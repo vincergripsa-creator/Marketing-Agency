@@ -1,0 +1,242 @@
+/** Playbooks: learned rules per agent (max 12), routed by lesson topic, mirrored as brain notes. */
+import type { BrainVault } from '../contracts.js';
+import type { AgentState, DeptId, Lesson, WorldState } from '../shared.js';
+import { basenameOf } from './markdown.js';
+import { DEPT_PLAYBOOK_LABELS, fmtPct, fold, safeFileName, shorten, unique } from './text.js';
+
+export const MAX_RULES = 12;
+export const COACHING_PREFIX = 'Coaching RH :';
+
+/** Which departments receive a lesson of a given topic ('chiefs' = every department chief). */
+export const TOPIC_DEPTS: Record<Lesson['topic'], DeptId[] | 'chiefs'> = {
+  ads: ['growth'],
+  pricing: ['boutique'],
+  product: ['studio', 'creation'],
+  support: ['support'],
+  niche: ['recherche', 'direction'],
+  finance: ['finance', 'direction'],
+  partnership: ['partenariats'],
+  process: 'chiefs',
+};
+
+/** Machine-readable rule patterns honoured by the heuristic engine (see shared conventions). */
+export const RULE_PATTERNS: readonly RegExp[] = [
+  /Ne jamais écrire « [^»]+ »/,
+  /Privilégier le hook « [a-z_]+ »/,
+  /Privilégier le format « [a-z_]+ »/,
+  /Prix cible « \d+ »/,
+  /Niveau de promesse max « [\d.]+ »/,
+  /Ton support « [^»]+ »/,
+];
+
+export function hasMachineRule(text: string): boolean {
+  return RULE_PATTERNS.some((re) => re.test(text));
+}
+
+export function quotedTerms(text: string): string[] {
+  return [...String(text ?? '').matchAll(/«\s*([^»]+?)\s*»/g)].map((m) => fold(m[1]!));
+}
+
+function ruleKey(rule: string): string {
+  return fold(rule).replace(/\s+/g, ' ').trim();
+}
+
+/** Short human title of a lesson (first clause of the insight). */
+export function lessonTitle(l: Pick<Lesson, 'insight'>): string {
+  const first = String(l.insight ?? '').split(/\s:\s|\.\s/)[0] ?? '';
+  return shorten(first.replace(/[.\s]+$/, ''), 90) || 'Leçon';
+}
+
+/** "[[jour-003-pub-mot-interdit-garanti|Ne jamais écrire « garanti » dans une pub]]" */
+export function lessonLink(l: Pick<Lesson, 'insight' | 'notePath'>): string {
+  const alias = lessonTitle(l).replace(/[[\]|]/g, ' ').replace(/\s+/g, ' ').trim();
+  return `[[${basenameOf(l.notePath)}|${alias}]]`;
+}
+
+/**
+ * Agents whose playbook receives a lesson: the topic's departments (+ extra departments, + matching roles).
+ * `routeOnly`: only the extra departments and the CEO (e.g. a process issue of one team).
+ */
+export function agentsForLesson(
+  world: WorldState, topic: Lesson['topic'], extraDepts: readonly DeptId[] = [], roles: readonly string[] = [], routeOnly = false,
+): AgentState[] {
+  const agents = world.company.agents ?? [];
+  const route = routeOnly && extraDepts.length ? 'only' : (TOPIC_DEPTS[topic] ?? 'chiefs');
+  const depts = new Set<DeptId>([...(route === 'chiefs' || route === 'only' ? [] : route), ...extraDepts]);
+  const roleKeys = roles.map((r) => fold(r).trim()).filter((r) => r.length >= 3);
+  return agents.filter((a) => {
+    if (depts.has(a.dept)) return true;
+    if (route === 'chiefs' && a.isChief) return true;
+    if (route === 'only' && a.isChief && a.dept === 'direction') return true;
+    if (roleKeys.length === 0) return false;
+    const role = fold(a.role);
+    return roleKeys.some((r) => r === a.dept || r === fold(a.name) || r === a.id || role.includes(r) || (role.length >= 4 && r.includes(role)));
+  });
+}
+
+/** Confidence used to rank rules when a playbook overflows. */
+function ruleConfidence(world: WorldState, rule: string): number {
+  const key = ruleKey(rule);
+  const lesson = (world.company.lessons ?? []).find((l) => ruleKey(l.insight) === key);
+  if (lesson) return lesson.confidence;
+  if (rule.startsWith(COACHING_PREFIX)) return 0.5;
+  return 0.55; // seed rules written by the runtime
+}
+
+function trimPlaybook(world: WorldState, pb: string[], keep: string): void {
+  while (pb.length > MAX_RULES) {
+    let worst = -1;
+    let worstConf = Infinity;
+    pb.forEach((rule, i) => {
+      if (rule === keep) return;
+      const c = ruleConfidence(world, rule);
+      if (c < worstConf) { // strict: on ties the oldest (lowest index) goes first
+        worstConf = c;
+        worst = i;
+      }
+    });
+    if (worst < 0) break;
+    pb.splice(worst, 1);
+  }
+}
+
+const BANNED_RX = /Ne jamais écrire\s*«\s*([^»]+?)\s*»/i;
+/** Same regexes as the runtime's parser: these directives are singletons ("last rule wins"). */
+const SINGLETON_RX: readonly RegExp[] = [
+  /Privilégier le hook\s*«\s*([^»]+?)\s*»/i,
+  /Privilégier le format\s*«\s*([^»]+?)\s*»/i,
+  /Prix cible\s*«\s*([^»]+?)\s*»/i,
+  /Niveau de promesse max\s*«\s*([^»]+?)\s*»/i,
+  /Ton support\s*«\s*([^»]+?)\s*»/i,
+];
+
+/** Directive family of a rule: same family = same slot in the playbook. */
+function directiveKind(rule: string): string | null {
+  const b = BANNED_RX.exec(rule);
+  if (b) return `banned:${fold(b[1]!.trim())}`;
+  const i = SINGLETON_RX.findIndex((rx) => rx.test(rule));
+  return i >= 0 ? `single:${i}` : null;
+}
+
+/**
+ * Adds a rule to an agent's playbook (max 12; the lowest-confidence, then oldest, rule is dropped).
+ * A rule carrying the same directive as an existing one (same banned word, or the same singleton pattern)
+ * replaces it in place — unless the old singleton is clearly better supported ('skipped').
+ * `replacePrefix`: an existing rule starting with it is replaced in place (one coaching rule per agent).
+ */
+export function addRule(world: WorldState, agentId: string, rule: string, replacePrefix?: string): 'added' | 'present' | 'replaced' | 'skipped' {
+  const text = String(rule ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return 'present';
+  const books = (world.company.playbooks ??= {});
+  const pb = (books[agentId] ??= []);
+  const key = ruleKey(text);
+  if (pb.some((r) => ruleKey(r) === key)) return 'present';
+  if (replacePrefix) {
+    const i = pb.findIndex((r) => r.startsWith(replacePrefix));
+    if (i >= 0) {
+      pb[i] = text;
+      return 'replaced';
+    }
+  }
+  const kind = directiveKind(text);
+  if (kind) {
+    const i = pb.findIndex((r) => directiveKind(r) === kind);
+    if (i >= 0) {
+      if (kind.startsWith('single:') && ruleConfidence(world, text) + 0.15 < ruleConfidence(world, pb[i]!)) return 'skipped';
+      pb[i] = text;
+      return 'replaced';
+    }
+  }
+  pb.push(text);
+  trimPlaybook(world, pb, text);
+  return pb.includes(text) ? 'added' : 'skipped';
+}
+
+/** Replaces a revised rule everywhere it appears. Returns the agents whose playbook changed. */
+export function replaceRuleEverywhere(world: WorldState, oldRule: string, newRule: string): string[] {
+  const changed: string[] = [];
+  const oldKey = ruleKey(oldRule);
+  for (const [agentId, pb] of Object.entries(world.company.playbooks ?? {})) {
+    const i = pb.findIndex((r) => ruleKey(r) === oldKey);
+    if (i < 0) continue;
+    if (pb.some((r) => ruleKey(r) === ruleKey(newRule))) pb.splice(i, 1);
+    else pb[i] = newRule;
+    changed.push(agentId);
+  }
+  return changed;
+}
+
+// ───────────────────────────── Brain notes ─────────────────────────────
+
+export function deptNoteTitle(dept: DeptId): string {
+  return `Playbook ${DEPT_PLAYBOOK_LABELS[dept] ?? dept}`;
+}
+
+/** Note name of an agent's playbook: the first name, disambiguated when two agents share it. */
+export function agentNoteName(world: WorldState, agent: AgentState): string {
+  const name = safeFileName(agent.name || agent.id);
+  const twins = (world.company.agents ?? []).filter((a) => fold(safeFileName(a.name || a.id)) === fold(name));
+  return twins.length > 1 ? safeFileName(`${name} (${agent.id})`) : name;
+}
+
+export function agentNotePath(world: WorldState, agent: AgentState): string {
+  return `playbooks/${agentNoteName(world, agent)}.md`;
+}
+
+function lessonsOfRules(world: WorldState, rules: readonly string[]): Lesson[] {
+  const keys = new Set(rules.map(ruleKey));
+  return (world.company.lessons ?? []).filter((l) => keys.has(ruleKey(l.insight)));
+}
+
+function agentNoteBody(world: WorldState, agent: AgentState): string {
+  const rules = world.company.playbooks?.[agent.id] ?? [];
+  const lines: string[] = [];
+  lines.push(`**Rôle** : ${agent.role || '—'} · **Département** : [[${deptNoteTitle(agent.dept)}]]${agent.isChief ? " · chef d'équipe" : ''}`);
+  const score = Math.round(agent.perf?.score ?? 0);
+  lines.push(`**Niveau** ${agent.level ?? 1} · **Score** ${score > 0 ? `${score}/100` : 'pas encore évalué'} · **Tâches terminées** ${agent.perf?.done ?? 0}`);
+  if (agent.persona) lines.push('', `> ${agent.persona}`);
+  lines.push('', `## Règles apprises (${rules.length}/${MAX_RULES})`);
+  if (rules.length) rules.forEach((r, i) => lines.push(`${i + 1}. ${r}`));
+  else lines.push("_Aucune règle apprise pour l'instant : les rétros du soir rempliront ce playbook._");
+  const sources = lessonsOfRules(world, rules);
+  if (sources.length) {
+    lines.push('', '## Leçons sources');
+    for (const l of sources) lines.push(`- ${lessonLink(l)} — jour ${l.day}, confiance ${fmtPct(l.confidence, 0)}`);
+  }
+  lines.push('', 'Retour : [[00 - Accueil]]');
+  return lines.join('\n');
+}
+
+function deptNoteBody(world: WorldState, dept: DeptId): string {
+  const def = (world.company.departments ?? []).find((d) => d.id === dept);
+  const members = (world.company.agents ?? []).filter((a) => a.dept === dept).sort((a, b) => Number(b.isChief) - Number(a.isChief));
+  const lines: string[] = [];
+  lines.push(`Département **${def?.name ?? DEPT_PLAYBOOK_LABELS[dept] ?? dept}**${def?.description ? ` — ${def.description}` : ''}`);
+  lines.push('', '## Équipe');
+  if (members.length) for (const a of members) lines.push(`- [[${agentNoteName(world, a)}]] — ${a.role || 'agent'}${a.isChief ? ' (chef)' : ''}`);
+  else lines.push('_Personne dans ce département pour le moment._');
+  const counts = new Map<string, number>();
+  for (const a of members) for (const r of world.company.playbooks?.[a.id] ?? []) counts.set(r, (counts.get(r) ?? 0) + 1);
+  lines.push('', '## Règles en vigueur');
+  if (counts.size) {
+    for (const [r, n] of [...counts].sort((x, y) => y[1] - x[1])) lines.push(`- ${r}${members.length > 1 ? ` _(${n}/${members.length} agents)_` : ''}`);
+  } else lines.push('_Aucune règle apprise pour le moment._');
+  lines.push('', 'Retour : [[00 - Accueil]]');
+  return lines.join('\n');
+}
+
+/** Writes playbooks/<Prénom>.md for the given agents and "Playbook <Département>" for their departments. */
+export async function writePlaybookNotes(world: WorldState, brain: BrainVault, agentIds: Iterable<string>, day: number): Promise<number> {
+  const ids = new Set(agentIds);
+  const agents = (world.company.agents ?? []).filter((a) => ids.has(a.id));
+  let written = 0;
+  for (const a of agents) {
+    await brain.write({ path: agentNotePath(world, a), title: a.name || a.id, tags: ['playbook', a.dept], body: agentNoteBody(world, a), day });
+    written++;
+  }
+  for (const dept of unique(agents.map((a) => a.dept))) {
+    await brain.write({ path: `playbooks/${deptNoteTitle(dept)}.md`, title: deptNoteTitle(dept), tags: ['playbook', 'departement', dept], body: deptNoteBody(world, dept), day });
+    written++;
+  }
+  return written;
+}

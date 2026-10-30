@@ -79,7 +79,10 @@ export interface MarketTools {
 
 export interface MarketDayResult {
   day: number;
-  sales: number; revenue: number; refunds: number; adSpend: number;
+  sales: number; revenue: number;
+  refunds: number;                         // COUNT of refunds + chargebacks closed by the market today
+  refundAmount?: number;                   // EUR of those refunds/chargebacks
+  adSpend: number;
   newMessages: number; events: string[];   // event ids created this day
   notes: string[];                         // French one-liners for the daily report
 }
@@ -90,11 +93,14 @@ export interface SimModule {
   createMarketTools(world: WorldState, rng: Rng): MarketTools;
   /** Simulates world.day: ads → traffic → sales → upsells → refunds → reviews → inbox → events → fixed costs → escalations. */
   tickMarket(world: WorldState, rng: Rng): MarketDayResult;
+  /** Signs are normalised by type (capital/revenue +, everything else −) and STORED signed, so
+   *  Σ amount = cash. Exceptions keep the caller's sign: refs 'hold:<id>' (payment reserve, cash-only,
+   *  excluded from profit) and 'reversal:<id>'. Consumers must sum stored amounts, never re-sign them. */
   recordLedger(world: WorldState, e: { type: LedgerType; amount: number; memo: string; ref?: string | null }): LedgerEntry;
   financeSnapshot(world: WorldState): FinanceSnapshot;
   // heuristic quality scorers (used by QA agents AND by the market's conversion model)
   scorePdf(content: PdfContent, ctx: { audience: string; problem: string; voc?: VoiceOfCustomer; design?: DesignSpec | null }): QualityReport;
-  scoreSalesPage(sp: SalesPage, product: Product): QualityReport;
+  scoreSalesPage(sp: SalesPage, product: Product, voc?: VoiceOfCustomer): QualityReport;
   scoreCreative(c: AdCreative, product: Product, voc?: VoiceOfCustomer): QualityReport;
   scoreSupportReply(msg: InboxMessage, reply: SupportReplyInput): { score: number; issues: string[] };
   /** Generic phrases that make a PDF sound "AI" (used by scorePdf and the humanizer). */
@@ -136,6 +142,7 @@ export interface MindContext {
   brainNotes: { path: string; title: string; excerpt: string }[]; // retrieved from the brain before acting
   lessons: Lesson[];           // relevant lessons
   day: number;
+  brand?: string;              // scenario.companyName (signatures, sales pages)
 }
 
 export interface Outline { title: string; chapters: { title: string; points: string[] }[]; bonusTitle: string; nextStepTitle: string }
@@ -159,7 +166,7 @@ export interface ContentEngine {
   writeSalesPage(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number }, ctx: MindContext): Promise<SalesPage>;
   writeAdHooks(input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[] }, ctx: MindContext): Promise<{ hookStyle: HookStyle; hook: string }[]>;
   writeAd(input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[] }, ctx: MindContext): Promise<AdDraft>;
-  writeSupportReply(input: { message: InboxMessage; product: Product | null; order: Order | null; policy: string[] }, ctx: MindContext): Promise<SupportReplyInput>;
+  writeSupportReply(input: { message: InboxMessage; product: Product | null; order: Order | null; policy: string[]; customer?: { name: string; archetype: string } | null }, ctx: MindContext): Promise<SupportReplyInput>;
   writeOutreach(input: { creator: CreatorProfile; product: Product; offer: { upfront: number; commission: number } }, ctx: MindContext): Promise<string>;
   planDay(input: { day: number; finance: FinanceSnapshot; kpis: DailyKpi[]; products: Product[]; openTasks: Task[]; lessons: Lesson[]; founderMissions: string[]; heuristicPlan: DayPlan }, ctx: MindContext): Promise<DayPlan>;
   interpretMission(input: { text: string; allowedKinds: TaskKind[] }, ctx: MindContext): Promise<DayPlanItem[]>;

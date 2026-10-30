@@ -192,6 +192,13 @@ export interface PdfContent {
   wordCount: number;
 }
 
+/**
+ * Label conventions (shared by minds/ which writes them and deliverables/ which draws them):
+ * - do_dont: every label is prefixed « À faire : … » or « À éviter : … » (order free).
+ * - quote: labels[0] = the quote, labels[1] = attribution (optional).
+ * - timeline: labels are « Phase : action » (e.g. « Nuits 1-3 : … »).
+ * - bar_chart: values 0..100 aligned with labels.
+ */
 export interface VisualSpec {
   type: 'timeline' | 'bar_chart' | 'checklist_card' | 'quote' | 'steps_diagram' | 'icon_grid' | 'do_dont';
   title: string;
@@ -340,6 +347,7 @@ export interface Order {
   source: 'ads' | 'organic' | 'creator' | 'upsell';
   campaignId: string | null; creatorId: string | null;
   refunded: boolean; chargeback: boolean;
+  refundedDay?: number | null;  // day of the refund / chargeback, for exact daily attribution
 }
 
 export type MessageIntent =
@@ -361,6 +369,9 @@ export interface InboxMessage {
   deadlineDay: number;        // unanswered past this day → escalation (bad review / chargeback)
   thread: { from: 'customer' | AgentId; text: string; day: number }[];
   resolution: string | null;
+  customerName?: string;      // display name (first name + initial), safe for the UI
+  replyScore?: number | null; // 0..100 score of the last support reply (set by replyToMessage)
+  repliedDay?: number | null;
 }
 
 export interface SupportReplyInput {
@@ -450,6 +461,7 @@ export interface NicheBrief {
 // ───────────────────────────── Learning ─────────────────────────────
 
 export interface Lesson {
+  key?: string;               // stable dedup key (topic + subject)
   id: string; day: number; topic: 'ads' | 'pricing' | 'product' | 'support' | 'niche' | 'finance' | 'process' | 'partnership';
   insight: string;            // French one-liner, actionable
   evidence: string;           // numbers backing it
@@ -462,6 +474,7 @@ export interface Lesson {
 export interface BanditArm { key: string; alpha: number; beta: number; pulls: number; reward: number }
 
 export interface Experiment {
+  nicheId?: string | null;    // scope (null = global)
   id: string; day: number; owner: AgentId; hypothesis: string;
   dimension: 'hook_style' | 'ad_format' | 'price' | 'sales_hype' | 'support_tone' | 'niche';
   variants: string[]; metric: 'ctr' | 'cvr' | 'roas' | 'refund_rate' | 'resolution';
@@ -483,7 +496,10 @@ export type WorldEventKind =
   | 'competitor_clone' | 'payment_hold' | 'trend_shift' | 'bad_review_wave' | 'scam_attempt' | 'creator_offer'
   | 'platform_outage' | 'seasonal_boost' | 'goal_reached' | 'bankrupt';
 
-export interface WorldEvent { id: string; day: number; kind: WorldEventKind; title: string; description: string; severity: 'info' | 'warn' | 'danger' | 'good' }
+export interface WorldEvent {
+  id: string; day: number; kind: WorldEventKind; title: string; description: string; severity: 'info' | 'warn' | 'danger' | 'good';
+  refs?: { productId?: string; nicheId?: string; creativeId?: string; creatorId?: string };
+}
 
 export type ActivityKind =
   | 'thought' | 'brain_read' | 'brain_write' | 'delegate' | 'task_start' | 'task_done' | 'task_failed'
@@ -567,6 +583,8 @@ export interface CompanyState {
   kpis: DailyKpi[];
   chats: Record<AgentId, ChatMessage[]>;
   pendingApprovals: string[];               // task ids awaiting founder (founderApproval mode)
+  budget?: { day: number; adCap: number; survival: boolean; note: string } | null; // CFO envelope of the day
+  lastRetroDay?: number;                    // idempotence of the evening retro (survives save/reload)
 }
 
 export interface WorldState {
@@ -611,7 +629,37 @@ export interface CompanySnapshot {
   ledger: LedgerEntry[];            // last 150
   activity: Activity[];             // last 200
   godMode?: { niches: Pick<NicheTruth, 'id' | 'name' | 'demand' | 'wtp' | 'competition' | 'tiktokAffinity' | 'hookAffinity'>[] };
+  session?: SessionInfo;            // live server loop state (play/pause, speed)
 }
+
+// ───────────────────────────── HTTP API shapes (api/ ↔ web/) ─────────────────────────────
+
+export type Speed = 1 | 2 | 4 | 8;
+
+export interface SessionInfo {
+  runId: string;
+  playing: boolean;
+  speed: Speed;
+  intervalMs?: number;
+  busy?: boolean;
+  mindMode: MindMode;
+  status?: WorldState['status'] | null;
+  day?: number;
+  tick?: number;
+  lastError?: string | null;
+}
+
+export interface RunInfo {
+  runId: string; companyName: string; scenarioName: string; difficulty: string;
+  day: number; status: WorldState['status']; cash: number; profit: number;
+  createdAt: string; mtime: string;
+  name?: string; updatedAt?: string; current?: boolean;
+}
+
+export interface ControlResponse { ok: boolean; status: WorldState['status']; speed: Speed; playing: boolean; message: string; session?: SessionInfo }
+export interface MissionResponse { ok: boolean; missionId: string }
+export interface ChatResponse { reply: string }
+export interface ApproveResponse { ok: boolean; message: string }
 
 /** Server-sent events on GET /api/stream */
 export type StreamEvent =

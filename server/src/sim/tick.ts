@@ -1,0 +1,750 @@
+/**
+ * Market close for world.day: paid ads → organic → creators → sales → upsells → refunds → reviews →
+ * inbox → escalations → random events → fixed costs. Every money move goes through the ledger.
+ */
+import { clamp, emit, nextId, round2 } from '../core/index.js';
+import type { DifficultyProfile, MarketDayResult, Rng } from '../contracts.js';
+import type {
+  AdCreative, Customer, DailyAdStats, InboxMessage, MessageIntent, NicheTruth, Order, Product, QualityReport, WorldEvent, WorldEventKind, WorldState,
+} from '../shared.js';
+import { ADS, CONVERSION, CREATORS, ESCALATION, FEES, INBOX, ORGANIC, REFUNDS, REVIEWS, STATS, UPSELL } from './balance.js';
+import { findBannedClaims } from './compliance.js';
+import { buyerArchetype, createCustomer, customerById, senderArchetype } from './customers.js';
+import { releaseHolds, rollEvents, seasonalBoostActive } from './events.js';
+import { adComments } from './feedback.js';
+import { cashOf, recordLedger } from './finance.js';
+import { createMessage, followUpText } from './inbox.js';
+import { difficultyProfile, isScammer } from './market.js';
+import { chargebackOrder, creativeById, nicheOf, orderById, productById, pushEvent, refundOrder, reviewProduct } from './ops.js';
+import { genericPhraseHits, scoreCreative, scorePdf, scoreSalesPage, vocPhraseHits } from './quality.js';
+import { fmtEur, fmtInt, fmtNum, fmtPct, keyTokens, lognormal, norm, overlap, pickWeighted, plural, short, stemSet, uniform } from './text.js';
+
+interface Traffic {
+  productId: string;
+  source: Order['source'];
+  landingViews: number;
+  cvrMult: number;
+  campaignId: string | null;
+  creativeId: string | null;
+  creatorId: string | null;
+  partnershipId: string | null;
+  postId: string | null;
+  stat: DailyAdStats | null;
+}
+
+const NEUTRAL_REPORT: QualityReport = {
+  overall: 35, specificity: 30, structure: 30, actionability: 30, humanTone: 50, design: 20, promiseMatch: 100, compliance: 100,
+  issues: [], evaluator: 'heuristic',
+};
+
+/** Per-day caches + running totals. */
+class Day {
+  readonly day: number;
+  cash: number;
+  readonly traffic: Traffic[] = [];
+  readonly newOrders: Order[] = [];
+  readonly notes: string[] = [];
+  readonly eventIds: string[] = [];
+  sales = 0; revenue = 0; upsells = 0; refunds = 0; refundAmount = 0; adSpend = 0; impressions = 0; clicks = 0; messages = 0;
+  chargebacks = 0; badReviews = 0;
+  readonly outage: boolean;
+  readonly boost: boolean;
+  private pdfCache = new Map<string, QualityReport>();
+  private salesCache = new Map<string, QualityReport>();
+  private creativeCache = new Map<string, QualityReport>();
+  private customers = new Map<string, Customer>();
+
+  constructor(readonly world: WorldState, readonly rng: Rng, readonly diff: DifficultyProfile) {
+    this.day = world.day;
+    for (const c of world.market.customers) this.customers.set(c.id, c);
+    this.cash = cashOf(world);
+    this.outage = world.market.modifiers.outageDay === world.day;
+    this.boost = seasonalBoostActive(world);
+  }
+
+  niche(p: Product): NicheTruth { return nicheOf(this.world, p); }
+
+  /** O(1) customer lookup (customers created during the tick fall back to a scan, then get cached). */
+  customer(id: string): Customer | undefined {
+    let c = this.customers.get(id);
+    if (!c) {
+      c = customerById(this.world, id);
+      if (c) this.customers.set(id, c);
+    }
+    return c;
+  }
+
+  /** The market's own reading of the PDF (blended with a non-heuristic evaluator's verdict when present). */
+  pdfQ(p: Product): QualityReport {
+    let r = this.pdfCache.get(p.id);
+    if (!r) {
+      const n = this.niche(p);
+      r = p.content ? scorePdf(p.content, { audience: p.audience, problem: p.problem, voc: n.voc, design: p.design }) : NEUTRAL_REPORT;
+      if (p.quality && p.quality.evaluator !== 'heuristic') {
+        r = { ...r, overall: Math.round(0.6 * r.overall + 0.4 * p.quality.overall), specificity: Math.round(0.6 * r.specificity + 0.4 * p.quality.specificity) };
+      }
+      this.pdfCache.set(p.id, r);
+    }
+    return r;
+  }
+
+  pageQ(p: Product): QualityReport {
+    let r = this.salesCache.get(p.id);
+    if (!r) {
+      r = p.salesPage ? scoreSalesPage(p.salesPage, { ...p, quality: this.pdfQ(p) }, this.niche(p).voc) : { ...NEUTRAL_REPORT, overall: 20 };
+      if (p.salesQuality && p.salesQuality.evaluator !== 'heuristic') r = { ...r, overall: Math.round(0.6 * r.overall + 0.4 * p.salesQuality.overall) };
+      this.salesCache.set(p.id, r);
+    }
+    return r;
+  }
+
+  adQ(c: AdCreative, p: Product): QualityReport {
+    let r = this.creativeCache.get(c.id);
+    if (!r) {
+      r = scoreCreative(c, p, this.niche(p).voc);
+      if (c.quality && c.quality.evaluator !== 'heuristic') r = { ...r, overall: Math.round(0.6 * r.overall + 0.4 * c.quality.overall) };
+      this.creativeCache.set(c.id, r);
+    }
+    return r;
+  }
+
+  noise(sd: number): number { return Math.exp(this.rng.normal(0, sd)); }
+}
+
+// ───────────────────────────── conversion model ─────────────────────────────
+
+export function priceFactor(price: number, wtp: { min: number; sweet: number; max: number }): number {
+  const { min, sweet, max } = wtp;
+  if (price <= sweet) {
+    const span = Math.max(1, sweet - min);
+    return Math.min(CONVERSION.priceBelowCap, 1 + CONVERSION.priceBelowBoost * ((sweet - price) / span));
+  }
+  if (price <= max) {
+    const t = (price - sweet) / Math.max(1, max - sweet);
+    return 1 - CONVERSION.priceAboveDrop * Math.pow(t, CONVERSION.priceAboveExp);
+  }
+  const atMax = 1 - CONVERSION.priceAboveDrop;
+  return atMax * Math.exp(-(price - max) / Math.max(1, CONVERSION.priceOverMaxDecay * max));
+}
+
+function ratingFactor(p: Product): number {
+  if (!p.stats.reviews.length || p.stats.rating <= 0) return CONVERSION.ratingNone;
+  const r = p.stats.rating;
+  if (r >= 4.5) return CONVERSION.ratingHigh;
+  if (r < 3.5) return CONVERSION.ratingLow;
+  return 1 + (CONVERSION.ratingHigh - 1) * ((r - 3.5) / 1);
+}
+
+/** Conversion rate of a landing view for this product today (before source multiplier & noise). */
+function baseCvr(d: Day, p: Product): number {
+  const n = d.niche(p);
+  const sq = d.pageQ(p).overall;
+  const sqF = clamp(Math.pow(Math.max(1, sq) / CONVERSION.salesQualityRef, CONVERSION.salesQualityExp), CONVERSION.salesQualityMin, CONVERSION.salesQualityMax);
+  const specF = CONVERSION.specificityMin + CONVERSION.specificitySpan * (d.pdfQ(p).specificity / 100);
+  const demandF = CONVERSION.demandMin + CONVERSION.demandSpan * n.demand;
+  const dow = n.seasonality[(d.day - 1) % 7] ?? 1;
+  const compF = 1 - CONVERSION.competitionWeight * n.competition;
+  const hypeF = 1 + CONVERSION.hypeBoost * clamp(p.salesPage?.hypeLevel ?? 0.5, 0, 1);
+  const boost = d.boost ? CONVERSION.seasonalBoost : 1;
+  return CONVERSION.base * sqF * priceFactor(p.price, n.wtp) * ratingFactor(p) * specF * demandF * dow * compF * hypeF * boost;
+}
+
+// ───────────────────────────── 1. paid ads ─────────────────────────────
+
+function runAds(d: Day): void {
+  const { world, rng, diff } = d;
+  const m = world.market;
+  const banned = m.adAccount.banned && d.day < m.adAccount.bannedUntilDay;
+  const eventCpm = m.modifiers.cpmUntilDay >= d.day ? m.modifiers.cpmMultiplier : 1;
+  const dowCpm = ADS.dayOfWeekCpm[(d.day - 1) % 7] ?? 1;
+  let blocked = 0; let capped = false;
+  for (const camp of world.company.campaigns) {
+    if (camp.status !== 'active') continue;
+    const p = productById(world, camp.productId);
+    if (!p || p.status !== 'live') continue;
+    const creatives = camp.creativeIds.map((id) => creativeById(world, id)).filter((c): c is AdCreative => !!c && c.review.status === 'approved' && c.productId === p.id);
+    if (!creatives.length) continue;
+    if (banned) { blocked++; continue; }
+    const wanted = Math.max(0, camp.dailyBudget) * uniform(rng, ADS.deliveryMin, ADS.deliveryMax);
+    const spendTotal = round2(Math.min(wanted, Math.max(0, d.cash)));
+    if (spendTotal < wanted - 0.01) capped = true;
+    if (spendTotal < 0.5) continue;
+    const n = d.niche(p);
+    const narrow = (camp.targeting?.ageMax ?? 55) - (camp.targeting?.ageMin ?? 18) < 10 ? ADS.narrowAgeCpm : 1;
+    const reach = ADS.reachBase + ADS.reachDemand * n.demand;
+    let campSpend = 0;
+    for (const c of creatives) {
+      const spend = round2(spendTotal / creatives.length);
+      if (spend <= 0) continue;
+      const cpm = Math.max(ADS.minCpm, n.cpmBase * diff.cpmMultiplier * eventCpm * dowCpm * narrow * d.noise(ADS.cpmNoiseSd));
+      const impressions = Math.floor((spend / cpm) * 1000);
+      const q = d.adQ(c, p);
+      const prior = m.creativeImpressions[c.id] ?? 0;
+      const fatigue = 1 / (1 + prior / ADS.fatigueImpressions);
+      const ctrRaw = ADS.baseCtr * Math.pow(Math.max(1, q.overall) / ADS.qualityRef, ADS.qualityExp)
+        * (n.hookAffinity[c.hookStyle] ?? 1) * (n.formatAffinity[c.format] ?? 1) * (0.6 + 0.8 * n.tiktokAffinity)
+        * fatigue * d.noise(ADS.ctrNoiseSd);
+      const ctr = clamp(ctrRaw, ADS.minCtr, ADS.maxCtr);
+      const clicks = rng.binomial(impressions, ctr);
+      const landingViews = rng.binomial(clicks, ADS.landingRate);
+      m.creativeImpressions[c.id] = prior + impressions;
+      const nComments = Math.min(ADS.maxCommentsPerRow, rng.poisson(impressions / ADS.commentsPerImpressions));
+      const stat: DailyAdStats = {
+        day: d.day, campaignId: camp.id, creativeId: c.id, productId: p.id,
+        spend, impressions, clicks,
+        ctr: impressions > 0 ? Math.round((clicks / impressions) * 10000) / 10000 : 0,
+        cpc: clicks > 0 ? round2(spend / clicks) : 0,
+        cpm: impressions > 0 ? round2((spend / impressions) * 1000) : 0,
+        landingViews, purchases: 0, revenue: 0, roas: 0,
+        frequency: round2(1 + (prior + impressions) / reach),
+        comments: adComments(rng, nComments, q.overall, p.salesPage?.hypeLevel ?? 0.5, diff.annoyingShare, n, p.audience),
+      };
+      m.adStats.push(stat);
+      d.traffic.push({ productId: p.id, source: 'ads', landingViews, cvrMult: 1, campaignId: camp.id, creativeId: c.id, creatorId: null, partnershipId: null, postId: null, stat });
+      campSpend += spend;
+      d.impressions += impressions;
+      d.clicks += clicks;
+    }
+    if (campSpend > 0) {
+      recordLedger(world, { type: 'ad_spend', amount: -campSpend, memo: `TikTok Ads — ${short(camp.name, 50)}`, ref: camp.id });
+      d.cash = round2(d.cash - campSpend);
+      d.adSpend = round2(d.adSpend + campSpend);
+    }
+  }
+  if (blocked) d.notes.push(`Compte publicitaire suspendu jusqu'au jour ${m.adAccount.bannedUntilDay} : ${plural(blocked, 'campagne bloquée', 'campagnes bloquées')}.`);
+  if (capped) d.notes.push('Trésorerie insuffisante : la diffusion des pubs a été plafonnée.');
+}
+
+// ───────────────────────────── 2. organic ─────────────────────────────
+
+/** 0..100 hook strength for organic reach (no full creative available). */
+export function hookStrength(hook: string, p: Product | undefined, n: NicheTruth | undefined): number {
+  let s = 50;
+  const h = hook.trim();
+  if (h.length >= 25 && h.length <= 90) s += 15; else if (h.length > 140 || h.length < 12) s -= 15;
+  if (/\d/.test(h)) s += 8;
+  if (h.includes('?')) s += 5;
+  if (p) {
+    const stems = stemSet(h);
+    if (Math.max(overlap(keyTokens(p.audience), stems), overlap(keyTokens(p.problem), stems)) > 0) s += 12;
+  }
+  if (n && vocPhraseHits(norm(h), n.voc) > 0) s += 10;
+  s -= 15 * Math.min(2, genericPhraseHits(norm(h)).total);
+  return clamp(s, 10, 100);
+}
+
+function runOrganic(d: Day): void {
+  const { world, rng } = d;
+  const perDay = new Map<number, number>();
+  for (const post of world.market.organicPosts) {
+    if (post.views > 0 || post.day > d.day) continue;
+    const rank = (perDay.get(post.day) ?? 0) + 1;
+    perDay.set(post.day, rank);
+    const p = productById(world, post.productId);
+    const n = p ? d.niche(p) : undefined;
+    const q = hookStrength(post.hook, p, n);
+    const aff = n ? (n.hookAffinity[post.hookStyle] ?? 1) * (n.formatAffinity[post.format] ?? 1) : 1;
+    const tik = n ? n.tiktokAffinity : 0.5;
+    const throttled = findBannedClaims([post.hook], n?.voc.bannedClaims ?? []).length > 0;
+    const reach = (1 / (1 + ORGANIC.sameDayDecay * (rank - 1))) * (throttled ? ORGANIC.bannedReach : 1);
+    const viralP = clamp(ORGANIC.viralChance * (q / 70) * (0.5 + tik) * Math.sqrt(aff) * reach, 0, 0.06);
+    if (rng.chance(viralP)) {
+      post.viral = true;
+      post.views = Math.round(clamp(lognormal(rng, 60000, 0.6), ORGANIC.viralMin, ORGANIC.viralMax));
+    } else {
+      post.views = Math.max(30, Math.round(lognormal(rng, ORGANIC.medianViews * Math.pow(q / 70, 1.2) * Math.pow(aff, 0.7) * (0.5 + tik) * reach, ORGANIC.viewsSigma)));
+    }
+    post.likes = Math.round(post.views * uniform(rng, ORGANIC.likeRate.min, ORGANIC.likeRate.max));
+    const rate = post.viral ? uniform(rng, ORGANIC.viralClickRate.min, ORGANIC.viralClickRate.max) : uniform(rng, ORGANIC.clickRate.min, ORGANIC.clickRate.max);
+    post.clicks = p && p.status === 'live' ? rng.binomial(post.views, rate) : 0;
+    if (p && post.clicks > 0) {
+      d.traffic.push({ productId: p.id, source: 'organic', landingViews: rng.binomial(post.clicks, ADS.landingRate), cvrMult: CONVERSION.organicCvrMultiplier, campaignId: null, creativeId: null, creatorId: null, partnershipId: null, postId: post.id, stat: null });
+    }
+    if (post.viral) {
+      const ev = pushEventSafe(d, 'viral_organic', 'Vidéo organique virale !', `« ${short(post.hook, 60)} » dépasse ${fmtInt(post.views)} vues sur TikTok.`, 'good');
+      if (ev) d.notes.push(`Post organique viral : ${fmtInt(post.views)} vues.`);
+    }
+  }
+  const posts = world.market.organicPosts;
+  if (posts.length > ORGANIC.keepPosts) posts.splice(0, posts.length - ORGANIC.keepPosts);
+}
+
+// ───────────────────────────── 3. creators ─────────────────────────────
+
+function runCreators(d: Day): void {
+  const { world, rng } = d;
+  for (const pt of world.market.partnerships) {
+    const creator = world.market.creators.find((c) => c.id === pt.creatorId);
+    if (!creator) continue;
+    if (pt.status === 'accepted' && pt.day < d.day) {
+      if (isScammer(creator)) {
+        pt.status = 'scam';
+        if (pt.upfront > 0) {
+          recordLedger(world, { type: 'creator_payout', amount: pt.upfront, memo: `Requalification de l'avance versée à @${creator.handle}`, ref: `reversal:${pt.id}` });
+          recordLedger(world, { type: 'scam_loss', amount: -pt.upfront, memo: `Arnaque : @${creator.handle} a encaissé l'avance sans publier`, ref: pt.id });
+        }
+        d.notes.push(`Arnaque : @${creator.handle} a encaissé ${fmtEur(pt.upfront)} d'avance et a disparu.`);
+        emit(world, { agentId: null, kind: 'event', text: `@${creator.handle} ne répond plus : l'avance de ${fmtEur(pt.upfront)} est perdue.` });
+        continue;
+      }
+      if (d.day >= pt.day + CREATORS.deliveryDelayDays) pt.status = 'delivered';
+    }
+    if (pt.status !== 'delivered') continue;
+    const k = d.day - (pt.day + CREATORS.deliveryDelayDays);
+    if (k < 0 || k >= CREATORS.tail.length) continue;
+    const p = productById(world, pt.productId);
+    if (!p) continue;
+    const match = creator.nicheId === p.nicheId ? 1 : CREATORS.offNicheReach;
+    const views = Math.round(creator.avgViews * CREATORS.tail[k]! * match * d.noise(0.35));
+    const clicks = p.status === 'live' ? rng.binomial(views, uniform(rng, CREATORS.clickRate.min, CREATORS.clickRate.max)) : 0;
+    if (clicks > 0) {
+      d.traffic.push({ productId: p.id, source: 'creator', landingViews: rng.binomial(clicks, ADS.landingRate), cvrMult: CREATORS.cvrMultiplier, campaignId: null, creativeId: null, creatorId: creator.id, partnershipId: pt.id, postId: null, stat: null });
+    }
+    if (k === 0) d.notes.push(`@${creator.handle} a publié sa vidéo sur « ${short(p.title, 40)} » (${fmtInt(views)} vues).`);
+  }
+}
+
+// ───────────────────────────── 4. sales ─────────────────────────────
+
+function newOrder(d: Day, p: Product, source: Order['source'], t: Pick<Traffic, 'campaignId' | 'creatorId'>, customer?: Customer): Order {
+  const { world, rng } = d;
+  const c = customer ?? createCustomer(world, rng, buyerArchetype(rng, world.scenario?.difficulty ?? 'normal'));
+  const o: Order = {
+    id: nextId(world, 'ord'), day: d.day, customerId: c.id, productId: p.id, price: p.price, source,
+    campaignId: t.campaignId, creatorId: t.creatorId, refunded: false, chargeback: false,
+  };
+  c.orders.push(o.id);
+  world.market.orders.push(o);
+  d.newOrders.push(o);
+  p.stats.sales += 1;
+  p.stats.revenue = round2(p.stats.revenue + p.price);
+  d.sales += 1;
+  d.revenue = round2(d.revenue + p.price);
+  return o;
+}
+
+const SOURCE_LABEL: Record<Order['source'], string> = { ads: 'pubs TikTok', organic: 'TikTok organique', creator: 'créateurs', upsell: 'upsell « La suite est ici »' };
+
+function bookRevenue(d: Day, p: Product, source: Order['source'], count: number, amount: number): void {
+  if (count <= 0 || amount <= 0) return;
+  recordLedger(d.world, { type: 'revenue', amount, memo: `${count} vente${count > 1 ? 's' : ''} « ${short(p.title, 40)} » (${SOURCE_LABEL[source]})`, ref: p.id });
+}
+
+function runSales(d: Day): void {
+  const { world, rng } = d;
+  if (!d.traffic.length) return;
+  const byProduct = new Map<string, Traffic[]>();
+  for (const t of d.traffic) {
+    const list = byProduct.get(t.productId) ?? [];
+    list.push(t);
+    byProduct.set(t.productId, list);
+  }
+  // niche saturation: the daily buyer pool is finite (demand-scaled)
+  const nicheViews = new Map<string, number>();
+  for (const t of d.traffic) {
+    const p = productById(world, t.productId);
+    if (!p) continue;
+    const id = d.niche(p).id;
+    nicheViews.set(id, (nicheViews.get(id) ?? 0) + t.landingViews);
+  }
+  const saturation = new Map<string, number>();
+  for (const [id, views] of nicheViews) {
+    const n = world.market.niches.find((x) => x.id === id);
+    const pool = CONVERSION.poolBase + CONVERSION.poolDemand * (n?.demand ?? 0.35);
+    saturation.set(id, views > 0 ? (pool * (1 - Math.exp(-views / pool))) / views : 1);
+  }
+  for (const [productId, entries] of byProduct) {
+    const p = productById(world, productId);
+    if (!p) continue;
+    const views = entries.reduce((s, t) => s + t.landingViews, 0);
+    p.stats.views += views;
+    if (d.outage || p.status !== 'live') continue;
+    const cvr0 = baseCvr(d, p) * d.noise(CONVERSION.noiseSd);
+    const sat = saturation.get(d.niche(p).id) ?? 1;
+    const bySource = new Map<Order['source'], { n: number; amount: number }>();
+    for (const t of entries) {
+      const eff = Math.round(t.landingViews * sat);
+      const n = rng.binomial(eff, Math.min(CONVERSION.maxCvr, cvr0 * t.cvrMult));
+      if (n <= 0) continue;
+      for (let i = 0; i < n; i++) newOrder(d, p, t.source, t);
+      const amount = round2(n * p.price);
+      const agg = bySource.get(t.source) ?? { n: 0, amount: 0 };
+      agg.n += n; agg.amount = round2(agg.amount + amount);
+      bySource.set(t.source, agg);
+      if (t.stat) {
+        t.stat.purchases += n;
+        t.stat.revenue = round2(t.stat.revenue + amount);
+        t.stat.roas = t.stat.spend > 0 ? round2(t.stat.revenue / t.stat.spend) : 0;
+      }
+      if (t.postId) {
+        const post = world.market.organicPosts.find((x) => x.id === t.postId);
+        if (post) post.sales += n;
+      }
+      if (t.partnershipId) {
+        const pt = world.market.partnerships.find((x) => x.id === t.partnershipId);
+        const creator = world.market.creators.find((c) => c.id === t.creatorId);
+        if (pt) {
+          pt.sales += n;
+          pt.revenue = round2(pt.revenue + amount);
+          const commission = round2(amount * pt.commission);
+          if (commission > 0) recordLedger(world, { type: 'creator_payout', amount: -commission, memo: `Commission @${creator?.handle ?? 'créateur'} (${fmtPct(pt.commission, 0)} de ${fmtEur(amount)})`, ref: pt.id });
+        }
+      }
+    }
+    for (const [source, agg] of bySource) bookRevenue(d, p, source, agg.n, agg.amount);
+  }
+  if (d.outage) d.notes.push('Panne de paiement de la boutique : aucune vente possible aujourd\'hui malgré le trafic.');
+}
+
+// ───────────────────────────── 5. upsells ─────────────────────────────
+
+function runUpsells(d: Day): void {
+  const { world, rng } = d;
+  const base = d.newOrders.filter((o) => o.source !== 'upsell');
+  const agg = new Map<string, { n: number; amount: number }>();
+  for (const o of base) {
+    const p = productById(world, o.productId);
+    if (!p) continue;
+    const upId = p.content?.nextStep?.upsellProductId ?? p.upsellProductId;
+    if (!upId || upId === p.id) continue;
+    const up = productById(world, upId);
+    if (!up || up.status !== 'live') continue;
+    const rate = UPSELL.minRate + (UPSELL.maxRate - UPSELL.minRate) * clamp((d.pdfQ(p).overall + d.pdfQ(up).overall) / 200, 0, 1);
+    if (!rng.chance(rate)) continue;
+    const customer = d.customer(o.customerId);
+    newOrder(d, up, 'upsell', { campaignId: o.campaignId, creatorId: o.creatorId }, customer);
+    p.stats.upsellSales += 1;
+    d.upsells += 1;
+    const a = agg.get(up.id) ?? { n: 0, amount: 0 };
+    a.n += 1; a.amount = round2(a.amount + up.price);
+    agg.set(up.id, a);
+  }
+  for (const [id, a] of agg) {
+    const up = productById(world, id);
+    if (up) bookRevenue(d, up, 'upsell', a.n, a.amount);
+  }
+  // payment processing fees for every sale of the day
+  if (d.newOrders.length) {
+    const fee = round2(d.newOrders.reduce((s, o) => s + o.price * FEES.paymentPct + FEES.paymentFixed, 0));
+    recordLedger(world, { type: 'payment_fee', amount: -fee, memo: `Frais de paiement (${d.newOrders.length} transaction${d.newOrders.length > 1 ? 's' : ''})`, ref: `fees:${d.day}` });
+  }
+}
+
+// ───────────────────────────── 6. refunds ─────────────────────────────
+
+const REFUND_WEIGHTS: number[] = (() => {
+  const w = Array.from({ length: REFUNDS.windowDays }, (_, i) => Math.exp(-i / REFUNDS.decayDays));
+  const total = w.reduce((s, x) => s + x, 0);
+  return w.map((x) => x / total);
+})();
+
+const INBOX_REFUNDERS: ReadonlySet<string> = new Set(['karen', 'sceptique', 'menace_chargeback', 'impatient']);
+
+function refundProbability(d: Day, p: Product, c: Customer | undefined): number {
+  const n = d.niche(p);
+  const pdf = d.pdfQ(p);
+  const sales = d.pageQ(p);
+  const base = d.diff.refundBase * (REFUNDS.sensitivityMin + REFUNDS.sensitivitySpan * n.refundSensitivity);
+  const gap = ((100 - sales.promiseMatch) / 150) * REFUNDS.gapWeight;
+  const lowQ = (Math.max(0, REFUNDS.lowQualityThreshold - pdf.overall) / 100) * REFUNDS.lowQualityWeight;
+  const arche = c ? REFUNDS.archetypeBonus[c.archetype] ?? 0 : 0;
+  return clamp(base + gap + lowQ + arche, 0, REFUNDS.maxCumulative);
+}
+
+function hasRequest(world: WorldState, orderId: string): boolean {
+  return world.market.inbox.some((m) => m.orderId === orderId && (m.intent === 'remboursement' || m.intent === 'menace_chargeback' || m.intent === 'plainte_qualite'));
+}
+
+function runRefunds(d: Day): void {
+  const { world, rng } = d;
+  const orders = world.market.orders;
+  for (let i = orders.length - 1; i >= 0; i--) {
+    const o = orders[i]!;
+    const age = d.day - o.day;
+    if (age > REFUNDS.windowDays) break;
+    if (age < 1 || o.refunded || o.chargeback) continue;
+    const p = productById(world, o.productId);
+    if (!p) continue;
+    const c = d.customer(o.customerId);
+    if (c?.archetype === 'chasseur_de_remboursement') {
+      if (age <= REFUNDS.hunterWindow && rng.chance(REFUNDS.hunterRequestChance) && !hasRequest(world, o.id)) {
+        createMessage(world, rng, { intent: 'remboursement', customer: c, product: p, order: o, niche: d.niche(p) });
+        d.messages++;
+      }
+      continue;
+    }
+    const hazard = refundProbability(d, p, c) * (REFUND_WEIGHTS[age - 1] ?? 0);
+    if (!rng.chance(hazard)) continue;
+    if (c && INBOX_REFUNDERS.has(c.archetype)) {
+      if (hasRequest(world, o.id)) continue;
+      const intent: MessageIntent = c.archetype === 'menace_chargeback' ? 'menace_chargeback'
+        : c.archetype === 'karen' ? (rng.chance(0.5) ? 'plainte_qualite' : 'remboursement')
+          : c.archetype === 'sceptique' ? (rng.chance(0.5) ? 'plainte_qualite' : 'remboursement') : 'remboursement';
+      createMessage(world, rng, { intent, customer: c, product: p, order: o, niche: d.niche(p) });
+      d.messages++;
+      continue;
+    }
+    const amount = refundOrder(world, o, `Remboursement via la plateforme — « ${short(p.title, 40)} »`);
+    if (amount > 0) { d.refunds++; d.refundAmount = round2(d.refundAmount + amount); }
+  }
+}
+
+// ───────────────────────────── 7. reviews ─────────────────────────────
+
+const RATING_SHIFT: Partial<Record<Customer['archetype'], number>> = { karen: -1, troll: -2, sceptique: -0.5, superfan: 0.8, chasseur_de_remboursement: -0.7 };
+
+function runReviews(d: Day): void {
+  const { world, rng } = d;
+  const reviewed = new Set<string>();
+  for (const p of world.company.products) for (const r of p.stats.reviews) reviewed.add(`${r.customerId}|${p.id}`);
+  const orders = world.market.orders;
+  for (let i = orders.length - 1; i >= 0; i--) {
+    const o = orders[i]!;
+    const age = d.day - o.day;
+    if (age > REVIEWS.maxAge) break;
+    if (age < REVIEWS.minAge) continue;
+    const key = `${o.customerId}|${o.productId}`;
+    if (reviewed.has(key)) continue;
+    const c = d.customer(o.customerId);
+    const chance = o.refunded ? REVIEWS.refundedChance : (c ? REVIEWS.archetypeChance[c.archetype] : undefined) ?? REVIEWS.dailyChance;
+    if (!rng.chance(chance)) continue;
+    const p = productById(world, o.productId);
+    if (!p) continue;
+    const gap = (100 - d.pageQ(p).promiseMatch) / 150;
+    const mean = REVIEWS.ratingIntercept + REVIEWS.ratingSlope * d.pdfQ(p).overall - REVIEWS.promiseGapPenalty * gap
+      + (c ? RATING_SHIFT[c.archetype] ?? 0 : 0) - (o.refunded ? 1.5 : 0);
+    const rating = Math.round(clamp(rng.normal(mean, REVIEWS.ratingSd), 1, 5));
+    reviewProduct(world, rng, p, c, rating, 'product');
+    reviewed.add(key);
+  }
+}
+
+// ───────────────────────────── 8. inbox ─────────────────────────────
+
+const BUYER_INTENTS: Record<Customer['archetype'], [MessageIntent, number][]> = {
+  normal: [['question', 0.4], ['non_recu', 0.25], ['compliment', 0.15], ['bug_paiement', 0.1], ['plainte_qualite', 0.1]],
+  impatient: [['non_recu', 0.6], ['question', 0.3], ['bug_paiement', 0.1]],
+  sceptique: [['plainte_qualite', 0.5], ['question', 0.3], ['remboursement', 0.2]],
+  chasseur_de_remboursement: [['question', 0.5], ['non_recu', 0.5]],
+  troll: [['troll', 1]],
+  karen: [['plainte_qualite', 0.5], ['non_recu', 0.3], ['bug_paiement', 0.2]],
+  perdu: [['non_recu', 0.5], ['bug_paiement', 0.3], ['question', 0.2]],
+  superfan: [['compliment', 0.7], ['sur_mesure', 0.3]],
+  arnaqueur: [['arnaque', 1]],
+  menace_chargeback: [['menace_chargeback', 0.6], ['non_recu', 0.4]],
+  demande_sur_mesure: [['sur_mesure', 0.8], ['question', 0.2]],
+};
+
+function runInbox(d: Day): void {
+  const { world, rng, diff } = d;
+  const live = world.company.products.filter((p) => p.status === 'live');
+
+  // a) buyers who write in
+  const buyers = d.newOrders.filter((o) => o.source !== 'upsell');
+  const k = rng.binomial(buyers.length, diff.inboxPerSale);
+  for (const o of rng.shuffle(buyers.slice()).slice(0, k)) {
+    const c = d.customer(o.customerId);
+    const p = productById(world, o.productId);
+    if (!c || !p) continue;
+    const intent = pickWeighted(rng, BUYER_INTENTS[c.archetype] ?? BUYER_INTENTS.normal);
+    createMessage(world, rng, { intent, customer: c, product: p, order: o, niche: d.niche(p) });
+    d.messages++;
+  }
+
+  // b) background noise: scams, spam partnerships, trolls, prospects
+  const difficulty = world.scenario?.difficulty ?? 'normal';
+  const noise = rng.poisson((INBOX.baseNoise[difficulty] ?? 0.45) + diff.scamRate * 0.5);
+  for (let i = 0; i < noise; i++) {
+    const intent = pickWeighted<MessageIntent>(rng, [
+      ['arnaque', 0.3 + diff.scamRate], ['partenariat', 0.3], ['troll', live.length ? 0.15 : 0.05],
+      ['question', live.length ? 0.25 : 0], ['sur_mesure', live.length ? 0.06 : 0],
+    ]);
+    const p = live.length ? rng.pick(live) : null;
+    const c = createCustomer(world, rng, senderArchetype(rng, intent));
+    createMessage(world, rng, { intent, customer: c, product: p, order: null, niche: p ? d.niche(p) : undefined });
+    d.messages++;
+  }
+
+  // c) ad comments that turn into conversations
+  for (const s of world.market.adStats) {
+    if (s.day !== d.day) continue;
+    const p = productById(world, s.productId);
+    if (!p) continue;
+    for (const cm of s.comments) {
+      const chance = INBOX.commentToMessage[cm.tone] ?? 0;
+      if (!chance || !rng.chance(chance)) continue;
+      const intent: MessageIntent = cm.tone === 'troll' ? 'troll' : 'question';
+      const c = createCustomer(world, rng, senderArchetype(rng, intent));
+      c.name = `@${cm.author}`;
+      const msg = createMessage(world, rng, { intent, customer: c, product: p, order: null, niche: d.niche(p), channel: 'commentaire_tiktok' });
+      msg.subject = 'Commentaire sous votre pub';
+      msg.body = cm.text;
+      msg.thread = [{ from: 'customer', text: cm.text, day: d.day }];
+      d.messages++;
+    }
+  }
+
+  // d) follow-ups on unsatisfying replies, quiet closing of the rest
+  for (const msg of world.market.inbox) {
+    if (msg.status !== 'replied') continue;
+    const lastAgent = [...msg.thread].reverse().find((t) => t.from !== 'customer');
+    const lastDay = lastAgent?.day ?? msg.day;
+    if (lastDay >= d.day) continue;
+    const c = d.customer(msg.customerId);
+    const agentReplies = msg.thread.filter((t) => t.from !== 'customer').length;
+    const chance = c ? INBOX.followUpChance[c.archetype] ?? INBOX.followUpDefault : INBOX.followUpDefault;
+    if (agentReplies <= INBOX.maxFollowUps && lastDay === d.day - 1 && rng.chance(chance)) {
+      const text = followUpText(rng, msg, c?.archetype ?? 'normal');
+      msg.thread.push({ from: 'customer', text, day: d.day });
+      msg.status = 'open';
+      msg.deadlineDay = d.day + 1;
+      msg.mood = round2(clamp(msg.mood - 0.15, -1, 1));
+      d.messages++;
+    } else if (d.day - lastDay >= INBOX.quietCloseDays) {
+      msg.status = 'resolved';
+      msg.resolution = msg.resolution ?? 'Le client n\'a pas relancé.';
+    }
+  }
+}
+
+// ───────────────────────────── 9. escalations ─────────────────────────────
+
+function badSupportReview(d: Day, msg: InboxMessage, c: Customer | undefined): boolean {
+  const p = productById(d.world, msg.productId);
+  if (!p || !msg.orderId) return false; // only buyers can review
+  reviewProduct(d.world, d.rng, p, c, d.rng.chance(0.65) ? 1 : 2, 'support_bad');
+  d.badReviews++;
+  return true;
+}
+
+function runEscalations(d: Day): void {
+  const { world, rng } = d;
+  for (const msg of world.market.inbox) {
+    if (msg.status !== 'open' || msg.deadlineDay >= d.day) continue;
+    const c = d.customer(msg.customerId);
+    const order = orderById(world, msg.orderId);
+    const angry = c?.archetype === 'karen' || c?.archetype === 'menace_chargeback';
+    switch (msg.intent) {
+      case 'arnaque': case 'troll': case 'partenariat':
+        msg.status = 'resolved';
+        msg.resolution = 'Ignoré : aucune conséquence.';
+        continue;
+      case 'compliment':
+        msg.status = 'resolved';
+        msg.resolution = 'Resté sans réponse.';
+        if (c) c.satisfaction = round2(clamp(c.satisfaction - 0.1, -1, 1));
+        continue;
+      default: break;
+    }
+    let outcome = 'Client sans réponse : abandon.';
+    const cbChance = (ESCALATION.chargeback[msg.intent] ?? 0) + (angry ? ESCALATION.angryArchetypeBoost : 0);
+    if (order && !order.refunded && cbChance > 0 && rng.chance(Math.min(0.95, cbChance))) {
+      const cost = chargebackOrder(world, order);
+      if (cost > 0) { d.chargebacks++; d.refunds++; d.refundAmount = round2(d.refundAmount + order.price); outcome = `Message ignoré → litige bancaire (${fmtEur(cost)}).`; }
+    } else if (rng.chance(Math.min(1, (ESCALATION.badReview[msg.intent] ?? 0) + (angry ? 0.3 : 0)))) {
+      if (badSupportReview(d, msg, c)) outcome = 'Message ignoré → avis négatif publié.';
+    }
+    msg.status = 'escalated';
+    msg.resolution = outcome;
+    msg.thread.push({ from: 'customer', text: c?.archetype === 'karen' ? 'AUCUNE RÉPONSE. Vous allez le regretter.' : 'Toujours aucune réponse… tant pis.', day: d.day });
+    if (c) c.satisfaction = round2(clamp(c.satisfaction - 0.4, -1, 1));
+  }
+}
+
+// ───────────────────────────── helpers ─────────────────────────────
+
+function pushEventSafe(d: Day, kind: WorldEventKind, title: string, description: string, severity: WorldEvent['severity']): WorldEvent {
+  const ev = pushEvent(d.world, kind, title, description, severity);
+  d.eventIds.push(ev.id);
+  return ev;
+}
+
+function housekeeping(d: Day): void {
+  const m = d.world.market;
+  if (m.adAccount.banned && d.day >= m.adAccount.bannedUntilDay) {
+    m.adAccount.banned = false;
+    m.adAccount.strikes = 0;
+    d.notes.push('Compte publicitaire réactivé : les campagnes peuvent reprendre.');
+    emit(d.world, { agentId: null, kind: 'ad', text: 'Fin de suspension : le compte publicitaire TikTok est réactivé.' });
+  }
+  if (m.modifiers.cpmUntilDay < d.day && m.modifiers.cpmMultiplier !== 1) m.modifiers.cpmMultiplier = 1;
+  const released = releaseHolds(d.world);
+  if (released > 0) d.notes.push(`Réserve de paiement libérée : ${fmtEur(released)} de retour en trésorerie.`);
+}
+
+function prune(d: Day): void {
+  const m = d.world.market;
+  const minDay = d.day - STATS.keepAdStatsDays;
+  if (m.adStats.length && m.adStats[0]!.day < minDay) m.adStats = m.adStats.filter((s) => s.day >= minDay);
+  const inboxMin = d.day - INBOX.keepDays;
+  if (m.inbox.length && m.inbox[0]!.day < inboxMin) m.inbox = m.inbox.filter((x) => x.day >= inboxMin || x.status === 'open' || x.status === 'replied');
+}
+
+function summarize(d: Day, result: MarketDayResult): void {
+  const { world } = d;
+  if (d.adSpend > 0) {
+    const ctr = d.impressions > 0 ? d.clicks / d.impressions : 0;
+    const adRevenue = world.market.adStats.filter((s) => s.day === d.day).reduce((s, x) => s + x.revenue, 0);
+    const roas = d.adSpend > 0 ? adRevenue / d.adSpend : 0;
+    const line = `Pubs TikTok : ${fmtEur(d.adSpend)} dépensés, ${fmtInt(d.impressions)} impressions, ${fmtInt(d.clicks)} clics (CTR ${fmtPct(ctr)}), ROAS ${fmtNum(roas, 2)}.`;
+    d.notes.unshift(line);
+    emit(world, { agentId: null, kind: 'ad', text: line });
+  }
+  const live = world.company.products.some((p) => p.status === 'live');
+  if (d.sales > 0) {
+    const line = `${plural(d.sales, 'vente', 'ventes')} aujourd'hui (${fmtEur(d.revenue)})${d.upsells ? `, dont ${plural(d.upsells, 'upsell', 'upsells')}` : ''}.`;
+    d.notes.push(line);
+    emit(world, { agentId: null, kind: 'sale', text: line });
+  } else if (live && !d.outage) d.notes.push('Aucune vente aujourd\'hui.');
+  if (d.refunds > 0) {
+    const line = `${plural(d.refunds, 'remboursement', 'remboursements')} (${fmtEur(d.refundAmount)})${d.chargebacks ? `, dont ${plural(d.chargebacks, 'litige bancaire', 'litiges bancaires')}` : ''}.`;
+    d.notes.push(line);
+    emit(world, { agentId: null, kind: 'refund', text: line });
+  }
+  if (d.badReviews > 0) d.notes.push(`${plural(d.badReviews, 'avis négatif', 'avis négatifs')} suite à des messages restés sans réponse.`);
+  if (d.messages > 0) {
+    const line = `${plural(d.messages, 'nouveau message client', 'nouveaux messages clients')} dans la boîte de réception.`;
+    d.notes.push(line);
+    emit(world, { agentId: null, kind: 'message', text: line });
+  }
+  result.sales = d.sales;
+  result.revenue = round2(d.revenue);
+  result.refunds = d.refunds;
+  result.adSpend = round2(d.adSpend);
+  result.newMessages = d.messages;
+  result.events = d.eventIds.slice();
+  result.notes = d.notes.slice();
+}
+
+// ───────────────────────────── entry point ─────────────────────────────
+
+export function tickMarket(world: WorldState, rng: Rng): MarketDayResult {
+  const day = world.day;
+  const result: MarketDayResult = { day, sales: 0, revenue: 0, refunds: 0, adSpend: 0, newMessages: 0, events: [], notes: [] };
+  if (world.ledger.some((e) => e.ref === `fixed:${day}`)) {
+    result.notes.push(`Le marché du jour ${day} est déjà clôturé.`);
+    return result;
+  }
+  const d = new Day(world, rng, difficultyProfile(world.scenario?.difficulty ?? 'normal'));
+  housekeeping(d);
+  runAds(d);
+  runOrganic(d);
+  runCreators(d);
+  runSales(d);
+  runUpsells(d);
+  runRefunds(d);
+  runReviews(d);
+  runInbox(d);
+  runEscalations(d);
+  const before = world.market.events.length;
+  rollEvents(world, rng, d.diff);
+  for (const ev of world.market.events.slice(before)) {
+    d.eventIds.push(ev.id);
+    d.notes.push(`Événement : ${ev.title}.`);
+  }
+  recordLedger(world, { type: 'platform_fee', amount: -FEES.boutiqueDaily, memo: 'Abonnement boutique (29 €/mois)', ref: `fixed:${day}` });
+  recordLedger(world, { type: 'tool_subscription', amount: -FEES.toolsDaily, memo: 'Outils (12 €/mois)', ref: `fixed:${day}:outils` });
+  prune(d);
+  summarize(d, result);
+  return result;
+}

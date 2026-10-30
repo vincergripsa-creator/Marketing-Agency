@@ -1,0 +1,536 @@
+/** Evening retro: KPI → bandit rewards → experiments → lessons (dedup) → playbooks → brain notes → activity feed. */
+import type { BrainNote, BrainVault, ContentEngine, LessonDraft, MindContext } from '../contracts.js';
+import type { AgentState, DailyKpi, Experiment, Lesson, WorldState } from '../shared.js';
+import { clamp, emit, nextId } from '../core/index.js';
+import { armStats, HYPE_ARMS, nearestArm, PRICE_ARMS, rewardArm } from './bandits.js';
+import {
+  addRow, adRows, ctrOf, cvrOf, emptyAgg, indexWorld, nicheName, priceOnDay, productOfRow, refundsOnDay, retroAgent, roasOf,
+  type FunnelAgg,
+} from './data.js';
+import { updateExperiments, experimentValueKind } from './experiments.js';
+import { detectLessons, type HeuristicDraft } from './heuristics.js';
+import { computeDailyKpi, upsertKpi } from './kpi.js';
+import { basenameOf } from './markdown.js';
+import {
+  addRule, agentNoteName, agentsForLesson, hasMachineRule, lessonLink, lessonTitle, quotedTerms, replaceRuleEverywhere,
+  TOPIC_DEPTS, writePlaybookNotes,
+} from './playbooks.js';
+import {
+  DIMENSION_LABELS, fmtEur, fmtNum, fmtPct, fmtRatio, fold, jaccard, pad3, plural, round, safeDiv, shorten, slugify,
+  tokenize, tokenSet, TOPIC_TAGS, unique,
+} from './text.js';
+
+export const MAX_NEW_LESSONS_PER_RETRO = 8;
+export const JOURNAL_SECTION = '## Rétro du soir';
+
+/** Days already rewarded per world object: a second retro the same evening must not double-count bandit rewards. */
+const rewardedDays = new WeakMap<WorldState, Set<number>>();
+
+// ───────────────────────────── (b) bandit rewards ─────────────────────────────
+
+/** Applies the shared-convention rewards for one day (hook_style, ad_format, price, hype, niche). Idempotent per world/day. */
+export function applyDailyRewards(world: WorldState, day: number): number {
+  const done = rewardedDays.get(world) ?? new Set<number>();
+  if (done.has(day)) return 0;
+  done.add(day);
+  rewardedDays.set(world, done);
+
+  const ix = indexWorld(world);
+  const perCreative = new Map<string, { agg: FunnelAgg; nicheId: string | null }>();
+  const perProduct = new Map<string, FunnelAgg>();
+  for (const r of adRows(world, day, day)) {
+    const p = productOfRow(ix, r);
+    const c = perCreative.get(r.creativeId) ?? { agg: emptyAgg(), nicheId: p?.nicheId ?? null };
+    addRow(c.agg, r);
+    perCreative.set(r.creativeId, c);
+    if (p) perProduct.set(p.id, addRow(perProduct.get(p.id) ?? emptyAgg(), r));
+  }
+  let rewards = 0;
+  for (const [creativeId, { agg, nicheId }] of perCreative) {
+    const creative = ix.creatives.get(creativeId);
+    if (!creative || !nicheId || agg.impressions < 300) continue;
+    const reward = clamp(ctrOf(agg) / 0.03);
+    const weight = clamp(agg.impressions / 1000, 0.5, 3);
+    rewardArm(world, `hook_style:${nicheId}`, creative.hookStyle, reward, weight);
+    rewardArm(world, `ad_format:${nicheId}`, creative.format, reward, weight);
+    rewards += 2;
+  }
+  const refunds = refundsOnDay(world, ix, day);
+  const ordersToday = new Map<string, number>();
+  for (const o of world.market?.orders ?? []) if (o.day === day) ordersToday.set(o.productId, (ordersToday.get(o.productId) ?? 0) + 1);
+  for (const [productId, agg] of perProduct) {
+    const p = ix.products.get(productId)!;
+    const ref = refunds.get(productId) ?? { count: 0, amount: 0 };
+    if (agg.landingViews >= 20) {
+      const weight = clamp(agg.landingViews / 50, 0.5, 3);
+      const priceArm = nearestArm(priceOnDay(p, day), PRICE_ARMS);
+      if (priceArm) {
+        rewardArm(world, `price:${p.nicheId}`, priceArm, clamp((agg.revenue - ref.amount) / agg.landingViews / 1.5), weight);
+        rewards++;
+      }
+      const hypeArm = p.salesPage ? nearestArm(p.salesPage.hypeLevel, HYPE_ARMS) : null;
+      if (hypeArm) {
+        const sales = Math.max(agg.purchases, ordersToday.get(productId) ?? 0);
+        const refundRate = safeDiv(ref.count, Math.max(1, sales));
+        rewardArm(world, 'hype', hypeArm, clamp(cvrOf(agg) / 0.08) * (1 - Math.min(1, refundRate * 4)), weight);
+        rewards++;
+      }
+    }
+    if (agg.spend >= 3 && p.nicheId) {
+      rewardArm(world, 'niche', p.nicheId, clamp(roasOf(agg) / 3), clamp(agg.spend / 20, 0.5, 3));
+      rewards++;
+    }
+  }
+  return rewards;
+}
+
+// ───────────────────────────── (e) engine reconciliation ─────────────────────────────
+
+const TOPIC_LINKS: Record<Lesson['topic'], string[]> = {
+  ads: ["Canaux d'acquisition"],
+  pricing: ['Prix'],
+  product: ["Structure d'un PDF qui vend"],
+  support: ['Support client'],
+  niche: ['Règle du un'],
+  finance: ['Budget et garde-fous'],
+  partnership: ["Canaux d'acquisition"],
+  process: ['Identité'],
+};
+
+/** Seed notes a lesson should link to, from its topic and wording. */
+function relevantLinks(topic: Lesson['topic'], insight: string, extra: readonly string[]): string[] {
+  const f = fold(insight);
+  const links = [...extra, ...(TOPIC_LINKS[topic] ?? [])];
+  if (/\b(interdit|refus|conformite|ecrire)/.test(f) && /\b(pub|tiktok)/.test(f)) links.push('Conformité pub TikTok');
+  if (/page de vente|promesse/.test(f)) links.push('Page de vente');
+  if (/\bprix\b|par visiteur/.test(f)) links.push('Prix');
+  if (/\bsupport\b|message client|chargeback|arnaque/.test(f)) links.push('Support client');
+  if (/\bniche\b|regle du un/.test(f)) links.push('Règle du un');
+  if (/\bpub|hook|createur|organique/.test(f)) links.push("Canaux d'acquisition");
+  return unique(links).slice(0, 6);
+}
+
+function toLessonDraft(h: HeuristicDraft): LessonDraft {
+  return { topic: h.topic, insight: h.insight, evidence: h.evidence, confidence: h.confidence, appliesToRoles: h.appliesToRoles };
+}
+
+function sanitizeDraft(d: unknown): LessonDraft | null {
+  if (!d || typeof d !== 'object') return null;
+  const x = d as Partial<LessonDraft>;
+  const insight = String(x.insight ?? '').replace(/\s+/g, ' ').trim();
+  if (insight.length < 8) return null;
+  const topic = (x.topic && x.topic in TOPIC_DEPTS ? x.topic : 'process') as Lesson['topic'];
+  return {
+    topic,
+    insight: shorten(insight, 280),
+    evidence: shorten(String(x.evidence ?? '').replace(/\s+/g, ' ').trim(), 600),
+    confidence: round(clamp(Number.isFinite(Number(x.confidence)) ? Number(x.confidence) : 0.5, 0.05, 0.98), 2),
+    appliesToRoles: Array.isArray(x.appliesToRoles) ? x.appliesToRoles.map(String).filter(Boolean).slice(0, 8) : [],
+  };
+}
+
+function sameQuoted(a: string, b: string): boolean {
+  return quotedTerms(a).sort().join('|') === quotedTerms(b).sort().join('|');
+}
+
+function matchesHeuristic(h: HeuristicDraft, d: LessonDraft): boolean {
+  if (h.insight === d.insight) return true;
+  if (h.topic !== d.topic) return false;
+  return sameQuoted(h.insight, d.insight) && jaccard(tokenSet(h.insight), tokenSet(d.insight)) >= 0.4;
+}
+
+function draftFromEngine(d: LessonDraft): HeuristicDraft {
+  const words = [...tokenSet(d.insight)].slice(0, 6).join(' ');
+  return {
+    ...d,
+    key: `${TOPIC_TAGS[d.topic]}-${slugify(words, 40)}`,
+    title: lessonTitle(d),
+    links: relevantLinks(d.topic, d.insight, []),
+    tags: [],
+    extraDepts: [],
+    critical: false,
+  };
+}
+
+/** Engine drafts are final; they inherit keys/links of the heuristic they rephrase; critical heuristics always survive. */
+export function reconcileDrafts(heuristics: HeuristicDraft[], engineDrafts: unknown): HeuristicDraft[] {
+  const drafts = Array.isArray(engineDrafts) ? engineDrafts.map(sanitizeDraft).filter((d): d is LessonDraft => d !== null) : [];
+  if (drafts.length === 0) return heuristics;
+  const used = new Set<HeuristicDraft>();
+  const out: HeuristicDraft[] = [];
+  for (const d of drafts) {
+    const match = heuristics.find((h) => !used.has(h) && matchesHeuristic(h, d));
+    if (match) {
+      used.add(match);
+      // never lose a machine-readable rule the heuristic engine relies on
+      const insight = hasMachineRule(match.insight) && !hasMachineRule(d.insight) ? match.insight : d.insight;
+      out.push({ ...match, insight, evidence: d.evidence || match.evidence, confidence: d.confidence, appliesToRoles: d.appliesToRoles });
+    } else out.push(draftFromEngine(d));
+  }
+  for (const h of heuristics) if (h.critical && !used.has(h)) out.push(h);
+  const seen = new Set<string>();
+  return out.filter((d) => (seen.has(d.key) ? false : (seen.add(d.key), true)));
+}
+
+// ───────────────────────────── (f) dedup ─────────────────────────────
+
+export function lessonKeyOf(l: Pick<Lesson, 'notePath'>): string {
+  return basenameOf(l.notePath ?? '').replace(/^jour-\d+-/, '');
+}
+
+/** Insight without its numbers (stemmed, so "1 jour" = "2 jours"): same comparable text = same conclusion. */
+function comparable(s: string): string {
+  return tokenize(String(s ?? '').replace(/\d+(?:[.,]\d+)?/g, ' ')).join(' ');
+}
+
+export function findDuplicateLesson(lessons: readonly Lesson[], d: Pick<HeuristicDraft, 'key' | 'topic' | 'insight'>): Lesson | undefined {
+  const key = slugify(d.key, 50);
+  return (
+    lessons.find((l) => l.topic === d.topic && lessonKeyOf(l) === key) ??
+    lessons.find((l) => l.topic === d.topic && sameQuoted(l.insight, d.insight) && jaccard(tokenSet(l.insight), tokenSet(d.insight)) >= 0.6)
+  );
+}
+
+// ───────────────────────────── helpers ─────────────────────────────
+
+function placeholderAgent(): AgentState {
+  return {
+    id: 'nora', name: 'Nora', role: 'Responsable RH et apprentissage', dept: 'rh', isChief: true, tier: 'haiku',
+    persona: "Anime la rétro du soir et tient la mémoire de l'agence.", skills: ['rétro', 'playbooks'],
+    tools: ['brain.read', 'brain.write'], taskKinds: ['retro', 'performance_review'],
+    avatar: { skin: '#f1c27d', hair: '#3b2a1a', shirt: '#7c5cbf', pants: '#2f2f3a', hairStyle: 1, accessory: 'glasses' },
+    status: 'working', place: 'rh', currentTaskId: null, energy: 100, level: 1, xp: 0,
+    perf: { done: 0, approved: 0, rejected: 0, failed: 0, score: 0 }, bubble: null,
+  };
+}
+
+async function mindContext(world: WorldState, brain: BrainVault, agent: AgentState, query: string): Promise<MindContext> {
+  let brainNotes: MindContext['brainNotes'] = [];
+  try {
+    brainNotes = (await brain.search(query, 4)).map((r) => ({ path: r.path, title: r.title, excerpt: r.excerpt }));
+  } catch {
+    brainNotes = [];
+  }
+  return { agent, playbook: [...(world.company.playbooks?.[agent.id] ?? [])], brainNotes, lessons: (world.company.lessons ?? []).slice(-10), day: world.day };
+}
+
+function dimensionLabel(world: WorldState, dim: string): string {
+  const [base, nicheId] = dim.split(':');
+  const label = DIMENSION_LABELS[base!] ?? base!;
+  return nicheId ? `${label} · ${nicheName(world, nicheId)}` : label;
+}
+
+function armLabel(world: WorldState, dim: string, key: string): string {
+  if (dim === 'niche') return nicheName(world, key);
+  if (dim.startsWith('price')) return `${key} €`;
+  return key;
+}
+
+function kpiTable(k: DailyKpi): string {
+  const rows: [string, string][] = [
+    ['Trésorerie', fmtEur(k.cash)],
+    ["Chiffre d'affaires", fmtEur(k.revenue)],
+    ['Dépense pub', fmtEur(k.adSpend)],
+    ['Profit du jour', fmtEur(k.profit)],
+    ['Profit cumulé', fmtEur(k.cumulativeProfit)],
+    ['Ventes', fmtNum(k.sales)],
+    ['Remboursements', fmtNum(k.refunds)],
+    ['Impressions', fmtNum(k.impressions)],
+    ['Clics', fmtNum(k.clicks)],
+    ['CTR', fmtPct(k.ctr, 2)],
+    ['Conversion page', fmtPct(k.cvr, 2)],
+    ['ROAS', fmtRatio(k.roas)],
+    ['Coût par achat (CAC)', fmtEur(k.cac)],
+    ['Tickets ouverts', fmtNum(k.openTickets)],
+    ['Score support moyen', k.avgReplyScore > 0 ? `${fmtNum(k.avgReplyScore)}/100` : '—'],
+    ['Produits en ligne', fmtNum(k.liveProducts)],
+    ['Tâches terminées', fmtNum(k.tasksDone)],
+    ['Leçons apprises', fmtNum(k.lessonsLearned)],
+  ];
+  return ['| Indicateur | Valeur |', '|---|---|', ...rows.map(([a, b]) => `| ${a} | ${b} |`)].join('\n');
+}
+
+function fmtExp(e: Experiment, v: number): string {
+  const kind = experimentValueKind(e);
+  if (kind === 'eur') return `${fmtEur(v)}/visiteur`;
+  if (kind === 'ratio') return fmtRatio(v);
+  if (kind === 'score') return `${fmtNum(v)}/100`;
+  return fmtPct(v, 2);
+}
+
+function fallbackMemo(k: DailyKpi, lessons: Lesson[], incidents: string[]): string {
+  const parts = [
+    `Jour ${k.day} : ${fmtEur(k.revenue)} de chiffre d'affaires pour ${fmtEur(k.adSpend)} de pub, profit du jour ${fmtEur(k.profit)} (cumul ${fmtEur(k.cumulativeProfit)}, trésorerie ${fmtEur(k.cash)}).`,
+    `${plural(k.sales, 'vente', 'ventes')}, ${plural(k.refunds, 'remboursement', 'remboursements')}, CTR ${fmtPct(k.ctr, 2)}, ROAS ${fmtRatio(k.roas)}.`,
+  ];
+  if (incidents.length) parts.push(`À retenir : ${shorten(incidents[0]!, 140)}`);
+  parts.push(lessons.length ? `${plural(lessons.length, 'leçon retenue', 'leçons retenues')}, la plus forte : ${shorten(lessons[0]!.insight, 140)}` : 'Pas de nouvelle leçon : on continue de tester et de mesurer.');
+  return parts.join(' ');
+}
+
+function lessonNoteBody(world: WorldState, l: Lesson, links: string[]): string {
+  const agents = (world.company.agents ?? []).filter((a) => l.appliesTo.includes(a.id));
+  const source = (world.company.agents ?? []).find((a) => a.id === l.source)?.name ?? l.source;
+  return [
+    `> ${l.insight}`,
+    '',
+    '## Preuves',
+    l.evidence || '_Pas de chiffre associé._',
+    '',
+    `**Confiance** : ${fmtPct(l.confidence, 0)} · **Thème** : ${TOPIC_TAGS[l.topic] ?? l.topic} · **Source** : ${source} · **Jour** : ${l.day}`,
+    '',
+    '## Appliquée dans les playbooks',
+    agents.length ? agents.map((a) => `[[${agentNoteName(world, a)}]]`).join(' · ') : '_Aucun agent ciblé._',
+    '',
+    '## Liens',
+    [`Rétro du [[jour-${pad3(l.day)}]]`, ...links.map((x) => `[[${x}]]`)].join(' · '),
+  ].join('\n');
+}
+
+// ───────────────────────────── runRetro ─────────────────────────────
+
+export async function runRetro(world: WorldState, engine: ContentEngine, brain: BrainVault, incidents: string[]): Promise<Lesson[]> {
+  const day = world.day;
+  const incidentLines = (Array.isArray(incidents) ? incidents : []).map((s) => String(s ?? '').trim()).filter(Boolean);
+  world.company.lessons ??= [];
+  world.company.playbooks ??= {};
+
+  // (a) KPI of the day
+  const kpi = computeDailyKpi(world, day);
+  upsertKpi(world, kpi);
+
+  // (b) bandit rewards from today's market data
+  applyDailyRewards(world, day);
+
+  // (c) experiments
+  const concluded = updateExperiments(world);
+
+  // (d) heuristic lessons
+  let notes: BrainNote[] = [];
+  try {
+    notes = await brain.list();
+  } catch {
+    notes = [];
+  }
+  const ix = indexWorld(world);
+  const heuristics = detectLessons({ world, day, kpi, ix, notes, concluded });
+
+  // (e) the engine (heuristic or Claude) turns them into the final drafts
+  const nora = retroAgent(world) ?? placeholderAgent();
+  const ctx = await mindContext(world, brain, nora, `leçons rétro ${unique(heuristics.map((h) => TOPIC_TAGS[h.topic])).join(' ')}`);
+  let engineDrafts: unknown = null;
+  try {
+    engineDrafts = await engine.extractLessons(
+      {
+        kpis: (world.company.kpis ?? []).slice(-14),
+        experiments: [...concluded, ...(world.company.experiments ?? []).filter((e) => e.status === 'running')],
+        incidents: incidentLines,
+        heuristicLessons: heuristics.map(toLessonDraft),
+      },
+      ctx,
+    );
+  } catch {
+    engineDrafts = null; // engine failure → heuristic lessons only
+  }
+  const finalDrafts = reconcileDrafts(heuristics, engineDrafts).sort(
+    (a, b) => Number(b.critical) - Number(a.critical) || b.confidence - a.confidence,
+  );
+
+  // (f) persist lessons (dedup: same key → confidence update) + (g) playbooks
+  const created: { lesson: Lesson; draft: HeuristicDraft }[] = [];
+  const updated: { lesson: Lesson; draft: HeuristicDraft; revised: boolean; reached: string[] }[] = [];
+  const changedAgents = new Set<string>();
+  /** `onlyNewAgents`: a confirmed lesson only reaches agents it never reached (no ping-pong between singleton rules). */
+  const applyToPlaybooks = (lesson: Lesson, d: HeuristicDraft, onlyNewAgents = false): void => {
+    const targets = agentsForLesson(world, lesson.topic, d.extraDepts, d.appliesToRoles, d.routeOnly);
+    for (const a of targets) {
+      if (onlyNewAgents && lesson.appliesTo.includes(a.id)) continue;
+      const r = addRule(world, a.id, lesson.insight);
+      if (r === 'added' || r === 'replaced') changedAgents.add(a.id);
+      if ((world.company.playbooks[a.id] ?? []).includes(lesson.insight)) lesson.appliesTo = unique([...lesson.appliesTo, a.id]);
+    }
+  };
+
+  for (const d of finalDrafts) {
+    const dup = findDuplicateLesson(world.company.lessons, d);
+    if (dup) {
+      const revised = comparable(dup.insight) !== comparable(d.insight);
+      if (!revised && dup.evidence === d.evidence) continue; // nothing new since last time
+      if (revised) {
+        // the data now says something different: new wording everywhere, confidence restarts from the new sample
+        const old = dup.insight;
+        dup.insight = d.insight;
+        dup.confidence = d.confidence;
+        for (const id of replaceRuleEverywhere(world, old, d.insight)) changedAgents.add(id);
+      } else {
+        // same conclusion on fresher data: keep the rule text stable, raise confidence a little
+        dup.confidence = round(Math.min(0.97, Math.max(dup.confidence, d.confidence) + 0.05 * d.confidence), 2);
+      }
+      dup.evidence = d.evidence;
+      const before = new Set(dup.appliesTo);
+      applyToPlaybooks(dup, d, !revised);
+      updated.push({ lesson: dup, draft: d, revised, reached: dup.appliesTo.filter((id) => !before.has(id)) });
+      continue;
+    }
+    if (created.length >= MAX_NEW_LESSONS_PER_RETRO) continue;
+    const lesson: Lesson = {
+      id: nextId(world, 'les'),
+      day,
+      topic: d.topic,
+      insight: d.insight,
+      evidence: d.evidence,
+      confidence: round(clamp(d.confidence, 0.05, 0.99), 2),
+      source: nora.id,
+      appliesTo: [],
+      notePath: `lecons/jour-${pad3(day)}-${slugify(d.key, 50)}.md`,
+    };
+    world.company.lessons.push(lesson);
+    applyToPlaybooks(lesson, d);
+    created.push({ lesson, draft: d });
+  }
+
+  // brain notes — a failing disk write is reported in the feed but never aborts the retro
+  const failures: string[] = [];
+  const safely = async (what: string, op: () => Promise<unknown>): Promise<void> => {
+    try {
+      await op();
+    } catch (err) {
+      failures.push(`${what} (${err instanceof Error ? err.message : String(err)})`);
+    }
+  };
+  const writeLessonNote = (lesson: Lesson, draft: HeuristicDraft) =>
+    brain.write({
+      path: lesson.notePath,
+      title: lessonTitle(lesson),
+      tags: unique(['lecon', TOPIC_TAGS[lesson.topic], ...draft.tags]),
+      body: lessonNoteBody(world, lesson, relevantLinks(lesson.topic, lesson.insight, draft.links)),
+      day,
+    });
+
+  for (const { lesson, draft } of created) await safely(lesson.notePath, () => writeLessonNote(lesson, draft));
+  for (const { lesson, draft, revised, reached } of updated) {
+    await safely(lesson.notePath, async () => {
+      const exists = notes.some((n) => n.path === lesson.notePath) || (await brain.read(lesson.notePath))?.path === lesson.notePath;
+      if (!exists) return writeLessonNote(lesson, draft);
+      const agents = (world.company.agents ?? []).filter((a) => reached.includes(a.id));
+      return brain.append(
+        lesson.notePath,
+        [
+          `### ${revised ? 'Révision' : 'Confirmation'} — jour ${day} ([[jour-${pad3(day)}]])`,
+          ...(revised ? [`> ${lesson.insight}`] : []),
+          `- ${lesson.evidence}`,
+          `- Confiance : ${fmtPct(lesson.confidence, 0)}`,
+          ...(agents.length ? [`- Nouveaux playbooks : ${agents.map((a) => `[[${agentNoteName(world, a)}]]`).join(' · ')}`] : []),
+        ].join('\n'),
+        day,
+      );
+    });
+  }
+  if (created.length) {
+    await safely('lecons/_index.md', () =>
+      brain.append('lecons/_index.md', created.map(({ lesson }) => `- ${lessonLink(lesson)} — jour ${day}, confiance ${fmtPct(lesson.confidence, 0)}`).join('\n'), day),
+    );
+  }
+
+  // brain notes: playbooks (all of them the first time, so every [[Prénom]] link resolves)
+  const firstTime = !notes.some((n) => n.path.startsWith('playbooks/'));
+  const toRefresh = firstTime ? (world.company.agents ?? []).map((a) => a.id) : [...changedAgents];
+  if (toRefresh.length) await safely('playbooks/', () => writePlaybookNotes(world, brain, toRefresh, day));
+
+  // KPI refreshed with today's lessons
+  kpi.lessonsLearned = (world.company.lessons ?? []).filter((l) => l.day === day).length;
+  upsertKpi(world, kpi);
+
+  // (h) journal of the day
+  const newLessons = created.map((c) => c.lesson);
+  let memo = '';
+  try {
+    memo = String(
+      (await engine.dailyMemo({ day, kpi, notes: [...incidentLines, ...newLessons.map((l) => `Leçon : ${l.insight}`), ...concluded.map((e) => `Expérience conclue : ${e.hypothesis} → ${e.winner ?? 'sans gagnant'}`)] }, ctx)) ?? '',
+    ).trim();
+  } catch {
+    memo = '';
+  }
+  if (!memo) memo = fallbackMemo(kpi, newLessons, incidentLines);
+  const journalPath = `journal/jour-${pad3(day)}.md`;
+  const section: string[] = [JOURNAL_SECTION, '', ...memo.split('\n').map((l) => `> ${l}`), '', '### Chiffres du jour', '', kpiTable(kpi), '', '### Incidents'];
+  section.push(...(incidentLines.length ? incidentLines.map((i) => `- ${i}`) : ['- Aucun incident notable.']));
+  section.push('', '### Leçons du jour');
+  section.push(...(newLessons.length ? newLessons.map((l) => `- ${lessonLink(l)} — ${l.evidence ? shorten(l.evidence, 160) : 'sans chiffre'} _(confiance ${fmtPct(l.confidence, 0)})_`) : ['- Pas de nouvelle leçon aujourd’hui.']));
+  if (updated.length) {
+    section.push('', '### Leçons confirmées ou révisées');
+    section.push(...updated.map(({ lesson, revised }) => `- ${lessonLink(lesson)} — ${revised ? 'révisée' : 'confirmée'}, confiance ${fmtPct(lesson.confidence, 0)}`));
+  }
+  const running = (world.company.experiments ?? []).filter((e) => e.status === 'running');
+  if (concluded.length || running.length) {
+    section.push('', '### Expériences');
+    for (const e of concluded) {
+      section.push(`- Conclue : « ${e.hypothesis} » → ${e.winner ? `gagnant « ${armLabel(world, e.dimension, e.winner)} »` : 'pas de gagnant net'} (${Object.entries(e.results).map(([k, r]) => `${k} ${fmtExp(e, r.value)}, n = ${fmtNum(r.n)}`).join(' · ')})`);
+    }
+    for (const e of running) section.push(`- En cours depuis le jour ${e.day} : « ${e.hypothesis} » (${Object.entries(e.results).map(([k, r]) => `${k} n = ${fmtNum(r.n)}`).join(' · ') || 'pas encore de données'})`);
+  }
+  const banditRows: string[] = [];
+  for (const dim of Object.keys(world.company.bandits ?? {}).sort()) {
+    const stats = armStats(world, dim);
+    const pulls = stats.reduce((s, a) => s + a.pulls, 0);
+    if (!stats.length || pulls === 0) continue;
+    banditRows.push(`| ${dimensionLabel(world, dim)} | ${armLabel(world, dim, stats[0]!.key)} | ${fmtPct(stats[0]!.mean, 0)} | ${fmtNum(pulls)} |`);
+  }
+  if (banditRows.length) section.push('', '### Ce que pensent les bandits', '', '| Décision | En tête | Score estimé | Essais |', '|---|---|---|---|', ...banditRows.slice(0, 16));
+  if (changedAgents.size) {
+    const names = (world.company.agents ?? []).filter((a) => changedAgents.has(a.id)).map((a) => `[[${agentNoteName(world, a)}]]`);
+    section.push('', '### Playbooks mis à jour', names.join(' · '));
+  }
+  section.push('', `Jour précédent : ${day > 1 ? `[[jour-${pad3(day - 1)}]]` : '—'} · [[Objectifs]] · [[00 - Accueil]]`);
+
+  // the journal may already hold sections written during the day (daily report…): keep them, replace only the retro
+  const existingJournal = await brain.read(journalPath).catch(() => null);
+  const own = existingJournal?.path === journalPath ? existingJournal : null;
+  const kept = own ? own.body.split(JOURNAL_SECTION)[0]!.trimEnd() : '';
+  await safely(journalPath, () =>
+    brain.write({
+      path: journalPath,
+      title: own ? own.title : `Journal — jour ${day}`,
+      tags: unique(['journal', 'retro', ...(own ? own.tags : [])]),
+      body: `${kept ? `${kept}\n\n` : ''}${section.join('\n')}`,
+      day,
+    }),
+  );
+  const journalIndex = notes.find((n) => n.path === 'journal/_index.md');
+  if (!journalIndex || !journalIndex.body.includes(`[[jour-${pad3(day)}]]`)) {
+    await safely('journal/_index.md', () =>
+      brain.append('journal/_index.md', `- [[jour-${pad3(day)}]] — profit du jour ${fmtEur(kpi.profit)}, ${plural(newLessons.length, 'leçon', 'leçons')}`, day),
+    );
+  }
+
+  // (i) activity feed
+  if (failures.length) {
+    emit(world, { agentId: nora.id, kind: 'thought', text: shorten(`${nora.name} n'arrive pas à écrire dans le cerveau : ${failures.join(' ; ')}`, 160) });
+  }
+  for (const l of newLessons) emit(world, { agentId: nora.id, kind: 'lesson', text: `Nouvelle leçon : ${shorten(l.insight, 110)}` });
+  for (const e of concluded) {
+    emit(world, {
+      agentId: nora.id,
+      kind: 'lesson',
+      text: e.winner
+        ? `Expérience conclue (${dimensionLabel(world, e.dimension)}) : « ${armLabel(world, e.dimension, e.winner)} » gagne.`
+        : `Expérience conclue (${dimensionLabel(world, e.dimension)}) sans gagnant net.`,
+    });
+  }
+  if (updated.length) emit(world, { agentId: nora.id, kind: 'lesson', text: `${plural(updated.length, 'leçon confirmée', 'leçons confirmées')} par les chiffres du jour.` });
+  emit(world, {
+    agentId: nora.id,
+    kind: 'brain_write',
+    text: `${nora.name} écrit le journal du jour ${day}${created.length ? ` et ${plural(created.length, 'leçon', 'leçons')}` : ''} dans le cerveau.`,
+  });
+  if (changedAgents.size) {
+    const names = (world.company.agents ?? []).filter((a) => changedAgents.has(a.id)).map((a) => a.name);
+    emit(world, {
+      agentId: nora.id,
+      kind: 'brain_write',
+      text: `Playbooks mis à jour : ${names.length > 4 ? `${names.slice(0, 4).join(', ')} et ${plural(names.length - 4, 'autre', 'autres')}` : names.join(', ')}.`,
+    });
+  }
+
+  return newLessons;
+}
