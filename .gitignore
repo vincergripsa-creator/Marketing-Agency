@@ -1,0 +1,21 @@
+node_modules/
+dist/
+web/dist/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+
+# Secrets — never commit real keys (this repo is public)
+.env
+.env.*
+!.env.example
+
+# Simulation runs: generated PDFs, covers, ads, brain copies, world saves
+runs/*
+!runs/.gitkeep
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/

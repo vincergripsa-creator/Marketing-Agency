@@ -1,0 +1,26 @@
+{
+  "name": "marketing-agency",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Agence marketing autonome en pixel art : 30 agents IA qui créent, vendent et font la pub de PDF à forte valeur ajoutée, entraînés dans un marché virtuel avant le passage au réel.",
+  "type": "module",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,magenta \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web",
+    "start": "npm run start -w server",
+    "sim": "npm run sim -w server --",
+    "test": "npm run test -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
