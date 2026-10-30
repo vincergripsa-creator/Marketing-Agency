@@ -21,9 +21,33 @@ interface CoverCtx {
 
 interface TextBlock { lines: string[]; size: number; lineHeight: number; height: number }
 
-function titleBlock(c: CoverCtx, maxWidth: number, max: number, min = 28): TextBlock {
-  const fit = fitText(c.title || 'Guide pratique', { maxWidth, maxLines: 4, font: c.titleFont, max, min, scale: c.titleScale });
-  const lineHeight = Math.round(fit.size * 1.1);
+/** Beyond this length a cover title is cut (at a word boundary); below it the FULL title is always shown. */
+export const COVER_TITLE_MAX_CHARS = 140;
+
+/** Word-boundary cut with an ellipsis, only for titles longer than COVER_TITLE_MAX_CHARS. */
+const CUT_DANGLING = /\s+(?:de|d['’]|du|des|la|le|les|l['’]|en|à|au|aux|pour|par|sur|et|ou|un|une|avec|sans|dans)$/i;
+
+function capTitle(title: string): string {
+  if (title.length <= COVER_TITLE_MAX_CHARS) return title;
+  const cut = title.slice(0, COVER_TITLE_MAX_CHARS - 1);
+  const sp = cut.lastIndexOf(' ');
+  let head = (sp > 80 ? cut.slice(0, sp) : cut).replace(/[\s,;:.…–—-]+$/, '');
+  // never end on « … vivant en » nor double an ellipsis already present in the title
+  for (let k = 0; k < 4 && CUT_DANGLING.test(head); k++) head = head.replace(CUT_DANGLING, '').replace(/[\s,;:.…–—-]+$/, '');
+  return `${head}…`;
+}
+
+/**
+ * The cover shows the WHOLE title: the biggest size that fits in 4 lines; a long title gets a smaller
+ * size and up to 6 lines instead of an ellipsis. Only titles beyond ~140 characters are cut.
+ */
+export function titleBlock(c: Pick<CoverCtx, 'title' | 'titleFont' | 'titleScale'>, maxWidth: number, max: number, min = 28): TextBlock {
+  const text = capTitle(c.title || 'Guide pratique');
+  const fitsIn4 = wrapText(text, maxWidth, c.titleFont, min, c.titleScale).length <= 4;
+  const fit = fitsIn4
+    ? fitText(text, { maxWidth, maxLines: 4, font: c.titleFont, max, min, scale: c.titleScale })
+    : fitText(text, { maxWidth, maxLines: 6, font: c.titleFont, max: min - 1, min: Math.max(16, Math.round(min * 0.62)), scale: c.titleScale });
+  const lineHeight = Math.round(fit.size * (fit.lines.length > 4 ? 1.08 : 1.1));
   return { lines: fit.lines, size: fit.size, lineHeight, height: lineHeight * fit.lines.length };
 }
 

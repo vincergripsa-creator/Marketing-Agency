@@ -70,7 +70,9 @@ export const supportHandlers: HandlerMap = {
         const order: Order | null = msg.orderId ? ctx.world.market.orders.find((o) => o.id === msg.orderId) ?? null : null;
         const tone = exp && exp.variants.length ? exp.variants[i % exp.variants.length]! : learnedTone ?? learning.chooseArm(ctx.world, 'support_tone', SUPPORT_TONES, ctx.rng);
         const toneMind = mindWith({ ...mind, playbook: withTone(mind.playbook, tone) }, []);
-        let reply: SupportReplyInput = await ctx.engine.writeSupportReply({ message: msg, product, order, policy }, toneMind);
+        const cust = ctx.world.market.customers.find((c) => c.id === msg.customerId);
+        const customer = cust ? { name: cust.name, archetype: cust.archetype } : msg.customerName ? { name: msg.customerName, archetype: 'normal' } : null;
+        let reply: SupportReplyInput = await ctx.engine.writeSupportReply({ message: msg, product, order, policy, customer }, toneMind);
         // Guards from the playbook: never pay/click for a scam, never refund without a real order, big refunds need the founder.
         const signals = scamSignals(msg);
         const moneyOut = reply.action === 'refund' || reply.action === 'discount_code';

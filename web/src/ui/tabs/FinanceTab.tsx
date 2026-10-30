@@ -2,17 +2,21 @@
 import { useMemo, useState } from 'react';
 import type { LedgerType } from '../../../../shared/types';
 import { BarChart, LineChart, SERIES } from '../charts';
-import { Bar, cx, Empty, Overlay, SectionTitle, Segmented, Stat } from '../common';
+import { Bar, cx, Empty, Overlay, Pill, SectionTitle, Segmented, Stat } from '../common';
 import { useApp } from '../context';
+import { budgetView, type BudgetView } from '../derive';
 import { clamp01, fmtEur, fmtEurShort, fmtEurSigned, fmtInt, fmtRoas, safeDiv, sum } from '../format';
 import { Icon } from '../icons';
-import { LEDGER_LABEL } from '../labels';
+import { agentName, LEDGER_LABEL } from '../labels';
 
 type LedgerFilter = 'all' | 'in' | 'out';
 
 export function FinanceTab({ onClose }: { onClose(): void }) {
-  const { snapshot } = useApp();
+  const { snapshot, lookups } = useApp();
   const [lf, setLf] = useState<LedgerFilter>('all');
+  const budget = budgetView(snapshot);
+  const cfoId = lookups.depts.get('finance')?.chiefId ?? null;
+  const budgetSpend = budget ? sum((snapshot?.market?.adStats ?? []).filter((r) => r.day === budget.day), (r) => r.spend) : 0;
   const f = snapshot?.finance;
   const kpis = snapshot?.company?.kpis ?? [];
   const ledger = snapshot?.ledger ?? [];
@@ -53,6 +57,8 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
         <Stat label="Runway" value={f.runwayDays === null ? 'rentable' : `${fmtInt(f.runwayDays)} j`} sub={f.runwayDays !== null && f.runwayDays < 14 ? 'sous le seuil de 14 jours' : undefined} tone={f.runwayDays === null ? 'good' : f.runwayDays < 14 ? 'bad' : null} icon="clock" />
         <Stat label="ROAS 7 j" value={fmtRoas(f.roas7d)} sub="seuil de rentabilité ≈ 1,5×" tone={f.roas7d >= 1.5 ? 'good' : f.roas7d > 0 ? 'bad' : null} icon="target" />
       </div>
+
+      {budget ? <BudgetCard b={budget} cfo={cfoId ? agentName(lookups, cfoId) : null} spend={budgetSpend} /> : null}
 
       {goal ? (
         <div className="goal card">
@@ -169,5 +175,36 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
       )}
       <div className="muted small">Total des 150 dernières écritures : {fmtEurSigned(sum(ledger, (e) => (e.type === 'capital' ? 0 : e.amount)))}</div>
     </Overlay>
+  );
+}
+
+/** CFO envelope of the day (company.budget): ad spending cap, survival mode, the CFO's note. */
+function BudgetCard({ b, cfo, spend }: { b: BudgetView; cfo: string | null; spend: number }) {
+  const used = b.adCap > 0 ? clamp01(safeDiv(spend, b.adCap)) : spend > 0 ? 1 : 0;
+  return (
+    <div className={cx('card budget', b.survival && 'budget-survival')}>
+      <div className="budget-top">
+        <span className="budget-icon"><Icon name={b.survival ? 'alert' : 'shield'} size={16} /></span>
+        <div className="budget-titles">
+          <strong>Enveloppe du CFO · jour {b.day}</strong>
+          <span className="muted small">{cfo ? `fixée par ${cfo} au stand-up` : 'fixée au stand-up du matin'}{b.stale ? ' · mise à jour au prochain stand-up' : ''}</span>
+        </div>
+        <span className="flex1" />
+        {b.survival
+          ? <Pill tone="red" icon="alert" title="Trésorerie sous le seuil de sécurité : dépenses pub réduites au minimum">Mode survie</Pill>
+          : <Pill tone="green" icon="check">Budget normal</Pill>}
+      </div>
+      <div className="budget-row">
+        <div className="budget-cap">
+          <span className="hud-label">Plafond pub du jour</span>
+          <strong>{fmtEur(b.adCap)}</strong>
+        </div>
+        <div className="budget-use">
+          <Bar value={used} height={8} color={used >= 1 ? '#dc2626' : used > 0.8 ? '#d97706' : '#2a78d6'} title={`${fmtEur(spend)} dépensés sur ${fmtEur(b.adCap)}`} />
+          <span className="muted small">{spend > 0 ? `${fmtEur(spend)} dépensés (${Math.round(used * 100)} %)` : 'dépense comptée à la clôture du marché'}</span>
+        </div>
+      </div>
+      {b.note ? <div className="budget-note small"><Icon name="chat" size={12} /> {b.note}</div> : null}
+    </div>
   );
 }

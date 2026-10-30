@@ -1,10 +1,14 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inflateSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AdCreative, ChapterContent, PdfContent, Product, SalesPage, VisualSpec } from '../src/shared.js';
 import { designFor, renderAdStoryboard, renderCoverSvg, renderPdf, renderSalesPageHtml } from '../src/deliverables/index.js';
 import { sanitizePdfText } from '../src/deliverables/text.js';
+import { titleBlock } from '../src/deliverables/cover.js';
+import { MIN_PAGE_FILL, planIntro } from '../src/deliverables/pdf.js';
+import { splitDoDont } from '../src/deliverables/pdfVisuals.js';
 
 // ───────────────────────────── fixture ─────────────────────────────
 
@@ -275,5 +279,139 @@ describe('renderAdStoryboard', () => {
     const empty = renderAdStoryboard({ creative: { ...creative, scenes: [] }, product, design, brand: 'Pixel Agency' });
     expect(empty.frames).toEqual([]);
     expect(empty.previewHtml).toContain('Aucune scène');
+  });
+});
+
+// ───────────────────────────── founder review regressions ─────────────────────────────
+
+/** Every <text> of an SVG, unescaped, joined with spaces (what a reader sees on the cover). */
+function svgText(svg: string): string {
+  return [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]!)
+    .join(' ').replace(/ /g, ' ').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+describe('cover title is shown in full', () => {
+  // the 130-char title the lead saw cut as « …pour les propriétaires d'un chiot de 2 à… »
+  const LONG = "Un chiot propre en quelques semaines, même en appartement : la méthode simple pour les propriétaires d'un chiot de 2 à 6 mois";
+
+  it('a 125-140 char title keeps every word on all four layouts (smaller font, up to 6 lines, no ellipsis)', () => {
+    expect(LONG.length).toBeGreaterThan(120);
+    for (const coverLayout of ['centered', 'split', 'badge', 'minimal'] as const) {
+      for (const titleFont of ['Helvetica-Bold', 'Times-Bold', 'Courier-Bold'] as const) {
+        const svg = renderCoverSvg({ title: LONG, subtitle: content.subtitle, audience: content.audience, design: { ...design, coverLayout, titleFont }, brand: 'Pixel Agency' });
+        assertBalancedXml(svg);
+        const shown = svgText(svg).replace(/\s+/g, ' ');
+        expect(shown, `${coverLayout}/${titleFont}`).toContain(LONG);
+        expect(shown, `${coverLayout}/${titleFont}`).not.toMatch(/…/);
+      }
+    }
+  });
+
+  it('the title block grows to 6 lines before cutting; only titles beyond ~140 chars get an ellipsis', () => {
+    const font = { titleFont: 'Helvetica-Bold' as const, titleScale: 1.05 };
+    const short = titleBlock({ ...font, title: 'Chiot propre en 21 jours' }, 512, 60);
+    expect(short.size).toBeGreaterThanOrEqual(40);
+    const long = titleBlock({ ...font, title: LONG }, 512, 60);
+    expect(long.lines.join(' ').replace(/ /g, ' ')).toBe(LONG);
+    expect(long.lines.length).toBeLessThanOrEqual(6);
+    const huge = titleBlock({ ...font, title: `${LONG} vivant en appartement, avec un planning compatible avec le travail` }, 512, 60);
+    expect(huge.lines.join(' ')).toMatch(/…$/);
+    expect(huge.lines.join(' ')).not.toMatch(/……|\s(?:en|de|la|le|les|pour)…$/);
+  });
+});
+
+describe('PDF layout regressions', () => {
+  const pageH = 700;
+  it('never leaves the « À la fin de ce guide » box alone on a near-empty page', () => {
+    // fits → untouched
+    expect(planIntro({ parts: [100, 100, 100], quote: 60, box: 80 }, 400, 500, pageH)).toEqual({ compact: false, quote: true, breakBefore: -1 });
+    // the box alone would spill (the lead's page 5): compact spacing, no decorative quote
+    expect(planIntro({ parts: [120, 110, 110, 100], quote: 70, box: 90 }, 520, 540, pageH)).toEqual({ compact: true, quote: false, breakBefore: -1 });
+    // compaction is not enough: the next page starts earlier and carries ≥ 25 % of content
+    const plan = planIntro({ parts: [150, 140, 130, 90], quote: 0, box: 80 }, 560, 540, pageH);
+    expect(plan.compact).toBe(false);
+    expect(plan.breakBefore).toBeGreaterThan(0);
+    const moved = [150, 140, 130, 90].slice(plan.breakBefore).reduce((a, b) => a + b, 0) + 80;
+    expect(moved).toBeGreaterThanOrEqual(pageH * MIN_PAGE_FILL);
+    // a big spill is a normal flow (the next page is full anyway)
+    expect(planIntro({ parts: [300, 300, 300], quote: 0, box: 80 }, 900, 540, pageH).breakBefore).toBe(-1);
+  });
+
+  it('do / don’t visuals follow the shared label convention, unprefixed lists read « à éviter » first', () => {
+    expect(splitDoDont(['À éviter : crier', 'À faire : récompenser', 'À éviter : le nez dans le pipi'])).toEqual({ dos: ['Récompenser'], donts: ['Crier', 'Le nez dans le pipi'] });
+    expect(splitDoDont(['Gronder après coup', 'Crier', 'Récompenser dehors', 'Sortir après la sieste'])).toEqual({ donts: ['Gronder après coup', 'Crier'], dos: ['Récompenser dehors', 'Sortir après la sieste'] });
+  });
+});
+
+// ───────────────────────────── page-level checks on the real PDF bytes ─────────────────────────────
+
+const WIN_ANSI: Record<number, string> = { 0x80: '€', 0x85: '…', 0x91: '‘', 0x92: '’', 0x93: '“', 0x94: '”', 0x96: '–', 0x97: '—', 0x9c: 'œ', 0x8c: 'Œ', 0xa0: ' ' };
+
+/** Text of each page, in drawing order (pdfkit: one deflated content stream per page, hex TJ strings). */
+async function pdfPagesText(file: string): Promise<string[]> {
+  const buf = await readFile(file);
+  const s = buf.toString('latin1');
+  const pages: string[] = [];
+  const re = /stream\r?\n/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s))) {
+    const start = m.index + m[0].length;
+    const end = s.indexOf('endstream', start);
+    if (end < 0) break;
+    let txt = '';
+    try { txt = inflateSync(buf.subarray(start, end)).toString('latin1'); } catch { continue; }
+    if (!/\bBT\b/.test(txt)) continue;
+    const parts: string[] = [];
+    for (const t of txt.matchAll(/\[([^\]]*)\]\s*TJ|<([0-9a-fA-F]+)>\s*Tj/g)) {
+      const hexes = t[1] !== undefined ? [...t[1].matchAll(/<([0-9a-fA-F]+)>/g)].map((h) => h[1]!) : [t[2]!];
+      parts.push(hexes.map((h) => h.match(/../g)!.map((b) => WIN_ANSI[parseInt(b, 16)] ?? String.fromCharCode(parseInt(b, 16))).join('')).join(''));
+    }
+    pages.push(parts.join(' ').replace(/\s+/g, ' '));
+  }
+  return pages;
+}
+
+/** Body of a page: what comes before the running footer (« PIXEL AGENCY · title · n »). */
+const bodyOf = (page: string) => page.slice(0, Math.max(0, page.lastIndexOf('PIXEL AGENCY'))).trim();
+
+describe('PDF pages read like the founder reads them', () => {
+  const para = 'Il est six heures quarante, la flaque est sur le tapis du salon, encore une fois, et le voisin du dessous commence à se plaindre de l’odeur. ';
+
+  it('no page ends on a lone heading (« Étape par étape », « Votre checklist », « Exemple concret »)', async () => {
+    for (let n = 1; n <= 7; n++) {
+      const chapters = content.chapters.map((c, k) => ({ ...c, paragraphs: [...c.paragraphs, ...Array.from({ length: (n + k) % 4 }, () => para.repeat(1 + ((n + k) % 3)))] }));
+      const file = join(dir, `headings-${n}.pdf`);
+      await renderPdf({ product, content: { ...content, chapters }, design, brand: 'Pixel Agency', outFile: file });
+      for (const [i, page] of (await pdfPagesText(file)).entries()) {
+        expect(bodyOf(page), `variante ${n}, page ${i + 1}`).not.toMatch(/(Étape par étape|Votre checklist|EXEMPLE CONCRET)$/);
+        // a chapter's checklist never sits alone on an otherwise empty page
+        expect(bodyOf(page).startsWith('Votre checklist') && bodyOf(page).length < 400, `variante ${n}, page ${i + 1} : checklist seule`).toBe(false);
+      }
+    }
+  });
+
+  it('the « À la fin de ce guide » box always shares its page with the introduction text', async () => {
+    for (let n = 2; n <= 9; n++) {
+      const introduction = [para.repeat(2), ...Array.from({ length: n }, (_, k) => para.repeat(1 + (k % 3)))];
+      const file = join(dir, `intro-${n}.pdf`);
+      await renderPdf({ product, content: { ...content, introduction }, design, brand: 'Pixel Agency', outFile: file });
+      const pages = await pdfPagesText(file);
+      const page = pages.find((p) => p.includes('À la fin de ce guide'))!;
+      expect(page, `n=${n}`).toBeTruthy();
+      const before = bodyOf(page).split('À la fin de ce guide')[0]!.replace(/^Introduction · Le point de départ/, '').trim();
+      expect(before.length, `n=${n} : l'encadré est seul sur sa page`).toBeGreaterThan(250); // ≥ 3 lines of text with it (≥ 25 % of the page with the box)
+    }
+  });
+
+  it('the last page and the running heads never double their labels', async () => {
+    const file = join(dir, 'labels.pdf');
+    await renderPdf({ product, content: { ...content, nextStep: { ...content.nextStep, title: 'La suite est ici : la marche en laisse sans tirer' } }, design, brand: 'Pixel Agency', outFile: file });
+    const all = (await pdfPagesText(file)).join(' ');
+    expect(all).toContain('la marche en laisse sans tirer');
+    expect(all).not.toMatch(/La suite est ici\s*:?\s*La suite est ici/);
+    expect(all).not.toMatch(/La suite est ici : la marche/);
+    expect(all).not.toMatch(/Bonus · Bonus|Bonus offert : Bonus/);
+    // bar values are a 0..100 index, not percentages
+    expect(all).not.toMatch(/\b68 %/);
   });
 });

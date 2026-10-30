@@ -14,6 +14,8 @@ export interface AppCtx {
   toast(t: ToastInput): void;
   openAgent(id: string, fromDept?: DeptId | null): void;
   openDept(id: DeptId): void;
+  /** Opens the Produits tab scrolled to (and highlighting) this product. */
+  openProduct(id: string): void;
   centerAgent(id: string): void;
   centerDept(id: DeptId): void;
   setTab(tab: TabId): void;
@@ -31,6 +33,7 @@ const EMPTY: AppCtx = {
   toast: () => undefined,
   openAgent: () => undefined,
   openDept: () => undefined,
+  openProduct: () => undefined,
   centerAgent: () => undefined,
   centerDept: () => undefined,
   setTab: () => undefined,

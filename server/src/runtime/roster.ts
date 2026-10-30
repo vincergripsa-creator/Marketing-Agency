@@ -373,7 +373,7 @@ export const SEED_PLAYBOOKS: Record<DeptId, string[]> = {
     'Ne jamais écrire « garanti »',
     'Ne jamais écrire « sans effort »',
     'Le hook tient dans les 2 premières secondes : la douleur avec les mots du client.',
-    'Stop-loss : pause si ROAS < 0,8 après 25 € dépensés ; +30 % de budget par jour au maximum.',
+    'Stop-loss sur échantillon : pause si ROAS < 0,4 après 25 €, ou ROAS < 0,8 après 2 jours et 40 € ; +30 % de budget par jour au maximum.',
   ],
   boutique: [
     'Niveau de promesse max « 0.6 »',

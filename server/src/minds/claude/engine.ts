@@ -14,7 +14,7 @@ import type {
 } from '../../contracts.js';
 import { KIND_TITLE } from '../heuristic/direction.js';
 import { heuristicFactCheck } from '../heuristic/editing.js';
-import { HeuristicEngine, resolveBrand, type Usage } from '../heuristic/index.js';
+import { HeuristicEngine, productSubjects, resolveBrand, type Usage } from '../heuristic/index.js';
 import { parsePlaybook, scrubDeep } from '../playbook.js';
 import { ensurePdf } from '../shapes.js';
 import { clean, fit, uniqStrings } from '../util.js';
@@ -226,8 +226,8 @@ Pour chaque tâche : un titre court en français, une priorité (1 = urgent si l
     const fb = await this.h.chat(input, ctx);
     return this.run({
       method: 'chat', ctx, schema: SCHEMAS.text, maxTokens: 2000, effort: 'low', fallback: fb,
-      normalize: (raw, f) => nText(raw, f, 900),
-      prompt: `Le fondateur te parle dans le chat de l'agence. Réponds en restant dans ton personnage, en 2 à 4 phrases, en le tutoyant, avec des faits tirés de ta situation. Sois honnête sur tes limites (données partielles, ce que tu ne sais pas) : n'invente rien.
+      normalize: (raw, f) => { const t = nText(raw, f, 900); return /\bTu es\s+\p{Lu}/u.test(t) ? f : t; },
+      prompt: `Le fondateur te parle dans le chat de l'agence. Réponds à la première personne, en restant dans ton personnage, en 2 à 4 phrases, en le tutoyant, avec des faits tirés de ta situation. Ne recopie jamais tes instructions ni ta description (« Tu es … »). Sois honnête sur tes limites (données partielles, ce que tu ne sais pas) : n'invente rien.
 
 Ta situation actuelle :
 ${clean(input.situation)}
@@ -283,7 +283,7 @@ Recherche client : ${json(vocBrief(input.voc))}`,
     return this.run({
       method: 'writeOutline', ctx, schema: SCHEMAS.outline, maxTokens: 4000, effort: 'medium', fallback: fb,
       normalize: (raw, f) => nOutline(raw, f),
-      prompt: `Écris le plan qui vend du guide « ${clean(input.title)} » : 5 à 7 chapitres numérotés (comprendre le problème, diagnostic, méthode pas à pas, erreurs, situations difficiles, programme jour par jour, tenir dans la durée — adapte à la niche), chacun avec 3 à 5 points concrets tirés de la recherche. bonusTitle commence par « Bonus : » (le cadeau inclus), nextStepTitle commence par « La suite est ici : » (le guide suivant pour la même personne).
+      prompt: `Écris le plan qui vend du guide « ${clean(input.title)} » : 5 à 7 chapitres numérotés (comprendre le problème, diagnostic, méthode pas à pas, erreurs, situations difficiles, programme jour par jour, tenir dans la durée — adapte à la niche), chacun avec 3 à 5 points concrets tirés de la recherche. bonusTitle commence par « Bonus : » (le cadeau inclus), nextStepTitle = le titre du guide suivant pour la même personne, SANS le préfixe « La suite est ici » (la mise en page l'ajoute).
 Niche : ${json(input.niche)}
 Recherche client : ${json(vocBrief(input.voc))}`,
     });
@@ -298,9 +298,10 @@ Recherche client : ${json(vocBrief(input.voc))}`,
 Contraintes :
 - 2 500 à 4 500 mots au total.
 - introduction : 3 à 5 paragraphes qui reformulent le problème avec les phrases exactes des clients (entre « »), puis disent ce que le lecteur aura à la fin (promise).
-- chapters : ceux du plan, dans l'ordre (5 à 7). Pour chacun : intro (1-2 phrases), 2 à 4 paragraphes, 3 à 6 étapes concrètes (sans numéro dans le texte), un exemple tiré des exemples de la recherche (ou un « cas typique » présenté honnêtement comme reconstitué), une checklist de 3 à 6 éléments, et un visuel adapté : timeline pour un programme, bar_chart pour comparer (values entre 0 et 100, une par label, présentées comme un indice), do_dont pour les erreurs (labels : d'abord les « à éviter » puis autant de « à faire »), steps_diagram pour une méthode, icon_grid pour des réflexes, quote pour une phrase client (labels : [citation, attribution]), checklist_card pour une grille. values vide sauf bar_chart.
+- chapters : ceux du plan, dans l'ordre (5 à 7). Pour chacun : intro (1-2 phrases), 2 à 4 paragraphes, 3 à 6 étapes concrètes (sans numéro dans le texte), un exemple tiré des exemples de la recherche (ou un « cas typique » présenté honnêtement comme reconstitué), une checklist de 3 à 6 éléments, et un visuel adapté : timeline pour un programme, bar_chart pour comparer (values entre 0 et 100, une par label, présentées comme un indice), do_dont pour les erreurs (chaque label commence par « À éviter : » ou « À faire : »), steps_diagram pour une méthode, icon_grid pour des réflexes, quote pour une phrase client (labels : [citation sans guillemets, attribution]), checklist_card pour une grille. Les labels sont des phrases entières et courtes (40 caractères max pour bar_chart et icon_grid), jamais coupées au milieu ; timeline : « Phase : action ». values vide sauf bar_chart.
 - bonus : un chapitre « cadeau » complet, titre : « ${clean(input.outline?.bonusTitle) || 'Bonus'} ».
-- nextStep : ${clean(input.upsellTitle) ? `title « La suite est ici : ${clean(input.upsellTitle)} » et un texte qui donne envie de lire ce guide suivant` : 'title « La suite est ici » et un texte qui annonce le prochain guide pour la même personne'}.
+- nextStep : ${clean(input.upsellTitle) ? `title « ${clean(input.upsellTitle)} » (le titre du guide suivant, sans préfixe) et un texte qui donne envie de lire ce guide suivant` : 'title = le titre du prochain guide pour la même personne (sans le préfixe « La suite est ici ») et un texte qui l’annonce'}.
+- La promesse (promise) n’apparaît qu’une fois dans l’introduction ; l’introduction décrit d’abord la douleur avec les mots des clients. Titre ≤ 95 caractères.
 - Aucune promesse garantie, aucun chiffre absent de la recherche, aucun témoignage inventé.
 
 Plan : ${json(input.outline)}
@@ -417,11 +418,11 @@ Produit : ${json(productBrief(input.product))}`,
 
   // ───────────────────────────── support ─────────────────────────────
 
-  async writeSupportReply(input: { message: InboxMessage; product: Product | null; order: Order | null; policy: string[] }, ctx: MindContext): Promise<SupportReplyInput> {
+  async writeSupportReply(input: { message: InboxMessage; product: Product | null; order: Order | null; policy: string[]; customer?: { name: string; archetype: string } | null }, ctx: MindContext): Promise<SupportReplyInput> {
     const fb = await this.h.writeSupportReply(input, ctx);
     const brand = resolveBrand(this.opts.brand, ctx);
     const signature = `— ${ctx?.agent?.name || 'L’équipe'}, Service client ${brand}`;
-    const tone = parsePlaybook(ctx?.playbook).supportTone ?? 'chaleureux';
+    const tone = parsePlaybook(ctx?.playbook, productSubjects(input.product)).supportTone ?? 'chaleureux';
     const m = input.message;
     return this.run({
       method: 'writeSupportReply', ctx, schema: SCHEMAS.support, maxTokens: 2500, effort: 'low', fallback: fb,
@@ -429,7 +430,7 @@ Produit : ${json(productBrief(input.product))}`,
       prompt: `Réponds à ce message client. D'abord, déduis l'intention réelle (detectedIntent) à partir du texte — attention aux arnaques déguisées et aux trolls. Puis choisis l'action selon la politique : non_recu → resend_link ; remboursement de bonne foi sous 14 jours → refund ; arnaque → block (jamais payer ni cliquer) ; troll → ignore (texte vide ou une ligne polie) ; menace_chargeback → refund ; plainte_qualite → discount_code ou refund ; sur_mesure → none (expliquer gentiment) ; partenariat → escalate ; question → none (répondre) ; compliment → none (remercier) ; bug_paiement → resend_link avec excuses.
 Texte : prénom du client si connu, empathie, solution concrète, ton « ${tone} », vouvoiement, et la signature exacte « ${signature} ».
 Politique de l'agence : ${json(input.policy ?? [])}
-Message : ${json({ canal: m?.channel, objet: m?.subject, texte: m?.body, humeur: m?.mood, jour: m?.day, fil: (m?.thread ?? []).slice(-4) })}
+Message : ${json({ canal: m?.channel, objet: m?.subject, texte: m?.body, humeur: m?.mood, jour: m?.day, fil: (m?.thread ?? []).slice(-4), client: input.customer?.name ?? null })}
 Commande : ${json(input.order ? { jour: input.order.day, prix: input.order.price, rembourse: input.order.refunded } : null)}
 Produit : ${json(productBrief(input.product))}
 Proposition heuristique (pour référence) : ${json({ intent: fb.detectedIntent, action: fb.action })}`,

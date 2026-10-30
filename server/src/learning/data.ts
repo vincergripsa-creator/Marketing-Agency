@@ -1,18 +1,25 @@
 /** Read-only accessors and aggregations over the world (ledger, ad stats, orders) shared by KPI, experiments and retro. */
 import type { BrainNote } from '../contracts.js';
-import type { AdCreative, AgentState, DailyAdStats, LedgerEntry, LedgerType, Order, Product, WorldState } from '../shared.js';
+import type { AdCreative, AgentState, DailyAdStats, LedgerEntry, Order, Product, WorldState } from '../shared.js';
 import { basenameOf } from './markdown.js';
 import { finite, fold, safeDiv, slugify } from './text.js';
 
-const INCOME_TYPES: ReadonlySet<LedgerType> = new Set<LedgerType>(['capital', 'revenue']);
-
 /**
- * Ledger amount with a normalised sign: income (capital, revenue) positive, everything else negative.
- * Robust to either convention in the sim (signed amounts, or positive costs).
+ * Ledger amount exactly as recordLedger STORED it (already signed: income +, costs −, and the caller's
+ * sign kept for 'hold:' / 'reversal:' refs). Never re-sign it: Σ amount = cash (see contracts.ts).
  */
-export function signedAmount(e: LedgerEntry): number {
-  const a = Math.abs(finite(e.amount));
-  return INCOME_TYPES.has(e.type) ? a : -a;
+export function amountOf(e: LedgerEntry): number {
+  return finite(e.amount);
+}
+
+/** Payment reserve ('hold:<id>' / 'hold:release:<day>'): moves cash, never profit. */
+export function isHoldEntry(e: Pick<LedgerEntry, 'ref'>): boolean {
+  return typeof e.ref === 'string' && e.ref.startsWith('hold:');
+}
+
+/** Counts in profit: everything except starting capital and payment reserves. */
+export function isProfitEntry(e: Pick<LedgerEntry, 'type' | 'ref'>): boolean {
+  return e.type !== 'capital' && !isHoldEntry(e);
 }
 
 export interface FunnelAgg {
@@ -86,21 +93,57 @@ export function nicheName(world: WorldState, nicheId: string): string {
   );
 }
 
-/** Refunds + chargebacks booked on a day, per product (ledger ref = order id or product id). */
-export function refundsOnDay(world: WorldState, ix: WorldIndex, day: number): Map<string, { count: number; amount: number }> {
-  const out = new Map<string, { count: number; amount: number; refs: Set<string> }>();
+/** Money lost per order on a day (refund + chargeback entries, ledger ref = order id). */
+function refundMoneyByRef(world: WorldState, day: number): Map<string, number> {
+  const out = new Map<string, number>();
   for (const e of world.ledger ?? []) {
-    if (e.day !== day || (e.type !== 'refund' && e.type !== 'chargeback')) continue;
-    const ref = e.ref ?? '';
+    if (e.day !== day || (e.type !== 'refund' && e.type !== 'chargeback') || !e.ref) continue;
+    out.set(e.ref, (out.get(e.ref) ?? 0) - amountOf(e));
+  }
+  return out;
+}
+
+/**
+ * Refunds + chargebacks closed on a day, per product. Primary source: Order.refundedDay (exact daily
+ * attribution); ledger entries of that day complete it for orders saved before the field existed.
+ * An order refunded then disputed the same day counts once.
+ */
+export function refundsOnDay(world: WorldState, ix: WorldIndex, day: number): Map<string, { count: number; amount: number }> {
+  const money = refundMoneyByRef(world, day);
+  const out = new Map<string, { count: number; amount: number }>();
+  const seen = new Set<string>();
+  const add = (productId: string, amount: number) => {
+    const cur = out.get(productId) ?? { count: 0, amount: 0 };
+    cur.count += 1;
+    cur.amount += Math.max(0, amount);
+    out.set(productId, cur);
+  };
+  for (const o of world.market?.orders ?? []) {
+    if (o.refundedDay !== day || !(o.refunded || o.chargeback)) continue;
+    seen.add(o.id);
+    add(o.productId, money.get(o.id) ?? Math.abs(finite(o.price)));
+  }
+  for (const [ref, amount] of money) {
+    if (seen.has(ref)) continue;
     const productId = ix.orders.get(ref)?.productId ?? (ix.products.has(ref) ? ref : null);
     if (!productId) continue;
-    const cur = out.get(productId) ?? { count: 0, amount: 0, refs: new Set<string>() };
-    cur.amount += Math.abs(finite(e.amount));
-    if (!cur.refs.has(ref) || !ref) cur.count += 1;
-    if (ref) cur.refs.add(ref);
-    out.set(productId, cur);
+    seen.add(ref);
+    add(productId, amount);
   }
-  return new Map([...out].map(([k, v]) => [k, { count: v.count, amount: v.amount }]));
+  return out;
+}
+
+/** Number of distinct orders refunded / disputed on a day (all products, including unknown ones). */
+export function refundCountOnDay(world: WorldState, day: number): number {
+  const ids = new Set<string>();
+  let noRef = 0;
+  for (const o of world.market?.orders ?? []) if (o.refundedDay === day && (o.refunded || o.chargeback)) ids.add(o.id);
+  for (const e of world.ledger ?? []) {
+    if (e.day !== day || (e.type !== 'refund' && e.type !== 'chargeback')) continue;
+    if (e.ref) ids.add(e.ref);
+    else noRef += 1;
+  }
+  return ids.size + noRef;
 }
 
 export interface FinanceView {
@@ -115,13 +158,13 @@ export function financeView(world: WorldState, day: number): FinanceView {
   let revenue7d = 0;
   for (const e of world.ledger ?? []) {
     if (e.day > day) continue;
-    const s = signedAmount(e);
+    const s = amountOf(e);
     cash += s;
-    if (e.type === 'capital') continue;
+    if (!isProfitEntry(e)) continue;
     cumulativeProfit += s;
     if (e.day > day - 7) {
       profit7d += s;
-      if (e.type === 'ad_spend') adSpend7d += Math.abs(s);
+      if (e.type === 'ad_spend') adSpend7d -= s;
       if (e.type === 'revenue') revenue7d += s;
     }
   }

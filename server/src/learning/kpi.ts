@@ -1,62 +1,59 @@
 /** Daily KPI aggregation from the ledger, ad stats, orders, inbox, tasks and lessons. */
 import type { DailyKpi, WorldState } from '../shared.js';
 import { finite, round, safeDiv } from './text.js';
-import { signedAmount } from './data.js';
+import { amountOf, isHoldEntry, isProfitEntry, refundCountOnDay } from './data.js';
 
-/** "score 82/100", "82 / 100", "score : 82" inside an activity line → 82. */
-export function parseReplyScore(text: string): number | null {
-  const s = String(text ?? '');
-  const m = s.match(/(\d{1,3}(?:[.,]\d+)?)\s*\/\s*100\b/) ?? s.match(/\bscore\s*(?:de\s*|:\s*)?(\d{1,3}(?:[.,]\d+)?)/i);
-  if (!m) return null;
-  const v = Number(m[1]!.replace(',', '.'));
-  return Number.isFinite(v) && v >= 0 && v <= 100 ? v : null;
+/** Scores of the support replies sent on a day (0..100). */
+export function replyScoresOfDay(world: WorldState, day: number): number[] {
+  const scores: number[] = [];
+  // 1. the sim stamps every reply on the message itself (InboxMessage.replyScore / repliedDay)
+  for (const m of world.market?.inbox ?? []) {
+    if (m.repliedDay !== day || m.replyScore === null || m.replyScore === undefined) continue;
+    const v = Number(m.replyScore);
+    if (Number.isFinite(v)) scores.push(Math.max(0, Math.min(100, v)));
+  }
+  if (scores.length) return scores;
+  // 2. saves made before those fields existed: the support task's structured output of that day
+  for (const t of world.company.tasks ?? []) {
+    if (t.kind !== 'reply_inbox' || t.dayDone !== day) continue;
+    const replies = (t.output as { replies?: unknown } | null)?.replies;
+    if (!Array.isArray(replies)) continue;
+    for (const r of replies) {
+      const v = Number((r as { score?: unknown } | null)?.score);
+      if (Number.isFinite(v)) scores.push(Math.max(0, Math.min(100, v)));
+    }
+  }
+  return scores;
+}
+
+/** Average support reply score of a day (0 when nobody was answered that day). */
+export function avgReplyScoreOf(world: WorldState, day: number): number {
+  const scores = replyScoresOfDay(world, day);
+  return scores.length ? round(scores.reduce((x, y) => x + y, 0) / scores.length, 1) : 0;
 }
 
 /**
- * Average support reply score of a day. The shared types have no per-reply score record, so:
- *  1. scores carried by that day's 'message' activity lines ("… (score 82/100)") are averaged;
- *  2. otherwise, if agents replied in inbox threads that day, the empirical mean of the
- *     'support_tone' bandit (rewarded with ReplyOutcome.score / 100 after every reply) is used;
- *  3. otherwise 0 (no reply that day).
+ * KPIs of a day. Money comes from the ledger, summed EXACTLY as recordLedger stored it (signed):
+ * cash = Σ entries up to that day (= financeSnapshot(world).cash at that day's close), profit excludes
+ * the starting capital and the payment reserves ('hold:' refs move cash, never profit).
  */
-export function avgReplyScoreOf(world: WorldState, day: number): number {
-  const scores: number[] = [];
-  for (const a of world.activity ?? []) {
-    if (a.day !== day || a.kind !== 'message') continue;
-    const s = parseReplyScore(a.text);
-    if (s !== null) scores.push(s);
-  }
-  if (scores.length) return round(scores.reduce((x, y) => x + y, 0) / scores.length, 1);
-  const replied = (world.market?.inbox ?? []).some((m) => (m.thread ?? []).some((t) => t.from !== 'customer' && t.day === day));
-  if (!replied) return 0;
-  const arms = world.company.bandits?.support_tone ?? [];
-  const pulls = arms.reduce((s, a) => s + a.pulls, 0);
-  const reward = arms.reduce((s, a) => s + a.reward, 0);
-  return pulls > 0 ? round((100 * reward) / pulls, 1) : 0;
-}
-
 export function computeDailyKpi(world: WorldState, day: number): DailyKpi {
   let cash = 0;
   let cumulativeProfit = 0;
   let revenue = 0;
   let adSpend = 0;
   let profit = 0;
-  let refundsNoRef = 0;
-  const refundRefs = new Set<string>();
 
   for (const e of world.ledger ?? []) {
     if (e.day > day) continue;
-    const s = signedAmount(e);
-    cash += s;
-    if (e.type !== 'capital') cumulativeProfit += s;
+    const a = amountOf(e);
+    cash += a;
+    const counts = isProfitEntry(e);
+    if (counts) cumulativeProfit += a;
     if (e.day !== day) continue;
-    if (e.type === 'revenue') revenue += s;
-    else if (e.type === 'ad_spend') adSpend += -s;
-    if (e.type !== 'capital') profit += s;
-    if (e.type === 'refund' || e.type === 'chargeback') {
-      if (e.ref) refundRefs.add(e.ref);
-      else refundsNoRef += 1;
-    }
+    if (counts) profit += a;
+    if (e.type === 'revenue' && !isHoldEntry(e)) revenue += a;
+    else if (e.type === 'ad_spend') adSpend -= a;
   }
 
   let impressions = 0;
@@ -88,7 +85,7 @@ export function computeDailyKpi(world: WorldState, day: number): DailyKpi {
     profit: round(profit),
     cumulativeProfit: round(cumulativeProfit),
     sales: ordersToday.length,
-    refunds: refundRefs.size + refundsNoRef,
+    refunds: refundCountOnDay(world, day),
     impressions: Math.round(impressions),
     clicks: Math.round(clicks),
     ctr: round(safeDiv(clicks, impressions), 4),

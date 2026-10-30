@@ -1,6 +1,6 @@
 // Typed client for the agency server (see server/src/contracts.ts, "api/" section).
 import type {
-  Activity, AgentId, CompanySnapshot, DayPhase, FinanceSnapshot, ScenarioConfig, StreamEvent,
+  Activity, AgentId, CompanySnapshot, DayPhase, FinanceSnapshot, ScenarioConfig, SessionInfo, StreamEvent,
 } from '../../shared/types';
 
 // ───────────────────────────── Response shapes ─────────────────────────────
@@ -13,7 +13,8 @@ export interface BrainGraph { nodes: { id: string; title: string; group: string 
 export type Speed = 1 | 2 | 4 | 8;
 export type ControlAction = 'play' | 'pause' | 'step' | 'day';
 export interface ControlRequest { action: ControlAction; speed?: Speed }
-export interface ControlResult { ok: boolean; status?: string; speed?: Speed; message?: string }
+/** session = live loop state after the command (ControlResponse.session), the source of truth for the HUD. */
+export interface ControlResult { ok: boolean; status?: string; speed?: Speed; playing?: boolean; message?: string; session?: SessionInfo }
 
 export interface MissionResult { ok: boolean; missionId: string | null; message?: string }
 export interface ApproveResult { ok: boolean; message?: string }
@@ -95,6 +96,13 @@ function asSnapshot(data: unknown): CompanySnapshot {
   throw new ApiError('Réponse inattendue du serveur (instantané manquant)', 500);
 }
 
+/** Accepts a SessionInfo-looking object (runId + playing + speed), else undefined. */
+export function asSession(v: unknown): SessionInfo | undefined {
+  if (!isObj(v) || typeof v.runId !== 'string' || typeof v.playing !== 'boolean') return undefined;
+  if (typeof v.speed !== 'number' || ![1, 2, 4, 8].includes(v.speed)) return undefined;
+  return v as unknown as SessionInfo;
+}
+
 function okFlag(data: unknown): boolean {
   return !(isObj(data) && data.ok === false);
 }
@@ -116,7 +124,9 @@ export const api = {
       ok: okFlag(data),
       status: typeof o.status === 'string' ? o.status : undefined,
       speed: typeof o.speed === 'number' && [1, 2, 4, 8].includes(o.speed) ? (o.speed as Speed) : undefined,
+      playing: typeof o.playing === 'boolean' ? o.playing : undefined,
       message: typeof o.message === 'string' ? o.message : undefined,
+      session: asSession(o.session),
     };
   },
 

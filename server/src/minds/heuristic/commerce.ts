@@ -7,9 +7,9 @@ import type { RedTeamVerdict } from '../../contracts.js';
 import { RISK_RULES } from '../lexicon.js';
 import { conflictsWith } from '../playbook.js';
 import { ensurePdf } from '../shapes.js';
-import { bare, cap, clean, fit, fmtEur, lf, norm, ofAud, q, uniqStrings, type LocalRng } from '../util.js';
+import { bare, bestLabel, cap, clean, fit, fmtEur, lf, lowerFirst, norm, ofAud, q, uniqStrings, type LocalRng } from '../util.js';
 import { buildNicheCtx, FALLBACK } from './niche.js';
-import { inferKind, type Kind } from './studio.js';
+import { inferKind, inline, promiseOutcome, type Kind } from './studio.js';
 
 export function nicheFromProduct(p: Product | null | undefined, voc?: VoiceOfCustomer | null): NicheBrief {
   return {
@@ -53,27 +53,46 @@ const BLURBS: Record<Kind, string[]> = {
   ],
 };
 
-function answerFor(objection: string, ctx: { audArt: string; chapters: number; minutes: number; price: number; dur: string }): string {
+interface AnswerCtx { audArt: string; chapters: number; minutes: number; price: number; dur: string; brand: string }
+
+/** Objection → honest answer. Specific patterns first (a « périmé » objection is not a « temps » one). */
+const ANSWERS: { re: RegExp; a: (c: AnswerCtx) => string }[] = [
+  { re: /chatgpt|\bia\b|intelligence artificielle|robot|generique|copier|copie/, a: (c) => `Non. Chaque chapitre part de vraies phrases ${ofAud(c.audArt)}, récoltées dans les commentaires et les avis, et chaque étape a été relue par notre équipe avant publication. Vous y retrouverez vos propres mots, pas des généralités.` },
+  { re: /perime|change(nt)? tout le temps|evolu|a jour|obsolete|plus valable/, a: () => 'Le guide indique, pour chaque repère, où vérifier l’information à jour, et chaque version corrigée vous est envoyée gratuitement. Vous apprenez surtout une méthode, qui ne se périme pas.' },
+  { re: /gratuit|site (officiel|de l)|internet|youtube|forum|en ligne/, a: () => 'Les informations existent, mais elles sont éparpillées et rarement dans le bon ordre. Le guide les rassemble en un plan clair, avec ce qu’il faut faire en premier et les erreurs à éviter.' },
+  { re: /pdf|livre|lecture|ebook/, a: (c) => `Ce n’est pas un livre à lire puis à ranger : ${c.chapters} chapitres courts, des étapes numérotées et une checklist à cocher, pensés pour être appliqués le jour même.` },
+  { re: /comptable|expert|educateur|veterinaire|medecin|pediatre|professionnel|coach|consultant|avocat|cours|formation/, a: (c) => `Un professionnel reste précieux pour les cas particuliers. Ce guide vous donne la méthode de base pour avancer dès ce soir, pour ${fmtEur(c.price)}, et vous arriverez mieux préparé si vous consultez ensuite.` },
+  { re: /confiance|fiable|serieux|croire|vrai/, a: () => 'Chaque repère du guide vient de la recherche, sans chiffre inventé ni promesse miracle. Et si le contenu ne vous convient pas, vous êtes remboursé sans justification.' },
+  { re: /conseil|eleveur|deja (lu|eu|recu)|on m'a (dit|donne)/, a: (c) => `Le guide ne remplace pas ces conseils : il les met dans l’ordre, avec un plan de ${c.dur} et une checklist par chapitre pour savoir où vous en êtes.` },
+  { re: /tout seul|finira|attendre|passera|avec le temps/, a: () => 'Peut-être, mais chaque semaine d’attente installe un peu plus l’habitude. Le plan ne demande que quelques minutes par jour, et vous voyez vite si la situation bouge.' },
+  { re: /tout essaye|rien ne marche|rien n'a marche|deja essaye/, a: () => 'C’est justement pour vous qu’il a été écrit. Un chapitre entier explique pourquoi les méthodes précédentes n’ont pas tenu, et le plan n’ajoute qu’une seule nouveauté à la fois.' },
+  { re: /pleur|forcer|strict|brutal|punition|crier/, a: () => 'Aucune étape ne vous demande de forcer. Chaque changement est progressif, expliqué, et vous gardez la main sur le rythme du début à la fin.' },
+  { re: /pas le temps|temps de|pages|trop long|lire|occupe|deborde|complique/, a: (c) => `Le guide se lit en ${c.minutes} minutes environ : ${c.chapters} chapitres courts, une checklist par chapitre. Le plan demande ensuite quelques minutes par jour, pas plus.` },
+  { re: /prix|cher|argent|euros|payer|arnaque/, a: (c) => `${fmtEur(c.price)}, c’est moins qu’une seule consultation. Et vous avez 14 jours pour être remboursé si le guide ne vous apporte rien de concret.` },
+  { re: /mon cas|pour moi|different|particulier|specifique|marchera|trop (age|vieux|jeune|tard)|\bage\b/, a: (c) => `Le guide est écrit pour un seul profil : ${c.audArt}. Si vous vous reconnaissez dans les phrases ci-dessus, il a été fait pour vous.` },
+];
+
+const GENERIC_ANSWERS: ((c: AnswerCtx) => string)[] = [
+  (c) => `Le guide y répond concrètement, chapitre par chapitre, avec des étapes numérotées et un plan de ${c.dur}.`,
+  (c) => `C’est une question que beaucoup se posent : le guide la traite pas à pas, et vous avez 14 jours pour être remboursé s’il ne vous aide pas (un simple e-mail à l’équipe ${c.brand} suffit).`,
+  () => 'Le plus simple est d’essayer le premier chapitre ce soir : il suffit pour savoir si la méthode vous convient.',
+];
+
+/** The observation diary is for babies and pets; an admin / skill reader takes stock instead. */
+const DIAG_NONCARE = ['Trois jours pour faire le point sur une seule page : vous saurez enfin par quoi commencer.', 'L’état des lieux en une page qui montre le point précis qui bloque.'];
+
+function answerFor(objection: string, ctx: AnswerCtx, used: Set<string>): string {
   const n = norm(objection);
-  if (/chatgpt|\bia\b|intelligence artificielle|robot|generique|copier|copie/.test(n)) {
-    return `Non. Chaque chapitre part de vraies phrases ${ofAud(ctx.audArt)}, récoltées dans les commentaires et les avis, et chaque étape a été relue par notre équipe avant publication. Vous y retrouverez vos propres mots, pas des généralités.`;
+  for (const r of ANSWERS) {
+    if (!r.re.test(n)) continue;
+    const a = r.a(ctx);
+    if (!used.has(a)) { used.add(a); return a; }
   }
-  if (/temps|pages|long|lire|occupe|deborde/.test(n)) {
-    return `Le guide se lit en ${ctx.minutes} minutes environ : ${ctx.chapters} chapitres courts, une checklist par chapitre. Le plan demande ensuite quelques minutes par jour, pas plus.`;
+  for (const g of GENERIC_ANSWERS) {
+    const a = g(ctx);
+    if (!used.has(a)) { used.add(a); return a; }
   }
-  if (/tout essaye|rien ne marche|rien n'a marche|deja essaye|deja lu/.test(n)) {
-    return 'C’est justement pour vous qu’il a été écrit. Un chapitre entier explique pourquoi les méthodes précédentes n’ont pas tenu, et le plan n’ajoute qu’une seule nouveauté à la fois.';
-  }
-  if (/pleur|forcer|dur|strict|brutal|punition|crier/.test(n)) {
-    return 'Aucune étape ne vous demande de forcer. Chaque changement est progressif, expliqué, et vous gardez la main sur le rythme du début à la fin.';
-  }
-  if (/prix|cher|argent|euros|payer|arnaque/.test(n)) {
-    return `${fmtEur(ctx.price)}, c’est moins qu’une seule consultation. Et vous avez 14 jours pour être remboursé si le guide ne vous apporte rien de concret.`;
-  }
-  if (/mon cas|pour moi|different|particulier|specifique|marchera|trop (age|vieux|jeune|tard)|\bage\b/.test(n)) {
-    return `Le guide est écrit pour un seul profil : ${ctx.audArt}. Si vous vous reconnaissez dans les phrases ci-dessus, il a été fait pour vous.`;
-  }
-  return `Le guide y répond concrètement, chapitre par chapitre, avec des étapes numérotées et un plan de ${ctx.dur}.`;
+  return GENERIC_ANSWERS[0]!(ctx);
 }
 
 const DEFAULT_OBJECTIONS = ['C’est encore un PDF écrit par ChatGPT ?', 'Je n’ai pas le temps de lire un long guide', 'J’ai déjà tout essayé'];
@@ -81,7 +100,7 @@ const DEFAULT_OBJECTIONS = ['C’est encore un PDF écrit par ChatGPT ?', 'Je n�
 export function heuristicSalesPage(
   input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number },
   rng: LocalRng,
-  rules: { maxHype: number | null; banned: string[] },
+  rules: { maxHype: number | null; banned: string[]; brand?: string },
 ): SalesPage {
   const product = input.product;
   const content = ensurePdf(input.content ?? product?.content);
@@ -90,39 +109,44 @@ export function heuristicSalesPage(
   if (rules.maxHype !== null) hype = Math.min(hype, rules.maxHype);
   const price = product?.price && product.price > 0 ? product.price : 19;
   const title = clean(content.title) || clean(product?.title) || 'le guide';
-  const desired = lf(c.outcomes[0] ?? FALLBACK.outcomes[0]);
+  const desired = lowerFirst(bestLabel([promiseOutcome(c), ...c.outcomes], 70, 10) ?? FALLBACK.outcomes[0]);
+  const brand = clean(rules.brand) || 'notre équipe';
   const durTxt = `${c.dur.n} ${c.dur.unit}`;
   const phrase = c.phrases.slice().sort((a, b) => a.length - b.length).find((p) => p.length <= 60) ?? c.phrases[0];
   const nCh = content.chapters.length || 5;
   const minutes = Math.max(10, Math.round((content.wordCount || 3000) / 200 / 5) * 5);
   const canRisk = (w: string) => !conflictsWith(w, rules.banned);
 
+  // « un chiot propre en quelques semaines » already says how long: no second, contradictory duration
+  const enDur = /\b(\d+|quelques|deux|trois)\s+(jours?|nuits?|semaines?|mois|minutes?|heures?)\b/i.test(desired) ? '' : ` en ${durTxt}`;
   const headline = hype >= 0.7
-    ? canRisk('garanti') ? `${cap(desired)} en ${durTxt} : résultat garanti` : `${cap(desired)} en ${durTxt}, dès la première semaine`
+    ? canRisk('garanti') ? `${cap(desired)}${enDur} : résultat garanti` : `${cap(desired)}${enDur}, avec un plan précis`
     : hype >= 0.35
-      ? `Enfin : ${desired} — en ${durTxt}, sans tout bouleverser`
+      ? `Enfin : ${desired}${enDur ? ` —${enDur}` : ''}, sans tout bouleverser`
       : phrase ? `${cap(q(phrase))} ? Voici un plan clair, pas à pas` : `${cap(desired)} : le plan clair, pas à pas`;
   const subheadline = `Le guide PDF pour ${c.audArt} : ${nCh} chapitres courts, des étapes numérotées, des exemples réels et un bonus offert.${hype >= 0.7 ? ` La méthode la plus complète du marché pour en finir avec le problème.` : ''}`;
 
   const painBullets = uniqStrings([...c.phrases, ...c.pains]).slice(0, Math.max(3, Math.min(6, c.phrases.length || 4)));
-  const firstStep = content.chapters.flatMap((ch) => ch.steps)[0];
-  const solution = `« ${title} » rassemble, en ${nCh} chapitres, ce qui fonctionne vraiment pour ${c.audArt}. Pas de théorie interminable : on commence par ${firstStep ? lf(firstStep) : 'observer trois jours'}, puis on suit un plan de ${durTxt} vers un seul objectif : ${desired}. Chaque chapitre se termine par une checklist, pour savoir exactement où vous en êtes.${hype >= 0.7 && canRisk('100 %') ? ' Une méthode efficace à 100 %, même si vous avez déjà tout essayé.' : ''}`;
+  const methodCh = content.chapters.find((ch, i) => inferKind(ch.title, i, content.chapters.length) === 'methode');
+  const firstStep = (methodCh ?? content.chapters[0])?.steps[0];
+  const solution = `« ${title} » rassemble, en ${nCh} chapitres, ce qui fonctionne vraiment pour ${c.audArt}. Pas de théorie interminable : on commence par ${firstStep ? inline(bare(firstStep)) : 'faire le point pendant trois jours'}, puis on suit un plan de ${durTxt} vers un seul objectif : ${desired}. Chaque chapitre se termine par une checklist, pour savoir exactement où vous en êtes.${hype >= 0.7 && canRisk('100 %') ? ' Une méthode efficace à 100 %, même si vous avez déjà tout essayé.' : ''}`;
 
   const chapterBlurbs = content.chapters.map((ch, i) => ({
     title: ch.title,
-    blurb: rng.pick(BLURBS[inferKind(ch.title, i, nCh)]),
+    blurb: rng.pick((() => { const k = inferKind(ch.title, i, nCh); return k === 'diagnostic' && !c.care ? DIAG_NONCARE : BLURBS[k]; })()),
   }));
   const bonusName = bare(content.bonus.title.replace(/^bonus\s*:\s*/i, '')) || 'la fiche SOS';
   const bonusBlurb = `Cadeau inclus : ${lf(bonusName)}. ${fit(clean(content.bonus.intro), 160) || 'Un outil prêt à imprimer pour les moments difficiles.'}`;
 
+  const usedAnswers = new Set<string>();
   const objections = (c.objections.length ? c.objections : DEFAULT_OBJECTIONS).slice(0, 4).map((o) => ({
     q: /[?]$/.test(clean(o)) ? clean(o) : q(o),
-    a: answerFor(o, { audArt: c.audArt, chapters: nCh, minutes, price, dur: durTxt }),
+    a: answerFor(o, { audArt: c.audArt, chapters: nCh, minutes, price, dur: durTxt, brand }, usedAnswers),
   }));
 
   const guarantee = hype >= 0.7 && canRisk('garanti')
     ? `Résultats garantis ou remboursé : si vous ne voyez aucun changement en ${durTxt}, on vous rembourse.`
-    : 'Satisfait ou remboursé pendant 14 jours : si le guide ne vous apporte rien de concret, un simple e-mail suffit, sans justification.';
+    : `Satisfait ou remboursé pendant 14 jours : si le guide ne vous apporte rien de concret, un simple e-mail à ${brand} suffit, sans justification.`;
   const cta = fit(hype >= 0.7 ? `Oui, je commence le plan — ${fmtEur(price)}` : hype >= 0.35 ? `Je commence ce soir — ${fmtEur(price)}` : `Je télécharge le guide — ${fmtEur(price)}`, 70);
 
   return { headline: fit(headline, 120), subheadline, painBullets, solution, chapterBlurbs, bonusBlurb, objections, guarantee, cta, hypeLevel: Math.round(hype * 100) / 100 };

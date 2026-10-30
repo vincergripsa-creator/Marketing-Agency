@@ -6,7 +6,7 @@ import type { CustomerArchetype, Difficulty } from '../shared.js';
 import type { DifficultyProfile } from '../contracts.js';
 
 export const DIFFICULTY: Record<Difficulty, DifficultyProfile> = {
-  facile: { cpmMultiplier: 0.85, annoyingShare: 0.15, scamRate: 0.08, eventRate: 0.12, refundBase: 0.025, inboxPerSale: 0.1 },
+  facile: { cpmMultiplier: 0.7, annoyingShare: 0.15, scamRate: 0.08, eventRate: 0.12, refundBase: 0.025, inboxPerSale: 0.1 },
   normal: { cpmMultiplier: 1, annoyingShare: 0.3, scamRate: 0.18, eventRate: 0.2, refundBase: 0.04, inboxPerSale: 0.16 },
   cauchemar: { cpmMultiplier: 1.35, annoyingShare: 0.55, scamRate: 0.4, eventRate: 0.34, refundBase: 0.07, inboxPerSale: 0.28 },
 };
@@ -28,10 +28,11 @@ export const CREATORS = {
 };
 
 export const ADS = {
-  baseCtr: 0.011,
+  baseCtr: 0.0055,                 // × quality × affinity^affinityExp × TikTok fit × fatigue: ≈ 1,5-2 % untested, 3-4 % on a learned angle
   qualityRef: 70,
   qualityExp: 1.3,
-  fatigueImpressions: 25000,        // fatigue = 1 / (1 + imps / this)
+  fatigueImpressions: 60000,        // fatigue = 1 / (1 + imps / this): a creative loses half its CTR after ~60 000 impressions
+  affinityExp: 2,                   // CTR ∝ (hookAffinity × formatAffinity)^this: how much the right angle matters
   minCtr: 0.0008,
   maxCtr: 0.08,
   landingRate: 0.85,
@@ -55,7 +56,7 @@ export const ADS = {
 };
 
 export const CONVERSION = {
-  base: 0.0285,
+  base: 0.019,                      // ≈ 2 % of paid visitors buy a well-priced, well-sold guide
   salesQualityRef: 70,
   salesQualityExp: 1.1,
   salesQualityMin: 0.4,
@@ -64,7 +65,8 @@ export const CONVERSION = {
   priceBelowCap: 1.3,
   priceAboveDrop: 0.45,             // factor at wtp.max = 1 - this
   priceAboveExp: 1.5,
-  priceOverMaxDecay: 0.15,          // exp decay (relative to wtp.max) beyond max
+  priceOverMaxDecay: 0.15,          // exp decay scale beyond max: at least this × wtp.max…
+  priceOverMaxDecayMax: 0.25,       // …at most this × wtp.max (between both: slope-continuous at max)
   ratingNone: 0.9,
   ratingHigh: 1.1,                  // average ≥ 4.5
   ratingLow: 0.6,                   // average < 3.5
@@ -77,7 +79,7 @@ export const CONVERSION = {
   noiseSd: 0.15,
   maxCvr: 0.25,
   poolBase: 120,                    // daily landing views a niche absorbs before saturating
-  poolDemand: 900,
+  poolDemand: 650,
   organicCvrMultiplier: 0.6,        // cold, broad organic audience
   seasonalBoost: 1.2,
   seasonalBoostDays: 5,
@@ -105,8 +107,10 @@ export const FEES = {
   paymentFixed: 0.25,
   boutiqueDaily: 0.97,              // 29 €/mois
   toolsDaily: 0.4,                  // 12 €/mois
+  setupCost: 60,                     // one-off launch costs booked at the first market close (ref 'setup')
   chargebackFee: 15,
   paymentHoldShare: 0.3,
+  paymentHoldMaxCashShare: 0.5,     // a reserve never freezes more than half of the cash
   paymentHoldDays: 7,
 };
 

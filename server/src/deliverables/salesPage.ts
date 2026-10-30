@@ -205,7 +205,8 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
   const pains = (sp?.painBullets ?? []).filter(Boolean);
   const blurbs = (sp?.chapterBlurbs ?? []).filter((b) => b && (b.title || b.blurb));
   const chapterList = blurbs.length ? blurbs : (content?.chapters ?? []).map((c) => ({ title: c.title, blurb: c.intro }));
-  const bonusTitle = content?.bonus?.title ?? '';
+  // the card already says « BONUS OFFERT »: the heading is the gift itself
+  const bonusTitle = String(content?.bonus?.title ?? '').replace(/^bonus\s*(?:offert\s*)?[:—–-]\s*/i, '').replace(/^./, (ch) => ch.toUpperCase());
   const reviews = [...(product.stats?.reviews ?? [])].filter((r) => r && r.text).sort((a, b) => b.day - a.day || b.rating - a.rating);
   const avg = (product.stats?.rating ?? 0) > 0 ? product.stats.rating : reviews.length ? reviews.reduce((s, r) => s + r.rating, 0) / reviews.length : 0;
   const objections = (sp?.objections ?? []).filter((o) => o && o.q);
@@ -260,7 +261,7 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
   <div class="wrap hero-grid">
     <div class="hero-cover"><div class="book">${cover}</div></div>
     <div class="hero-copy">
-      <span class="eyebrow">${ICON.book.replace('<svg', '<svg width="16" height="16"')} Guide PDF${audience ? ` · ${h(truncate(audience, 48))}` : ''}</span>
+      <span class="eyebrow">${ICON.book.replace('<svg', '<svg width="16" height="16"')} Guide PDF${audience ? ` · ${h(truncate(audience.replace(/\s*\([^)]*\)/g, ''), 48))}` : ''}</span>
       <h1>${h(headline)}</h1>
       ${sub ? `<p class="sub">${h(sub)}</p>` : ''}
       ${ratingLine}

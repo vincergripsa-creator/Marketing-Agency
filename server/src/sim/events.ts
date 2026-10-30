@@ -6,7 +6,7 @@ import { CREATORS, CONVERSION, EVENTS, FEES } from './balance.js';
 import { createCustomer, senderArchetype } from './customers.js';
 import { HOLD_REF, cashOf, heldAmount, recordLedger, revenueSince } from './finance.js';
 import { createMessage } from './inbox.js';
-import { makeCreator } from './market.js';
+import { difficultyProfile, makeCreator } from './market.js';
 import { nicheOf, pushEvent, reviewProduct } from './ops.js';
 import { fmtEur, fmtPct, pickWeighted, short } from './text.js';
 
@@ -55,7 +55,8 @@ const competitorClone: Roll = (world, rng) => {
     weaknesses: ["Copie quasi conforme d'un guide existant", 'Avis suspects publiés le même jour'],
   });
   return pushEvent(world, 'competitor_clone', 'Un concurrent copie notre guide',
-    `Un vendeur ${platform} a publié une copie de « ${short(p.title, 50)} » à ${fmtEur(Math.max(5, Math.round(p.price * 0.6)))}. La concurrence monte dans la niche « ${niche.name} ».`, 'warn');
+    `Un vendeur ${platform} a publié une copie de « ${short(p.title, 50)} » à ${fmtEur(Math.max(5, Math.round(p.price * 0.6)))}. La concurrence monte dans la niche « ${niche.name} ».`, 'warn',
+    { productId: p.id, nicheId: niche.id });
 };
 
 const paymentHold: Roll = (world) => {
@@ -63,11 +64,15 @@ const paymentHold: Roll = (world) => {
   if (m.paymentHoldUntilDay > world.day || heldAmount(world) < 0) return null;
   const rev7 = revenueSince(world, 7);
   if (rev7 < 30) return null;
-  const amount = round2(Math.min(Math.max(0, cashOf(world)), rev7 * FEES.paymentHoldShare));
+  // a reserve freezes part of the cash (never the checkout, never all of the cash: the agency keeps operating)
+  const share = round2(rev7 * FEES.paymentHoldShare);
+  const cap = round2(Math.max(0, cashOf(world)) * FEES.paymentHoldMaxCashShare);
+  const amount = Math.min(share, cap);
   if (amount < 5) return null;
   m.paymentHoldUntilDay = world.day + FEES.paymentHoldDays;
+  const basis = amount < share ? 'la moitié de la trésorerie disponible' : `${fmtPct(FEES.paymentHoldShare, 0)} des ventes de la semaine`;
   const ev = pushEvent(world, 'payment_hold', 'Paiements mis en réserve',
-    `Le prestataire de paiement bloque ${fmtEur(amount)} (30 % des ventes de la semaine) par sécurité. Libération prévue le jour ${m.paymentHoldUntilDay}.`, 'warn');
+    `Le prestataire de paiement bloque ${fmtEur(amount)} (${basis}) par sécurité. Les ventes continuent normalement ; libération prévue le jour ${m.paymentHoldUntilDay}.`, 'warn');
   recordLedger(world, { type: 'platform_fee', amount: -amount, memo: `Réserve de sécurité du prestataire de paiement (libérée le jour ${m.paymentHoldUntilDay})`, ref: `${HOLD_REF}${ev.id}` });
   return ev;
 };
@@ -76,15 +81,18 @@ const trendShift: Roll = (world, rng) => {
   const live = liveProducts(world);
   const niches = world.market.niches;
   if (!niches.length) return null;
-  const niche = live.length && rng.chance(0.5) ? nicheOf(world, rng.pick(live)) : rng.pick(niches);
+  const picked = live.length > 0 && rng.chance(0.5) ? rng.pick(live) : null;
+  const niche = picked ? nicheOf(world, picked) : rng.pick(niches);
   if (niche.id === '_inconnue') return null;
+  const affected = live.find((p) => p.nicheId === niche.id) ?? null;
   const up = rng.chance(0.5);
   const before = niche.demand;
   niche.demand = round2(clamp(niche.demand * (up ? EVENTS.trendShift.up : EVENTS.trendShift.down), 0.05, 1));
   const delta = niche.demand / Math.max(0.01, before) - 1;
   return pushEvent(world, 'trend_shift', up ? `Tendance en hausse : ${niche.name}` : `Tendance en baisse : ${niche.name}`,
     up ? `Le sujet circule beaucoup sur TikTok cette semaine : la demande progresse d'environ ${fmtPct(delta, 0)}.`
-      : `L'intérêt retombe : la demande recule d'environ ${fmtPct(-delta, 0)} dans cette niche.`, up ? 'good' : 'warn');
+      : `L'intérêt retombe : la demande recule d'environ ${fmtPct(-delta, 0)} dans cette niche.`, up ? 'good' : 'warn',
+    { nicheId: niche.id, productId: (picked ?? affected)?.id ?? null });
 };
 
 const badReviewWave: Roll = (world, rng) => {
@@ -100,19 +108,23 @@ const badReviewWave: Roll = (world, rng) => {
   const troll = createCustomer(world, rng, 'troll');
   reviewProduct(world, rng, p, troll, 1, 'troll');
   return pushEvent(world, 'bad_review_wave', 'Vague de trolls',
-    `Une vidéo moqueuse sur les « vendeurs de PDF » a fait le tour : ${n} messages hostiles et un avis 1 étoile sur « ${short(p.title, 50)} ». Ne pas nourrir les trolls.`, 'danger');
+    `Une vidéo moqueuse sur les « vendeurs de PDF » a fait le tour : ${n} messages hostiles et un avis 1 étoile sur « ${short(p.title, 50)} ». Ne pas nourrir les trolls.`, 'danger',
+    { productId: p.id, nicheId: niche.id });
 };
 
 const scamAttempt: Roll = (world, rng) => {
   const n = rng.int(1, 3);
   const live = liveProducts(world);
+  let target: Product | null = null;
   for (let i = 0; i < n; i++) {
     const c = createCustomer(world, rng, senderArchetype(rng, 'arnaque'));
     const p = live.length ? rng.pick(live) : null;
+    target ??= p;
     createMessage(world, rng, { intent: 'arnaque', customer: c, product: p, order: null, niche: p ? nicheOf(world, p) : undefined });
   }
   return pushEvent(world, 'scam_attempt', "Tentatives d'arnaque",
-    `${n} message(s) suspect(s) viennent d'arriver (faux support, fausses promotions, liens douteux). Vigilance au support.`, 'danger');
+    `${n} message(s) suspect(s) viennent d'arriver (faux support, fausses promotions, liens douteux). Vigilance au support.`, 'danger',
+    target ? { productId: target.id, nicheId: target.nicheId } : undefined);
 };
 
 const creatorOffer: Roll = (world, rng) => {
@@ -136,7 +148,8 @@ const creatorOffer: Roll = (world, rng) => {
     : `Coucou, ici @${creator.handle} (${Math.round(creator.followers / 1000)} k abonnés). Ton guide « ${p.title} » colle parfaitement à mon audience. Je peux en parler à la commission (${Math.round(creator.askCommission * 100)} %), sans avance.`;
   msg.thread = [{ from: 'customer', text: msg.body, day: world.day }];
   return pushEvent(world, 'creator_offer', 'Un créateur nous contacte',
-    `@${creator.handle} propose une collaboration pour « ${short(p.title, 50)} ». À vérifier avant de payer quoi que ce soit.`, 'info');
+    `@${creator.handle} propose une collaboration pour « ${short(p.title, 50)} ». À vérifier avant de payer quoi que ce soit.`, 'info',
+    { productId: p.id, nicheId: niche.id, creatorId: creator.id });
 };
 
 const platformOutage: Roll = (world) => {
@@ -167,6 +180,12 @@ function rollOne(world: WorldState, rng: Rng, diff: DifficultyProfile): WorldEve
     if (ev) return ev;
   }
   return null;
+}
+
+/** Rolls one specific event now (tests, scripted scenarios). Returns null when its conditions are not met. */
+export function forceEvent(world: WorldState, rng: Rng, kind: WorldEventKind): WorldEvent | null {
+  const roll = ROLLS.find(([k]) => k === kind)?.[1];
+  return roll ? roll(world, rng, difficultyProfile(world.scenario?.difficulty ?? 'normal')) : null;
 }
 
 /** 0, 1 or (rarely) 2 events per day, at the difficulty's rate. */

@@ -370,10 +370,13 @@ function buildAdStats(): DailyAdStats[] {
   return out;
 }
 
+const CUSTOMER_NAMES = ['Sophie L.', 'Karim B.', 'Julie M.', 'Thomas R.', 'Nadia P.', 'Camille D.'];
+
 function buildInbox(): InboxMessage[] {
   const m = (id: number, day: number, channel: InboxMessage['channel'], subject: string, body: string, intent: InboxMessage['intent'], mood: number, status: InboxMessage['status'], reply?: [string, string]): InboxMessage => ({
     id: `msg_${id}`, day, customerId: `cus_${id + 2}`, channel, subject, body, intent, productId: 'prd_1', orderId: `ord_${id}`, mood, status, deadlineDay: day + 2,
     thread: [{ from: 'customer', text: body, day }, ...(reply ? [{ from: reply[0], text: reply[1], day }] : [])], resolution: status === 'resolved' ? 'Lien renvoyé, cliente satisfaite.' : null,
+    customerName: CUSTOMER_NAMES[(id - 1) % CUSTOMER_NAMES.length], replyScore: reply ? 70 + ((id * 7) % 25) : null, repliedDay: reply ? day : null,
   });
   return [
     m(1, 7, 'email', 'Je n’ai pas reçu mon PDF', 'Bonjour, j’ai payé hier soir et je n’ai rien reçu dans ma boîte mail.', 'non_recu', -0.3, 'resolved', ['lucas', 'Bonjour Sophie, désolé pour l’attente ! Voici votre lien de téléchargement direct. Pensez à vérifier les spams.']),
@@ -403,9 +406,9 @@ function buildPartnerships(): Partnership[] {
 function buildEvents(): WorldEvent[] {
   return [
     { id: 'evt_1', day: 7, kind: 'cpm_spike', title: 'Hausse du CPM', description: 'Le CPM TikTok grimpe de 30 % pendant deux jours (forte concurrence publicitaire).', severity: 'warn' },
-    { id: 'evt_2', day: 8, kind: 'ad_rejected', title: 'Pub refusée', description: '« Il fait ses nuits en 3 jours, garanti » refusée : promesse de résultat garanti.', severity: 'danger' },
+    { id: 'evt_2', day: 8, kind: 'ad_rejected', title: 'Pub refusée', description: '« Il fait ses nuits en 3 jours, garanti » refusée : promesse de résultat garanti.', severity: 'danger', refs: { productId: 'prd_1' } },
     { id: 'evt_3', day: 9, kind: 'scam_attempt', title: 'Tentative d’arnaque', description: 'Un faux créateur demande 150 € d’avance pour un post (audience achetée).', severity: 'warn' },
-    { id: 'evt_4', day: 10, kind: 'viral_organic', title: 'Post organique qui décolle', description: 'Le POV de Chloé dépasse 38 000 vues.', severity: 'good' },
+    { id: 'evt_4', day: 10, kind: 'viral_organic', title: 'Post organique qui décolle', description: 'Le POV de Chloé dépasse 38 000 vues.', severity: 'good', refs: { productId: 'prd_1' } },
   ];
 }
 
@@ -562,6 +565,7 @@ function buildActivity(now: number): Activity[] {
     [-260, 'raphael', 'deliverable', 'Rapport du jour 9 publié : ROAS 4,6 après la hausse de prix.'],
     [-220, 'sarah', 'ad', 'crt_1 : CTR 3,1 %, budget +20 %. crt_2 en observation.'],
     [-180, null, 'sale', 'Nouvelle vente « Dodo serein » à 19 € (TikTok Ads).'],
+    [-170, null, 'event', 'Post organique qui décolle — Le POV de Chloé dépasse 38 000 vues.'],
     [-150, 'ines', 'message', 'Double débit signalé : vérification avec Alice avant de répondre.'],
     [-120, 'nora', 'coffee', 'Pause café avant la rétro du soir.', undefined, 'cafe'],
     [-95, 'axel', 'review', 'La promesse « siestes de 2 h » est trop forte : à reformuler.', 'elise'],
@@ -628,6 +632,7 @@ export function mockSnapshot(): CompanySnapshot {
         ],
       },
       pendingApprovals: [],
+      budget: { day: DAY, adCap: 25, survival: false, note: 'Produit rentable (ROAS 4,2) : on garde 25 € de pub, pas plus tant que le test de prix tourne.' },
     },
     market: {
       inbox: buildInbox(),
@@ -643,5 +648,6 @@ export function mockSnapshot(): CompanySnapshot {
     finance,
     ledger: buildLedger(),
     activity: buildActivity(now),
+    session: { runId: 'demo-pixel-agency', playing: true, speed: 1, intervalMs: 2000, busy: false, mindMode: 'heuristic', status: 'running', day: DAY, tick: TICK, lastError: null },
   };
 }

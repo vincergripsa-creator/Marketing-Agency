@@ -8,7 +8,7 @@ import { KIND_DEPT, KIND_TITLE } from '../heuristic/direction.js';
 import { pdfWordCount } from '../heuristic/studio.js';
 import { AD_FORMATS, HOOK_STYLES } from '../playbook.js';
 import { arr, ensurePdf, forEachText, str } from '../shapes.js';
-import { bare, clampNum, clean, fit, isStr, norm, splitSentences, strArr, uniqStrings } from '../util.js';
+import { bare, clampNum, clean, composeTitle, fit, isStr, norm, splitSentences, strArr, uniqStrings } from '../util.js';
 import { ACTIONS, INTENTS, LESSON_TOPICS } from './schemas.js';
 
 type O = Record<string, unknown>;
@@ -43,7 +43,8 @@ export function nRanking(raw: unknown, fb: OpportunityRanking): OpportunityRanki
 
 export function nTitles(raw: unknown, fb: string[], count: number): string[] {
   const n = count > 0 ? Math.floor(count) : fb.length;
-  const t = uniqStrings([...strArr(asObj(raw).titles).map((x) => fit(x, 160)), ...fb]);
+  // a title is whole (≤ 95 chars, one « : » at most, no ellipsis): anything else is dropped, not truncated
+  const t = uniqStrings([...strArr(asObj(raw).titles).filter((x) => composeTitle([x], 95) !== null), ...fb]);
   return t.slice(0, n);
 }
 

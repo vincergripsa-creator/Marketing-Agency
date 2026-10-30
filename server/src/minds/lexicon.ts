@@ -85,4 +85,4 @@ export const RISK_RULES: readonly RiskRule[] = [
   { id: 'argent', label: 'Promesse d’argent facile', re: /devenir riche|revenu passif garanti|argent facile/iu },
 ];
 
-export const CONNECTORS: readonly string[] = ['Concrètement, ', 'Dans les faits, ', 'Au quotidien, ', 'Côté pratique, ', 'Sur le terrain, ', 'Point important : '];
+export const CONNECTORS: readonly string[] = ['Concrètement, ', 'Dans les faits, ', 'Au quotidien, ', 'En pratique, '];

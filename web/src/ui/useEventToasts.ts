@@ -1,6 +1,6 @@
 // Turns snapshot changes into toasts: world events, sale bursts, run status changes.
 import { useEffect, useRef } from 'react';
-import type { CompanySnapshot, WorldEventKind } from '../../../shared/types';
+import type { CompanySnapshot, WorldEvent, WorldEventKind } from '../../../shared/types';
 import { fmtEur } from './format';
 import type { IconName } from './icons';
 import type { ToastInput, ToastTone } from './Toasts';
@@ -13,7 +13,8 @@ const EVENT_ICON: Partial<Record<WorldEventKind, IconName>> = {
 const SEVERITY_TONE: Record<string, ToastTone> = { info: 'info', warn: 'warn', danger: 'bad', good: 'good' };
 const SALE_BURST = 2;
 
-export function useEventToasts(snapshot: CompanySnapshot | null, push: (t: ToastInput) => void, enabled: boolean) {
+/** onOpenProduct: events with refs.productId (and rejected creatives) get a « Voir le produit » link. */
+export function useEventToasts(snapshot: CompanySnapshot | null, push: (t: ToastInput) => void, enabled: boolean, onOpenProduct?: (productId: string) => void) {
   const state = useRef<{ runId: string | null; events: Set<string>; orders: Set<string>; rejected: Set<string>; status: string | null }>({ runId: null, events: new Set(), orders: new Set(), rejected: new Set(), status: null });
 
   useEffect(() => {
@@ -29,9 +30,12 @@ export function useEventToasts(snapshot: CompanySnapshot | null, push: (t: Toast
     }
     if (!enabled) return;
 
+    const products = new Set((snapshot.company?.products ?? []).map((p) => p.id));
+    const productAction = (id: string | null | undefined): ToastInput['action'] =>
+      id && onOpenProduct && products.has(id) ? { label: 'Voir le produit', run: () => onOpenProduct(id) } : undefined;
     const fresh = events.filter((e) => !s.events.has(e.id));
     for (const e of fresh.slice(-3)) {
-      push({ tone: SEVERITY_TONE[e.severity] ?? 'info', icon: EVENT_ICON[e.kind], title: e.title, text: e.description, ttl: e.severity === 'danger' ? 8000 : 5500 });
+      push(eventToast(e, productAction(e.refs?.productId)));
     }
     for (const e of events) s.events.add(e.id);
 
@@ -39,7 +43,7 @@ export function useEventToasts(snapshot: CompanySnapshot | null, push: (t: Toast
     const newlyRejected = rejected.filter((c) => !s.rejected.has(c.id));
     if (newlyRejected.length && !fresh.some((e) => e.kind === 'ad_rejected')) {
       const c = newlyRejected[newlyRejected.length - 1]!;
-      push({ tone: 'bad', icon: 'ban', title: 'Pub refusée par la plateforme', text: `« ${c.hook} »${c.review?.reason ? ` — ${c.review.reason}` : ''}`, ttl: 7000 });
+      push({ tone: 'bad', icon: 'ban', title: 'Pub refusée par la plateforme', text: `« ${c.hook} »${c.review?.reason ? ` — ${c.review.reason}` : ''}`, ttl: 7000, action: productAction(c.productId) });
     }
     for (const c of rejected) s.rejected.add(c.id);
 
@@ -58,5 +62,10 @@ export function useEventToasts(snapshot: CompanySnapshot | null, push: (t: Toast
       if (snapshot.status === 'finished') push({ tone: 'info', icon: 'flag', title: 'Fin de la simulation', text: `Horizon atteint au jour ${snapshot.day}.` });
       s.status = snapshot.status;
     }
-  }, [snapshot, push, enabled]);
+  }, [snapshot, push, enabled, onOpenProduct]);
+}
+
+/** Toast of a world event; action = link to the product the event is about (refs.productId). */
+export function eventToast(e: WorldEvent, action?: ToastInput['action']): ToastInput {
+  return { tone: SEVERITY_TONE[e.severity] ?? 'info', icon: EVENT_ICON[e.kind], title: e.title, text: e.description, ttl: e.severity === 'danger' ? 8000 : action ? 7000 : 5500, action };
 }

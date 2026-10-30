@@ -2,20 +2,10 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { repoRoot } from '../core/index.js';
-import type { LedgerType, WorldState } from '../shared.js';
+import type { LedgerType, RunInfo, WorldState } from '../shared.js';
 
-export interface RunInfo {
-  runId: string;
-  companyName: string;
-  scenarioName: string;
-  difficulty: string;
-  day: number;
-  status: WorldState['status'];
-  cash: number;
-  profit: number;
-  createdAt: string;   // ISO
-  mtime: string;       // ISO, last save
-}
+/** Saved run summary (shared with the UI: GET /api/runs). */
+export type { RunInfo };
 
 export interface SaveOptions {
   /** Runs root (default <repo>/runs). */

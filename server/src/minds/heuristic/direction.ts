@@ -4,7 +4,7 @@
  */
 import type { AgentState, DailyKpi, DeptId, TaskKind } from '../../shared.js';
 import type { DayPlanItem } from '../../contracts.js';
-import { cap, clean, fit, fmtEur, fmtNum, fmtPct, norm, type LocalRng } from '../util.js';
+import { cap, clean, fit, fmtEur, fmtNum, fmtPct, lf, norm, splitSentences, type LocalRng } from '../util.js';
 
 export const KIND_DEPT: Record<TaskKind, DeptId> = {
   plan_day: 'direction', scan_trends: 'recherche', mine_pains: 'recherche', scan_competitors: 'recherche',
@@ -83,32 +83,69 @@ export function heuristicMission(input: { text: string; allowedKinds: TaskKind[]
 // ───────────────────────────── chat ─────────────────────────────
 
 const TOPICS: { re: RegExp; keys: RegExp }[] = [
-  { re: /vente|chiffre|ca\b|revenu|argent|profit|rentab|combien/, keys: /vente|ca\b|revenu|profit|€|roas|marge|tresorerie|cash/ },
-  { re: /pub|tiktok|campagne|hook|ctr/, keys: /pub|campagne|ctr|roas|hook|creative|cpm/ },
-  { re: /tache|fais|travaill|occupe|en cours|aujourd'hui/, keys: /tache|en cours|mission|travail|redige|prepare/ },
-  { re: /client|mail|support|rembours/, keys: /ticket|client|mail|rembours|message/ },
-  { re: /produit|pdf|guide/, keys: /produit|pdf|guide|vente|note/ },
+  { re: /vente|chiffre|ca\b|revenu|argent|profit|rentab|combien|tresorerie|cash|budget/, keys: /vente|ca\b|revenu|profit|€|roas|marge|tresorerie|cash|runway/ },
+  { re: /pub|tiktok|campagne|hook|ctr|creative/, keys: /pub|campagne|ctr|roas|hook|creative|cpm/ },
+  { re: /tache|fais|travaill|occupe|en cours|aujourd'hui|quoi de neuf|ca va/, keys: /tache|en cours|mission|travail|redige|prepare|relecture/ },
+  { re: /client|mail|support|rembours|ticket/, keys: /ticket|client|mail|rembours|message/ },
+  { re: /produit|pdf|guide|boutique/, keys: /produit|pdf|guide|boutique|note/ },
+  { re: /lecon|appris|erreur|retro/, keys: /lecon/ },
 ];
 
-export function heuristicChat(input: { history: { from: string; text: string }[]; text: string; situation: string }, agent: AgentState, rng: LocalRng): string {
+/** System-prompt material that must never be read back to the founder (« Tu es Camille, CEO… »). */
+const PERSONA_LINE = /^\s*(?:#+\s|tu es\b|you are\b|personnalit[ée]|comp[ée]tences\s*:|outils connect|ton r[ôo]le|r[ôo]le\s*:|ton playbook|format de r[ée]ponse|garde-fous|style d'[ée]criture)/iu;
+
+/** One fact of the situation, in the agent's own voice. */
+function voiced(line: string): string {
+  const l = clean(line).replace(/[.;]+$/, '');
+  return l
+    .replace(/^Ma tâche en cours\s*:\s*(.+?)\s*\((en cours|en relecture|à faire)\)$/iu, (_m, t: string, s: string) => `je suis sur ${t}${s === 'en cours' ? '' : ` (${s})`}`)
+    .replace(/^Pas de tâche en cours pour moi ce jour (\d+)$/iu, 'je n’ai pas de tâche en cours aujourd’hui')
+    .replace(/^Hier\s*:\s*/iu, 'hier, on a fait ')
+    .replace(/^Trésorerie\s+/iu, 'la trésorerie est à ')
+    .replace(/^En boutique\s*:\s*/iu, 'en boutique, on a ')
+    .replace(/^Leçon récente\s*:\s*/iu, 'la dernière leçon retenue : ')
+    .replace(/^Pas encore de chiffres de vente$/iu, 'on n’a pas encore de chiffres de vente')
+    .replace(/^Aucun produit en ligne pour l’instant$/iu, 'on n’a encore aucun produit en ligne');
+}
+
+function sentencesCount(s: string): number {
+  return (s.match(/[.!?…](\s|$)/g) ?? []).length;
+}
+
+/**
+ * In-character, first-person reply in 2 to 4 sentences, grounded in the situation lines built by the
+ * runtime. Persona / system lines are never quoted back.
+ */
+export function heuristicChat(input: { history: { from: string; text: string }[]; text: string; situation: string }, agent: AgentState | null | undefined, rng: LocalRng, brand = 'l’agence'): string {
   const ask = norm(input.text ?? '');
-  const lines = clean(input.situation).split(/\n+|(?<=[.;])\s+/).map(clean).filter((l) => l.length > 3);
+  const raw = String(input.situation ?? '').split(/\n+|(?<=[.;])\s+(?=\p{Lu})/u).map(clean).filter((l) => l.length > 3);
+  const lines = raw.filter((l) => !PERSONA_LINE.test(l) && !/\btu es\s+\p{Lu}/u.test(l) && !/^contexte\s*:/i.test(l));
   const topic = TOPICS.find((t) => t.re.test(ask));
   const relevant = topic ? lines.filter((l) => topic.keys.test(norm(l))) : [];
-  const facts = (relevant.length ? relevant : lines).slice(0, 2);
-  const direct = /direct|franc|cash|sec|concis/.test(norm(agent.persona ?? ''));
-  const greet = direct ? '' : rng.pick(['Bonne question. ', 'Merci de demander. ', 'Je fais le point. ']);
+  const facts = (relevant.length ? relevant : lines).slice(0, 2).map(voiced).filter(Boolean);
+  const role = clean(agent?.role) || 'membre de l’équipe';
+  const name = clean(agent?.name);
+  const direct = /direct|franc|cash|sec|concis|tranche/.test(norm(agent?.persona ?? ''));
+  const open = direct ? '' : rng.pick(['Bonne question. ', 'Je fais le point. ', 'Merci de demander. ']);
   const s1 = facts.length
-    ? `${greet}${cap(facts.map((f) => f.replace(/[.;]$/, '')).join(' ; '))}.`
-    : `${greet}Je n’ai pas encore de chiffres solides sur ce point dans mes notes du jour.`;
+    ? `${open}${cap(facts.join(' ; '))}.`
+    : `${open}Je n’ai pas encore de chiffres solides sur ce point dans mes notes du jour.`;
+  const skills = (agent?.skills ?? []).slice(0, 2).map((s) => lf(s)).filter(Boolean);
   const s2 = /\?/.test(input.text ?? '') && /pourquoi|comment/.test(ask)
-    ? `Mon analyse, en tant que ${agent.role.toLowerCase()} : on avance par petits tests, on garde ce qui marche et on coupe vite le reste.`
-    : `De mon côté, en tant que ${agent.role.toLowerCase()}, je m’occupe de ${agent.skills.slice(0, 2).map((s) => s.toLowerCase()).join(' et ') || 'ma partie'}.`;
-  const s3 = 'Je ne vois que nos données internes et la simulation du marché : pour le reste, je préfère ne rien inventer.';
-  const s4 = /\b(peux|pourrais|pouvez|veux|voudrais)\b.*\?|fais|lance|change/.test(ask)
-    ? 'Si tu veux que ça devienne une priorité, donne la mission au CEO et je m’y mets dès le prochain créneau.'
-    : '';
-  return [s1, s2, s3, s4].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    ? `Mon analyse, en tant que ${lf(role)} : on avance par petits tests, on garde ce qui marche et on coupe vite le reste.`
+    : `${name ? `Ici ${name}, ` : 'De mon côté, '}${lf(role)} chez ${brand} : je m’occupe surtout ${skills.length ? skills.map(deOf).join(' et ') : 'de ma partie'}.`;
+  const s3 = /\b(peux|pourrais|pouvez|veux|voudrais)\b.*\?|\b(fais|lance|change|ajoute|arrete|coupe)\b/.test(ask)
+    ? 'Si tu veux que ça devienne une priorité, confie la mission au CEO et je m’y mets dès le prochain créneau.'
+    : 'Je ne m’appuie que sur nos données internes : pour le reste, je préfère ne rien inventer.';
+  let out = [s1, s2, s3].join(' ').replace(/\s+/g, ' ').trim();
+  // never read the system persona back, never more than 4 sentences
+  out = splitSentences(out).filter((s) => !/\btu es\s+\p{Lu}/u.test(s)).slice(0, 4).join(' ');
+  if (sentencesCount(out) < 2) out = `${out} Je reviens vers toi dès que j’ai du nouveau.`.trim();
+  return out;
+}
+
+function deOf(w: string): string {
+  return /^[aeiouyàâéèêëîïôûùh]/i.test(w) ? `d’${w}` : `de ${w}`;
 }
 
 // ───────────────────────────── daily memo ─────────────────────────────

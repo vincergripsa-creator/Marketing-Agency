@@ -13,6 +13,9 @@ import { NICHE_CATALOG } from '../src/sim/niches.js';
 import { isScammer } from '../src/sim/market.js';
 import { createCustomer } from '../src/sim/customers.js';
 import { createMessage } from '../src/sim/inbox.js';
+import { forceEvent } from '../src/sim/events.js';
+import { priceFactor, SETUP_REF } from '../src/sim/tick.js';
+import { ADS, DIFFICULTY, FEES } from '../src/sim/balance.js';
 
 // ───────────────────────────── fixtures ─────────────────────────────
 
@@ -310,7 +313,7 @@ describe('createMarketState', () => {
   });
 
   it('exposes difficulty profiles', () => {
-    expect(difficultyProfile('facile').cpmMultiplier).toBe(0.85);
+    expect(difficultyProfile('facile').cpmMultiplier).toBe(0.7);
     expect(difficultyProfile('normal').cpmMultiplier).toBe(1);
     expect(difficultyProfile('cauchemar').cpmMultiplier).toBe(1.35);
     expect(difficultyProfile('cauchemar').annoyingShare).toBeGreaterThan(difficultyProfile('facile').annoyingShare);
@@ -595,12 +598,24 @@ describe('inbox', () => {
     expect(tools.replyToMessage(req.id, competentReply(req), 'ines').customerReaction).toMatch(/déjà traité/);
     expect(tools.issueRefund('ord_t', 'doublon').ok).toBe(false);
 
-    // arguing with a troll backfires
+    // arguing with a troll backfires: a troll who bought the guide leaves a 1-star store review…
+    const argue = { text: 'Vous avez tort, ' + 'notre guide est excellent et vous ne l\'avez même pas lu, c\'est ridicule. '.repeat(5), action: 'none' as const, detectedIntent: 'question' as const };
     const troll = createCustomer(world, rng, 'troll');
-    const tm = createMessage(world, rng, { intent: 'troll', customer: troll, product: p, order: null, niche: n });
-    const fed = tools.replyToMessage(tm.id, { text: 'Vous avez tort, ' + 'notre guide est excellent et vous ne l\'avez même pas lu, c\'est ridicule. '.repeat(5), action: 'none', detectedIntent: 'question' }, 'ines');
+    const trollOrder = { ...order, id: 'ord_troll', customerId: troll.id, refunded: false };
+    world.market.orders.push(trollOrder);
+    troll.orders.push(trollOrder.id);
+    const tm = createMessage(world, rng, { intent: 'troll', customer: troll, product: p, order: trollOrder, niche: n });
+    const fed = tools.replyToMessage(tm.id, argue, 'ines');
     expect(fed.consequence).toBe('bad_review');
     expect(p.stats.reviews.at(-1)!.rating).toBe(1);
+    // …while a troll who never bought it cannot rate the store (verified reviews only): he just comes back.
+    const reviews = p.stats.reviews.length;
+    const stranger = createCustomer(world, rng, 'troll');
+    const sm = createMessage(world, rng, { intent: 'troll', customer: stranger, product: p, order: null, niche: n });
+    const fedStranger = tools.replyToMessage(sm.id, argue, 'ines');
+    expect(fedStranger.consequence).toBe('none');
+    expect(fedStranger.resolved).toBe(false);
+    expect(p.stats.reviews.length).toBe(reviews);
   });
 });
 
@@ -802,7 +817,11 @@ describe('creators', () => {
 // ───────────────────────────── economics ─────────────────────────────
 
 describe('economics (30 days, normal)', () => {
-  it('a competent policy on a gem niche ends profitable on every seed', () => {
+  // Calibration (docs/BALANCE.md): a STATIC competent policy — 3 creatives never rotated, launch price never
+  // tested — now earns ROAS ≈ 1,3-1,6 on the gem niche (it was 1,5-4,5 before the market got harder); making
+  // real money takes the agency's learning (hooks, formats, prices). Its operating profit is still positive
+  // on every seed; only the one-off launch costs (FEES.setupCost) may keep it slightly in the red after 30 days.
+  it('a competent policy on a gem niche pays back its ads and its running costs on every seed', () => {
     for (const seed of SEEDS) {
       const { world, rng } = makeWorld(seed, 'normal');
       const { tools, campaign } = launch(world, rng, {
@@ -817,9 +836,9 @@ describe('economics (30 days, normal)', () => {
       const revenue = results.reduce((s, r) => s + r.revenue, 0);
       const f = financeSnapshot(world);
       expect(spend).toBeGreaterThan(450);
-      expect(revenue / spend, `seed ${seed} ROAS`).toBeGreaterThan(1.5);
-      expect(revenue / spend, `seed ${seed} ROAS`).toBeLessThan(4.5);
-      expect(f.profit, `seed ${seed} profit`).toBeGreaterThan(0);
+      expect(revenue / spend, `seed ${seed} ROAS`).toBeGreaterThan(1.2);
+      expect(revenue / spend, `seed ${seed} ROAS`).toBeLessThan(3);
+      expect(f.profit + FEES.setupCost, `seed ${seed} operating profit`).toBeGreaterThan(0);
       expect(f.bankrupt).toBe(false);
     }
   });
@@ -869,5 +888,185 @@ describe('economics (30 days, normal)', () => {
     const median = posts.map((x) => x.views).sort((a, b) => a - b)[Math.floor(posts.length / 2)]!;
     expect(median).toBeGreaterThan(50);
     expect(median).toBeLessThan(5000);
+  });
+});
+
+// ───────────────────────────── review fixes (ledger & market plausibility) ─────────────────────────────
+
+describe('payment holds and pricing beyond the max willingness to pay', () => {
+  it('a payment hold freezes cash (at most half of it) but never blocks checkout, and its release is exact', () => {
+    const { world, rng } = makeWorld(5, 'normal', 800);
+    const { tools } = launch(world, rng, { niche: 'proprete-chiot', good: true, budget: 30, styles: [['pov', 'faceless_voiceover'], ['mistake', 'ugc_avatar']] });
+    runDays(world, rng, 8, () => { for (const m of tools.listInbox('open')) tools.replyToMessage(m.id, competentReply(m), 'support'); });
+    const cashBefore = financeSnapshot(world).cash;
+    const profitBefore = financeSnapshot(world).profit;
+    const ev = forceEvent(world, rng, 'payment_hold');
+    expect(ev?.kind).toBe('payment_hold');
+    const hold = world.ledger.at(-1)!;
+    expect(hold.ref).toBe(`hold:${ev!.id}`);
+    expect(hold.amount).toBeLessThan(0);
+    expect(-hold.amount).toBeLessThanOrEqual(cashBefore * 0.5 + 0.01);
+    expect(financeSnapshot(world).cash).toBeCloseTo(cashBefore + hold.amount, 2);
+    expect(financeSnapshot(world).profit).toBeCloseTo(profitBefore, 2); // cash timing, never a loss
+    const untilDay = world.market.modifiers.paymentHoldUntilDay;
+    let salesDuringHold = 0;
+    for (let d = world.day + 1; d < untilDay; d++) {
+      world.day = d;
+      salesDuringHold += tickMarket(world, rng).sales;
+    }
+    expect(salesDuringHold).toBeGreaterThan(0);
+    world.day = untilDay;
+    tickMarket(world, rng);
+    const release = world.ledger.find((e) => e.ref === `hold:release:${untilDay}`)!;
+    expect(release).toBeDefined();
+    expect(release.type).toBe('platform_fee');
+    expect(release.amount).toBeCloseTo(-hold.amount, 2);
+    expect(world.ledger.filter((e) => e.ref?.startsWith('hold:')).reduce((s, e) => s + e.amount, 0)).toBeCloseTo(0, 2);
+    const f = financeSnapshot(world);
+    expect(f.cash).toBeCloseTo(world.ledger.reduce((s, e) => s + e.amount, 0), 2);
+    expect(f.profit).toBeCloseTo(world.ledger.filter((e) => e.type !== 'capital' && !e.ref?.startsWith('hold:')).reduce((s, e) => s + e.amount, 0), 2);
+  });
+
+  it('money released from a reserve is spendable on the release day', () => {
+    const { world, rng } = makeWorld(6, 'normal', 300);
+    launch(world, rng, { niche: 'proprete-chiot', good: true, budget: 100, styles: [['pov', 'faceless_voiceover'], ['mistake', 'ugc_avatar']] });
+    recordLedger(world, { type: 'platform_fee', amount: -250, memo: 'réserve', ref: 'hold:evt_test' });
+    world.market.modifiers.paymentHoldUntilDay = 2;
+    world.day = 2;
+    const r = tickMarket(world, rng);
+    expect(world.ledger.some((e) => e.ref === 'hold:release:2' && e.amount === 250)).toBe(true);
+    expect(r.adSpend).toBeGreaterThan(85); // was capped at the 50 € left before the release
+  });
+
+  it('demand fades smoothly above the max willingness to pay (no cliff), but the sweet spot still wins', () => {
+    const wtp = { min: 9, sweet: 18, max: 33 };
+    const f = (p: number) => priceFactor(p, wtp);
+    for (let p = 5; p < 80; p += 1) expect(f(p + 1)).toBeLessThanOrEqual(f(p) + 1e-9);
+    expect(f(33 + 1e-6)).toBeCloseTo(f(33), 4); // continuous at max
+    const slopeBelow = (f(33) - f(32.9)) / 0.1;
+    const slopeAbove = (f(33.1) - f(33)) / 0.1;
+    expect(slopeAbove / slopeBelow).toBeLessThan(1.6); // the old cliff was a 2.5× jump in slope
+    expect(f(39) / f(29)).toBeGreaterThan(0.3); // +34 % price: conversion roughly halved, not divided by 4.4
+    expect(f(39) / f(29)).toBeLessThan(0.5);
+    expect(39 * f(39)).toBeLessThan(29 * f(29)); // overpricing still loses money per visitor
+    expect(f(60)).toBeLessThan(0.05);
+  });
+
+  it('a 1-star product loses most of its conversion but still sells over a week of traffic', () => {
+    const { world, rng } = makeWorld(9, 'normal', 1500);
+    const { product } = launch(world, rng, { niche: 'proprete-chiot', good: true, budget: 60, styles: [['pov', 'faceless_voiceover'], ['mistake', 'ugc_avatar']] });
+    for (let i = 0; i < 6; i++) product.stats.reviews.push({ id: `rev_${i}`, day: 1, customerId: `c${i}`, rating: 1, text: 'Nul.' });
+    product.stats.rating = 1;
+    const results = runDays(world, rng, 7, () => { product.stats.rating = 1; });
+    const sales = results.reduce((s, r) => s + r.sales, 0);
+    const views = world.market.adStats.reduce((s, r) => s + r.landingViews, 0);
+    expect(views).toBeGreaterThan(300);
+    expect(sales).toBeGreaterThan(0);
+  });
+});
+
+describe('optional fields filled by the market', () => {
+  it('stamps customerName, replyScore and repliedDay on inbox messages', () => {
+    const { world, rng } = makeWorld(12, 'normal');
+    const tools = createMarketTools(world, rng);
+    const c = createCustomer(world, rng, 'normal');
+    c.name = 'Sophie Martin';
+    const msg = createMessage(world, rng, { intent: 'question', customer: c, product: null, order: null });
+    expect(msg.customerName).toBe('Sophie M.');
+    expect(msg.replyScore).toBeNull();
+    expect(msg.repliedDay).toBeNull();
+    const handle = createCustomer(world, rng, 'troll');
+    handle.name = '@lea_du_34';
+    expect(createMessage(world, rng, { intent: 'troll', customer: handle, product: null, order: null }).customerName).toBe('@lea_du_34');
+    world.day = 3;
+    const out = tools.replyToMessage(msg.id, competentReply(msg), 'ines');
+    expect(msg.replyScore).toBe(out.score);
+    expect(msg.repliedDay).toBe(3);
+  });
+
+  it('dates refunds and chargebacks on the order, reports the refunded amount and refs events', () => {
+    const { world, rng } = makeWorld(21, 'cauchemar', 1500);
+    const { tools, product } = launch(world, rng, { niche: 'oral-aide-soignante', good: true, styles: [['mistake', 'text_slideshow'], ['story', 'faceless_voiceover']], budget: 40 });
+    const results = runDays(world, rng, 25);
+    const refunded = world.market.orders.filter((o) => o.refunded || o.chargeback);
+    expect(refunded.length).toBeGreaterThan(0);
+    for (const o of refunded) {
+      expect(o.refundedDay).toBeGreaterThanOrEqual(o.day);
+      const booked = world.ledger.filter((e) => e.ref === o.id && (e.type === 'refund' || e.type === 'chargeback'));
+      expect(booked.length).toBeGreaterThan(0);
+      expect(booked[0]!.day).toBe(o.refundedDay);
+    }
+    expect(results.some((r) => r.refunds > 0)).toBe(true);
+    for (const r of results) {
+      if (r.refunds === 0) expect(r.refundAmount).toBe(0);
+      else expect(r.refundAmount).toBeGreaterThan(0);
+    }
+    // a refund issued by the support today is dated today
+    const fresh = world.market.orders.find((o) => !o.refunded && !o.chargeback)!;
+    world.day = 26;
+    expect(tools.issueRefund(fresh.id, 'demande client').ok).toBe(true);
+    expect(fresh.refundedDay).toBe(26);
+    // events about a product / niche carry their refs
+    for (const e of world.market.events.filter((x) => ['competitor_clone', 'bad_review_wave', 'creator_offer'].includes(x.kind))) {
+      expect(e.refs).toMatchObject({ productId: product.id, nicheId: product.nicheId });
+    }
+    const cr = badCreative(world, 'cre_banned', product, 'stat', 'carousel', 'Résultat garanti en 7 jours');
+    tools.submitCreative(cr.id);
+    expect(world.market.events.at(-1)).toMatchObject({ kind: 'ad_rejected', refs: { creativeId: 'cre_banned', productId: product.id, nicheId: product.nicheId } });
+  });
+});
+
+// ───────────────────────────── calibration (docs/BALANCE.md) ─────────────────────────────
+
+describe('market calibration', () => {
+  it('books the one-off launch costs once, at the very first market close', () => {
+    const { world, rng } = makeWorld(5);
+    tickMarket(world, rng);
+    const setup = world.ledger.filter((e) => e.ref === SETUP_REF);
+    expect(setup).toHaveLength(1);
+    expect(setup[0]).toMatchObject({ day: 1, type: 'tool_subscription', amount: -FEES.setupCost });
+    expect(tickMarket(world, rng).notes.join(' ')).toMatch(/déjà clôturé/);
+    world.day = 2;
+    tickMarket(world, rng);
+    expect(world.ledger.filter((e) => e.ref === SETUP_REF)).toHaveLength(1);
+    expect(financeSnapshot(world).profit).toBeCloseTo(-FEES.setupCost - 2 * (FEES.boutiqueDaily + FEES.toolsDaily), 2);
+  });
+
+  it('the right angle matters: CTR scales with (hook × format affinity)^affinityExp', () => {
+    expect(ADS.affinityExp).toBeGreaterThan(1);
+    const { world, rng } = makeWorld(8, 'normal', 50_000);
+    const tools = createMarketTools(world, rng);
+    const n = findNiche(world, 'proprete-chiot')!;
+    const content = goodContent(n);
+    const p = makeProduct(world, 'p', n, content, goodSalesPage(n, content), n.wtp.sweet);
+    tools.publishProduct(p.id);
+    const aff = (s: HookStyle, f: AdFormat) => (n.hookAffinity[s] ?? 1) * (n.formatAffinity[f] ?? 1);
+    const hooks = Object.keys(n.hookAffinity) as HookStyle[];
+    const formats = Object.keys(n.formatAffinity) as AdFormat[];
+    const best = hooks.flatMap((s) => formats.map((f) => [s, f] as const)).sort((a, b) => aff(b[0], b[1]) - aff(a[0], a[1]));
+    const [hi, lo] = [best[0]!, best[best.length - 1]!];
+    const ids: Record<string, string> = {};
+    for (const [key, [s, f]] of [['hi', hi], ['lo', lo]] as const) {
+      const c = goodCreative(world, `cre_${key}`, p, n, s, f, 0);
+      expect(approve(tools, c.id)).toBe('approved');
+      ids[key] = tools.createCampaign({ productId: p.id, name: key, creativeIds: [c.id], dailyBudget: 150, targeting: { interests: [], ageMin: 25, ageMax: 45 }, createdBy: 'test' }).id!;
+    }
+    runDays(world, rng, 4);
+    const ctr = (id: string) => {
+      const rows = world.market.adStats.filter((s) => s.campaignId === id);
+      return rows.reduce((s, r) => s + r.clicks, 0) / rows.reduce((s, r) => s + r.impressions, 0);
+    };
+    const q = (id: string) => Math.pow(scoreCreative(world.company.creatives.find((c) => c.id === id)!, p, n.voc).overall / ADS.qualityRef, ADS.qualityExp);
+    const affRatio = aff(hi[0], hi[1]) / aff(lo[0], lo[1]);
+    const measured = (ctr(ids.hi!) / ctr(ids.lo!)) / (q('cre_hi') / q('cre_lo'));
+    expect(measured).toBeGreaterThan(Math.pow(affRatio, ADS.affinityExp) * 0.75);
+    expect(measured).toBeLessThan(Math.pow(affRatio, ADS.affinityExp) * 1.33);
+    expect(measured).toBeGreaterThan(affRatio * 1.2); // more than the raw affinity ratio: learning the angle pays
+  });
+
+  it('difficulty keeps its order: cheaper ads in facile, pricier in cauchemar', () => {
+    expect(DIFFICULTY.facile.cpmMultiplier).toBeLessThan(DIFFICULTY.normal.cpmMultiplier);
+    expect(DIFFICULTY.normal.cpmMultiplier).toBeLessThan(DIFFICULTY.cauchemar.cpmMultiplier);
+    expect(DIFFICULTY.facile.refundBase).toBeLessThan(DIFFICULTY.cauchemar.refundBase);
   });
 });

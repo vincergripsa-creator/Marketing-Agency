@@ -8,23 +8,18 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { basename, extname, join, relative } from 'node:path';
 import { onActivity, repoRoot } from '../core/index.js';
-import type { MindMode, ScenarioConfig, WorldState } from '../shared.js';
+import type { ApproveResponse, ChatResponse, ControlResponse, MissionResponse, ScenarioConfig, SessionInfo, WorldState } from '../shared.js';
 import { isEntryPoint } from './entry.js';
 import { config, mindModeLabel } from './env.js';
 import {
-  applyCors, HttpError, isSafeRelativePath, mimeFor, parseControl, readJsonBody, requireText, safeResolve,
+  applyCors, errorStatus, HttpError, isSafeRelativePath, mimeFor, parseControl, readJsonBody, requireText, safeResolve,
   sanitizeScenario, sendError, sendJson, sendRawJson, type ControlAction, type Speed,
 } from './http.js';
 import { flushSaves, isValidRunId, runsDir } from './persist.js';
 import { SseHub } from './sse.js';
 
-export interface SessionInfoLike {
-  runId: string;
-  playing: boolean;
-  speed: Speed;
-  mindMode: MindMode;
-  status?: WorldState['status'] | null;
-}
+/** Live session state as sent to the UI (CompanySnapshot.session, /api/control). */
+export type SessionInfoLike = SessionInfo;
 
 /** What the HTTP layer needs from the live session (implemented by AgencySession). */
 export interface SessionLike {
@@ -155,7 +150,8 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           const { action, speed } = parseControl(await readJsonBody(req));
           const info = await session.control(action, speed);
           hub.snapshotSoon();
-          return sendJson(res, 200, { ok: true, status: session.status(), speed: info.speed, playing: info.playing, message: controlMessage(action, info), session: info });
+          const body: ControlResponse = { ok: true, status: session.status(), speed: info.speed, playing: info.playing, message: controlMessage(action, info), session: info };
+          return sendJson(res, 200, body);
         }
         case '/api/scenario': {
           if (!isPost) break;
@@ -172,7 +168,8 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           const agentId = typeof body.agentId === 'string' && body.agentId.trim() ? body.agentId.trim() : undefined;
           const missionId = await session.mission(text, agentId);
           hub.snapshotSoon();
-          return sendJson(res, 200, { ok: true, missionId });
+          const out: MissionResponse = { ok: true, missionId };
+          return sendJson(res, 200, out);
         }
         case '/api/chat': {
           if (!isPost) break;
@@ -181,7 +178,8 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           const text = requireText(body.text, 'text', 2000);
           const reply = await session.chat(agentId, text);
           hub.snapshotSoon();
-          return sendJson(res, 200, { reply });
+          const out: ChatResponse = { reply };
+          return sendJson(res, 200, out);
         }
         case '/api/approve': {
           if (!isPost) break;
@@ -190,7 +188,8 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           if (typeof body.approved !== 'boolean') throw new HttpError(400, 'Le champ « approved » doit être true ou false.');
           await session.approve(taskId, body.approved);
           hub.snapshotSoon();
-          return sendJson(res, 200, { ok: true, message: body.approved ? 'Validé : la tâche reprend.' : 'Refusé : la tâche est annulée.' });
+          const answer: ApproveResponse = { ok: true, message: body.approved ? 'Validé : la tâche reprend.' : 'Refusé : la tâche est annulée.' };
+          return sendJson(res, 200, answer);
         }
         case '/api/brain':
           if (!isGet) break;
@@ -270,9 +269,10 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
       return;
     }
     route(req, res).catch((err: unknown) => {
-      if (err instanceof HttpError) return sendError(res, err.status, err.message);
-      console.error(`[api] ${req.method} ${req.url} :`, err);
+      const status = errorStatus(err);
       const msg = err instanceof Error ? err.message : String(err);
+      if (status < 500) return sendError(res, status, msg);
+      console.error(`[api] ${req.method} ${req.url} :`, err);
       sendError(res, 500, `Erreur interne du serveur : ${msg}`);
     }).catch(() => {
       try { res.destroy(); } catch { /* socket already gone */ }

@@ -37,6 +37,17 @@ export function phaseOf(tick: number): DayPhase {
 
 interface ReadyWork { task: Task; agent: AgentState }
 
+type Usage = ReturnType<ContentEngine['usage']>;
+
+function safeUsage(engine: ContentEngine): Usage | null {
+  try {
+    const u = engine.usage();
+    return { calls: u.calls || 0, inputTokens: u.inputTokens || 0, outputTokens: u.outputTokens || 0, costEur: u.costEur || 0, fallbacks: u.fallbacks || 0 };
+  } catch {
+    return null;
+  }
+}
+
 export class Company implements CompanyApi {
   readonly world: WorldState;
   private readonly engine: ContentEngine;
@@ -51,6 +62,12 @@ export class Company implements CompanyApi {
   private readonly idleTicks = new Map<AgentId, number>();
   private readonly recalled = new Map<AgentId, Set<string>>();
   private stepLock: Promise<unknown> = Promise.resolve();
+  /** Usage already persisted in world.mind when this Company was mounted (a resumed run keeps counting from it). */
+  private readonly mindBase: Usage;
+  /** Engine counters when this Company was mounted (the engine may be shared or already used). */
+  private readonly engineZero: Usage;
+  /** Engine cost (EUR, since mount) already booked in the ledger as 'compute'. */
+  private bookedCompute = 0;
 
   constructor(world: WorldState, opts: CompanyOptions) {
     this.world = world;
@@ -60,7 +77,10 @@ export class Company implements CompanyApi {
     this.rng = createRng(world.rngState);
     this.tools = sim.createMarketTools(world, this.rng);
     this.ctx = { world, engine: this.engine, brain: this.brain, tools: this.tools, rng: this.rng, paths: this.paths, incidents: [], lastMarketNotes: [] };
-    world.mind.mode = this.engine.mode;
+    const m = (world.mind ?? {}) as Partial<Usage>;
+    this.mindBase = { calls: m.calls || 0, inputTokens: m.inputTokens || 0, outputTokens: m.outputTokens || 0, costEur: m.costEur || 0, fallbacks: m.fallbacks || 0 };
+    this.engineZero = safeUsage(this.engine) ?? { calls: 0, inputTokens: 0, outputTokens: 0, costEur: 0, fallbacks: 0 };
+    world.mind = { mode: this.engine.mode, ...this.mindBase };
     // Tasks interrupted by a reload start their brain read again; nothing else is kept in memory.
   }
 
@@ -152,7 +172,7 @@ export class Company implements CompanyApi {
     await this.ready();
     const w = this.world;
     const agent = agentById(w, agentId);
-    if (!agent) throw new Error(`Agent inconnu : ${agentId}`);
+    if (!agent) throw Object.assign(new Error(`Agent inconnu : ${agentId}`), { status: 404 });
     const clean = String(text ?? '').trim();
     const history = (w.company.chats[agentId] ??= []);
     const situation = this.situationFor(agent);
@@ -458,7 +478,7 @@ export class Company implements CompanyApi {
       .filter((l) => topics.includes(l.topic) || l.appliesTo.includes(agent.id))
       .sort((a, b) => b.day - a.day || b.confidence - a.confidence)
       .slice(0, 6);
-    return { agent, playbook: [...(w.company.playbooks[agent.id] ?? [])], brainNotes, lessons, day: w.day };
+    return { agent, playbook: [...(w.company.playbooks[agent.id] ?? [])], brainNotes, lessons, day: w.day, brand: w.scenario.companyName || w.company.name };
   }
 
   private async runHandlers(ready: ReadyWork[]): Promise<void> {
@@ -478,7 +498,7 @@ export class Company implements CompanyApi {
     if (!spec) { this.failTask(task, agent, 'aucun savoir-faire pour ce type de tâche'); return; }
     const cached = this.minds.get(task.id);
     const mind: MindContext = cached
-      ? { ...cached, agent, playbook: [...(w.company.playbooks[agent.id] ?? [])], day: w.day }
+      ? { ...cached, agent, playbook: [...(w.company.playbooks[agent.id] ?? [])], day: w.day, brand: w.scenario.companyName || w.company.name }
       : await this.mindFor(agent, task.kind, this.taskQuery(task));
     let outcome: HandlerOutcome;
     try {
@@ -776,15 +796,30 @@ export class Company implements CompanyApi {
     emit(w, { agentId: null, kind: 'event', text: `${title} — ${short(description, 140)}` });
   }
 
+  /**
+   * world.mind = what the run had already used when mounted + what the engine used since (cumulative across
+   * resumes). With scenario.chargeCompute, every new engine cost since the last sync is booked as 'compute'.
+   */
   private syncMind(): void {
     const w = this.world;
-    let u: ReturnType<ContentEngine['usage']>;
-    try { u = this.engine.usage(); } catch { return; }
-    w.mind = { mode: this.engine.mode, calls: u.calls, inputTokens: u.inputTokens, outputTokens: u.outputTokens, costEur: round2(u.costEur), fallbacks: u.fallbacks };
+    const u = safeUsage(this.engine);
+    if (!u) return;
+    const z = this.engineZero;
+    const b = this.mindBase;
+    const spent = Math.max(0, u.costEur - z.costEur);
+    w.mind = {
+      mode: this.engine.mode,
+      calls: b.calls + Math.max(0, u.calls - z.calls),
+      inputTokens: b.inputTokens + Math.max(0, u.inputTokens - z.inputTokens),
+      outputTokens: b.outputTokens + Math.max(0, u.outputTokens - z.outputTokens),
+      costEur: round2(b.costEur + spent),
+      fallbacks: b.fallbacks + Math.max(0, u.fallbacks - z.fallbacks),
+    };
     if (!w.scenario.chargeCompute) return;
-    const booked = w.ledger.filter((e) => e.type === 'compute').reduce((s, e) => s + Math.abs(e.amount), 0);
-    const delta = round2(u.costEur - booked);
-    if (delta >= 0.01) sim.recordLedger(w, { type: 'compute', amount: -delta, memo: `Calcul Claude (${u.calls} appels cumulés)`, ref: null });
+    const delta = round2(spent - this.bookedCompute);
+    if (delta < 0.01) return;
+    sim.recordLedger(w, { type: 'compute', amount: -delta, memo: `Calcul Claude (${w.mind.calls} appels cumulés)`, ref: null });
+    this.bookedCompute = round2(this.bookedCompute + delta);
   }
 
   private advance(): void {

@@ -15,7 +15,7 @@ import { normalizeDesign } from './design.js';
 import { renderCoverSvg } from './cover.js';
 import { motifSvg, sparklePath } from './motifs.js';
 import { drawCheckbox, drawCheckMark, drawIcon, layoutVisual, measure, put, type PdfTheme } from './pdfVisuals.js';
-import { hashString, sanitizePdfText, truncate, wrapText, type StdFont } from './text.js';
+import { hashString, normalizeKey, sanitizePdfText, truncate, wrapText, type StdFont } from './text.js';
 
 const PAGE_W = 595.28;
 const PAGE_H = 841.89;
@@ -74,6 +74,10 @@ const fontCallback = (family: string, bold: boolean, italic: boolean): string =>
   if (/georgia|times|serif/.test(f.replace('sans-serif', ''))) return bold && italic ? 'Times-BoldItalic' : bold ? 'Times-Bold' : italic ? 'Times-Italic' : 'Times-Roman';
   return bold && italic ? 'Helvetica-BoldOblique' : bold ? 'Helvetica-Bold' : italic ? 'Helvetica-Oblique' : 'Helvetica';
 };
+
+/** Checklist card spacing (pt): head = title band, row = gap after each item, pad = card bottom, after = gap below the card. */
+const CHECK_NORMAL = { head: 50, row: 10, pad: 8, after: 18 };
+const CHECK_TIGHT = { head: 40, row: 6, pad: 6, after: 10 };
 
 class GuideWriter {
   readonly metas: PageMeta[] = [];
@@ -237,7 +241,9 @@ class GuideWriter {
     const clean = items.map((s) => S(s).replace(/^\s*(?:\d+\s*[.)\-–—:]|étape\s*\d+\s*[:.\-–—]?)\s*/i, '')).filter(Boolean);
     if (clean.length === 0) return;
     const { doc, t } = this;
-    this.subheading('Étape par étape', 60);
+    // the heading always travels with its first step box (never alone at the bottom of a page)
+    const firstH = Math.max(42, measure(doc, clean[0]!, t.body, 10.4, CW - 62, 3) + 24);
+    this.subheading('Étape par étape', Math.max(60, firstH + 24)); // 6 + 9 pt around the heading, 8 pt under the box
     clean.forEach((s, k) => {
       const textW = CW - 62;
       const th = measure(doc, s, t.body, 10.4, textW, 3);
@@ -279,13 +285,14 @@ class GuideWriter {
     doc.y = y + h + 16;
   }
 
-  checklist(items: string[], title = 'Votre checklist'): void {
-    const clean = items.map((s) => S(s).replace(/^\s*[-•*]\s*/, '')).filter(Boolean);
+  checklist(items: string[], title = 'Votre checklist', tight = false): void {
+    const clean = this.checklistItems(items);
     if (clean.length === 0) return;
     const { doc, t } = this;
+    const g = tight ? CHECK_TIGHT : CHECK_NORMAL;
     const textW = CW - 64;
     const hs = clean.map((s) => Math.max(13, measure(doc, s, t.body, 10.4, textW, 2.5)));
-    const total = 50 + hs.reduce((a, h) => a + h + 10, 0) + 8;
+    const total = g.head + hs.reduce((a, h) => a + h + g.row, 0) + g.pad;
     const fitsOnPage = total <= this.bottom - M.top - 20;
     this.ensure(fitsOnPage ? total + 12 : 120);
     let y = doc.y + 4;
@@ -295,16 +302,79 @@ class GuideWriter {
       doc.roundedRect(M.left, y, CW, total, 10).lineWidth(1.2).dash(4, { space: 3 }).strokeColor(lighten(t.p.primary, 0.45)).stroke().undash();
       doc.restore();
     }
-    drawCheckMark(doc, M.left + 28, y + 24, 10, t.p.primary, readableOn(t.p.primary, t.ink));
-    put(doc, S(title), M.left + 46, y + 17, { font: t.bold, size: 12.5, color: t.primaryInk, width: CW - 60 });
-    y += 48;
+    drawCheckMark(doc, M.left + 28, y + (tight ? 20 : 24), 10, t.p.primary, readableOn(t.p.primary, t.ink));
+    put(doc, S(title), M.left + 46, y + (tight ? 13 : 17), { font: t.bold, size: 12.5, color: t.primaryInk, width: CW - 60 });
+    y += g.head - 2;
     clean.forEach((s, k) => {
       if (!fitsOnPage && y + hs[k] > this.bottom) { this.newPage(this.section, false); y = doc.y; }
       drawCheckbox(doc, M.left + 22, y, 12, t.p.primary, false);
       put(doc, s, M.left + 44, y + 0.5, { font: t.body, size: 10.4, color: t.ink, width: textW, lineGap: 2.5 });
-      y += hs[k] + 10;
+      y += hs[k] + g.row;
     });
-    doc.y = y + (fitsOnPage ? 18 : 10);
+    doc.y = y + (fitsOnPage ? g.after : 10);
+  }
+
+  /** Vertical space the example callout consumes (0 when there is none). */
+  exampleNeed(text: string | null | undefined): number {
+    const s = S(text ?? '');
+    if (!s) return 0;
+    const th = measure(this.doc, s, this.t.italic, 10.8, CW - 44, 3.4);
+    return th + 52 + 20;
+  }
+
+  checklistItems(items: string[]): string[] {
+    return items.map((s) => S(s).replace(/^\s*[-•*]\s*/, '')).filter(Boolean);
+  }
+
+  /** Vertical space of the checklist card, normal or tight spacing. */
+  checklistNeed(items: string[], tight = false): number {
+    const clean = this.checklistItems(items);
+    if (clean.length === 0) return 0;
+    const hs = clean.map((s) => Math.max(13, measure(this.doc, s, this.t.body, 10.4, CW - 64, 2.5)));
+    const g = tight ? CHECK_TIGHT : CHECK_NORMAL;
+    return 4 + g.head + hs.reduce((a, h) => a + h + g.row, 0) + g.pad + g.after;
+  }
+
+  visualNeed(v: ChapterContent['visual']): number {
+    const layout = layoutVisual(this.doc, v, CW, this.t);
+    return layout && layout.height <= this.bottom - M.top - 10 ? layout.height + 22 : 0;
+  }
+
+  /**
+   * End of a chapter: visual → example → checklist. The last block never lands alone on a near-empty
+   * page: the checklist is tightened when that is enough, else the block before it moves to the next
+   * page too, so that page carries at least MIN_PAGE_FILL of content.
+   */
+  chapterTail(ch: ChapterContent): void {
+    const items = arr(ch?.checklist);
+    const blocks = [
+      { need: this.visualNeed(ch?.visual ?? null), draw: () => this.visual(ch?.visual ?? null) },
+      { need: this.exampleNeed(ch?.example), draw: () => this.example(ch?.example) },
+    ].filter((b) => b.need > 0);
+    const ck = this.checklistNeed(items);
+    const room = this.bottom - this.doc.y;
+    const before = blocks.reduce((a, b) => a + b.need, 0);
+    let tight = false;
+    let moveFrom = -1;
+    if (ck > 0 && before + ck > room) {
+      if (before + this.checklistNeed(items, true) <= room) tight = true;
+      else {
+        // where would the natural flow break, and what would the next page hold?
+        let acc = 0;
+        let split = blocks.length;
+        for (let i = 0; i < blocks.length; i++) { acc += blocks[i]!.need; if (acc > room) { split = i; break; } }
+        const tail = blocks.slice(split).reduce((a, b) => a + b.need, 0) + ck;
+        const pageH = this.bottom - M.top;
+        // the closing checklist alone on a page (or any tail under MIN_PAGE_FILL) takes the block before it along
+        const aloneChecklist = split === blocks.length;
+        if ((aloneChecklist || tail < pageH * MIN_PAGE_FILL) && split > 0 && this.doc.y - M.top > pageH * 0.3) moveFrom = split - 1;
+      }
+    }
+    blocks.forEach((b, i) => {
+      if (i === moveFrom) this.newPage(this.section, false);
+      b.draw();
+    });
+    this.checklist(items, 'Votre checklist', tight);
   }
 
   visual(v: ChapterContent['visual']): void {
@@ -331,7 +401,7 @@ class GuideWriter {
       label: isBonus ? 'Chapitre bonus' : `Chapitre ${n}`,
       number: isBonus ? null : pad2(n),
       title,
-      section: isBonus ? `Bonus · ${title}` : `Chapitre ${n} · ${title}`,
+      section: isBonus ? `Bonus · ${title.replace(/^bonus\s*(?:offert\s*)?[:—–-]\s*/i, '')}` : `Chapitre ${n} · ${title}`,
       dest,
       bonus: isBonus,
     });
@@ -340,9 +410,7 @@ class GuideWriter {
     if (ch?.intro) this.lead(ch.intro);
     for (const p of arr(ch?.paragraphs)) this.para(p);
     this.steps(arr(ch?.steps));
-    this.visual(ch?.visual ?? null);
-    this.example(ch?.example);
-    this.checklist(arr(ch?.checklist));
+    this.chapterTail(ch);
   }
 
   private bonusNote(): void {
@@ -467,7 +535,7 @@ function promisePage(w: GuideWriter, product: Product, content: PdfContent): voi
       doc.y = y + h + 7;
     }
     if (content.bonus?.title) {
-      const s = `Bonus offert : ${S(content.bonus.title)}`;
+      const s = `Bonus offert : ${S(content.bonus.title).replace(/^bonus\s*(?:offert\s*)?[:—–-]\s*/i, '')}`;
       const h = Math.max(15, measure(doc, s, t.bold, 10.6, CW - 30));
       w.ensure(h + 8);
       const y = doc.y;
@@ -528,6 +596,43 @@ function promisePage(w: GuideWriter, product: Product, content: PdfContent): voi
   }
 }
 
+/** Lowercase, accent-free, straight apostrophes — to compare texts (« Le chiot… » vs « le chiot… »). */
+function keyOf(s: string): string {
+  return normalizeKey(S(s)).replace(/[’`´]/g, "'").replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Typesetting parameters of the introduction (normal, or compact to keep its last box on the page). */
+interface IntroStyle { lead: number; leadGap: number; leadAfter: number; body: number; gap: number; after: number; boxBody: number }
+const INTRO_NORMAL: IntroStyle = { lead: 12.6, leadGap: 4.2, leadAfter: 12, body: BODY_SIZE, gap: BODY_GAP, after: 8, boxBody: 10.8 };
+const INTRO_COMPACT: IntroStyle = { lead: 11.8, leadGap: 3.4, leadAfter: 8, body: 10.2, gap: 3, after: 5, boxBody: 10.2 };
+
+/** A page holding less than this share of content because of one leftover block is a layout bug. */
+export const MIN_PAGE_FILL = 0.25;
+
+export interface IntroPlan { compact: boolean; quote: boolean; breakBefore: number }
+
+/**
+ * Layout decision for the introduction: heights (pt) of its paragraphs, the pull-quote and the
+ * « À la fin de ce guide » box at the normal size, the compact total (no quote), the space left on
+ * the first page and the page body height. Never leaves the box (+ quote) alone on a near-empty page:
+ * tighten the spacing when that is enough, else start the next page earlier (breakBefore = index of the
+ * first paragraph moved to it) so that it holds at least MIN_PAGE_FILL of content.
+ */
+export function planIntro(normal: { parts: number[]; quote: number; box: number }, compactTotal: number, avail: number, pageH: number): IntroPlan {
+  const total = normal.parts.reduce((a, b) => a + b, 0) + normal.quote + normal.box;
+  if (total <= avail) return { compact: false, quote: true, breakBefore: -1 };
+  if (compactTotal <= avail) return { compact: true, quote: false, breakBefore: -1 };
+  const spill = total - avail;
+  if (spill >= pageH * MIN_PAGE_FILL) return { compact: false, quote: true, breakBefore: -1 };
+  let acc = normal.quote + normal.box;
+  for (let k = normal.parts.length - 1; k > 0; k--) {
+    acc += normal.parts[k]!;
+    if (acc >= pageH * MIN_PAGE_FILL) return { compact: false, quote: true, breakBefore: k };
+  }
+  return { compact: false, quote: true, breakBefore: normal.parts.length > 1 ? 1 : -1 };
+}
+
+
 function introPage(w: GuideWriter, product: Product, content: PdfContent): void {
   const { doc, t } = w;
   w.toc.push({ kind: 'intro', label: 'Introduction', title: 'Le point de départ', page: 0, dest: 'introduction' });
@@ -535,9 +640,36 @@ function introPage(w: GuideWriter, product: Product, content: PdfContent): void 
   w.toc[w.toc.length - 1].page = w.pageIndex + 1;
   const intro = arr(content.introduction).map(S).filter(Boolean);
   const paragraphs = intro.length ? intro : [S(product.problem)].filter(Boolean);
-  paragraphs.forEach((p, k) => (k === 0 ? w.lead(p) : w.para(p)));
+  const promise = S(content.promise);
+  // pull-quote of the problem, unless the text already says it or it IS the promise / the title (upsell guides)
   const problem = S(product.problem);
-  if (problem && !paragraphs.some((p) => p.includes(problem))) {
+  const pk = keyOf(problem);
+  const showQuote = !!problem && pk.length > 0
+    && !paragraphs.some((p) => keyOf(p).includes(pk))
+    && !keyOf(promise).includes(pk) && !pk.includes(keyOf(promise) || '\u0000')
+    && !keyOf(content.title).includes(pk);
+
+  const measureAll = (st: IntroStyle, quote: boolean) => {
+    const parts = paragraphs.map((p, k) => (k === 0
+      ? measure(doc, p, t.body, st.lead, CW, st.leadGap) + st.leadAfter
+      : measure(doc, p, t.body, st.body, CW, st.gap) + st.after));
+    const q = quote ? measure(doc, problem, t.italic, 13, CW - 70, 3.5) + 30 + 22 : 0;
+    const box = promise ? measure(doc, promise, t.body, st.boxBody, CW - 40, 3) + 52 + 14 : 0;
+    return { parts, q, box, total: parts.reduce((a, b) => a + b, 0) + q + box };
+  };
+  const avail = w.bottom - doc.y - 6;
+  const pageH = w.bottom - M.top;
+  const normal = measureAll(INTRO_NORMAL, showQuote);
+  const plan = planIntro({ parts: normal.parts, quote: normal.q, box: normal.box }, measureAll(INTRO_COMPACT, false).total, avail, pageH);
+  const st = plan.compact ? INTRO_COMPACT : INTRO_NORMAL;
+  const quote = showQuote && plan.quote;
+  const breakBefore = plan.breakBefore;
+  paragraphs.forEach((p, k) => {
+    if (k === breakBefore) w.newPage('Introduction', false);
+    if (k === 0) w.para(p, { size: st.lead, color: t.primaryInk, gap: st.leadGap, after: st.leadAfter });
+    else w.para(p, { size: st.body, gap: st.gap, after: st.after });
+  });
+  if (quote) {
     const qh = measure(doc, problem, t.italic, 13, CW - 70, 3.5) + 30;
     w.ensure(qh + 16);
     const y = doc.y + 4;
@@ -548,10 +680,9 @@ function introPage(w: GuideWriter, product: Product, content: PdfContent): void 
     put(doc, problem, M.left + 52, y + 14, { font: t.italic, size: 13, color: t.primaryInk, width: CW - 70, lineGap: 3.5 });
     doc.y = y + qh + 18;
   }
-  const promise = S(content.promise);
   if (promise) {
     const head = 'À la fin de ce guide';
-    const ph = measure(doc, promise, t.body, 10.8, CW - 40, 3) + 52;
+    const ph = measure(doc, promise, t.body, st.boxBody, CW - 40, 3) + 52;
     w.ensure(ph + 10);
     const y = doc.y;
     doc.save();
@@ -559,7 +690,7 @@ function introPage(w: GuideWriter, product: Product, content: PdfContent): void 
     doc.restore();
     drawCheckMark(doc, M.left + 26, y + 24, 9, t.p.primary, readableOn(t.p.primary, t.ink));
     put(doc, head, M.left + 42, y + 17, { font: t.bold, size: 12, color: t.primaryInk, width: CW - 60 });
-    put(doc, promise, M.left + 20, y + 40, { font: t.body, size: 10.8, color: t.ink, width: CW - 40, lineGap: 3 });
+    put(doc, promise, M.left + 20, y + 40, { font: t.body, size: st.boxBody, color: t.ink, width: CW - 40, lineGap: 3 });
     doc.y = y + ph + 14;
   }
 }
@@ -572,7 +703,8 @@ function finalPage(w: GuideWriter, content: PdfContent, product: Product, upsell
   doc.addNamedDestination('la-suite');
   w.toc[w.toc.length - 1].page = w.pageIndex + 1;
 
-  const subtitle = S(next.title);
+  // the layout already prints « La suite est ici »: the subtitle is the next guide's title only
+  const subtitle = S(next.title).replace(/^la\s+suite\s+est\s+ici\s*(?:[:—–-]\s*)?/i, '').trim();
   const subH = subtitle ? measure(doc, subtitle, t.body, 15, CW - 150, 3) : 0;
   const bandH = Math.max(270, 168 + subH + 40);
   doc.save();
@@ -651,7 +783,7 @@ function finalPage(w: GuideWriter, content: PdfContent, product: Product, upsell
   }
 
   // thanks + disclaimer
-  const thanks = `Merci de votre confiance. Si ce guide vous a aidé, dites-le nous : chaque retour nous aide à l’améliorer pour la prochaine version. — L’équipe ${S(w.brand)}`;
+  const thanks = `Merci de votre confiance. Si ce guide vous a aidé, dites-le-nous : chaque retour nous aide à l’améliorer pour la prochaine version. — L’équipe ${S(w.brand)}`;
   w.para(thanks, { font: t.italic, size: 10.4, color: t.muted, after: 10 });
   const disclaimer = `Ce guide est fourni à titre informatif et pédagogique. Il ne remplace pas l’avis d’un professionnel qualifié (médecin, vétérinaire, conseiller financier…) adapté à votre situation. Version ${Math.max(1, Math.trunc(product.version || 1))}.`;
   w.para(disclaimer, { size: 8, color: t.muted, after: 0 });

@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import type { Activity, ActivityKind } from '../../../shared/types';
 import { cx, Dot, Segmented } from './common';
 import { useApp } from './context';
+import { activityProductId } from './derive';
 import { Icon } from './icons';
 import { ACTIVITY_META, agentColor, agentName, firstName } from './labels';
 
@@ -17,7 +18,8 @@ const FILTER_KINDS: Record<Exclude<Filter, 'all'>, ReadonlySet<ActivityKind>> = 
 const QUIET: ReadonlySet<ActivityKind> = new Set<ActivityKind>(['walk']);
 
 export function ActivityFeed() {
-  const { activity, lookups, openAgent } = useApp();
+  const { activity, lookups, openAgent, openProduct, snapshot } = useApp();
+  const events = snapshot?.market?.events;
   const [open, setOpen] = useState(true);
   const [filter, setFilter] = useState<Filter>('all');
 
@@ -56,11 +58,16 @@ export function ActivityFeed() {
             {items.map((a) => {
               const meta = ACTIVITY_META[a.kind] ?? ACTIVITY_META.thought;
               const color = agentColor(lookups, a.agentId);
-              const clickable = !!a.agentId && lookups.agents.has(a.agentId);
+              const agentOk = !!a.agentId && lookups.agents.has(a.agentId);
+              // market lines (events, ad reviews…) about a product open the Produits tab on that product
+              const pid = a.kind === 'event' || !agentOk ? activityProductId(a, events) : null;
+              const product = pid ? lookups.products.get(pid) : undefined;
+              const clickable = !!product || agentOk;
               return (
                 <li key={a.id}>
-                  <button type="button" className={cx('feed-item', `feed-${a.kind}`)} disabled={!clickable}
-                    onClick={() => a.agentId && openAgent(a.agentId)} title={clickable ? `Voir ${agentName(lookups, a.agentId)}` : undefined}>
+                  <button type="button" className={cx('feed-item', `feed-${a.kind}`, product && 'feed-has-product')} disabled={!clickable}
+                    onClick={() => (product ? openProduct(product.id) : a.agentId && openAgent(a.agentId))}
+                    title={product ? `Voir le produit « ${product.title} »` : agentOk ? `Voir ${agentName(lookups, a.agentId)}` : undefined}>
                     <span className="feed-icon"><Icon name={meta.icon} size={13} /></span>
                     <span className="feed-text">
                       {a.agentId ? (
@@ -69,6 +76,7 @@ export function ActivityFeed() {
                         </span>
                       ) : null}
                       <span className="feed-msg">{a.text}</span>
+                      {product ? <span className="feed-product"><Icon name="package" size={10} /> Voir le produit</span> : null}
                     </span>
                     <span className="feed-time">J{a.day}·{a.tick}</span>
                   </button>

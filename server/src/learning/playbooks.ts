@@ -207,7 +207,11 @@ function agentNoteBody(world: WorldState, agent: AgentState): string {
   return lines.join('\n');
 }
 
-function deptNoteBody(world: WorldState, dept: DeptId): string {
+/** Section of a department note maintained by the retro; everything else in the note (seed text) is kept. */
+export const DEPT_RULES_SECTION = '## Règles en vigueur';
+
+/** Header of a department note created from scratch (no seed note in the vault). */
+function deptNoteIntro(world: WorldState, dept: DeptId): string {
   const def = (world.company.departments ?? []).find((d) => d.id === dept);
   const members = (world.company.agents ?? []).filter((a) => a.dept === dept).sort((a, b) => Number(b.isChief) - Number(a.isChief));
   const lines: string[] = [];
@@ -215,17 +219,51 @@ function deptNoteBody(world: WorldState, dept: DeptId): string {
   lines.push('', '## Équipe');
   if (members.length) for (const a of members) lines.push(`- [[${agentNoteName(world, a)}]] — ${a.role || 'agent'}${a.isChief ? ' (chef)' : ''}`);
   else lines.push('_Personne dans ce département pour le moment._');
-  const counts = new Map<string, number>();
-  for (const a of members) for (const r of world.company.playbooks?.[a.id] ?? []) counts.set(r, (counts.get(r) ?? 0) + 1);
-  lines.push('', '## Règles en vigueur');
-  if (counts.size) {
-    for (const [r, n] of [...counts].sort((x, y) => y[1] - x[1])) lines.push(`- ${r}${members.length > 1 ? ` _(${n}/${members.length} agents)_` : ''}`);
-  } else lines.push('_Aucune règle apprise pour le moment._');
   lines.push('', 'Retour : [[00 - Accueil]]');
   return lines.join('\n');
 }
 
-/** Writes playbooks/<Prénom>.md for the given agents and "Playbook <Département>" for their departments. */
+/** The maintained "## Règles en vigueur" section: rules currently in the team's playbooks + links to each member. */
+export function deptRulesSection(world: WorldState, dept: DeptId, day: number): string {
+  const members = (world.company.agents ?? []).filter((a) => a.dept === dept).sort((a, b) => Number(b.isChief) - Number(a.isChief));
+  const lines: string[] = [DEPT_RULES_SECTION, `_Tenue à jour par la rétro du soir (jour ${day}) à partir des playbooks de l'équipe._`];
+  if (members.length) lines.push('', `**Playbooks individuels** : ${members.map((a) => `[[${agentNoteName(world, a)}]]`).join(' · ')}`);
+  const counts = new Map<string, number>();
+  for (const a of members) for (const r of world.company.playbooks?.[a.id] ?? []) counts.set(r, (counts.get(r) ?? 0) + 1);
+  lines.push('');
+  if (counts.size) {
+    for (const [r, n] of [...counts].sort((x, y) => y[1] - x[1])) lines.push(`- ${r}${members.length > 1 ? ` _(${n}/${members.length} agents)_` : ''}`);
+  } else lines.push("_Aucune règle apprise pour le moment : les règles de départ s'appliquent._");
+  return lines.join('\n');
+}
+
+/** Removes one "## Heading" section (up to the next level-2 heading) from a markdown body. */
+export function removeSection(body: string, heading: string): string {
+  const lines = String(body ?? '').split('\n');
+  const out: string[] = [];
+  let skipping = false;
+  for (const line of lines) {
+    if (line.trim() === heading) {
+      skipping = true;
+      continue;
+    }
+    if (skipping && /^##\s+\S/.test(line)) skipping = false;
+    if (!skipping) out.push(line);
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
+}
+
+/** Department note body: the existing (seed) body untouched + the maintained rules section at the end. */
+export function deptNoteBody(world: WorldState, dept: DeptId, day: number, existingBody: string | null): string {
+  const base = existingBody !== null ? removeSection(existingBody, DEPT_RULES_SECTION) : deptNoteIntro(world, dept);
+  return `${base.trimEnd()}${base.trim() ? '\n\n' : ''}${deptRulesSection(world, dept, day)}`;
+}
+
+/**
+ * Writes playbooks/<Prénom>.md for the given agents and refreshes the "## Règles en vigueur" section of
+ * "Playbook <Département>" for their departments. A department note shipped by the seed vault keeps its
+ * title, tags and body: only that section is (re)written below it.
+ */
 export async function writePlaybookNotes(world: WorldState, brain: BrainVault, agentIds: Iterable<string>, day: number): Promise<number> {
   const ids = new Set(agentIds);
   const agents = (world.company.agents ?? []).filter((a) => ids.has(a.id));
@@ -235,7 +273,16 @@ export async function writePlaybookNotes(world: WorldState, brain: BrainVault, a
     written++;
   }
   for (const dept of unique(agents.map((a) => a.dept))) {
-    await brain.write({ path: `playbooks/${deptNoteTitle(dept)}.md`, title: deptNoteTitle(dept), tags: ['playbook', 'departement', dept], body: deptNoteBody(world, dept), day });
+    const path = `playbooks/${deptNoteTitle(dept)}.md`;
+    const existing = await brain.read(path);
+    const own = existing && fold(existing.path) === fold(path) ? existing : null;
+    await brain.write({
+      path,
+      title: own?.title || deptNoteTitle(dept),
+      tags: unique([...(own?.tags ?? []), 'playbook', 'departement', dept]),
+      body: deptNoteBody(world, dept, day, own ? own.body : null),
+      day,
+    });
     written++;
   }
   return written;

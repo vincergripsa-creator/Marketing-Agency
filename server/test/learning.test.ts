@@ -12,8 +12,10 @@ import {
   updateExperiments,
 } from '../src/learning/index.js';
 import { sampleBeta } from '../src/learning/bandits.js';
-import { addRule, agentsForLesson } from '../src/learning/playbooks.js';
-import { extractBannedTerm } from '../src/learning/heuristics.js';
+import { addRule, agentsForLesson, DEPT_RULES_SECTION } from '../src/learning/playbooks.js';
+import { extractBannedTerm, FINANCE_KEY } from '../src/learning/heuristics.js';
+import { conclusionOf, MAX_NEW_LESSONS_PER_RETRO } from '../src/learning/retro.js';
+import { financeSnapshot, recordLedger } from '../src/sim/index.js';
 import { parseNote, serializeNote } from '../src/learning/markdown.js';
 import { slugify, safeFileName, tokenize } from '../src/learning/text.js';
 
@@ -319,7 +321,9 @@ describe('computeDailyKpi', () => {
     world.market.orders.push(order('ord_1', 2), order('ord_2', 2), order('ord_3', 2), order('ord_4', 2), order('ord_5', 2), order('ord_0', 1));
     world.market.inbox.push(
       { id: 'msg_1', day: 2, customerId: 'c1', channel: 'email', subject: 'Pas reçu', body: '…', intent: 'non_recu', productId: 'prd_1', orderId: 'ord_1', mood: -0.2, status: 'open', deadlineDay: 3, thread: [], resolution: null },
-      { id: 'msg_2', day: 2, customerId: 'c2', channel: 'email', subject: 'Merci', body: '…', intent: 'compliment', productId: 'prd_1', orderId: null, mood: 0.8, status: 'resolved', deadlineDay: 3, thread: [], resolution: 'ok' },
+      { id: 'msg_2', day: 2, customerId: 'c2', channel: 'email', subject: 'Merci', body: '…', intent: 'compliment', productId: 'prd_1', orderId: null, mood: 0.8, status: 'resolved', deadlineDay: 3, thread: [], resolution: 'ok', replyScore: 80, repliedDay: 2 },
+      { id: 'msg_3', day: 1, customerId: 'c3', channel: 'email', subject: 'Question', body: '…', intent: 'question', productId: 'prd_1', orderId: null, mood: 0, status: 'replied', deadlineDay: 3, thread: [], resolution: null, replyScore: 60, repliedDay: 2 },
+      { id: 'msg_4', day: 1, customerId: 'c4', channel: 'email', subject: 'Hier', body: '…', intent: 'question', productId: 'prd_1', orderId: null, mood: 0, status: 'resolved', deadlineDay: 2, thread: [], resolution: null, replyScore: 10, repliedDay: 1 },
     );
     const t: Task = {
       id: 'tsk_1', kind: 'write_pdf', title: 'Rédiger', dept: 'studio', assignee: 'elise', createdBy: 'system', missionId: null, dependsOn: [], status: 'done',
@@ -327,11 +331,8 @@ describe('computeDailyKpi', () => {
     };
     world.company.tasks.push(t, { ...t, id: 'tsk_2', dayDone: 1 });
     world.company.lessons.push({ id: 'les_1', day: 2, topic: 'ads', insight: 'x', evidence: 'y', confidence: 0.5, source: 'nora', appliesTo: [], notePath: 'lecons/x.md' });
-    world.activity.push(
-      { id: 'a1', day: 2, tick: 3, at: 0, agentId: 'ines', kind: 'message', text: 'Inès répond à Paul (score 80/100)' },
-      { id: 'a2', day: 2, tick: 4, at: 0, agentId: 'ines', kind: 'message', text: 'Réponse envoyée, score : 60' },
-      { id: 'a3', day: 2, tick: 4, at: 0, agentId: 'ines', kind: 'message', text: 'Nouveau message de Karen' },
-    );
+    // activity text is never parsed any more (a score in a feed line must not count)
+    world.activity.push({ id: 'a1', day: 2, tick: 3, at: 0, agentId: 'ines', kind: 'message', text: 'Inès répond à Paul (score 5/100)' });
 
     const k = computeDailyKpi(world, 2);
     expect(k.revenue).toBe(95);
@@ -352,15 +353,58 @@ describe('computeDailyKpi', () => {
     expect(k.liveProducts).toBe(1);
     expect(k.tasksDone).toBe(1);
     expect(k.lessonsLearned).toBe(1);
+  });
 
-    // same numbers when the sim books costs as positive amounts
-    const w2 = makeWorld();
-    w2.ledger = world.ledger.map((e) => ({ ...e, amount: Math.abs(e.amount) }));
-    w2.market = world.market;
-    w2.company.tasks = world.company.tasks;
-    w2.company.lessons = world.company.lessons;
-    w2.activity = world.activity;
-    expect(computeDailyKpi(w2, 2)).toEqual(k);
+  it('sums the STORED signed amounts: payment holds move cash only, reversals keep their sign (cauchemar day 46/53 bug)', () => {
+    const world = makeWorld();
+    const sim = { recordLedger, financeSnapshot };
+    world.day = 1;
+    sim.recordLedger(world, { type: 'capital', amount: 500, memo: 'capital' });
+    sim.recordLedger(world, { type: 'revenue', amount: 900, memo: 'ventes' });
+    world.day = 46;
+    sim.recordLedger(world, { type: 'ad_spend', amount: -187.08, memo: 'pub' });
+    sim.recordLedger(world, { type: 'platform_fee', amount: -607.2, memo: 'réserve', ref: 'hold:evt_8478' });
+    const k46 = computeDailyKpi(world, 46);
+    expect(k46.profit).toBeCloseTo(-187.08, 2); // the hold is not a loss
+    expect(k46.cash).toBeCloseTo(500 + 900 - 187.08 - 607.2, 2); // …but the cash is frozen
+    expect(k46.cash).toBeCloseTo(sim.financeSnapshot(world).cash, 2);
+    expect(k46.cumulativeProfit).toBeCloseTo(sim.financeSnapshot(world).profit, 2);
+    world.day = 50;
+    sim.recordLedger(world, { type: 'creator_payout', amount: 120, memo: 'requalification', ref: 'reversal:prt_1' });
+    sim.recordLedger(world, { type: 'scam_loss', amount: -120, memo: 'arnaque', ref: 'prt_1' });
+    expect(computeDailyKpi(world, 50).profit).toBeCloseTo(0, 2); // the 120 € left exactly once
+    world.day = 53;
+    sim.recordLedger(world, { type: 'revenue', amount: 39, memo: 'vente' });
+    sim.recordLedger(world, { type: 'platform_fee', amount: 607.2, memo: 'libération', ref: 'hold:release:53' });
+    const k53 = computeDailyKpi(world, 53);
+    expect(k53.profit).toBeCloseTo(39, 2); // the release is not a gain either (was −603,20 €)
+    expect(k53.revenue).toBe(39);
+    expect(k53.cash).toBeCloseTo(sim.financeSnapshot(world).cash, 2); // was 1 214,40 € below the CFO's cash
+    expect(k53.cash).toBeCloseTo(500 + 900 - 187.08 + 39, 2);
+    expect(k53.cumulativeProfit).toBeCloseTo(900 - 187.08 + 39, 2);
+    expect(computeDailyKpi(world, 46).cash).toBeCloseTo(k46.cash, 2); // a past day keeps its close
+  });
+
+  it('attributes refunds by Order.refundedDay and reads reply scores from the messages (fallback: support task output)', () => {
+    const world = makeWorld();
+    world.market.orders.push(
+      { ...order('ord_a', 1), refunded: true, refundedDay: 3 },
+      { ...order('ord_b', 2), refunded: true, chargeback: true, refundedDay: 3 },
+      { ...order('ord_c', 2), refunded: true, refundedDay: 4 },
+    );
+    world.ledger.push(entry(3, 'refund', -19, 'ord_a'), entry(3, 'refund', -19, 'ord_b'), entry(3, 'chargeback', -34, 'ord_b'), entry(4, 'refund', -19, 'ord_c'));
+    expect(computeDailyKpi(world, 3).refunds).toBe(2);
+    expect(computeDailyKpi(world, 4).refunds).toBe(1);
+    expect(computeDailyKpi(world, 2).refunds).toBe(0);
+    // older saves (no replyScore on messages): the reply_inbox task output of the day
+    const t: Task = {
+      id: 'tsk_r', kind: 'reply_inbox', title: 'Répondre', dept: 'support', assignee: 'ines', createdBy: 'system', missionId: null, dependsOn: [], status: 'done',
+      priority: 2, dayCreated: 5, dayDone: 5, progress: 1, workLeft: 0, attempts: 1, reviewer: null, reviews: [], input: {},
+      output: { replies: [{ messageId: 'm1', tone: 'concis', score: 90 }, { messageId: 'm2', tone: 'chaleureux', score: 70 }] }, deliverableIds: [], log: [],
+    };
+    world.company.tasks.push(t);
+    expect(computeDailyKpi(world, 5).avgReplyScore).toBe(80);
+    expect(computeDailyKpi(world, 6).avgReplyScore).toBe(0);
   });
 
   it('returns zeros on an empty world', () => {
@@ -397,6 +441,63 @@ describe('experiments', () => {
     expect(e!.results['19']).toEqual({ n: 40, value: 0.95 });
     expect(e!.results['9']).toEqual({ n: 0, value: 0 });
     expect(e!.winner).toBeNull(); // only one variant has data
+  });
+
+  it('scopes product experiments to their niche (explicit or inferred from the hypothesis)', () => {
+    const world = makeWorld();
+    const other: Product = { ...product(), id: 'prd_2', nicheId: 'chiot', title: 'Propreté du chiot en 14 jours' };
+    world.company.products.push(other);
+    world.company.creatives.push({ ...creative('crt_9', 'stat', 'Chiot propre en 14 jours', { status: 'approved', reason: null, day: 1 }), productId: 'prd_2' });
+    const inferred = startExperiment(world, { day: 1, owner: 'emma', hypothesis: `Sur « ${product().title} », le hook histoire bat le hook chiffre choc en CTR`, dimension: 'hook_style', variants: ['story', 'stat'], metric: 'ctr' });
+    expect(inferred.nicheId).toBe('sommeil');
+    const explicit = startExperiment(world, { day: 1, owner: 'emma', nicheId: 'chiot', hypothesis: 'Le hook chiffre choc bat histoire', dimension: 'hook_style', variants: ['story', 'stat'], metric: 'ctr' });
+    expect(explicit.nicheId).toBe('chiot');
+    expect(startExperiment(world, { day: 1, owner: 'emma', hypothesis: 'Un ton concis résout mieux', dimension: 'support_tone', variants: ['concis', 'chaleureux'], metric: 'resolution' }).nicheId).toBeNull();
+    // the other niche's "stat" ad is huge: it must not leak into the sommeil experiment
+    world.market.adStats.push(stat(1, 'crt_1', 3500, 140, 100, 4, 20), stat(1, 'crt_2', 3100, 31, 25, 1, 20), { ...stat(1, 'crt_9', 20000, 2000, 1500, 60, 50), productId: 'prd_2' });
+    updateExperiments(world);
+    expect(inferred.results.stat).toEqual({ n: 3100, value: 0.01 });
+    expect(inferred.winner).toBe('story');
+    expect(explicit.results.stat).toEqual({ n: 20000, value: 0.1 });
+    expect(explicit.results.story!.n).toBe(0);
+    // an old save without the field: inferred at compute time
+    const legacy = { ...inferred, id: 'exp_old', status: 'running' as const, winner: null, endDay: null };
+    delete (legacy as { nicheId?: string | null }).nicheId;
+    world.company.experiments.push(legacy);
+    updateExperiments(world);
+    expect(legacy.results.stat!.n).toBe(3100);
+  });
+
+  it('support-tone experiments only count the replies sent since they started, with the tone actually used', () => {
+    const world = makeWorld();
+    world.day = 10;
+    // all-time bandit: lots of old "chaleureux" replies (the old code reused these and concluded on day one)
+    world.company.bandits.support_tone = [
+      { key: 'chaleureux', alpha: 80, beta: 5, pulls: 82, reward: 78 },
+      { key: 'concis', alpha: 40, beta: 15, pulls: 52, reward: 40 },
+    ];
+    const e = startExperiment(world, { day: 10, owner: 'emma', hypothesis: 'Un ton concis résout mieux les tickets', dimension: 'support_tone', variants: ['concis', 'chaleureux'], metric: 'resolution' });
+    expect(updateExperiments(world)).toEqual([]);
+    expect(e.results).toEqual({ concis: { n: 0, value: 0 }, chaleureux: { n: 0, value: 0 } });
+    const replies: { messageId: string; tone: string; score: number }[] = [];
+    for (let i = 0; i < 24; i++) {
+      const tone = i % 2 === 0 ? 'concis' : 'chaleureux';
+      const score = tone === 'concis' ? 90 : 70;
+      const day = i < 4 ? 9 : 10 + (i % 3); // 4 replies before the start must be ignored
+      replies.push({ messageId: `m${i}`, tone, score });
+      world.market.inbox.push({
+        id: `m${i}`, day, customerId: `c${i}`, channel: 'email', subject: 'Q', body: '…', intent: 'question', productId: 'prd_1', orderId: null,
+        mood: 0, status: 'resolved', deadlineDay: day + 2, thread: [], resolution: null, replyScore: score, repliedDay: day,
+      });
+    }
+    world.company.tasks.push({
+      id: 'tsk_reply', kind: 'reply_inbox', title: 'Répondre', dept: 'support', assignee: 'ines', createdBy: 'system', missionId: null, dependsOn: [], status: 'done',
+      priority: 2, dayCreated: 9, dayDone: 12, progress: 1, workLeft: 0, attempts: 1, reviewer: null, reviews: [], input: {}, output: { replies }, deliverableIds: [], log: [],
+    });
+    world.day = 12;
+    updateExperiments(world);
+    expect(e.results.concis).toEqual({ n: 10, value: 90 });
+    expect(e.results.chaleureux).toEqual({ n: 10, value: 70 });
   });
 });
 
@@ -485,6 +586,17 @@ describe('runRetro', () => {
     expect(banned!.evidence).toMatch(/crt_4/);
     expect((await brain.read(banned!.notePath))?.body).toContain('Confirmation — jour 2');
     expect(world.company.lessons.filter((l) => l.insight.startsWith('Privilégier le hook « story »'))).toHaveLength(1);
+    // the confirmed lesson's insight numbers are refreshed (not only its evidence), in the playbooks too
+    const hookLesson = world.company.lessons.find((l) => l.insight.startsWith('Privilégier le hook « story »'))!;
+    expect(hookLesson.key).toBe('pub-hook-sommeil');
+    expect(hookLesson.insight).toContain('3,90 %'); // (200 + 190) / 10 000 impressions
+    expect(hookLesson.insight).not.toContain('4,00 %');
+    expect(hookLesson.evidence).toMatch(/jours 1 à 2/);
+    expect(world.company.playbooks.sarah).toContain(hookLesson.insight);
+    expect(world.company.playbooks.sarah!.some((r) => r.includes('4,00 %'))).toBe(false);
+    const hookNote = await brain.read(hookLesson.notePath);
+    expect(hookNote?.body.startsWith(`> ${hookLesson.insight}`)).toBe(true);
+    expect(hookNote?.body).toContain('## Historique');
     expect(world.company.kpis.map((k) => k.day)).toEqual([1, 2]);
     expect(await brain.read('journal/jour-002.md')).not.toBeNull();
   });
@@ -535,6 +647,120 @@ describe('runRetro', () => {
     expect(j?.title).toBe('Journal du jour 1');
     expect(j?.body).toContain('Rapport de Raphaël');
     expect(j?.body.split('## Rétro du soir')).toHaveLength(2);
+  });
+});
+
+describe('runRetro: idempotence, playbook notes and lesson hygiene', () => {
+  const pullsOf = (w: WorldState) => Object.values(w.company.bandits).flat().reduce((s, a) => s + a.pulls, 0);
+
+  it('never re-rewards the bandits for a day already retro-ed, even after a save / reload (lastRetroDay)', async () => {
+    const world = makeWorld();
+    seedDay1(world);
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    await runRetro(world, stubEngine(), brain, []);
+    expect(world.company.lastRetroDay).toBe(1);
+    const pulls = pullsOf(world);
+    expect(pulls).toBeGreaterThan(0);
+    const reloaded = JSON.parse(JSON.stringify(world)) as WorldState; // a WeakMap keyed on the object would not survive this
+    await runRetro(reloaded, stubEngine(), brain, []);
+    expect(pullsOf(reloaded)).toBe(pulls);
+    expect(reloaded.company.lessons).toHaveLength(world.company.lessons.length);
+  });
+
+  it('keeps the seed department notes and maintains a "Règles en vigueur" section; writes every agent note', async () => {
+    const world = makeWorld();
+    seedDay1(world);
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    const seed = (await brain.read('playbooks/Playbook Growth.md'))!;
+    expect(seed.body).toContain('## Règles de départ');
+    expect(seed.body).not.toContain(DEPT_RULES_SECTION);
+    await runRetro(world, stubEngine(), brain, []);
+    const day1 = (await brain.read('playbooks/Playbook Growth.md'))!;
+    expect(day1.title).toBe(seed.title);
+    expect(day1.tags).toEqual(expect.arrayContaining(seed.tags));
+    expect(day1.body.startsWith(seed.body.trimEnd())).toBe(true); // seed text untouched, section below it
+    expect(day1.body).toContain(DEPT_RULES_SECTION);
+    expect(day1.body).toContain('Ne jamais écrire « garanti »');
+    expect(day1.links).toEqual(expect.arrayContaining(['Léo', 'Sarah', 'Adam', "Canaux d'acquisition"]));
+    // the seed vault ships department notes only: every agent still gets playbooks/<Prénom>.md on the first retro
+    for (const a of world.company.agents) expect(await brain.read(`playbooks/${a.name}.md`), a.name).not.toBeNull();
+    // day 2: the section is replaced, never stacked, and the seed is still there
+    world.day = 2;
+    world.company.creatives.push(creative('crt_5', 'pov', 'Sommeil miracle', { status: 'rejected', reason: 'Allégation interdite : « miracle »', day: 2 }));
+    await runRetro(world, stubEngine(), brain, []);
+    const day2 = (await brain.read('playbooks/Playbook Growth.md'))!;
+    expect(day2.body.split(DEPT_RULES_SECTION)).toHaveLength(2);
+    expect(day2.body.startsWith(seed.body.trimEnd())).toBe(true);
+    expect(day2.body).toContain('Ne jamais écrire « miracle »');
+    expect(day2.body).toContain('(jour 2)');
+  });
+
+  it('caps new lessons per evening, stores Lesson.key and never duplicates a key', async () => {
+    const world = makeWorld();
+    seedDay1(world);
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    const words = [
+      'Planifier les briefs créatifs le lundi matin', 'Archiver chaque storyboard validé dans le cerveau', 'Relire les titres à voix haute avant publication',
+      'Grouper les réponses clients par intention', 'Vérifier les liens de téléchargement chaque semaine', 'Comparer deux couvertures avant impression',
+      'Noter les objections entendues pendant les appels', 'Limiter les réunions quotidiennes à quinze minutes', 'Documenter chaque refus de modération',
+      'Préparer un modèle de rapport hebdomadaire',
+    ];
+    const chatty = {
+      mode: 'claude',
+      async extractLessons(input: { heuristicLessons: LessonDraft[] }) {
+        return [
+          ...input.heuristicLessons,
+          ...words.map((w, i) => ({ topic: 'process', insight: `${w}.`, evidence: `${i + 2} essais`, confidence: 0.5, appliesToRoles: [] })),
+        ];
+      },
+      async dailyMemo() { return 'Mémo.'; },
+    } as unknown as ContentEngine;
+    const day1 = await runRetro(world, chatty, brain, []);
+    expect(day1.length).toBeLessThanOrEqual(MAX_NEW_LESSONS_PER_RETRO + 1);
+    expect(day1.some((l) => l.insight.includes('« garanti »'))).toBe(true); // critical first
+    expect(world.company.lessons.every((l) => typeof l.key === 'string' && l.key.length > 0)).toBe(true);
+    for (let d = 2; d <= 5; d++) {
+      world.day = d;
+      const fresh = await runRetro(world, chatty, brain, []);
+      expect(fresh.length).toBeLessThanOrEqual(MAX_NEW_LESSONS_PER_RETRO + 1);
+    }
+    const keys = world.company.lessons.map((l) => l.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(world.company.lessons.filter((l) => words.some((w) => l.insight === `${w}.`))).toHaveLength(words.length); // all of them, spread over evenings
+  });
+
+  it('tells a revision (new conclusion) from a confirmation (fresher numbers, another runner-up)', () => {
+    const hook = (w: string, l: string, a: string, b: string) => `Privilégier le hook « ${w} » (x) sur « Sommeil » : CTR ${a} % contre ${b} % pour « ${l} » (y).`;
+    expect(conclusionOf(hook('mistake', 'pov', '3,99', '1,81'))).toBe(conclusionOf(hook('mistake', 'before_after', '3,78', '2,15')));
+    expect(conclusionOf(hook('mistake', 'pov', '3,99', '1,81'))).not.toBe(conclusionOf(hook('story', 'pov', '3,99', '1,81')));
+    expect(conclusionOf('Prix cible « 29 » sur « A » : 0,59 € par visiteur contre 0,10 € à 39 €.')).not.toBe(conclusionOf('Prix cible « 24 » sur « A » : 0,61 € par visiteur.'));
+    expect(conclusionOf('Prix cible « 29 » sur « A » : 0,59 € par visiteur.')).toBe(conclusionOf('Prix cible « 29 » sur « A » : 0,71 € par visiteur contre 0,47 €.'));
+    expect(conclusionOf('Mode survie : trésorerie sous 30 %.')).not.toBe(conclusionOf('Rentable sur 7 jours : augmenter les budgets.'));
+  });
+
+  it('keeps one finance-state lesson, revised when the situation changes (no contradictory rules)', async () => {
+    const world = makeWorld();
+    world.company.creatives = [];
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    world.day = 3;
+    world.ledger.push(entry(1, 'capital', 500), entry(3, 'ad_spend', -400));
+    await runRetro(world, stubEngine(), brain, []);
+    const survival = world.company.lessons.find((l) => l.key === FINANCE_KEY)!;
+    expect(survival.insight).toMatch(/^Mode survie/);
+    expect(world.company.playbooks.gabriel).toContain(survival.insight);
+    world.day = 10;
+    world.ledger.push(entry(10, 'revenue', 2000));
+    await runRetro(world, stubEngine(), brain, []);
+    const finance = world.company.lessons.filter((l) => l.key === FINANCE_KEY);
+    expect(finance).toHaveLength(1);
+    expect(finance[0]!.insight).toMatch(/^Rentable sur 7 jours/);
+    expect(world.company.playbooks.gabriel!.some((r) => r.startsWith('Mode survie'))).toBe(false);
+    expect(world.company.playbooks.gabriel).toContain(finance[0]!.insight);
+    expect((await brain.read(finance[0]!.notePath))?.body).toContain('Révision — jour 10');
   });
 });
 
@@ -673,4 +899,66 @@ describe('brain vault existence checks', () => {
     expect(created?.title).toBe('guide-sommeil');
     expect(created?.body).toBe('## Ventes (jour 10)\n3 ventes.');
   });
+});
+
+// ───────────────────────────── KPI ↔ ledger invariant on a real headless company ─────────────────────────────
+
+describe('KPI / ledger invariant over a real 60-day headless company', () => {
+  const RUNS: { difficulty: 'cauchemar' | 'normal' | 'facile'; seed: number }[] = [
+    { difficulty: 'cauchemar', seed: 1 }, // the lead's run: payment hold on day 46, released day 53
+    { difficulty: 'normal', seed: 7 },
+    { difficulty: 'facile', seed: 42 },
+  ];
+
+  for (const { difficulty, seed } of RUNS) {
+    it(`${difficulty} seed ${seed}: kpi.cash = Σ ledger, cumulativeProfit = Σ non-capital non-hold entries, no NaN`, async () => {
+      const { createWorld, defaultScenario, Company } = await import('../src/runtime/index.js');
+      const minds = (await import('../src/minds/index.js')) as unknown as {
+        createContentEngine: (o: { mode: 'heuristic'; maxComputeEur: number; seed: number }) => ContentEngine;
+      };
+      const paths = await tempPaths();
+      const world = createWorld(defaultScenario({ seed, difficulty, mindMode: 'heuristic', horizonDays: 60 }), `test-invariant-${difficulty}-${seed}`);
+      const company = new Company(world, { paths, engine: minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed }), brain: createBrainVault(paths) });
+      const closes = new Map<number, number>();
+      let forced = false;
+      await company.runDays(60, (kpi) => {
+        // the day is closed: what the CFO sees now is that day's close
+        closes.set(kpi.day, financeSnapshot(world).cash);
+        // every run must go through a payment hold and its release: force one if the market did not roll it
+        if (kpi.day === 25 && !world.ledger.some((e) => e.ref?.startsWith('hold:')) && !forced) {
+          forced = true;
+          world.market.modifiers.paymentHoldUntilDay = world.day + 7;
+          recordLedger(world, { type: 'platform_fee', amount: -Math.max(5, Math.round(financeSnapshot(world).cash * 0.3)), memo: 'Réserve (test)', ref: 'hold:test' });
+        }
+      });
+      const kpis = world.company.kpis;
+      expect(kpis.length).toBeGreaterThanOrEqual(55);
+      const holds = world.ledger.filter((e) => e.ref?.startsWith('hold:'));
+      expect(holds.some((e) => e.amount < 0)).toBe(true);
+      expect(holds.some((e) => e.amount > 0)).toBe(true); // released
+      expect(world.ledger.every((e) => Number.isFinite(e.amount))).toBe(true);
+      for (const k of kpis) {
+        for (const [field, v] of Object.entries(k)) expect(Number.isFinite(v), `jour ${k.day} ${field}`).toBe(true);
+        const upTo = world.ledger.filter((e) => e.day <= k.day);
+        const cash = upTo.reduce((s, e) => s + e.amount, 0);
+        const profit = upTo.filter((e) => e.type !== 'capital' && !e.ref?.startsWith('hold:')).reduce((s, e) => s + e.amount, 0);
+        const dayProfit = upTo.filter((e) => e.day === k.day && e.type !== 'capital' && !e.ref?.startsWith('hold:')).reduce((s, e) => s + e.amount, 0);
+        expect(Math.abs(k.cash - cash), `jour ${k.day} trésorerie`).toBeLessThanOrEqual(0.011);
+        expect(Math.abs(k.cumulativeProfit - profit), `jour ${k.day} profit cumulé`).toBeLessThanOrEqual(0.011);
+        expect(Math.abs(k.profit - dayProfit), `jour ${k.day} profit du jour`).toBeLessThanOrEqual(0.011);
+        const close = closes.get(k.day);
+        if (close !== undefined) expect(Math.abs(k.cash - close), `jour ${k.day} = financeSnapshot à la clôture`).toBeLessThanOrEqual(0.011);
+      }
+      const f = financeSnapshot(world);
+      for (const v of [f.cash, f.revenue, f.refunds, f.adSpend, f.fees, f.compute, f.otherCosts, f.profit, f.profit7d, f.burn7d, f.roas7d]) expect(Number.isFinite(v)).toBe(true);
+      const last = kpis.at(-1)!;
+      expect(Math.abs(last.cumulativeProfit - f.profit)).toBeLessThanOrEqual(0.011);
+      // lessons stay readable: few per evening, unique keys
+      const perDay = new Map<number, number>();
+      for (const l of world.company.lessons) perDay.set(l.day, (perDay.get(l.day) ?? 0) + 1);
+      for (const n of perDay.values()) expect(n).toBeLessThanOrEqual(MAX_NEW_LESSONS_PER_RETRO + 1);
+      const keys = world.company.lessons.map((l) => l.key);
+      expect(new Set(keys).size).toBe(keys.length);
+    }, 240_000);
+  }
 });

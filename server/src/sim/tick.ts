@@ -15,7 +15,7 @@ import { adComments } from './feedback.js';
 import { cashOf, recordLedger } from './finance.js';
 import { createMessage, followUpText } from './inbox.js';
 import { difficultyProfile, isScammer } from './market.js';
-import { chargebackOrder, creativeById, nicheOf, orderById, productById, pushEvent, refundOrder, reviewProduct } from './ops.js';
+import { chargebackOrder, creativeById, nicheOf, orderById, productById, pushEvent, refundOrder, reviewProduct, type EventRefs } from './ops.js';
 import { genericPhraseHits, scoreCreative, scorePdf, scoreSalesPage, vocPhraseHits } from './quality.js';
 import { fmtEur, fmtInt, fmtNum, fmtPct, keyTokens, lognormal, norm, overlap, pickWeighted, plural, short, stemSet, uniform } from './text.js';
 
@@ -123,8 +123,12 @@ export function priceFactor(price: number, wtp: { min: number; sweet: number; ma
     const t = (price - sweet) / Math.max(1, max - sweet);
     return 1 - CONVERSION.priceAboveDrop * Math.pow(t, CONVERSION.priceAboveExp);
   }
+  // beyond the max willingness to pay, demand keeps falling at (at least) the slope it had just below max:
+  // no cliff where +6 € suddenly divides sales by 3, but still a steep, clearly losing zone
   const atMax = 1 - CONVERSION.priceAboveDrop;
-  return atMax * Math.exp(-(price - max) / Math.max(1, CONVERSION.priceOverMaxDecay * max));
+  const slopeAtMax = (CONVERSION.priceAboveDrop * CONVERSION.priceAboveExp) / Math.max(1, max - sweet);
+  const scale = clamp(atMax / slopeAtMax, CONVERSION.priceOverMaxDecay * max, CONVERSION.priceOverMaxDecayMax * max);
+  return atMax * Math.exp(-(price - max) / Math.max(1, scale));
 }
 
 function ratingFactor(p: Product): number {
@@ -182,7 +186,7 @@ function runAds(d: Day): void {
       const prior = m.creativeImpressions[c.id] ?? 0;
       const fatigue = 1 / (1 + prior / ADS.fatigueImpressions);
       const ctrRaw = ADS.baseCtr * Math.pow(Math.max(1, q.overall) / ADS.qualityRef, ADS.qualityExp)
-        * (n.hookAffinity[c.hookStyle] ?? 1) * (n.formatAffinity[c.format] ?? 1) * (0.6 + 0.8 * n.tiktokAffinity)
+        * Math.pow((n.hookAffinity[c.hookStyle] ?? 1) * (n.formatAffinity[c.format] ?? 1), ADS.affinityExp) * (0.6 + 0.8 * n.tiktokAffinity)
         * fatigue * d.noise(ADS.ctrNoiseSd);
       const ctr = clamp(ctrRaw, ADS.minCtr, ADS.maxCtr);
       const clicks = rng.binomial(impressions, ctr);
@@ -261,7 +265,8 @@ function runOrganic(d: Day): void {
       d.traffic.push({ productId: p.id, source: 'organic', landingViews: rng.binomial(post.clicks, ADS.landingRate), cvrMult: CONVERSION.organicCvrMultiplier, campaignId: null, creativeId: null, creatorId: null, partnershipId: null, postId: post.id, stat: null });
     }
     if (post.viral) {
-      const ev = pushEventSafe(d, 'viral_organic', 'Vidéo organique virale !', `« ${short(post.hook, 60)} » dépasse ${fmtInt(post.views)} vues sur TikTok.`, 'good');
+      const ev = pushEventSafe(d, 'viral_organic', 'Vidéo organique virale !', `« ${short(post.hook, 60)} » dépasse ${fmtInt(post.views)} vues sur TikTok.`, 'good',
+        { productId: p?.id ?? null, nicheId: p?.nicheId ?? null });
       if (ev) d.notes.push(`Post organique viral : ${fmtInt(post.views)} vues.`);
     }
   }
@@ -431,6 +436,9 @@ function runUpsells(d: Day): void {
 }
 
 // ───────────────────────────── 6. refunds ─────────────────────────────
+
+/** Ledger ref of the one-off launch costs (FEES.setupCost). */
+export const SETUP_REF = 'setup';
 
 const REFUND_WEIGHTS: number[] = (() => {
   const w = Array.from({ length: REFUNDS.windowDays }, (_, i) => Math.exp(-i / REFUNDS.decayDays));
@@ -653,8 +661,8 @@ function runEscalations(d: Day): void {
 
 // ───────────────────────────── helpers ─────────────────────────────
 
-function pushEventSafe(d: Day, kind: WorldEventKind, title: string, description: string, severity: WorldEvent['severity']): WorldEvent {
-  const ev = pushEvent(d.world, kind, title, description, severity);
+function pushEventSafe(d: Day, kind: WorldEventKind, title: string, description: string, severity: WorldEvent['severity'], refs?: EventRefs): WorldEvent {
+  const ev = pushEvent(d.world, kind, title, description, severity, refs);
   d.eventIds.push(ev.id);
   return ev;
 }
@@ -669,7 +677,10 @@ function housekeeping(d: Day): void {
   }
   if (m.modifiers.cpmUntilDay < d.day && m.modifiers.cpmMultiplier !== 1) m.modifiers.cpmMultiplier = 1;
   const released = releaseHolds(d.world);
-  if (released > 0) d.notes.push(`Réserve de paiement libérée : ${fmtEur(released)} de retour en trésorerie.`);
+  if (released > 0) {
+    d.cash = round2(d.cash + released); // the released money is spendable today (ads are capped by cash)
+    d.notes.push(`Réserve de paiement libérée : ${fmtEur(released)} de retour en trésorerie.`);
+  }
 }
 
 function prune(d: Day): void {
@@ -710,6 +721,7 @@ function summarize(d: Day, result: MarketDayResult): void {
   result.sales = d.sales;
   result.revenue = round2(d.revenue);
   result.refunds = d.refunds;
+  result.refundAmount = round2(d.refundAmount);
   result.adSpend = round2(d.adSpend);
   result.newMessages = d.messages;
   result.events = d.eventIds.slice();
@@ -720,7 +732,7 @@ function summarize(d: Day, result: MarketDayResult): void {
 
 export function tickMarket(world: WorldState, rng: Rng): MarketDayResult {
   const day = world.day;
-  const result: MarketDayResult = { day, sales: 0, revenue: 0, refunds: 0, adSpend: 0, newMessages: 0, events: [], notes: [] };
+  const result: MarketDayResult = { day, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, adSpend: 0, newMessages: 0, events: [], notes: [] };
   if (world.ledger.some((e) => e.ref === `fixed:${day}`)) {
     result.notes.push(`Le marché du jour ${day} est déjà clôturé.`);
     return result;
@@ -741,6 +753,11 @@ export function tickMarket(world: WorldState, rng: Rng): MarketDayResult {
   for (const ev of world.market.events.slice(before)) {
     d.eventIds.push(ev.id);
     d.notes.push(`Événement : ${ev.title}.`);
+  }
+  // One-off launch costs, booked at the very first market close (store theme, domain, ad pixel, e-mail tool):
+  // the agency starts slightly in the red, as any real one does, instead of "profitable" after its first sale.
+  if (FEES.setupCost > 0 && !world.ledger.some((e) => e.ref === SETUP_REF)) {
+    recordLedger(world, { type: 'tool_subscription', amount: -FEES.setupCost, memo: 'Frais de démarrage : thème de boutique, nom de domaine, pixel publicitaire, outil e-mail', ref: SETUP_REF });
   }
   recordLedger(world, { type: 'platform_fee', amount: -FEES.boutiqueDaily, memo: 'Abonnement boutique (29 €/mois)', ref: `fixed:${day}` });
   recordLedger(world, { type: 'tool_subscription', amount: -FEES.toolsDaily, memo: 'Outils (12 €/mois)', ref: `fixed:${day}:outils` });

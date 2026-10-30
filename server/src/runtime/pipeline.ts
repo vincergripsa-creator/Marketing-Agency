@@ -12,7 +12,7 @@ import type { RuntimeCtx } from './ctx.js';
 import { incident, latestOutput, nameOf, runFileExists, say } from './ctx.js';
 import { createTask, isOpen, KIND_META, logTask, type TaskSpec } from './tasks.js';
 import { activeCampaigns } from './metrics.js';
-import { writePostMortem } from './notes.js';
+import { productNote, writePostMortem } from './notes.js';
 import { short } from './util.js';
 
 export interface PipelineOpts { createdBy: Task['createdBy']; missionId: string | null; priority?: 1 | 2 | 3 }
@@ -132,6 +132,7 @@ export function cancelProductTasks(ctx: RuntimeCtx, productId: string, reason: s
   for (const t of ctx.world.company.tasks) {
     if (!isOpen(t) || t.input.productId !== productId) continue;
     t.status = 'cancelled';
+    t.dayDone = ctx.world.day;
     logTask(t, `Jour ${ctx.world.day} : annulée — ${reason}`);
     const pa = ctx.world.company.pendingApprovals.indexOf(t.id);
     if (pa >= 0) ctx.world.company.pendingApprovals.splice(pa, 1);
@@ -140,6 +141,40 @@ export function cancelProductTasks(ctx: RuntimeCtx, productId: string, reason: s
     n++;
   }
   return n;
+}
+
+/** Task kinds that promote a product: cancelled when it is paused for quality. */
+const PROMOTION_TASKS: TaskKind[] = ['post_organic', 'write_ad_hooks', 'produce_ad', 'launch_campaign', 'find_creators', 'negotiate_deal'];
+
+/**
+ * CEO decision: take a product off sale until its next version is ready (bad rating / refunds).
+ * The store stops selling it, its campaigns are paused and the tasks that promote it are cancelled.
+ */
+export async function pauseProduct(ctx: RuntimeCtx, product: Product, reason: string, by: AgentId = 'camille'): Promise<void> {
+  if (product.status !== 'live') return;
+  try { ctx.tools.setProductStatus(product.id, 'paused'); } catch { /* the runtime status below is authoritative */ }
+  product.status = 'paused';
+  for (const c of activeCampaigns(ctx.world, product.id)) {
+    try { ctx.tools.updateCampaign(c.id, { status: 'paused' }); } catch { /* ignore */ }
+    c.status = 'paused';
+  }
+  let cancelled = 0;
+  for (const t of ctx.world.company.tasks) {
+    if (!isOpen(t) || t.input.productId !== product.id || !PROMOTION_TASKS.includes(t.kind)) continue;
+    t.status = 'cancelled';
+    t.dayDone = ctx.world.day;
+    logTask(t, `Jour ${ctx.world.day} : annulée — produit mis en pause (${reason})`);
+    const pa = ctx.world.company.pendingApprovals.indexOf(t.id);
+    if (pa >= 0) ctx.world.company.pendingApprovals.splice(pa, 1);
+    const agent = ctx.world.company.agents.find((a) => a.currentTaskId === t.id);
+    if (agent) { agent.currentTaskId = null; agent.status = 'idle'; agent.bubble = null; }
+    cancelled++;
+  }
+  say(ctx, by, `${nameOf(ctx, by)} retire « ${short(product.title, 50)} » de la vente : ${reason} — on ne le pousse plus avant la v${product.version + 1}${cancelled ? ` (${cancelled} tâche(s) de promotion annulée(s))` : ''}`, 'thought', { productId: product.id });
+  incident(ctx, `Produit « ${product.title} » mis en pause pour qualité : ${reason}`);
+  try {
+    await productNote(ctx, product, by, 'Mise en pause qualité', `- ${reason}\n- Plus de pub ni de post tant que la v${product.version + 1} n'est pas en ligne.`);
+  } catch { /* the brain is best-effort */ }
 }
 
 /** CEO decision: stop a product, pause its ads, write the post-mortem. */

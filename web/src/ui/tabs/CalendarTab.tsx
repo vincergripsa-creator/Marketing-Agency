@@ -87,7 +87,7 @@ export function CalendarTab({ onClose }: { onClose(): void }) {
 }
 
 function DayDetail({ day, kpi }: { day: number; kpi: DailyKpi | undefined }) {
-  const { snapshot, lookups, activity, demo, openAgent, openBrainNote } = useApp();
+  const { snapshot, lookups, activity, demo, openAgent, openBrainNote, openProduct } = useApp();
   const [note, setNote] = useState<BrainNote | null>(null);
   const [noteState, setNoteState] = useState<'idle' | 'loading' | 'missing'>('idle');
   const tasksDone = (snapshot?.company?.tasks ?? []).filter((t) => t.status === 'done' && t.dayDone === day);
@@ -125,9 +125,20 @@ function DayDetail({ day, kpi }: { day: number; kpi: DailyKpi | undefined }) {
       {events.length ? (
         <>
           <SectionTitle>Événements</SectionTitle>
-          {events.map((e) => (
-            <div key={e.id} className="event-line"><Pill tone={EVENT_TONE[e.severity]}>{e.title}</Pill><span className="small">{e.description}</span></div>
-          ))}
+          {events.map((e) => {
+            const product = e.refs?.productId ? lookups.products.get(e.refs.productId) : undefined;
+            return (
+              <div key={e.id} className="event-line">
+                <Pill tone={EVENT_TONE[e.severity]}>{e.title}</Pill>
+                <span className="small">{e.description}</span>
+                {product ? (
+                  <button type="button" className="link-btn small" onClick={() => openProduct(product.id)} title={product.title}>
+                    <Icon name="package" size={11} /> Voir le produit
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
         </>
       ) : null}
 

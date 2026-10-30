@@ -58,7 +58,7 @@ export async function reviewTask(ctx: RuntimeCtx, task: Task, reviewer: AgentSta
     }
     case 'write_sales_page': {
       if (!product.salesPage) return changes(['La page de vente est vide.']);
-      const q = sim.scoreSalesPage(product.salesPage, product);
+      const q = sim.scoreSalesPage(product.salesPage, product, vocOf(ctx, product.nicheId));
       product.salesQuality = q;
       const banned = directivesOf(ctx.world, reviewer.id).banned;
       const text = [product.salesPage.headline, product.salesPage.subheadline, product.salesPage.solution, product.salesPage.guarantee, product.salesPage.cta, ...product.salesPage.painBullets].join(' ');

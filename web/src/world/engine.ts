@@ -1,10 +1,11 @@
 // The world renderer: owns the canvas, camera, layout, agent simulation, effects and input.
 // Runs its own requestAnimationFrame loop (60 fps) independently from server ticks.
-import type { AgentState, CompanySnapshot, DeptId } from '../../../shared/types';
+import type { Activity, AgentState, CompanySnapshot, DeptId } from '../../../shared/types';
 import { AgentSim, type AgentVis } from './agents';
 import { Bubbles } from './bubbles';
 import { Camera } from './camera';
 import { Flows } from './flow';
+import { freshState, needsOverviewFit, pruneSeen, takeFresh, type FreshItem, type FreshState } from './fresh';
 import { isoX, isoY, pointInPoly } from './iso';
 import { drawIslandLabel, drawNameTag, drawPlaceTag, type LabelRect } from './labels';
 import { buildLayout, layoutKeyOf } from './layout';
@@ -57,10 +58,13 @@ export class WorldEngine {
   private flowMode = false;
   private focusKey = '';
   private pendingFocus: WorldFocus = null;
-  private seen = new Map<string, number>();
+  private fresh: FreshState = freshState();
+  private liveActivity: readonly Activity[] | null = null;
   private firstSnapshot = true;
   private runId: string | null = null;
   private fitted = false;
+  /** The last overview fit framed the placeholder layout drawn before the first snapshot (plaza only). */
+  private fittedPlaceholder = false;
   /** True once the user panned/zoomed: resizes then keep the current framing. */
   private userMoved = false;
   private hoverAgent: string | null = null;
@@ -94,7 +98,8 @@ export class WorldEngine {
     const now = performance.now() / 1000;
     if (s && s.runId !== this.runId) {
       if (this.runId !== null) {
-        this.seen.clear();
+        this.fresh = freshState();
+        this.liveActivity = null;
         this.bubbles.reset();
         this.flows.reset();
         this.firstSnapshot = true;
@@ -109,7 +114,9 @@ export class WorldEngine {
       this.layout = buildLayout(s);
       this.sim.setLayout(this.layout);
       this.camera.setBounds(this.layout.bounds);
-      if (!this.fitted && this.camera.w > 1) this.fitOverview();
+      // first real layout: re-frame it unless the user already took the camera (the frames drawn before the
+      // first snapshot fitted a plaza-only placeholder, ×2.2 zoom on the fountain)
+      if (this.camera.w > 1 && needsOverviewFit(this.fitted, this.fittedPlaceholder, this.userMoved)) this.fitOverview();
       if (this.pendingFocus) {
         const f = this.pendingFocus;
         this.pendingFocus = null;
@@ -119,26 +126,34 @@ export class WorldEngine {
     this.scenery.setClock(s?.tick ?? 4);
     // fresh activities
     const acts = s?.activity ?? [];
-    const wall = Date.now();
-    const fresh = [];
-    for (const a of acts) {
-      if (!a || this.seen.has(a.id)) continue;
-      const age = this.firstSnapshot ? Math.max(0, (wall - (a.at || 0)) / 1000) : 0;
-      this.seen.set(a.id, now - age);
-      if (age < 8) fresh.push({ a, born: now - age });
-    }
-    if (this.seen.size > 3000) {
-      const keep = new Set(acts.map((a) => a.id));
-      for (const id of this.seen.keys()) if (!keep.has(id)) this.seen.delete(id);
-    }
+    const fresh = takeFresh(this.fresh, acts, now, Date.now(), this.firstSnapshot);
+    pruneSeen(this.fresh, [acts, this.liveActivity ?? undefined]);
     this.sim.sync(s, now);
+    this.animate(fresh, now);
+    this.bubbles.syncAgentBubbles(s?.company.agents ?? [], now, this.firstSnapshot);
+    if (s) this.firstSnapshot = false;
+  }
+
+  /**
+   * Live activity stream (snapshot activity merged with the SSE batches received since): bubbles,
+   * flow lines and walks update between two snapshots. Lines already seen are never replayed.
+   */
+  setActivity(list: readonly Activity[] | null | undefined): void {
+    if (!list || list === this.liveActivity) return;
+    this.liveActivity = list;
+    // before the first snapshot of a run the ages can't be trusted yet: setSnapshot catches up
+    if (this.firstSnapshot || !this.snapshot) return;
+    const now = performance.now() / 1000;
+    this.animate(takeFresh(this.fresh, list, now, Date.now(), false), now);
+  }
+
+  private animate(fresh: FreshItem[], now: number): void {
     for (const { a, born } of fresh) {
+      if (a.agentId && !this.byId.has(a.agentId)) continue;
       this.sim.onActivity(a, now);
       this.bubbles.push(a, born, this.byId);
       this.flows.push(a, born);
     }
-    this.bubbles.syncAgentBubbles(s?.company.agents ?? [], now, this.firstSnapshot);
-    if (s) this.firstSnapshot = false;
   }
 
   setSelection(agentId: string | null, dept: DeptId | null): void {
@@ -197,6 +212,7 @@ export class WorldEngine {
     const o = this.camera.overview();
     this.camera.snapTo(o.x, o.y, o.zoom);
     this.fitted = true;
+    this.fittedPlaceholder = !this.snapshot;
   }
 
   resize(w: number, h: number, dpr: number): void {

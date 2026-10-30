@@ -103,6 +103,9 @@ export function Stat({ label, value, sub, tone, icon, big = false }: { label: st
   );
 }
 
+/** Generated files (PDF served inline, HTML sales pages, ad previews) always open in a new tab, never in the app's. */
+export const NEW_TAB = { target: '_blank', rel: 'noopener noreferrer' } as const;
+
 /** Opens a generated file of the run in a new tab (disabled in demo mode). */
 export function FileLink({ runId, path, children, icon = 'external', demo, className, title }: {
   runId: string; path: string | null | undefined; children: ReactNode; icon?: IconName; demo?: boolean; className?: string; title?: string;
@@ -116,7 +119,7 @@ export function FileLink({ runId, path, children, icon = 'external', demo, class
     );
   }
   return (
-    <a className={cx('btn btn-sm btn-ghost', className)} href={fileUrl(runId, path)} target="_blank" rel="noreferrer" title={title ?? path}>
+    <a className={cx('btn btn-sm btn-ghost', className)} href={fileUrl(runId, path)} {...NEW_TAB} title={title ?? path}>
       <Icon name={icon} size={13} />{children}
     </a>
   );

@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
-import type { AgentState, InboxMessage, NicheBrief, Order, Product, QualityReport, VoiceOfCustomer } from '../src/shared.js';
+import type { AgentState, InboxMessage, NicheBrief, Order, PdfContent, Product, QualityReport, VoiceOfCustomer } from '../src/shared.js';
 import type { MindContext, UsageEvent } from '../src/contracts.js';
 import { createContentEngine, type ClaudeClientLike } from '../src/minds/index.js';
 import { findCliches } from '../src/minds/heuristic/editing.js';
 import { isCliche } from '../src/minds/lexicon.js';
-import { allText, norm, splitSentences } from '../src/minds/util.js';
+import { allText, endsDangling, norm, splitSentences } from '../src/minds/util.js';
+import { parsePlaybook, scrubText } from '../src/minds/playbook.js';
+import { createRng } from '../src/core/index.js';
+import { createWorld, defaultScenario } from '../src/runtime/index.js';
+import { createMarketTools, scorePdf } from '../src/sim/index.js';
+import { genericPhraseHits, pdfText } from '../src/sim/quality.js';
+import { norm as simNorm } from '../src/sim/text.js';
+import { designFor } from '../src/deliverables/index.js';
 
 // ───────────────────────────── fixtures ─────────────────────────────
 
@@ -129,7 +136,9 @@ describe('heuristic studio', () => {
     expect(o.chapters.length).toBeLessThanOrEqual(7);
     expect(o.chapters.every((c) => c.points.length >= 2)).toBe(true);
     expect(o.bonusTitle).toMatch(/^Bonus/);
-    expect(o.nextStepTitle).toMatch(/^La suite est ici/);
+    // the next guide's title only: « La suite est ici » is printed by the layout (PDF page, product card)
+    expect(o.nextStepTitle.length).toBeGreaterThan(5);
+    expect(o.nextStepTitle).not.toMatch(/^La suite est ici/i);
   });
 
   it('writes a complete, rich first draft', async () => {
@@ -640,5 +649,241 @@ describe('machine-readable playbook rules', () => {
     expect(hooks.map((h) => h.hookStyle)).toEqual(expect.arrayContaining(['question', 'pov']));
     const r = await eng.rankOpportunities({ signals: [{ nicheId: 'sommeil-bebe', name: 'S', audience: 'Parents', category: 'p', searchInterest: 50, tiktokBuzz: 50, competitionHint: 'faible', sampleTitles: [] }], competitors: {}, voc: { 'sommeil-bebe': VOC }, excludeNicheIds: [] }, c);
     expect(r.ranked[0]!.suggestedPrice).toBe(24);
+  });
+});
+
+// ───────────────────────────── content regressions (founder review) ─────────────────────────────
+
+/** The playbook the bal-normal-42 retro really wrote for the Studio (its « n'hésitez pas à » rule used to delete every « n »). */
+const REAL_STUDIO_PLAYBOOK = [
+  'Ne jamais écrire « il est important de noter »',
+  "Ne jamais écrire « n'hésitez pas à »",
+  'Ne jamais écrire « soyez patient »',
+  'Chaque chapitre : étapes numérotées, un exemple réel tiré de la recherche, une checklist.',
+];
+/** « Ce ’est », « il ’associe », « ’hésitez » : an apostrophe left alone after a deleted « n ». */
+const ORPHAN_APOSTROPHE = /(^|[\s(«])['’][a-zà-ÿ]/i;
+/** « Erreur °1 » (lost « n »), but « 20 °C » is fine. */
+const LOST_N_DEGREE = /(^|[^n])°(?!C)/;
+const REAL_NICHES = ['sommeil-bebe', 'proprete-chiot', 'urssaf-micro'] as const;
+
+function realResearch(seed: number, nicheId: string): { brief: NicheBrief; voc: VoiceOfCustomer } {
+  const world = createWorld(defaultScenario({ seed }), `test-content-${seed}`);
+  const tools = createMarketTools(world, createRng(seed));
+  return { brief: tools.nicheBrief(nicheId)!, voc: tools.minePains(nicheId, 'deep') };
+}
+
+/** The Studio pipeline exactly as the runtime chains it (flagged = sim GENERIC_PHRASES hits). */
+async function studioPipeline(seed: number, brief: NicheBrief, voc: VoiceOfCustomer, playbook = REAL_STUDIO_PLAYBOOK) {
+  const eng = heuristic(seed);
+  const c = ctx({ playbook });
+  const titles = await eng.writeTitles({ niche: brief, voc, count: 10 }, c);
+  const outline = await eng.writeOutline({ title: titles[0]!, niche: brief, voc }, c);
+  const pdf = await eng.writePdfContent({ title: titles[0]!, outline, niche: brief, voc, upsellTitle: null }, c);
+  const flagged = genericPhraseHits(simNorm(pdfText(pdf))).found;
+  const human = await eng.humanize({ content: pdf, flagged, voc }, c);
+  const fc = await eng.factCheck({ content: human, voc }, c);
+  return { eng, titles, outline, pdf, final: fc.content };
+}
+
+/** Body text of the guide outside the cover / promise page (title, subtitle and promise excluded). */
+function bodyText(p: PdfContent): string {
+  return allText({ introduction: p.introduction, chapters: p.chapters, bonus: p.bonus, next: p.nextStep.text });
+}
+
+function count(hay: string, needle: string): number {
+  if (!needle) return 0;
+  let n = 0;
+  for (let i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + 1)) n++;
+  return n;
+}
+
+describe('content regressions: negations, fragments, repetitions', () => {
+  it('a banned phrase with an apostrophe is parsed whole, never as the word « n »', () => {
+    const rules = parsePlaybook(REAL_STUDIO_PLAYBOOK);
+    expect(rules.banned).toContain("n'hésitez pas à");
+    expect(rules.banned.every((b) => norm(b).replace(/[^a-z]/g, '').length >= 3)).toBe(true);
+    // a stray one-letter rule is ignored instead of wrecking the text
+    expect(parsePlaybook(['Ne jamais écrire « n »']).banned).toEqual([]);
+    const text = 'Ce n’est ni un manque de volonté ni un manque d’amour. N’hésitez pas à adapter ces conseils. Nous ne les avons pas inventées : erreur n°1, la nuit.';
+    const out = scrubText(text, rules.banned);
+    expect(out).toBe('Ce n’est ni un manque de volonté ni un manque d’amour. Nous ne les avons pas inventées : erreur n°1, la nuit.');
+    // a banned phrase inside a single sentence (list item) is removed with its sentence start re-capitalised
+    expect(scrubText("N'hésitez pas à demander de l'aide", rules.banned)).toBe("Demander de l'aide");
+  });
+
+  it('negations survive the whole pipeline: 10 seeds × 3 real niches, with the real studio playbook', async () => {
+    for (let seed = 1; seed <= 10; seed++) {
+      for (const nicheId of REAL_NICHES) {
+        const { brief, voc } = realResearch(seed, nicheId);
+        const { titles, outline, pdf, final } = await studioPipeline(seed, brief, voc);
+        for (const [label, v] of [['titles', titles], ['outline', outline], ['draft', pdf], ['final', final]] as const) {
+          const text = allText(v);
+          expect(text, `${nicheId}/${seed}/${label}`).not.toMatch(ORPHAN_APOSTROPHE);
+          expect(text, `${nicheId}/${seed}/${label}`).not.toMatch(LOST_N_DEGREE);
+        }
+        const text = allText(final);
+        expect(text).toContain('Le problème ne s’arrête jamais à un seul symptôme');
+        expect(text).toMatch(/Ce n’est ni un manque de volonté ni un manque d/);
+        expect(text).toContain('Erreur n°1');
+        expect(text).toMatch(/\bnous ne les avons pas inventées\b/i);
+        expect((text.match(/\bn(?:e\b|['’])/g) ?? []).length).toBeGreaterThan(15);
+        expect(norm(text)).not.toContain("n'hesitez pas a");
+      }
+    }
+  });
+
+  it('titles, labels and quotes are whole phrases; the promise is not repeated; scores stay ≥ 85', async () => {
+    for (let seed = 1; seed <= 10; seed++) {
+      for (const nicheId of REAL_NICHES) {
+        const { brief, voc } = realResearch(seed, nicheId);
+        const { titles, final } = await studioPipeline(seed, brief, voc);
+        const where = `${nicheId}/${seed}`;
+        for (const t of titles) {
+          expect(t.length, `${where} « ${t} »`).toBeLessThanOrEqual(95);
+          expect(t, where).not.toMatch(/…|\.\.\./);
+          expect((t.match(/\s:\s/g) ?? []).length, `${where} « ${t} »`).toBeLessThanOrEqual(1);
+          expect(endsDangling(t.replace(/\s*\([^)]*\)$/, '')), `${where} « ${t} »`).toBe(false);
+        }
+        expect(final.title.length).toBeLessThanOrEqual(95);
+        // the introduction describes the PAIN, never the promise
+        const promised = norm(final.promise.split(' : ').slice(1).join(' : '));
+        expect(promised.length).toBeGreaterThan(8);
+        expect(norm(final.introduction[0]!), where).not.toContain(promised);
+        expect([brief.problem, ...voc.pains].some((p) => norm(final.introduction[0]!).includes(norm(p).slice(0, 30))), where).toBe(true);
+        expect(count(norm(bodyText(final)), promised), `${where} promesse répétée`).toBeLessThanOrEqual(2);
+        expect(norm(allText(final))).not.toContain('ce que decrivent ceux qui ont reussi');
+        // « La suite est ici » is the layout's, not the title's
+        expect(final.nextStep.title).not.toMatch(/^la suite est ici/i);
+        expect(final.nextStep.title.length).toBeGreaterThan(5);
+        for (const ch of [...final.chapters, final.bonus]) {
+          const v = ch.visual;
+          if (!v) continue;
+          for (const l of v.labels) {
+            expect(l, `${where} ${v.type}`).not.toMatch(/…/);
+            expect(endsDangling(l.replace(/^À (?:faire|éviter) : /, '')), `${where} ${v.type} « ${l} »`).toBe(false);
+          }
+          if (v.type === 'bar_chart') {
+            expect(v.labels.every((l) => l.length <= 40), `${where} ${v.labels.join(' | ')}`).toBe(true);
+            expect(v.values).toHaveLength(v.labels.length);
+            expect(v.values.every((x) => x >= 0 && x <= 100)).toBe(true);
+          }
+          if (v.type === 'do_dont') expect(v.labels.every((l) => /^À (faire|éviter) : \S/.test(l)), v.labels.join(' | ')).toBe(true);
+          if (v.type === 'do_dont') expect(v.labels.some((l) => l.startsWith('À faire')) && v.labels.some((l) => l.startsWith('À éviter'))).toBe(true);
+          if (v.type === 'quote') { expect(v.labels[0]).not.toMatch(/[«»]/); expect(v.labels.length).toBeGreaterThanOrEqual(2); }
+          if (v.type === 'timeline') expect(v.labels.every((l) => /^.{2,32}? : \S/.test(l)), v.labels.join(' | ')).toBe(true);
+        }
+        // the pull-quote of a chapter is not repeated by the example right under it
+        for (const ch of final.chapters) {
+          if (ch.visual?.type === 'quote' && ch.example) expect(norm(ch.example)).not.toContain(norm(ch.visual.labels[0]!));
+        }
+        const q = scorePdf(final, { audience: brief.audience, problem: brief.problem, voc, design: designFor({ nicheName: brief.name, category: brief.category, seed }) });
+        expect(q.overall, `${where} ${q.issues.join(' | ')}`).toBeGreaterThanOrEqual(85);
+      }
+    }
+  });
+
+  it('an upsell brief whose « problem » is a desired outcome still opens on the pain', async () => {
+    const { brief, voc } = realResearch(42, 'proprete-chiot');
+    const goal = voc.desiredOutcomes[0]!;
+    const upsell = { ...brief, problem: goal };
+    const { final } = await studioPipeline(42, upsell, voc);
+    expect(norm(final.introduction[0]!)).not.toContain(norm(goal));
+    expect(count(norm(bodyText(final)), norm(goal))).toBeLessThanOrEqual(2);
+  });
+
+  it('sales page, hooks and ad never show a cut fragment or an ellipsis', async () => {
+    for (const nicheId of REAL_NICHES) {
+      for (const seed of [2, 7]) {
+        const { brief, voc } = realResearch(seed, nicheId);
+        const { eng, final } = await studioPipeline(seed, brief, voc);
+        const prod = product({ nicheId, title: final.title, audience: brief.audience, problem: brief.problem, content: final });
+        const sp = await eng.writeSalesPage({ product: prod, content: final, voc, hype: 0.4 }, ctx());
+        expect(new Set(sp.objections.map((o) => o.a)).size).toBe(sp.objections.length); // no copy-pasted answer
+        const hooks = await eng.writeAdHooks({ product: prod, voc, styles: ['question', 'contrarian', 'story', 'stat', 'pov', 'mistake', 'before_after', 'listicle'] }, ctx());
+        for (const h of hooks) {
+          expect(h.hook.length).toBeLessThanOrEqual(90);
+          expect(h.hook, `${nicheId} ${h.hookStyle}`).not.toMatch(/…/);
+          expect(h.hook).not.toMatch(/ce n’est pas « normal » que/);
+        }
+        const ad = await eng.writeAd({ product: prod, voc, hook: hooks[0]!.hook, hookStyle: hooks[0]!.hookStyle, format: 'text_slideshow', bannedClaims: voc.bannedClaims }, ctx());
+        for (const s of ad.scenes) {
+          expect(s.onScreenText.length).toBeLessThanOrEqual(50);
+          expect(s.onScreenText, nicheId).not.toMatch(/…/);
+        }
+        expect(allText(sp)).not.toMatch(ORPHAN_APOSTROPHE);
+      }
+    }
+  });
+});
+
+describe('content regressions: chat persona, niche-scoped rules, brand and customer name', () => {
+  it('the heuristic chat never reads the system persona back and answers in the first person', async () => {
+    const eng = heuristic(3);
+    const situation = [
+      'Tu es Camille, CEO chez Pixel Agency (département direction, chef de département).',
+      'Personnalité et façon de travailler : Calme, exigeante et obsédée par la rentabilité.',
+      'Ma tâche en cours : « Stand-up et plan du jour » (en cours).',
+      'Hier : 4 ventes, 76 € de CA, 30 € de pub, ROAS 2,5.',
+      'Trésorerie 512 €, profit cumulé 12 €.',
+      'Contexte : Camille, CEO (Direction) chez Pixel Agency, jour 5.',
+    ].join('\n');
+    for (const text of ['Combien de ventes hier ?', 'Tu fais quoi en ce moment ?', 'Salut', 'Pourquoi le ROAS baisse ?']) {
+      const r = await eng.chat({ history: [], text, situation }, ctx({ brand: 'Pixel Agency' }, { id: 'camille', name: 'Camille', role: 'CEO', dept: 'direction', skills: ['Stratégie', 'Arbitrage'] }));
+      expect(r, text).not.toMatch(/\bTu es\b/);
+      expect(r).not.toMatch(/Personnalité|Contexte :/);
+      expect(splitSentences(r).length, r).toBeGreaterThanOrEqual(2);
+      expect(splitSentences(r).length, r).toBeLessThanOrEqual(4);
+      expect(r).toMatch(/\b(je|j’|j'|mon|ma|on)\b/i);
+    }
+    const sales = await eng.chat({ history: [], text: 'Combien de ventes hier ?', situation }, ctx({}, { name: 'Camille', role: 'CEO' }));
+    expect(sales).toContain('4 ventes');
+  });
+
+  it('niche-scoped machine rules apply to their niche only; unscoped rules apply everywhere', async () => {
+    const eng = heuristic(5);
+    const playbook = [
+      'Prix cible « 24 » sur « Relooker un meuble ancien sans le rater » : 0,63 € de profit par visiteur contre 0,51 € à 29 €.',
+      'Privilégier le hook « pov » (POV) sur « Chat qui griffe le canapé » : CTR 5,21 % contre 3,13 %.',
+    ];
+    const sig = (nicheId: string, name: string) => ({ nicheId, name, audience: 'x', category: 'c', searchInterest: 50, tiktokBuzz: 50, competitionHint: 'faible' as const, sampleTitles: [] });
+    const r = await eng.rankOpportunities({ signals: [sig('relooker-meuble', 'Relooker un meuble ancien sans le rater'), sig('sommeil-bebe', 'Sommeil de bébé')], competitors: {}, voc: { 'sommeil-bebe': VOC }, excludeNicheIds: [] }, ctx({ playbook }));
+    expect(r.ranked.find((x) => x.nicheId === 'relooker-meuble')!.suggestedPrice).toBe(24);
+    expect(r.ranked.find((x) => x.nicheId === 'sommeil-bebe')!.suggestedPrice).not.toBe(24);
+    const chat = product({ nicheId: 'chat-griffe-canape', title: 'Le chat détruit le canapé : la méthode simple en 14 jours', problem: 'Le chat détruit le canapé et les meubles en les griffant', audience: "Propriétaires d'un chat d'intérieur" });
+    expect((await eng.writeAdHooks({ product: chat, voc: VOC, styles: ['question', 'mistake'] }, ctx({ playbook })))[0]!.hookStyle).toBe('pov');
+    const bebe = await eng.writeAdHooks({ product: product(), voc: VOC, styles: ['question', 'mistake'] }, ctx({ playbook }));
+    expect(bebe.map((h) => h.hookStyle)).toEqual(['question', 'mistake']);
+    // unscoped: everywhere
+    const all = await eng.writeAdHooks({ product: product(), voc: VOC, styles: ['question'] }, ctx({ playbook: ['Privilégier le hook « stat » : il gagne l’expérience.'] }));
+    expect(all[0]!.hookStyle).toBe('stat');
+    expect(parsePlaybook(['Prix cible « 19 »', 'Prix cible « 29 » sur « Sommeil de bébé »'], ['sommeil-bebe', 'Sommeil de bébé']).targetPrice).toBe(29);
+    expect(parsePlaybook(['Prix cible « 19 »', 'Prix cible « 29 » sur « Sommeil de bébé »'], ['proprete-chiot', 'Propreté du chiot']).targetPrice).toBe(19);
+  });
+
+  it('uses ctx.brand in signatures, outreach and sales pages, and greets the customer by name', async () => {
+    const eng = heuristic(2);
+    const c = ctx({ brand: 'Atelier Lumen' });
+    const r = await eng.writeSupportReply({ message: message({ subject: 'PDF', body: "Je n'ai jamais reçu le PDF" }), product: product(), order: ORDER, policy: [], customer: { name: 'Sophie M.', archetype: 'normal' } }, c);
+    expect(r.text.startsWith('Bonjour Sophie,')).toBe(true);
+    expect(r.text).toContain('Service client Atelier Lumen');
+    const anon = await eng.writeSupportReply({ message: message({ subject: 'PDF', body: "je n'ai jamais reçu le pdf" }), product: product(), order: ORDER, policy: [] }, ctx({ brand: 'Atelier Lumen', playbook: ['Ton support « formel »'] }));
+    expect(anon.text.startsWith('Bonjour,')).toBe(true);
+    const dm = await eng.writeOutreach({ creator: { id: 'c', handle: 'lea', nicheId: 'n', followers: 1000, avgViews: 500, engagement: 0.05, askUpfront: 0, askCommission: 0.3, redFlags: [] }, product: product(), offer: { upfront: 0, commission: 0.3 } }, c);
+    expect(dm).toContain('Atelier Lumen');
+    const sp = await eng.writeSalesPage({ product: product(), content: await draft(2), voc: VOC, hype: 0.2 }, c);
+    expect(sp.guarantee).toContain('Atelier Lumen');
+  });
+
+  it('Claude output is normalised to the same conventions (nextStep title, do/don’t prefixes, quotes)', async () => {
+    const fb = await draft(6);
+    const ch = fb.chapters.map((x, i) => (i === 0 ? { ...x, visual: { type: 'do_dont', title: 'T', labels: ['Gronder après coup', 'Crier', 'Récompenser dehors', 'Sortir après la sieste'], values: [] } }
+      : i === 1 ? { ...x, visual: { type: 'quote', title: 'Q', labels: ['« il se réveille toutes les 2h »', 'Un parent'], values: [] } } : x));
+    const client: ClaudeClientLike = { messages: { create: async () => fakeMessage({ ...fb, chapters: ch, nextStep: { title: 'La suite est ici : Les siestes sans larmes', text: fb.nextStep.text } }) } };
+    const eng = createContentEngine({ mode: 'claude', apiKey: 'sk-test', maxComputeEur: 3, seed: 6, client, log: () => {} });
+    const out = await eng.writePdfContent({ title: fb.title, outline: { title: fb.title, chapters: fb.chapters.map((c) => ({ title: c.title, points: c.steps })), bonusTitle: fb.bonus.title, nextStepTitle: 'x' }, niche: NICHE, voc: VOC, upsellTitle: 'Les siestes sans larmes' }, ctx());
+    expect(out.nextStep.title).toBe('Les siestes sans larmes');
+    expect(out.chapters[0]!.visual!.labels).toEqual(['À éviter : gronder après coup', 'À éviter : crier', 'À faire : récompenser dehors', 'À faire : sortir après la sieste']);
+    expect(out.chapters[1]!.visual!.labels[0]).toBe('il se réveille toutes les 2h');
   });
 });

@@ -1,19 +1,37 @@
 // Products: the PDF guides — cover, pipeline, quality, sales, reviews, files.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Product } from '../../../../shared/types';
 import { fileUrl } from '../../api';
 import { cx, Empty, FileLink, Overlay, Pill, QualityBars, qualityColor, SectionTitle, Segmented, Stat } from '../common';
 import { useApp } from '../context';
+import { nextStepTitle } from '../derive';
 import { fmtEur, fmtInt, fmtPct, safeDiv, stars, sum } from '../format';
 import { Icon } from '../icons';
 import { nicheName, PIPELINE, PRODUCT_STATUS_LABEL, PRODUCT_STATUS_TONE } from '../labels';
 
 type Filter = 'all' | 'live' | 'prod' | 'stopped';
 
-export function ProductsTab({ onClose }: { onClose(): void }) {
+/** focusId/focusSeq: product to scroll to and highlight (links from toasts, the journal, the calendar…). */
+export function ProductsTab({ onClose, focusId = null, focusSeq = 0 }: { onClose(): void; focusId?: string | null; focusSeq?: number }) {
   const { snapshot } = useApp();
   const [filter, setFilter] = useState<Filter>('all');
   const products = snapshot?.company?.products ?? [];
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const known = !!focusId && products.some((p) => p.id === focusId);
+
+  useEffect(() => {
+    if (!focusId || !known) return;
+    setFilter('all');
+    setHighlight(focusId);
+    const raf = requestAnimationFrame(() => {
+      const el = gridRef.current?.querySelector<HTMLElement>(`[data-product-id="${CSS.escape(focusId)}"]`);
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+    const t = setTimeout(() => setHighlight(null), 2600);
+    return () => { cancelAnimationFrame(raf); clearTimeout(t); };
+  }, [focusId, focusSeq, known]);
+
   const groups = useMemo(() => ({
     live: products.filter((p) => p.status === 'live'),
     prod: products.filter((p) => ['idea', 'research', 'writing', 'design', 'qa', 'ready'].includes(p.status)),
@@ -46,8 +64,8 @@ export function ProductsTab({ onClose }: { onClose(): void }) {
       {list.length === 0 ? (
         <Empty icon="package">{products.length === 0 ? 'Aucun guide pour l’instant : la Recherche cherche encore la bonne niche (règle du un : un problème, une personne).' : 'Aucun produit dans cette catégorie.'}</Empty>
       ) : (
-        <div className="product-grid">
-          {list.map((p) => <ProductCard key={p.id} p={p} />)}
+        <div className="product-grid" ref={gridRef}>
+          {list.map((p) => <ProductCard key={p.id} p={p} focused={highlight === p.id} />)}
         </div>
       )}
     </Overlay>
@@ -74,19 +92,22 @@ function Cover({ p }: { p: Product }) {
   );
 }
 
-function ProductCard({ p }: { p: Product }) {
+function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) {
   const { lookups, runId, demo } = useApp();
   const [showIssues, setShowIssues] = useState(false);
   const st = p.stats ?? { views: 0, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, rating: 0, reviews: [], upsellSales: 0 };
-  const upsell = p.upsellProductId ? lookups.products.get(p.upsellProductId) : undefined;
+  const upsellId = p.upsellProductId ?? p.content?.nextStep?.upsellProductId ?? null;
+  const upsell = upsellId && upsellId !== p.id ? lookups.products.get(upsellId) : undefined;
   const stageIdx = PIPELINE.indexOf(p.status);
   const inProd = stageIdx >= 0 && p.status !== 'live';
   const history = (p.priceHistory ?? []).slice(-6);
   const cvr = safeDiv(st.sales, st.views);
   const q = p.quality;
+  const nextTitle = nextStepTitle(p.content?.nextStep?.title);
+  const nextText = (p.content?.nextStep?.text ?? '').trim();
 
   return (
-    <article className="product-card">
+    <article className={cx('product-card', focused && 'is-focus')} data-product-id={p.id}>
       <div className="product-cover"><Cover p={p} /></div>
       <div className="product-body">
         <div className="product-top">
@@ -157,10 +178,10 @@ function ProductCard({ p }: { p: Product }) {
           <FileLink runId={runId} path={p.files?.salesPage} demo={demo} icon="store">Page de vente</FileLink>
           {!p.files?.pdf && !p.files?.salesPage ? <span className="muted small">Fichiers en cours de fabrication…</span> : null}
         </div>
-        {upsell || p.content?.nextStep ? (
-          <div className="upsell small">
+        {upsell || nextTitle || nextText ? (
+          <div className="upsell small" title={!upsell && nextText ? nextText : undefined}>
             <Icon name="arrowRight" size={12} /> <strong>La suite est ici :</strong>{' '}
-            {upsell ? <>{upsell.title} <span className="muted">({PRODUCT_STATUS_LABEL[upsell.status].toLowerCase()}, {fmtEur(upsell.price, 0)})</span></> : p.content?.nextStep?.title}
+            {upsell ? <>{upsell.title} <span className="muted">({PRODUCT_STATUS_LABEL[upsell.status].toLowerCase()}, {fmtEur(upsell.price, 0)})</span></> : nextTitle || <span className="muted">guide suivant en préparation</span>}
             {st.upsellSales ? <span className="txt-good"> · {fmtInt(st.upsellSales)} upsells</span> : null}
             {upsell?.files?.salesPage ? <> <FileLink runId={runId} path={upsell.files.salesPage} demo={demo} icon="external" className="upsell-link">Voir la page</FileLink></> : null}
           </div>

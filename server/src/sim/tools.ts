@@ -10,7 +10,7 @@ import type {
 } from '../shared.js';
 import { ADS, ORGANIC, SCAM } from './balance.js';
 import { findBannedClaims } from './compliance.js';
-import { customerById } from './customers.js';
+import { customerById, displayName } from './customers.js';
 import { cashOf, recordLedger } from './finance.js';
 import { reaction, scamAmount, type ReactionKey } from './inbox.js';
 import { findNiche, isScammer } from './market.js';
@@ -148,15 +148,16 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
       const more = banned.length > 1 ? ` (et ${banned.length - 1} autre${banned.length > 2 ? 's' : ''} : ${banned.slice(1, 3).map((b) => `« ${b} »`).join(', ')})` : '';
       const reason = `Refusée : l'allégation « ${banned[0]} » enfreint les règles publicitaires de TikTok${more}. Avertissement ${Math.min(acc.strikes, ADS.strikesBeforeBan)}/${ADS.strikesBeforeBan}.`;
       c.review = { status: 'rejected', reason, day: world.day };
-      pushEvent(world, 'ad_rejected', 'Pub refusée par TikTok', `« ${short(c.hook, 60)} » : allégation « ${banned[0]} » interdite.`, 'warn');
+      const refs = { creativeId: c.id, productId: c.productId, nicheId: p?.nicheId ?? null };
+      pushEvent(world, 'ad_rejected', 'Pub refusée par TikTok', `« ${short(c.hook, 60)} » : allégation « ${banned[0]} » interdite.`, 'warn', refs);
       if (acc.strikes >= ADS.strikesBeforeBan) {
         acc.banned = true;
         acc.bannedUntilDay = world.day + ADS.banDays;
         pushEvent(world, 'ad_account_banned', 'Compte publicitaire suspendu',
-          `Trois refus pour allégations interdites : TikTok suspend le compte pub jusqu'au jour ${acc.bannedUntilDay}. Aucune campagne ne sera diffusée d'ici là.`, 'danger');
+          `Trois refus pour allégations interdites : TikTok suspend le compte pub jusqu'au jour ${acc.bannedUntilDay}. Aucune campagne ne sera diffusée d'ici là.`, 'danger', refs);
       } else if (acc.strikes === ADS.strikesBeforeBan - 1) {
         pushEvent(world, 'ad_account_warning', 'Avertissement du compte pub',
-          'Deuxième refus pour allégation interdite. Au prochain, le compte publicitaire sera suspendu 7 jours.', 'danger');
+          'Deuxième refus pour allégation interdite. Au prochain, le compte publicitaire sera suspendu 7 jours.', 'danger', refs);
       }
       return { status: 'rejected', reason, strike: true };
     }
@@ -369,7 +370,10 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
         else {
           key = 'troll_fed';
           if (r.action === 'refund') refund('Remboursement accordé à un troll');
-          if (product && consequence === 'none' && reviewProduct(world, rng, product, customer, 1, 'troll')) consequence = 'bad_review';
+          // Only verified buyers can rate the guide in the store: a fed troll who never bought it cannot
+          // leave a store review, he comes back for more instead (the thread stays open, more support noise).
+          if (product && order && consequence === 'none' && reviewProduct(world, rng, product, customer, 1, 'troll')) consequence = 'bad_review';
+          else if (!order) resolved = false;
         }
         break;
       }
@@ -437,6 +441,9 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     msg.thread.push({ from: agentId, text: r.text || (r.action === 'ignore' ? '(ignoré)' : r.action === 'block' ? '(expéditeur bloqué)' : '(sans texte)'), day: world.day });
     msg.thread.push({ from: 'customer', text: customerReaction, day: world.day });
     msg.mood = newMood;
+    msg.replyScore = score;
+    msg.repliedDay = world.day;
+    if (!msg.customerName) msg.customerName = displayName(customer);
     msg.status = final === 'chargeback' ? 'escalated' : resolved ? 'resolved' : 'replied';
     msg.resolution = final === 'chargeback' ? 'Litige bancaire ouvert par le client.'
       : resolved ? `Résolu (${r.action}, note ${score}/100).` : issues[0] ?? null;

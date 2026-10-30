@@ -4,8 +4,8 @@
  */
 import type { NicheBrief, VoiceOfCustomer } from '../../shared.js';
 import {
-  bare, cap, clean, extractAgeRange, lf, norm, programmeDuration, shortAudience, subjectNoun, uniqStrings, withArticle,
-  type Duration,
+  bare, bestLabel, cap, clauseLabel, clean, endsDangling, extractAgeRange, labelOf, lf, lowerFirst, norm, programmeDuration, shortAudience,
+  subjectNoun, uniqStrings, withArticle, type Duration,
 } from '../util.js';
 
 export interface NicheCtx {
@@ -14,10 +14,15 @@ export interface NicheCtx {
   aud: string;            // "parents épuisés de bébés de 6 à 12 mois"
   audArt: string;         // "les parents épuisés de bébés de 6 à 12 mois"
   audShort: string;       // short label for hooks / captions
-  problem: string;        // lowercase-first clause
+  audTitle: string;       // audience for titles, whole phrase ≤ 52 chars, with article ("les parents épuisés d'un bébé de 6 à 12 mois")
+  audCore: string;        // tighter audience for titles, ≤ 40 chars ("les propriétaires d'un chiot")
+  problem: string;        // lowercase-first clause (the PAIN, even when the brief states a goal)
+  goal: string | null;    // the brief's "problem" when it is in fact a desired outcome (upsell guides)
   pbClause: string;       // main problem, lowercase-first ("bébé se réveille toutes les 2 heures")
   pbIsClause: boolean;    // pbClause reads as subject + verb (usable after « pourquoi », « quand », « si »)
-  pbShort: string | null; // the problem in ≤ 56 chars, for quotes in titles / hooks (null when nothing fits)
+  pbShort: string | null; // the problem in ≤ 56 chars, whole phrase, for quotes in titles / hooks (null when nothing fits)
+  painTitle: string;      // the main pain as a clean title piece (≤ 55 chars, never cut mid-phrase)
+  care: boolean;          // the reader looks after someone (baby, child, pet): « par amour », « l'entourage »…
   stepCount: number;      // steps of the method chapter (research steps, completed when thin)
   age: string | null;
   dur: Duration;
@@ -75,22 +80,32 @@ export function buildNicheCtx(nicheIn: Partial<NicheBrief> | null | undefined, v
   const k = voc.knowledge;
   const corpus = [niche.audience, niche.problem, niche.name, ...voc.pains, ...voc.phrases, ...k.steps, ...k.facts, ...k.tips, ...voc.desiredOutcomes];
   const age = extractAgeRange([niche.audience, niche.problem, ...voc.pains, ...voc.phrases, ...k.facts]);
-  const mainPain = niche.problem.length <= 90 && !firstPerson(niche.problem) ? niche.problem : voc.pains.find((p) => !firstPerson(p) && p.length <= 90) ?? niche.problem;
+  // An upsell brief may carry a desired outcome as its "problem": the pain then comes from the research.
+  const goal = isGoal(niche.problem, voc.desiredOutcomes) ? niche.problem : null;
+  const painCands = [...(goal ? [] : [niche.problem]), ...voc.pains].filter((p) => !firstPerson(p));
+  const mainPain = painCands.find((p) => p.length <= 90) ?? painCands[0] ?? voc.pains[0] ?? niche.problem;
   const items = voc.pains.length + voc.phrases.length + k.tips.length + k.steps.length + k.mistakes.length + k.examples.length + k.facts.length;
   const adj = SOFT_HINT.test(norm(corpus.join(' '))) ? 'douce' : 'simple';
+  const audArt = withArticle(niche.audience);
+  const subj = subjectNoun(corpus);
   return {
     niche, voc,
     aud: lf(niche.audience),
-    audArt: withArticle(niche.audience),
+    audArt,
     audShort: shortAudience(niche.audience),
-    problem: lf(niche.problem),
+    audTitle: titleAudience(audArt, 52),
+    audCore: titleAudience(audArt, 40),
+    problem: lf(goal ? mainPain : niche.problem),
+    goal: goal ? lf(goal) : null,
     pbClause: lf(mainPain),
     pbIsClause: looksLikeClause(lf(mainPain)),
-    pbShort: [lf(mainPain), ...voc.pains.map(lf)].find((p) => p.length >= 10 && p.length <= 56) ?? null,
+    pbShort: bestLabel([mainPain, ...voc.pains.filter((p) => !firstPerson(p))].map(headOf), 56, 10),
+    painTitle: bestLabel([mainPain, ...painCands, niche.name].map(headOf), 55, 10) ?? cap(bare(niche.name)),
+    care: ['bébé', 'enfant', 'chien', 'chat'].includes(subj.noun),
     stepCount: k.steps.length >= 3 ? Math.min(5, k.steps.length) : Math.min(6, uniqStrings([...k.steps, ...FALLBACK.steps]).length),
     age,
     dur: programmeDuration(corpus, niche.category, niche.keywords),
-    subj: subjectNoun(corpus),
+    subj,
     adj,
     adjM: adj === 'douce' ? 'doux' : adj,
     pains: voc.pains, phrases: voc.phrases, objections: voc.objections, outcomes: voc.desiredOutcomes,
@@ -99,6 +114,34 @@ export function buildNicheCtx(nicheIn: Partial<NicheBrief> | null | undefined, v
     richness: Math.min(1, items / 32),
     deep: voc.depth === 'deep',
   };
+}
+
+/** Head of a phrase before its own « : » / « ; » (« Les accidents de nuit : tous les matins… » → « Les accidents de nuit »). */
+export function headOf(s: string): string {
+  const head = clean(s).split(/\s+[:;]\s+/)[0] ?? '';
+  return head.length >= 10 ? head : clean(s);
+}
+
+/** The brief's problem is one of the desired outcomes (« Un chiot propre en quelques semaines »). */
+export function isGoal(problem: string, outcomes: readonly string[]): boolean {
+  const p = norm(bare(problem));
+  if (!p) return false;
+  return outcomes.some((o) => {
+    const n = norm(bare(o));
+    return n.length >= 8 && (n === p || p.includes(n) || n.includes(p));
+  });
+}
+
+/** Audience for a title: whole phrase with its article, shortened at a natural boundary (never « vivant en… »). */
+export function titleAudience(audArt: string, max: number): string {
+  const a = clean(audArt).replace(/\s*\([^)]*\)/g, '');
+  if (a.length <= max) return a;
+  const l = clauseLabel(a, max, 8);
+  if (l) return lowerFirst(l);
+  // « les propriétaires d'un chiot de 2 à 6 mois » → « les propriétaires d'un chiot »
+  const m = /^(.{8,}?)\s+(?:de|d['’]|du|des)\s+\d/u.exec(a);
+  if (m && m[1]!.length <= max && !endsDangling(m[1]!)) return m[1]!;
+  return lowerFirst(labelOf(a, max));
 }
 
 /** "de" + elision: de(« allumer ») → "d'allumer". */
@@ -150,6 +193,10 @@ export function firstPerson(s: string): boolean {
 /** Rough check that a phrase is "subject + conjugated verb" (bébé se réveille…, il ne mange pas…). */
 export function looksLikeClause(s: string): boolean {
   if (isInfinitive(s) || firstPerson(s)) return false;
-  const w = norm(bare(s)).split(/\s+/).slice(1, 4);
-  return w.some((x) => /^(s'|n')[a-z]/.test(x) || /^(se|ne|est|sont|a|ont|fait|font|va|vont|peut|veut|reste|refuse|pleure|mange|dort|aboie|tire|mord|crie|boude|arrive|oublie|perd|prend|bloque)$/.test(x));
+  const words = norm(bare(s)).split(/\s+/);
+  // a clause starts with a subject: pronoun, determiner + noun, or a bare « bébé »
+  if (!/^(il|elle|ils|elles|bebe|le|la|les|l'.*|mon|ma|mes|son|sa|ses|leur|leurs|notre|votre|ce|cet|cette|un|une)$/.test(words[0] ?? '')) return false;
+  if (/[:;]/.test(s)) return false;
+  const w = words.slice(1, 5);
+  return w.some((x) => /^(s'|n')[a-z]/.test(x) || /^(se|ne|est|sont|a|ont|fait|font|va|vont|peut|veut|reste|refuse|pleure|mange|dort|aboie|tire|mord|crie|boude|arrive|oublie|perd|prend|bloque|griffe|detruit|ignore|tombe|ecaille|coule|seche)$/.test(x));
 }

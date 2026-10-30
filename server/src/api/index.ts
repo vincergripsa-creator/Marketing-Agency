@@ -13,5 +13,5 @@ export type { MountedRun, SessionInfo } from './session.js';
 export { createAgencyServer, startServer, unavailableSession, devLandingPage } from './server.js';
 export type { AgencyServer, AgencyServerOptions, SessionLike } from './server.js';
 export { isEntryPoint } from './entry.js';
-export { safeResolve, isSafeRelativePath, mimeFor, sanitizeScenario, parseControl, HttpError } from './http.js';
+export { safeResolve, isSafeRelativePath, mimeFor, sanitizeScenario, parseControl, HttpError, errorStatus } from './http.js';
 export { SseHub } from './sse.js';

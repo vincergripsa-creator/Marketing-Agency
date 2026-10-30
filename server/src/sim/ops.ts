@@ -55,6 +55,7 @@ function bumpRefundStats(world: WorldState, order: Order): void {
 export function refundOrder(world: WorldState, order: Order, memo: string): number {
   if (order.refunded || order.chargeback) return 0;
   order.refunded = true;
+  order.refundedDay = world.day;
   recordLedger(world, { type: 'refund', amount: -order.price, memo, ref: order.id });
   bumpRefundStats(world, order);
   return order.price;
@@ -65,6 +66,7 @@ export function chargebackOrder(world: WorldState, order: Order): number {
   if (order.refunded || order.chargeback) return 0;
   order.chargeback = true;
   order.refunded = true;
+  order.refundedDay = world.day;
   const cost = order.price + FEES.chargebackFee;
   recordLedger(world, { type: 'chargeback', amount: -cost, memo: `Litige bancaire (chargeback) : ${fmtEur(order.price)} + ${fmtEur(FEES.chargebackFee)} de frais`, ref: order.id });
   bumpRefundStats(world, order);
@@ -86,11 +88,29 @@ export function reviewProduct(world: WorldState, rng: Rng, product: Product | un
   return true;
 }
 
+/** Ids an event is about (product, niche, creative, creator); undefined / null values are dropped. */
+export type EventRefs = { [K in keyof NonNullable<WorldEvent['refs']>]?: string | null };
+
+function cleanRefs(refs: EventRefs | undefined): WorldEvent['refs'] | undefined {
+  if (!refs) return undefined;
+  const out: NonNullable<WorldEvent['refs']> = {};
+  for (const k of ['productId', 'nicheId', 'creativeId', 'creatorId'] as const) {
+    const v = refs[k];
+    if (typeof v === 'string' && v && v !== FALLBACK_NICHE.id) out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 /** Records a world event and mirrors it in the activity feed. */
-export function pushEvent(world: WorldState, kind: WorldEventKind, title: string, description: string, severity: WorldEvent['severity']): WorldEvent {
+export function pushEvent(world: WorldState, kind: WorldEventKind, title: string, description: string, severity: WorldEvent['severity'], refs?: EventRefs): WorldEvent {
   const ev: WorldEvent = { id: nextId(world, 'evt'), day: world.day, kind, title, description, severity };
+  const r = cleanRefs(refs);
+  if (r) ev.refs = r;
   world.market.events.push(ev);
   if (world.market.events.length > EVENTS.keepEvents) world.market.events.splice(0, world.market.events.length - EVENTS.keepEvents);
-  emit(world, { agentId: null, kind: 'event', text: `${title} — ${short(description, 90)}` });
+  emit(world, {
+    agentId: null, kind: 'event', text: `${title} — ${short(description, 90)}`,
+    ...(r?.productId || r?.creativeId ? { refs: { ...(r.productId ? { productId: r.productId } : {}), ...(r.creativeId ? { creativeId: r.creativeId } : {}) } } : {}),
+  });
   return ev;
 }

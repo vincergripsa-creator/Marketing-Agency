@@ -2,7 +2,7 @@
 import { useMemo, useState } from 'react';
 import type { Deliverable } from '../../../../shared/types';
 import { fileUrl } from '../../api';
-import { cx, Empty, Overlay, Segmented } from '../common';
+import { cx, Empty, NEW_TAB, Overlay, Segmented } from '../common';
 import { useApp } from '../context';
 import { fmtInt } from '../format';
 import { Icon } from '../icons';
@@ -62,5 +62,5 @@ function Tile({ d }: { d: Deliverable }) {
     </>
   );
   if (demo) return <div className="tile is-disabled" title="Fichier indisponible en mode démo">{body}</div>;
-  return <a className="tile" href={url} target="_blank" rel="noreferrer" title={`Ouvrir ${d.path}`}>{body}</a>;
+  return <a className="tile" href={url} {...NEW_TAB} title={`Ouvrir ${d.path}`}>{body}</a>;
 }

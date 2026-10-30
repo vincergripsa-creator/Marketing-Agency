@@ -104,6 +104,17 @@ export function firstName(c: Customer | undefined): string {
   return c ? c.name.split(' ')[0]! : 'Client';
 }
 
+/** UI-safe display name: "Sophie Martin" → "Sophie M." ; pseudos ("@lea_du_34") and single words stay as they are. */
+export function displayName(c: Pick<Customer, 'name'> | undefined | null): string {
+  const name = String(c?.name ?? '').replace(/\s+/g, ' ').trim();
+  if (!name) return 'Client';
+  if (name.startsWith('@')) return name;
+  const parts = name.split(' ');
+  if (parts.length < 2) return name;
+  const initial = parts[parts.length - 1]!.charAt(0).toUpperCase();
+  return initial ? `${parts[0]} ${initial}.` : parts[0]!;
+}
+
 export function customerById(world: WorldState, id: string): Customer | undefined {
   return world.market.customers.find((c) => c.id === id);
 }

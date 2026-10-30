@@ -13,7 +13,7 @@
     "build": "npm run build -w web",
     "start": "npm run start -w server",
     "sim": "npm run sim -w server --",
-    "test": "npm run test -w server",
+    "test": "npm run test -w server && npm run test:web -w server",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
   },
   "devDependencies": {

@@ -13,6 +13,12 @@ function running(ctx: RuntimeCtx, dimension: Experiment['dimension']): Experimen
   return ctx.world.company.experiments.find((e) => e.status === 'running' && e.dimension === dimension);
 }
 
+/** A price test needs this many sales of the product first; a product is re-tested at most every PRICE_RETEST_DAYS days. */
+export const PRICE_TEST_MIN_SALES = 10;
+export const PRICE_RETEST_DAYS = 12;
+/** Paid conversion (purchases / landing views, 7 days) under which the next price test goes one tier down. */
+export const PRICE_TEST_LOW_CVR = 0.015;
+
 /** Same dimension and same variants tested recently (running, or concluded less than 10 days ago). */
 function recentlyTested(ctx: RuntimeCtx, dimension: Experiment['dimension'], variants: string[]): boolean {
   const key = [...variants].sort().join('|');
@@ -39,11 +45,20 @@ export function experimentCandidate(ctx: RuntimeCtx): Omit<Experiment, 'id' | 's
         return { hypothesis: `Sur « ${name} », le format ${FORMAT_LABELS[v[0]!] ?? v[0]} bat ${FORMAT_LABELS[v[1]!] ?? v[1]} en CTR`, dimension: 'ad_format', variants: v, metric: 'ctr' };
       }
     }
-    if (!running(ctx, 'price') && p.stats.sales >= 10 && !ctx.world.company.experiments.some((e) => e.dimension === 'price' && e.hypothesis.includes(name))) {
+    const lastPriceTest = Math.max(0, ...ctx.world.company.experiments.filter((e) => e.dimension === 'price' && e.hypothesis.includes(name)).map((e) => e.endDay ?? ctx.world.day));
+    if (!running(ctx, 'price') && p.stats.sales >= PRICE_TEST_MIN_SALES && (lastPriceTest === 0 || ctx.world.day - lastPriceTest >= PRICE_RETEST_DAYS)) {
       const cur = PRICE_ARMS.find((a) => Number(a) >= p.price) ?? PRICE_ARMS[PRICE_ARMS.length - 1]!;
       const i = PRICE_ARMS.indexOf(cur);
-      const up = PRICE_ARMS[Math.min(PRICE_ARMS.length - 1, i + 1)]!;
-      if (up !== cur) return { hypothesis: `« ${name} » rapporte plus par visiteur à ${up} € qu'à ${cur} €`, dimension: 'price', variants: [cur, up], metric: 'roas' };
+      // Direction from what buyers do: a paid conversion below PRICE_TEST_LOW_CVR says "too expensive" → test one
+      // tier lower; otherwise test one tier higher. (Before, only raises were ever tested, so a guide launched
+      // above what its buyers pay could never learn to come down.)
+      const m7 = productMetrics(ctx.world, p.id, Math.max(1, ctx.world.day - 6));
+      const cvr = m7.landingViews > 0 ? m7.adPurchases / m7.landingViews : null;
+      const down = cvr !== null && m7.landingViews >= 120 && cvr < PRICE_TEST_LOW_CVR;
+      const other = PRICE_ARMS[down ? Math.max(0, i - 1) : Math.min(PRICE_ARMS.length - 1, i + 1)]!;
+      if (other !== cur && !recentlyTested(ctx, 'price', [cur, other])) {
+        return { hypothesis: `« ${name} » rapporte plus par visiteur à ${other} € qu'à ${cur} €`, dimension: 'price', variants: [cur, other], metric: 'roas' };
+      }
     }
   }
   if (!running(ctx, 'support_tone')) {
@@ -132,6 +147,13 @@ export const opsHandlers: HandlerMap = {
         say(ctx, agent.id, `${agent.name} lève le mode survie : la trésorerie est remontée à ${eur(b.cash)}`, 'finance');
       }
       if (b.rate < 0.15 && !b.survival) incident(ctx, `Runway sous 14 jours : enveloppe pub réduite à 8 % de la trésorerie`);
+      // The CFO's envelope of the day, shown by the UI (Finance tab).
+      const note = b.bankrupt
+        ? `Trésorerie négative (${eur(b.cash)}) : aucune dépense pub.`
+        : b.survival
+          ? `Mode survie : trésorerie ${eur(b.cash)} sous 30 % du départ, pubs non rentables coupées.`
+          : `${Math.round(b.rate * 100)} % de ${eur(b.cash)} — ${runway}.`;
+      ctx.world.company.budget = { day: ctx.world.day, adCap: b.adCap, survival: b.survival, note };
       return {
         summary: `Enveloppe pub ${eur(b.adCap)}${b.survival ? ' — mode survie' : ''} ; trésorerie ${eur(b.cash)}, ${runway}.`,
         output: { adCap: b.adCap, survival: b.survival, cash: b.cash, runwayDays: b.runwayDays, rate: b.rate, bankrupt: b.bankrupt },

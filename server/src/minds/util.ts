@@ -120,6 +120,12 @@ export function lf(s: string): string {
 }
 const KEEP_CAPS = new Set(['tiktok', 'instagram', 'youtube', 'paris', 'noel', 'google', 'amazon', 'excel', 'linkedin']);
 
+/** Verbatim in running prose: like q(), but a customer's question keeps its « ? » inside the quotes. */
+export function qv(s: string): string {
+  const quoted = q(s);
+  return /\?\s*[»"”]?\s*$/.test(clean(s)) ? quoted.replace(/ »$/, ' ? »') : quoted;
+}
+
 /** Full sentence: capitalised, ends with punctuation. */
 export function sentence(s: string): string {
   const t = clean(s);
@@ -130,7 +136,8 @@ export function sentence(s: string): string {
 
 /** « verbatim » customer words. */
 export function q(s: string): string {
-  return `« ${bare(s)} »`;
+  // nested quotes inside a verbatim are French “ ” (« il me dit “ça va passer” »), never stray apostrophes
+  return `« ${bare(s).replace(/(^|[\s(])['‘’]([^'‘’]+?)['‘’](?=[\s,.;:!?)]|$)/g, '$1“$2”')} »`;
 }
 
 export function fit(s: string, max: number): string {
@@ -243,12 +250,12 @@ export function withArticle(audience: string): string {
   return a;
 }
 
-/** Short audience label for tight spaces (hooks, captions). */
+/** Short audience label for tight spaces (hooks, captions): a whole phrase, never an ellipsis. */
 export function shortAudience(audience: string, max = 42): string {
   const a = lf(audience).replace(/\s*\([^)]*\)/g, '');
   if (a.length <= max) return a;
-  const cut = a.split(/\s+(?:qui|dont|avec|et|lorsqu|quand)\s+/i)[0] ?? a;
-  return fit(cut, max);
+  const l = clauseLabel(a, max, 6);
+  return l ? lowerFirst(l) : lowerFirst(labelOf(a, max));
 }
 
 const AGE_RE = /(\d{1,2})\s*(?:-|–|à|a|et)\s*(\d{1,2})\s*(mois|ans)/i;
@@ -305,14 +312,159 @@ export function subjectNoun(texts: readonly string[]): { noun: string; fem: bool
   return { noun: 'situation', fem: true };
 }
 
-/** "Tenir un carnet" → "Tenir un carnet" (steps stay infinitive, short form for diagrams). */
+/** Whole short label for diagrams / checklists (never cut mid-phrase, no ellipsis). */
 export function shortLabel(s: string, max = 34): string {
-  const t = bare(s).replace(/\s*\([^)]*\)/g, '');
-  const head = t.split(/\s*[,;:]\s+|\s+(?:pour|afin|en pensant|parce)\s+/i)[0] ?? t;
-  return cap(fit(head.length >= 8 ? head : t, max));
+  return labelOf(s, max);
 }
 
 
+
+// ───────────────────────────── clean labels (never cut a phrase mid-sentence) ─────────────────────────────
+
+/** Words a label / title can never end on (« Les accidents de », « malgré les », « le vernis fait »). */
+const DANGLING = new Set([
+  'de', 'd', 'du', 'des', 'a', 'au', 'aux', 'le', 'la', 'les', 'l', 'un', 'une', 'et', 'ou', 'en', 'pour', 'par', 'sur', 'sous',
+  'dans', 'avec', 'sans', 'malgre', 'que', 'qu', 'qui', 'ne', 'n', 'se', 's', 'son', 'sa', 'ses', 'leur', 'leurs', 'mon', 'ma', 'mes',
+  'ton', 'ta', 'tes', 'votre', 'vos', 'notre', 'nos', 'ce', 'cet', 'cette', 'ces', 'tres', 'plus', 'moins', 'si', 'quand',
+  'comme', 'chez', 'entre', 'vers', 'avant', 'apres', 'mais', 'donc', 'car', 'lorsqu', 'lorsque', 'puis',
+  'il', 'elle', 'ils', 'elles', 'on', 'je', 'j', 'tu', 'dont', 'jusqu', 'pendant', 'depuis', 'c', 'est', 'sont',
+  'tout', 'tous', 'toute', 'toutes', 'juste', 'trop', 'encore', 'deja', 'presque', 'plutot', 'assez',
+  'fait', 'font', 'met', 'mettent', 'rend', 'rendent', 'donne', 'prend', 'devant', 'derriere', 'pres', 'loin', 'autour',
+]);
+
+/** True when the phrase ends on a preposition / article / auxiliary / bare number (an obviously cut fragment). */
+export function endsDangling(s: string): boolean {
+  const words = norm(s).replace(/[^a-z0-9'\s-]/g, ' ').trim().split(/[\s']+/).filter(Boolean);
+  const last = words[words.length - 1] ?? '';
+  // a capitalised last word is a name / acronym / letter (« Plan B », « TOEIC »), never « à », « le »…
+  const rawLast = clean(s).split(/[\s'’]+/).filter(Boolean).pop() ?? '';
+  if (words.length > 1 && /^\p{Lu}/u.test(rawLast)) return false;
+  // adverbial « juste avant », « peu après », « et après » end a phrase legitimately
+  if ((last === 'avant' || last === 'apres') && /^(juste|peu|bien|longtemps|et|d|jour|semaine|mois|l)$/.test(words[words.length - 2] ?? '')) return false;
+  // locutions that need their complement (« facturé au lieu », « à cause », « en fonction »)
+  if (/(?:^|\s)(?:au lieu|a cause|grace|en raison|a partir|en fonction|par rapport|lors|a l aide|au moment|au niveau|en cas)$/.test(words.join(' '))) return true;
+  return !last || DANGLING.has(last) || /^\d+$/.test(last);
+}
+
+/** « ne / n’ » without its second half (« je ne savais ») is a cut negation. */
+function brokenNegation(s: string): boolean {
+  const n = ` ${norm(s)} `;
+  const i = n.search(/\s(ne|n')\s?/);
+  if (i < 0) return false;
+  return !/\b(pas|plus|jamais|rien|personne|aucun|aucune|guere|que|qu'|ni)\b/.test(n.slice(i + 2));
+}
+
+/** Cut points tried, strongest first: punctuation, then subordinate words (the head keeps its meaning). */
+const LABEL_SEPARATORS: RegExp[] = [/\s*[:;]\s+/, /\s+[—–]\s+/, /\s+-\s+/, /,\s+/, /\s+\(/];
+
+/**
+ * Tier 1 = clause boundaries (the head is a whole clause: « Il se retient dehors | et se lâche… »).
+ * Tier 2 = prepositions (« Peur de se tromper dans la déclaration | de chiffre d'affaires »), only when no
+ * clause head fits. « sans », « avec », « chaque » are never cut points: they carry the meaning
+ * (« Laisser des questions | sans réponse » would say the opposite).
+ */
+const LABEL_CUTWORDS: readonly (readonly string[])[] = [
+  [' qui ', ' quand ', ' lorsqu', ' parce ', ' alors ', ' afin ', ' pour ', ' malgré ', ' dès ', ' avant ', ' après ',
+    ' même ', ' mais ', ' et ', ' ou ', ' vivant ', ' habitant ', ' à cause ', ' depuis ', ' pendant ', ' juste ', ' tous les ', ' toutes les '],
+  [' dans ', ' sur ', ' en ', ' de ', ' du ', ' des '],
+];
+
+/** A head before a comma that is only a circumstance (« En micro-entreprise, … », « Après un imprévu, … »). */
+const CIRCUMSTANCE = /^(après|avant|pendant|en|dans|si|quand|chaque|même|dès|pour|le soir|le matin|la nuit|au début|à|avec|sans|entre|une fois|au quotidien|concrètement|sinon|ensuite|enfin|d’abord|d'abord)\b/iu;
+
+function labelOk(s: string, min: number, max: number): boolean {
+  const t = s.trim();
+  return t.length >= min && t.length <= max && !endsDangling(t) && !brokenNegation(t) && !/[«“(]$/.test(t)
+    && (t.match(/«/g) ?? []).length === (t.match(/»/g) ?? []).length;
+}
+
+/** A cut head must still say something: two words at least. */
+function headOk(s: string, min: number, max: number): boolean {
+  return labelOk(s, min, max) && s.trim().split(/\s+/).length >= 2;
+}
+
+export interface LabelOptions { min?: number; tiers?: 1 | 2 }
+
+/**
+ * A whole short phrase usable as a label / title piece (≤ max chars), or null.
+ * Never cuts mid-phrase: the text is kept whole, or reduced to its head at a natural boundary
+ * (« : », « , », « qui », « malgré »…), and never ends on a dangling word. No ellipsis.
+ * `tiers: 1` forbids prepositional cuts (strict, for chart labels).
+ */
+export function clauseLabel(s: string | null | undefined, max: number, min: number | LabelOptions = 8, depth = 0): string | null {
+  const o: LabelOptions = typeof min === 'number' ? { min } : min;
+  const mn = o.min ?? 8;
+  const tiers = o.tiers ?? 2;
+  const t = bare(String(s ?? '').replace(/\s*\([^)]*\)/g, '')).replace(/\s+/g, ' ');
+  if (!t) return null;
+  if (labelOk(t, Math.min(mn, t.length), max)) return cap(t);
+  for (const sep of LABEL_SEPARATORS) {
+    const parts = t.split(sep);
+    const head = bare(parts[0] ?? '');
+    if (head === t) continue;
+    // « En micro-entreprise, on déclare… » : the circumstance alone says nothing, the rest carries the meaning
+    if (CIRCUMSTANCE.test(head) && parts.length > 1 && depth === 0) {
+      const tail = clauseLabel(parts.slice(1).join(', '), max, o, 1);
+      if (tail) return tail;
+      continue;
+    }
+    if (headOk(head, mn, max)) return cap(head);
+  }
+  // longest head before a subordinate word (clause boundaries first, then prepositions)
+  const low = ` ${t} `.toLowerCase();
+  for (const tier of LABEL_CUTWORDS.slice(0, tiers)) {
+    let best: string | null = null;
+    for (const w of tier) {
+      let from = 0;
+      for (;;) {
+        const i = low.indexOf(w, from);
+        if (i < 0) break;
+        from = i + 1;
+        const head = bare(t.slice(0, Math.max(0, i - 1)));
+        if (headOk(head, mn, max) && (!best || head.length > best.length)) best = head;
+      }
+    }
+    if (best) return cap(best);
+  }
+  return null;
+}
+
+/** First candidate that yields a clean label. */
+export function bestLabel(cands: readonly (string | null | undefined)[], max: number, min: number | LabelOptions = 8): string | null {
+  for (const c of cands) {
+    const l = clauseLabel(c, max, min);
+    if (l) return l;
+  }
+  return null;
+}
+
+/** Clean label, else a word-boundary cut WITHOUT ellipsis and without dangling words (last resort). */
+export function labelOf(s: string, max: number): string {
+  const l = clauseLabel(s, max);
+  if (l) return l;
+  const words = bare(s).replace(/\s*\([^)]*\)/g, '').split(/\s+/);
+  let out = '';
+  for (const w of words) {
+    const next = out ? `${out} ${w}` : w;
+    if (next.length > max) break;
+    out = next;
+  }
+  while (out && endsDangling(out)) out = out.split(/\s+/).slice(0, -1).join(' ');
+  out = bare(out.replace(/[,;:]+$/, ''));
+  return cap(out || bare(s).slice(0, max));
+}
+
+/** First candidate (in order) that is ≤ max chars, has at most one « : », no ellipsis, no dangling end. */
+export function composeTitle(variants: readonly (string | null | undefined)[], max = 95): string | null {
+  for (const v of variants) {
+    const t = clean(v ?? '');
+    if (!t || t.length > max || /…|\.\.\./.test(t)) continue;
+    if ((t.match(/\s:\s/g) ?? []).length > 1) continue;
+    if (endsDangling(t.replace(/\s*\([^)]*\)$/, ''))) continue;
+    return t;
+  }
+  return null;
+}
 
 /** Lowercase the first letter only (keeps any trailing ellipsis, unlike lf). */
 export function lowerFirst(s: string): string {

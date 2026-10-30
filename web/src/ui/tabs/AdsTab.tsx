@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import type { AdComment, AdCreative, DailyAdStats } from '../../../../shared/types';
 import { fileUrl } from '../../api';
 import { LineChart, SERIES } from '../charts';
-import { cx, Empty, Overlay, Pill, SectionTitle, Segmented, Stat } from '../common';
+import { cx, Empty, FileLink, Overlay, Pill, SectionTitle, Segmented, Stat } from '../common';
 import { useApp } from '../context';
 import { fmtCompact, fmtEur, fmtEurShort, fmtInt, fmtPct, fmtRoas, safeDiv, sum } from '../format';
 import { Icon } from '../icons';
@@ -231,6 +231,12 @@ function CreativeCard({ c, agg }: { c: AdCreative; agg: Agg | undefined }) {
           </div>
         ) : <div className="muted small">Pas encore diffusée.</div>}
         <div className="muted small">J{c.createdDay} · {agentName(lookups, c.createdBy)} · {c.scenes?.length ?? 0} scènes</div>
+        {c.files?.preview || c.files?.storyboard?.length ? (
+          <div className="product-actions">
+            <FileLink runId={runId} path={c.files.preview} demo={demo} icon="external" title="Ouvrir l’aperçu animé 9:16 dans un nouvel onglet">Aperçu de la pub</FileLink>
+            <FileLink runId={runId} path={c.files.storyboard?.[0]} demo={demo} icon="film" title="Ouvrir le storyboard dans un nouvel onglet">Storyboard</FileLink>
+          </div>
+        ) : null}
       </div>
     </article>
   );

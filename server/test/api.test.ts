@@ -10,7 +10,7 @@ import type {
 } from '../src/shared.js';
 import { buildConfig, mergeEnv, parseEnvFile, parseMindMode } from '../src/api/env.js';
 import { isEntryPoint } from '../src/api/entry.js';
-import { HttpError, isSafeRelativePath, mimeFor, parseControl, safeResolve, sanitizeScenario } from '../src/api/http.js';
+import { errorStatus, HttpError, isSafeRelativePath, mimeFor, parseControl, safeResolve, sanitizeScenario } from '../src/api/http.js';
 import {
   estimateCashProfit, flushSaves, isValidRunId, listRuns, loadWorld, makeRunId, newRunId, saveWorld, scheduleSave,
 } from '../src/api/persist.js';
@@ -760,6 +760,55 @@ describe('HTTP server', () => {
   });
 });
 
+describe('HTTP errors raised below the HTTP layer', () => {
+  it('maps a numeric 4xx status to the HTTP status, everything else to 500', () => {
+    expect(errorStatus(new HttpError(409, 'x'))).toBe(409);
+    expect(errorStatus(Object.assign(new Error('Agent inconnu : zz'), { status: 404 }))).toBe(404);
+    expect(errorStatus(Object.assign(new Error('x'), { statusCode: 400 }))).toBe(400);
+    expect(errorStatus(Object.assign(new Error('x'), { status: 503 }))).toBe(500);
+    expect(errorStatus(new Error('boom'))).toBe(500);
+    expect(errorStatus('boom')).toBe(500);
+  });
+
+  it('answers 404 JSON (not 500) when the runtime says the agent is unknown', async () => {
+    const world = makeWorld('run-20261030-170000');
+    const session: SessionLike = {
+      info: () => ({ runId: world.runId, playing: false, speed: 1, mindMode: 'heuristic' }),
+      status: () => world.status,
+      snapshotJson: () => '{}',
+      tickJson: () => '{}',
+      control: async () => ({ runId: world.runId, playing: false, speed: 1, mindMode: 'heuristic' }),
+      newRun: async () => undefined,
+      loadRun: async () => undefined,
+      mission: async () => { throw new Error('panne interne'); },
+      chat: async (agentId) => { throw Object.assign(new Error(`Agent inconnu : ${agentId}`), { status: 404 }); },
+      approve: async () => undefined,
+      brainList: async () => [],
+      brainNote: async () => null,
+      brainGraph: async () => ({ nodes: [], edges: [] }),
+      listRuns: async () => [],
+    };
+    const dir = await mkdtemp(join(tmpdir(), 'agency-http-404-'));
+    const app = createAgencyServer({ session, runsRoot: join(dir, 'runs'), webDist: join(dir, 'no-dist'), sse: { activityThrottleMs: 20, heartbeatMs: 60_000, snapshotMinIntervalMs: 0 } });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', () => r()));
+      const port = (app.server.address() as AddressInfo).port;
+      const res = await call(port, 'POST', '/api/chat', JSON.stringify({ agentId: 'zz', text: 'Salut' }));
+      expect(res.status).toBe(404);
+      expect(res.headers['content-type']).toMatch(/application\/json/);
+      expect(JSON.parse(res.body)).toEqual({ error: 'Agent inconnu : zz' });
+      const boom = await call(port, 'POST', '/api/mission', JSON.stringify({ text: 'Fais quelque chose' }));
+      expect(boom.status).toBe(500);
+      expect(JSON.parse(boom.body).error).toMatch(/Erreur interne du serveur : panne interne/);
+    } finally {
+      errors.mockRestore();
+      await app.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // ───────────────────────────── CLI helpers ─────────────────────────────
 
 describe('cli', () => {
@@ -849,6 +898,11 @@ describe('live session', () => {
     await expect(s.mission('x', 'ag_inconnu')).rejects.toMatchObject({ status: 404 });
     expect(await s.chat('ag_margaux', 'Salut')).toBe('Bien reçu : Salut');
     await expect(s.chat('ag_inconnu', 'Salut')).rejects.toBeInstanceOf(HttpError);
+    await expect(s.chat('ag_inconnu', 'Salut')).rejects.toMatchObject({ status: 404 });
+    expect(await s.chat('Margaux', 'Coucou')).toBe('Bien reçu : Coucou'); // a first name works too
+    expect(await s.mission('Écris des hooks', 'noam')).toBe('mis_42');
+    // the live session info carries every SessionInfo field the UI reads
+    expect(Object.keys(s.info()).sort()).toEqual(['busy', 'day', 'intervalMs', 'lastError', 'mindMode', 'playing', 'runId', 'speed', 'status', 'tick']);
     await s.approve('tsk_1', true);
     expect(fake.approvals).toContain('tsk_1:true');
     await expect(s.approve('tsk_absent', true)).rejects.toMatchObject({ status: 404 });

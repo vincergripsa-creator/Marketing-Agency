@@ -1,14 +1,26 @@
 // React wrapper of the pixel world: full-size canvas, devicePixelRatio aware, its own 60 fps loop.
 import { useEffect, useRef, type JSX } from 'react';
-import type { CompanySnapshot, DeptId } from '../../../shared/types';
+import type { Activity, CompanySnapshot, DeptId } from '../../../shared/types';
 import { WorldEngine } from './engine';
+
+const LOW_POWER_FRAME_MS = 48;
 
 export interface WorldCanvasProps {
   snapshot: CompanySnapshot | null;
+  /**
+   * Live activity (snapshot activity merged with the SSE batches received since the last snapshot):
+   * bubbles and flow lines update between snapshots. Optional: without it only snapshot.activity is used.
+   */
+  activity?: readonly Activity[];
   selectedAgentId: string | null;
   selectedDept: DeptId | null;
   focus: { kind: 'dept'; id: DeptId } | { kind: 'agent'; id: string } | { kind: 'overview' } | null;
   flowMode: boolean;
+  /**
+   * The world is mostly hidden (a full-size tab overlay is open): draw at ~20 fps instead of 60, so the
+   * panels' backdrop blur is not recomputed every frame and opening/scrolling them stays fluid.
+   */
+  lowPower?: boolean;
   onSelectAgent(id: string): void;
   onSelectDept(id: DeptId): void;
 }
@@ -35,6 +47,7 @@ export function WorldCanvas(props: WorldCanvasProps): JSX.Element {
     engine.setSelection(p.selectedAgentId, p.selectedDept);
     engine.setFlowMode(p.flowMode);
     engine.setSnapshot(p.snapshot);
+    engine.setActivity(p.activity);
 
     const measure = () => {
       const r = host.getBoundingClientRect();
@@ -55,8 +68,11 @@ export function WorldCanvas(props: WorldCanvasProps): JSX.Element {
     onDpr();
     const detach = engine.attachInput();
     let raf = 0;
+    let lastDraw = -Infinity;
     const loop = (t: number) => {
       raf = requestAnimationFrame(loop);
+      if (propsRef.current.lowPower && t - lastDraw < LOW_POWER_FRAME_MS) return;
+      lastDraw = t;
       try {
         engine.frame(t);
       } catch (err) {
@@ -77,6 +93,11 @@ export function WorldCanvas(props: WorldCanvasProps): JSX.Element {
   useEffect(() => {
     engineRef.current?.setSnapshot(props.snapshot);
   }, [props.snapshot]);
+
+  // after the snapshot effect: a new run is mounted before its live lines are ingested
+  useEffect(() => {
+    engineRef.current?.setActivity(props.activity);
+  }, [props.activity]);
 
   useEffect(() => {
     engineRef.current?.setSelection(props.selectedAgentId, props.selectedDept);

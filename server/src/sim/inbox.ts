@@ -2,6 +2,7 @@
 import { nextId } from '../core/index.js';
 import type { Rng } from '../contracts.js';
 import type { Customer, CustomerArchetype, InboxMessage, MessageIntent, NicheTruth, Order, Product, WorldState } from '../shared.js';
+import { displayName } from './customers.js';
 import { fill, fmtEur, norm } from './text.js';
 
 interface Tpl { subject: string; body: string }
@@ -234,6 +235,9 @@ export function createMessage(world: WorldState, rng: Rng, input: {
     deadlineDay: day + (URGENT.has(customer.archetype) ? 1 : 2),
     thread: [{ from: 'customer', text: body, day }],
     resolution: null,
+    customerName: displayName(customer),
+    replyScore: null,
+    repliedDay: null,
   };
   world.market.inbox.push(msg);
   return msg;

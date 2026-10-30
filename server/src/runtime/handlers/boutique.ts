@@ -62,7 +62,7 @@ export const boutiqueHandlers: HandlerMap = {
       const sp = await ctx.engine.writeSalesPage({ product, content: product.content, voc, hype }, studioMind(ctx, task, mind));
       sp.hypeLevel = hype;
       product.salesPage = sp;
-      const sq = sim.scoreSalesPage(sp, product);
+      const sq = sim.scoreSalesPage(sp, product, voc);
       product.salesQuality = sq;
       const design = ensureDesign(ctx, product);
       const coverSvg = await ensureCoverFile(ctx, product);
@@ -93,6 +93,10 @@ export const boutiqueHandlers: HandlerMap = {
       let why: string;
       if (reason === 'experiment' && exp && exp.variants.length) {
         price = Number(exp.variants[ctx.world.day % exp.variants.length]); why = `test A/B en cours (${exp.variants.join(' € vs ')} €)`;
+      } else if ((reason === 'winner' || reason === 'baisse') && (numOf(task.input.price) ?? 0) > 0) {
+        // Measured decisions of the CEO (strategy.priceMove): they beat the playbook's older target price.
+        price = numOf(task.input.price)!;
+        why = reason === 'winner' ? 'gagnant du test A/B de prix (revenu par visiteur)' : 'la hausse faisait baisser le revenu par visiteur : retour au prix précédent';
       } else if (target !== null) {
         price = nearestArm(PRICES, target); why = `prix cible du playbook (${target} €)`;
       } else if (reason === 'initial' || !product.launchedDay) {
@@ -148,6 +152,7 @@ export const boutiqueHandlers: HandlerMap = {
       const product = productOf(ctx, task.input.productId);
       if (!product || product.status === 'killed') return;
       const wasLive = product.status === 'live';
+      const republish = task.input.republish === true;
       const res = ctx.tools.publishProduct(product.id);
       if (!res.ok && !wasLive) {
         product.status = 'ready';
@@ -157,16 +162,16 @@ export const boutiqueHandlers: HandlerMap = {
       }
       product.status = 'live';
       if (product.launchedDay === null) product.launchedDay = ctx.world.day;
-      say(ctx, 'clara', wasLive
+      say(ctx, 'clara', wasLive || republish
         ? `La v${product.version} de « ${short(product.title, 50)} » remplace l'ancienne en boutique`
         : `« ${short(product.title, 50)} » est en ligne à ${eur(product.price)} !`, 'deliverable', { productId: product.id, taskId: task.id });
-      await productNote(ctx, product, 'clara', wasLive ? `Version ${product.version} en ligne` : 'Mise en ligne', [
+      await productNote(ctx, product, 'clara', wasLive || republish ? `Version ${product.version} en ligne` : 'Mise en ligne', [
         `- Prix : ${eur(product.price)} · qualité PDF ${product.quality?.overall ?? '—'}/100 · page ${product.salesQuality?.overall ?? '—'}/100`,
         `- Fichiers : \`${product.files.pdf}\` · \`${product.files.salesPage}\``,
       ].join('\n'));
       // An upsell going live: the parent guide's last page now points to it.
       const parent = parentOf(ctx.world, product.id);
-      if (parent && parent.status !== 'killed' && !wasLive) {
+      if (parent && parent.status !== 'killed' && !wasLive && !republish) {
         if (parent.content?.nextStep) parent.content.nextStep = { ...parent.content.nextStep, title: parent.content.nextStep.title || 'La suite est ici', upsellProductId: product.id };
         createTask(ctx.world, { kind: 'render_pdf', title: `Ajouter « La suite est ici » au guide « ${short(parent.title, 40)} »`, input: { productId: parent.id, nicheId: parent.nicheId, reason: 'upsell_link' }, createdBy: 'paul', missionId: task.missionId, priority: 2 });
       }

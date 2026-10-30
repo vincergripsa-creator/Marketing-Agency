@@ -8,7 +8,9 @@
     "start": "tsx src/api/server.ts",
     "sim": "tsx src/cli.ts",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json"
+    "test:web": "vitest run --root ../web/src",
+    "typecheck": "tsc -p tsconfig.json",
+    "balance": "tsx scripts/balance.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

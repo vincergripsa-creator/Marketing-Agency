@@ -126,8 +126,14 @@ function refundWindow(policy: readonly string[]): number {
 interface ReplyCtx { name: string | null; tone: SupportTone; agent: string; brand: string; title: string; price: number | null; product: Product | null; channel: InboxMessage['channel'] }
 
 function hello(c: ReplyCtx): string {
-  if (c.tone === 'formel') return c.name ? `Bonjour ${c.name},` : 'Madame, Monsieur,';
   return c.name ? `Bonjour ${c.name},` : 'Bonjour,';
+}
+
+/** « Sophie M. » → « Sophie » (the CRM name wins over a name guessed from the message). */
+export function greetingName(customer: { name?: string | null } | null | undefined, msg: Pick<InboxMessage, 'body' | 'thread'>): string | null {
+  const first = clean(customer?.name ?? '').split(/\s+/)[0] ?? '';
+  const ok = first.length >= 2 && first.length <= 24 && /^\p{Lu}[\p{L}’'-]+$/u.test(first) && !NOT_NAMES.has(norm(first));
+  return ok ? first : extractFirstName(msg);
 }
 
 function sign(c: ReplyCtx): string {
@@ -163,7 +169,7 @@ function answerQuestion(text: string, c: ReplyCtx): string[] {
 }
 
 export function heuristicSupportReply(
-  input: { message: InboxMessage; product: Product | null; order: Order | null; policy: string[] },
+  input: { message: InboxMessage; product: Product | null; order: Order | null; policy: string[]; customer?: { name: string; archetype: string } | null },
   rng: LocalRng,
   opts: { tone: SupportTone; agent: string; brand: string; playbook: string[] },
 ): SupportReplyInput {
@@ -178,10 +184,10 @@ export function heuristicSupportReply(
   const product = input.product;
   const order = input.order;
   const c: ReplyCtx = {
-    name: extractFirstName(msg), tone: opts.tone, agent: opts.agent, brand: opts.brand,
+    name: greetingName(input.customer, msg), tone: opts.tone, agent: opts.agent, brand: opts.brand,
     title: clean(product?.title) || 'votre guide', price: order?.price ?? product?.price ?? null, product, channel: msg.channel,
   };
-  const t = `« ${fit(c.title, 80)} »`;
+  const t = `« ${c.title} »`;
   const days = order ? Math.max(0, (msg.day ?? 0) - order.day) : null;
   const window = refundWindow(input.policy);
   const amount = c.price ? ` de ${fmtEur(c.price)}` : '';

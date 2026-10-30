@@ -7,7 +7,7 @@ import {
   addRow, adRows, ctrOf, cvrOf, emptyAgg, financeView, findNoteLink, nicheName, priceOnDay, productOfRow, roasOf,
   type FunnelAgg, type WorldIndex,
 } from './data.js';
-import { experimentThreshold, experimentValueKind, lowerIsBetter } from './experiments.js';
+import { experimentNiche, experimentThreshold, experimentValueKind, lowerIsBetter } from './experiments.js';
 import {
   DIMENSION_LABELS, FORMAT_LABELS, HOOK_LABELS, TASK_LABELS, fmtEur, fmtNum, fmtPct, fmtRatio, fold, plural, round,
   safeDiv, shorten, slugify, unique,
@@ -306,27 +306,28 @@ function adAccount(inp: RetroInput): HeuristicDraft[] {
 
 function organic(inp: RetroInput): HeuristicDraft[] {
   const { world, day } = inp;
-  const posts = (world.market?.organicPosts ?? []).filter((p) => p.day > day - 7 && p.day <= day);
+  // viral posts are outliers with their own lesson below: the style comparison uses the median of the others
+  const posts = (world.market?.organicPosts ?? []).filter((p) => p.day > day - 7 && p.day <= day && !p.viral);
   const out: HeuristicDraft[] = [];
-  const by = new Map<string, { n: number; views: number }>();
-  for (const p of posts) {
-    const cur = by.get(p.hookStyle) ?? { n: 0, views: 0 };
-    cur.n += 1;
-    cur.views += Math.max(0, p.views);
-    by.set(p.hookStyle, cur);
-  }
-  const list = [...by].filter(([, v]) => v.n >= 2).sort((a, b) => b[1].views / b[1].n - a[1].views / a[1].n);
+  const by = new Map<string, number[]>();
+  for (const p of posts) by.set(p.hookStyle, [...(by.get(p.hookStyle) ?? []), Math.max(0, p.views)]);
+  const median = (xs: number[]): number => {
+    const s = [...xs].sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+  };
+  const list = [...by].filter(([, v]) => v.length >= 2).map(([k, v]) => [k, { n: v.length, med: median(v) }] as const).sort((a, b) => b[1].med - a[1].med);
   if (posts.length >= 6 && list.length >= 2) {
     const [bk, bv] = list[0]!;
     const [wk, wv] = list[list.length - 1]!;
-    const ratio = safeDiv(bv.views / bv.n, Math.max(1, wv.views / wv.n));
+    const ratio = safeDiv(bv.med, Math.max(1, wv.med));
     if (ratio >= 1.8) {
       out.push(draft({
         key: 'organique-hook',
         topic: 'ads',
         title: `Organique : hooks « ${bk} »`,
         insight: `En organique, les hooks « ${bk} » (${HOOK_LABELS[bk as HookStyle] ?? bk}) font ${fmtRatio(ratio)}× plus de vues que les « ${wk} » : en publier davantage.`,
-        evidence: `${fmtNum(bv.views / bv.n)} vues en moyenne sur ${bv.n} posts « ${bk} » contre ${fmtNum(wv.views / wv.n)} sur ${wv.n} posts « ${wk} » (7 derniers jours).`,
+        evidence: `${fmtNum(bv.med)} vues (médiane) sur ${bv.n} posts « ${bk} » contre ${fmtNum(wv.med)} sur ${wv.n} posts « ${wk} » (7 derniers jours, posts viraux exclus).`,
         confidence: sampleConfidence(posts.length, 20, (ratio - 1) / 2),
         links: ["Canaux d'acquisition"],
         tags: ['organique', 'tiktok'],
@@ -708,6 +709,12 @@ function niches(inp: RetroInput): HeuristicDraft[] {
   return out;
 }
 
+/**
+ * One lesson for the cash situation (survival / short runway / profitable): a new state REVISES it, so the
+ * playbooks never hold "scale up" and "survival mode" at the same time.
+ */
+export const FINANCE_KEY = 'finance-tresorerie';
+
 function finance(inp: RetroInput): HeuristicDraft[] {
   const { world, day } = inp;
   if (day < 3) return [];
@@ -717,7 +724,7 @@ function finance(inp: RetroInput): HeuristicDraft[] {
   const evidence = `Trésorerie ${fmtEur(f.cash)} au jour ${day}, profit sur 7 jours ${fmtEur(f.profit7d)}, dépense pub sur 7 jours ${fmtEur(f.adSpend7d)}${f.runwayDays !== null ? `, runway ${fmtNum(f.runwayDays)} jours` : ''}.`;
   if (f.cash <= 0.3 * start) {
     return [draft({
-      key: 'finance-survie',
+      key: FINANCE_KEY,
       topic: 'finance',
       title: 'Mode survie',
       insight: "Mode survie : trésorerie sous 30 % du budget de départ, couper les pubs non rentables et miser sur l'organique et les créateurs à la commission.",
@@ -731,7 +738,7 @@ function finance(inp: RetroInput): HeuristicDraft[] {
   }
   if (f.runwayDays !== null && f.runwayDays < 14) {
     return [draft({
-      key: 'finance-runway',
+      key: FINANCE_KEY,
       topic: 'finance',
       title: 'Runway court',
       insight: `Runway sous 14 jours : plafonner la pub à 8 % de la trésorerie et couper tout ce qui a un ROAS sous 0,8.`,
@@ -745,7 +752,7 @@ function finance(inp: RetroInput): HeuristicDraft[] {
   }
   if (f.profit7d > 0 && f.cumulativeProfit > 0) {
     return [draft({
-      key: 'finance-croissance',
+      key: FINANCE_KEY,
       topic: 'finance',
       title: 'Rentable : scaler prudemment',
       insight: 'Rentable sur 7 jours : augmenter les budgets des campagnes gagnantes de 20 à 30 % par jour maximum, jamais plus.',
@@ -822,18 +829,21 @@ function experiments(inp: RetroInput): HeuristicDraft[] {
     const loser = others[0];
     const wv = fmtExpValue(e, e.results[w]?.value ?? 0);
     const vs = loser ? ` contre ${fmtExpValue(e, loser[1].value)} pour « ${loser[0]} »` : '';
+    // a niche-scoped experiment says so (and gets its own lesson per niche)
+    const nicheId = experimentNiche(inp.world, e);
+    const on = nicheId ? ` sur « ${nicheName(inp.world, nicheId)} »` : '';
     let insight: string;
     switch (e.dimension) {
-      case 'hook_style': insight = `Privilégier le hook « ${w} » (${HOOK_LABELS[w as HookStyle] ?? w}) : il gagne l'expérience (${wv}${vs}).`; break;
-      case 'ad_format': insight = `Privilégier le format « ${w} » (${FORMAT_LABELS[w as AdFormat] ?? w}) : il gagne l'expérience (${wv}${vs}).`; break;
-      case 'price': insight = `Prix cible « ${Math.round(Number(w)) || w} » : il gagne l'expérience de prix (${wv}${vs}).`; break;
-      case 'sales_hype': insight = `Niveau de promesse max « ${w} » : meilleur compromis conversion / remboursements (${wv}${vs}).`; break;
+      case 'hook_style': insight = `Privilégier le hook « ${w} » (${HOOK_LABELS[w as HookStyle] ?? w})${on} : il gagne l'expérience (${wv}${vs}).`; break;
+      case 'ad_format': insight = `Privilégier le format « ${w} » (${FORMAT_LABELS[w as AdFormat] ?? w})${on} : il gagne l'expérience (${wv}${vs}).`; break;
+      case 'price': insight = `Prix cible « ${Math.round(Number(w)) || w} »${on} : il gagne l'expérience de prix (${wv}${vs}).`; break;
+      case 'sales_hype': insight = `Niveau de promesse max « ${w} »${on} : meilleur compromis conversion / remboursements (${wv}${vs}).`; break;
       case 'support_tone': insight = `Ton support « ${w} » : il gagne l'expérience (${wv}${vs}).`; break;
       default: insight = `Miser sur la niche « ${nicheName(inp.world, w)} » : elle gagne l'expérience (${wv}${vs}).`;
     }
     const minN = Math.min(...Object.values(e.results).map((r) => r.n));
     out.push(draft({
-      key: `experience-${slugify(e.dimension, 20)}`,
+      key: `experience-${slugify(e.dimension, 20)}${nicheId ? `-${slugify(nicheId, 28)}` : ''}`,
       topic: EXP_TOPIC[e.dimension] ?? 'process',
       title: `Expérience ${DIMENSION_LABELS[e.dimension] ?? e.dimension} : « ${w} »`,
       insight,

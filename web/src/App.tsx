@@ -6,6 +6,7 @@ import { useAgency } from './store';
 import { ActivityFeed } from './ui/ActivityFeed';
 import { AgentPanel } from './ui/AgentPanel';
 import { cx } from './ui/common';
+import { sessionView } from './ui/derive';
 import { AppContext, type AppCtx } from './ui/context';
 import { DeptPanel } from './ui/DeptPanel';
 import { DeptStrip } from './ui/DeptStrip';
@@ -40,7 +41,7 @@ function isTyping(el: EventTarget | null): boolean {
 
 export default function App() {
   const agency = useAgency();
-  const { snapshot, activity, connection, demo, godMode, speed, setSpeed, setGodMode, replaceSnapshot } = agency;
+  const { snapshot, activity, connection, demo, godMode, speed: localSpeed, setSpeed, setGodMode, replaceSnapshot, applySession } = agency;
   const agencyRefresh = agency.refresh;
   const lookups = useMemo(() => buildLookups(snapshot), [snapshot]);
   const { toasts, push, dismiss } = useToasts();
@@ -55,9 +56,23 @@ export default function App() {
   const [brainPath, setBrainPath] = useState<string | null>(null);
   const [endDismissed, setEndDismissed] = useState<string | null>(null);
   const [ctrlBusy, setCtrlBusy] = useState(false);
+  const [productFocus, setProductFocus] = useState<{ id: string; seq: number } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  useEventToasts(snapshot, push, connection === 'live' || connection === 'reconnecting');
+  // snapshot.session (server loop) is the source of truth for play/pause and speed; local state is the fallback
+  const sim = useMemo(() => sessionView(snapshot, localSpeed), [snapshot, localSpeed]);
+  const speed = sim.speed;
+  useEffect(() => {
+    // remember the server speed locally (fallback for the next load); demo data must not overwrite it
+    if (sim.fromServer && !demo && sim.speed !== localSpeed) setSpeed(sim.speed);
+  }, [sim.fromServer, sim.speed, localSpeed, setSpeed, demo]);
+
+  const openProduct = useCallback((id: string) => {
+    setProductFocus((prev) => ({ id, seq: (prev?.seq ?? 0) + 1 }));
+    setTab('produits');
+  }, []);
+
+  useEventToasts(snapshot, push, connection === 'live' || connection === 'reconnecting', openProduct);
 
   // Connection transitions → one toast each.
   const prevConn = useRef(connection);
@@ -104,6 +119,7 @@ export default function App() {
     try {
       const r = await api.control(action === 'play' ? { action, speed: newSpeed ?? speed } : { action });
       if (!r.ok) throw new Error(r.message ?? 'Commande refusée');
+      if (r.session) applySession(r.session);
       if (r.speed) setSpeed(r.speed);
       await agencyRefresh().catch(() => undefined);
     } catch (e) {
@@ -111,7 +127,7 @@ export default function App() {
     } finally {
       if (slow) setCtrlBusy(false);
     }
-  }, [demo, push, setSpeed, speed, agencyRefresh]);
+  }, [demo, push, setSpeed, speed, agencyRefresh, applySession]);
 
   const toggleGod = useCallback((on: boolean) => {
     setGodMode(on);
@@ -159,12 +175,13 @@ export default function App() {
     toast: push,
     openAgent,
     openDept,
+    openProduct,
     centerAgent: (id: string) => setFocus({ kind: 'agent', id }),
     centerDept: (id: DeptId) => setFocus({ kind: 'dept', id }),
     setTab,
     openBrainNote,
     refresh,
-  }), [snapshot, lookups, activity, demo, godMode, push, openAgent, openDept, openBrainNote, refresh]);
+  }), [snapshot, lookups, activity, demo, godMode, push, openAgent, openDept, openProduct, openBrainNote, refresh]);
 
   const sideOpen = !!agentId || !!panelDept;
   const closeTab = () => setTab('bureau');
@@ -180,6 +197,8 @@ export default function App() {
           <ErrorBoundary label="Le monde" resetKey={snapshot?.runId}>
             <WorldCanvas
               snapshot={snapshot}
+              activity={activity}
+              lowPower={tab !== 'bureau' && tab !== 'taches' /* the md overlay leaves half the world visible */}
               selectedAgentId={agentId}
               selectedDept={selectedDept}
               focus={focus}
@@ -203,7 +222,7 @@ export default function App() {
           />
           <div className="hud-row">
             <CompanyBadge connection={connection} lastError={agency.lastError} onRetry={agency.retry} />
-            <SimHud speed={speed} onControl={(a, s) => void control(a, s)} busy={ctrlBusy} />
+            <SimHud sim={sim} onControl={(a, s) => void control(a, s)} busy={ctrlBusy} />
           </div>
 
           <DeptStrip selected={selectedDept} onPick={openDept} onOverview={overview} />
@@ -211,7 +230,7 @@ export default function App() {
           <ErrorBoundary label="L’onglet" resetKey={`${tab}:${snapshot?.runId}`}>
             {tab === 'taches' ? <TasksTab onClose={closeTab} /> : null}
             {tab === 'calendrier' ? <CalendarTab onClose={closeTab} /> : null}
-            {tab === 'produits' ? <ProductsTab onClose={closeTab} /> : null}
+            {tab === 'produits' ? <ProductsTab onClose={closeTab} focusId={productFocus?.id ?? null} focusSeq={productFocus?.seq ?? 0} /> : null}
             {tab === 'pub' ? <AdsTab onClose={closeTab} /> : null}
             {tab === 'mail' ? <InboxTab onClose={closeTab} /> : null}
             {tab === 'finance' ? <FinanceTab onClose={closeTab} /> : null}

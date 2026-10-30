@@ -1,6 +1,6 @@
 // Live agency state: initial GET /api/state, then SSE updates; demo fallback when the server is down.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Activity, CompanySnapshot } from '../../shared/types';
+import type { Activity, CompanySnapshot, SessionInfo } from '../../shared/types';
 import { api, openStream, type Speed } from './api';
 import { mockSnapshot } from './world/mockSnapshot';
 
@@ -23,6 +23,8 @@ export interface Agency {
   refresh(): Promise<void>;
   /** Replace the snapshot (after POST /api/scenario or /api/load). */
   replaceSnapshot(s: CompanySnapshot): void;
+  /** Apply the loop state returned by POST /api/control right away (before the next snapshot). */
+  applySession(info: SessionInfo): void;
 }
 
 const MAX_ACTIVITY = 400;
@@ -60,6 +62,13 @@ function readSpeed(): Speed {
   } catch {
     return 1;
   }
+}
+
+/** Patches snapshot.session with a fresher SessionInfo of the same run (else keeps the snapshot as is). */
+export function withSession(s: CompanySnapshot | null, info: SessionInfo | null | undefined): CompanySnapshot | null {
+  if (!s || !info || (info.runId && info.runId !== s.runId)) return s;
+  const status = info.status ?? s.status;
+  return { ...s, session: { ...s.session, ...info }, status };
 }
 
 function errorText(err: unknown): string {
@@ -196,6 +205,10 @@ export function useAgency(): Agency {
     applySnapshot(s);
   }, [applySnapshot]);
 
+  const applySession = useCallback((info: SessionInfo) => {
+    setSnapshot((prev) => withSession(prev, info));
+  }, []);
+
   const visible = useMemo<CompanySnapshot | null>(() => {
     if (!snapshot) return null;
     if (godMode) {
@@ -222,5 +235,6 @@ export function useAgency(): Agency {
     retry,
     refresh,
     replaceSnapshot,
+    applySession,
   };
 }

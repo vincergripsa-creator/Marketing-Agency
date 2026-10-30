@@ -9,11 +9,11 @@ import { createBrainVault } from '../learning/index.js';
 import { createContentEngine } from '../minds/index.js';
 import { Company, createWorld, defaultScenario } from '../runtime/index.js';
 import type { BrainNote, BrainVault, CompanyApi, ContentEngine, RunPaths, StepResult, UsageEvent } from '../contracts.js';
-import type { MindMode, ScenarioConfig, WorldState } from '../shared.js';
+import type { RunInfo, ScenarioConfig, SessionInfo, WorldState } from '../shared.js';
 import { TICKS_PER_DAY } from '../shared.js';
 import { config, type ConfigMindMode } from './env.js';
-import { HttpError, type ControlAction, type Speed } from './http.js';
-import { flushSaves, isValidRunId, listRuns, loadWorld, newRunId, runsDir, saveWorld, scheduleSave, type RunInfo } from './persist.js';
+import { errorStatus, HttpError, type ControlAction, type Speed } from './http.js';
+import { flushSaves, isValidRunId, listRuns, loadWorld, newRunId, runsDir, saveWorld, scheduleSave } from './persist.js';
 import { safeFinance, snapshotJson } from './snapshot.js';
 
 export interface MountedRun {
@@ -93,18 +93,9 @@ export async function mountWorld(world: WorldState, opts: MountOptions = {}): Pr
   return { world, company, engine, brain, paths, syncMind };
 }
 
-export interface SessionInfo {
-  runId: string;
-  playing: boolean;
-  speed: Speed;
-  intervalMs: number;
-  busy: boolean;
-  mindMode: MindMode;
-  status: WorldState['status'] | null;
-  day: number;
-  tick: number;
-  lastError: string | null;
-}
+/** The live session state sent to the UI is the shared SessionInfo (every optional field is filled here). */
+export type { SessionInfo };
+export type LiveSessionInfo = Required<SessionInfo>;
 
 type SessionEventName = 'tick' | 'run' | 'state';
 
@@ -164,7 +155,7 @@ export class AgencySession {
     return job;
   }
 
-  info(): SessionInfo {
+  info(): LiveSessionInfo {
     return {
       runId: this.run?.world.runId ?? '',
       playing: this._playing,
@@ -391,7 +382,7 @@ export class AgencySession {
     }
   }
 
-  async control(action: ControlAction, speed?: Speed): Promise<SessionInfo> {
+  async control(action: ControlAction, speed?: Speed): Promise<LiveSessionInfo> {
     this.mounted();
     switch (action) {
       case 'play':
@@ -434,7 +425,16 @@ export class AgencySession {
   // ───────────────────────────── founder actions ─────────────────────────────
 
   hasAgent(agentId: string): boolean {
-    return this.world.company.agents.some((a) => a.id === agentId);
+    return this.resolveAgent(agentId) !== null;
+  }
+
+  /** Agent id from an id or a first name (case/accent-insensitive: « Léo », « leo », « LEO »), or null. */
+  resolveAgent(agentId: string): string | null {
+    const agents = this.world.company.agents;
+    if (agents.some((a) => a.id === agentId)) return agentId;
+    const key = foldName(agentId);
+    if (!key) return null;
+    return agents.find((a) => foldName(a.id) === key || foldName(a.name) === key)?.id ?? null;
   }
 
   hasTask(taskId: string): boolean {
@@ -444,8 +444,9 @@ export class AgencySession {
   async mission(text: string, agentId?: string): Promise<string> {
     await this.switching;
     const run = this.mounted();
-    if (agentId && !this.hasAgent(agentId)) throw new HttpError(404, `Agent inconnu : ${agentId}`);
-    const id = await run.company.giveMission(text, agentId);
+    const target = agentId ? this.resolveAgent(agentId) : null;
+    if (agentId && !target) throw new HttpError(404, `Agent inconnu : ${agentId}`);
+    const id = await run.company.giveMission(text, target ?? undefined);
     this.touch();
     return id;
   }
@@ -453,8 +454,16 @@ export class AgencySession {
   async chat(agentId: string, text: string): Promise<string> {
     await this.switching;
     const run = this.mounted();
-    if (!this.hasAgent(agentId)) throw new HttpError(404, `Agent inconnu : ${agentId}`);
-    const reply = await run.company.chat(agentId, text);
+    const target = this.resolveAgent(agentId);
+    if (!target) throw new HttpError(404, `Agent inconnu : ${agentId}`);
+    let reply: string;
+    try {
+      reply = await run.company.chat(target, text);
+    } catch (err) {
+      const status = errorStatus(err);
+      if (status < 500) throw new HttpError(status, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
     run.syncMind();
     this.touch();
     return reply;
@@ -494,10 +503,14 @@ export class AgencySession {
   }
 
   /** Saved runs (most recent first) + UI aliases (name, updatedAt) and the current-run flag. */
-  async listRuns(): Promise<(RunInfo & { name: string; updatedAt: string; current: boolean })[]> {
+  async listRuns(): Promise<(RunInfo & Required<Pick<RunInfo, 'name' | 'updatedAt' | 'current'>>)[]> {
     const current = this.run?.world.runId;
     return (await listRuns()).map((r) => ({ ...r, name: r.scenarioName || r.companyName, updatedAt: r.mtime, current: r.runId === current }));
   }
+}
+
+function foldName(s: string): string {
+  return String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
 }
 
 function safeEmit(world: WorldState, text: string): void {

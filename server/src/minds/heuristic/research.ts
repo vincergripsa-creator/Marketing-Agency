@@ -4,7 +4,7 @@
  */
 import type { CompetitorProduct, TrendSignal, VoiceOfCustomer } from '../../shared.js';
 import type { OpportunityRanking } from '../../contracts.js';
-import { cap, clampNum, clean, extractAgeRange, fit, fmtEur, lf, norm, uniqStrings } from '../util.js';
+import { cap, clampNum, clauseLabel, clean, extractAgeRange, fit, fmtEur, lf, norm, uniqStrings } from '../util.js';
 import { firstPerson, safeVoc } from './niche.js';
 
 export const PRICE_LADDER = [9, 14, 19, 24, 29, 39, 49] as const;
@@ -23,8 +23,9 @@ const COMPETITION_PENALTY: Record<TrendSignal['competitionHint'], number> = { fa
 
 export function heuristicRanking(
   input: { signals: TrendSignal[]; competitors: Record<string, CompetitorProduct[]>; voc: Record<string, VoiceOfCustomer>; excludeNicheIds: string[] },
-  targetPrice: number | null,
+  targetPrice: number | null | ((s: TrendSignal) => number | null),
 ): OpportunityRanking {
+  const priceRule = (s: TrendSignal): number | null => (typeof targetPrice === 'function' ? targetPrice(s) : targetPrice);
   const exclude = new Set(input.excludeNicheIds ?? []);
   const bySignal = new Map<string, TrendSignal>();
   for (const s of input.signals ?? []) {
@@ -62,14 +63,15 @@ export function heuristicRanking(
     const age = extractAgeRange([s.audience, s.name, ...(voc?.pains ?? []), ...(voc?.phrases ?? []), ...(voc?.knowledge.facts ?? [])]);
     const audience = age && !extractAgeRange([s.audience]) ? `${audienceBase} (${age})` : audienceBase;
     const mainPain = voc?.pains.find((p) => !firstPerson(p) && p.length >= 15 && p.length <= 110) ?? voc?.pains[0] ?? s.name;
-    const problem = cap(fit(clean(mainPain), 110));
-    const price = suggestPrice(voc?.priceAnchors ?? [], comps.map((c) => c.price), targetPrice);
+    const problem = cap(clauseLabel(mainPain, 110) ?? clean(mainPain));
+    const price = suggestPrice(voc?.priceAnchors ?? [], comps.map((c) => c.price), priceRule(s));
     const phrase = voc?.phrases[0];
-    const angle = `Un seul problème : ${lf(problem)}. Une seule personne : ${lf(audience)}.${phrase ? ` Le guide parle avec leurs mots (« ${fit(clean(phrase), 60)} »).` : ''}`;
+    const phraseQ = phrase ? clauseLabel(phrase, 60) : null;
+    const angle = `Un seul problème : ${lf(problem)}. Une seule personne : ${lf(audience)}.${phraseQ ? ` Le guide parle avec leurs mots (« ${lf(phraseQ)} »).` : ''}`;
     const parts = [
       `buzz TikTok ${Math.round(s.tiktokBuzz)}/100, intérêt ${Math.round(s.searchInterest)}/100, concurrence ${s.competitionHint}`,
       comps.length ? `${comps.length} concurrent${comps.length > 1 ? 's' : ''} (${reviews} avis, note moyenne ${avgRating.toFixed(1).replace('.', ',')})` : 'aucun concurrent repéré',
-      weaknesses.length ? `les acheteurs leur reprochent « ${fit(weaknesses[0]!, 60)} »` : '',
+      weaknesses.length ? `les acheteurs leur reprochent « ${lf(clauseLabel(weaknesses[0]!, 60) ?? fit(weaknesses[0]!, 60))} »` : '',
       voc ? `${voc.pains.length + voc.phrases.length} douleurs et phrases clients récoltées${voc.priceAnchors.length ? `, prix cités autour de ${fmtEur(price)}` : ''}` : 'recherche client à approfondir',
     ].filter(Boolean);
     return { nicheId: s.nicheId, score, why: cap(`${parts.join(' ; ')}.`), angle, audience, problem, suggestedPrice: price };

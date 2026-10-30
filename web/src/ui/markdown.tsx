@@ -54,7 +54,7 @@ function inline(text: string, onWiki: (t: string) => void, known: ((t: string) =
     } else if (tok.startsWith('[')) {
       const mm = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(tok);
       const href = mm?.[2] ?? '';
-      if (/^https?:\/\//.test(href)) out.push(<a key={key} href={href} target="_blank" rel="noreferrer">{mm?.[1]}</a>);
+      if (/^https?:\/\//.test(href)) out.push(<a key={key} href={href} target="_blank" rel="noopener noreferrer">{mm?.[1]}</a>);
       else out.push(<span key={key} className="md-link">{mm?.[1] ?? tok}</span>);
     } else {
       out.push(<em key={key}>{inline(tok.slice(1, -1), onWiki, known, key)}</em>);

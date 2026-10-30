@@ -12,7 +12,7 @@ import { detectLessons, type HeuristicDraft } from './heuristics.js';
 import { computeDailyKpi, upsertKpi } from './kpi.js';
 import { basenameOf } from './markdown.js';
 import {
-  addRule, agentNoteName, agentsForLesson, hasMachineRule, lessonLink, lessonTitle, quotedTerms, replaceRuleEverywhere,
+  addRule, agentNoteName, agentNotePath, agentsForLesson, hasMachineRule, lessonLink, lessonTitle, quotedTerms, replaceRuleEverywhere,
   TOPIC_DEPTS, writePlaybookNotes,
 } from './playbooks.js';
 import {
@@ -20,20 +20,31 @@ import {
   tokenize, tokenSet, TOPIC_TAGS, unique,
 } from './text.js';
 
-export const MAX_NEW_LESSONS_PER_RETRO = 8;
+/** New lessons per evening: a readable feed, not a firehose (one more slot for a critical lesson). */
+export const MAX_NEW_LESSONS_PER_RETRO = 4;
 export const JOURNAL_SECTION = '## Rétro du soir';
-
-/** Days already rewarded per world object: a second retro the same evening must not double-count bandit rewards. */
-const rewardedDays = new WeakMap<WorldState, Set<number>>();
+export const LESSON_HISTORY_SECTION = '## Historique';
+/** Lines kept in a lesson note's history (oldest dropped first). */
+export const LESSON_HISTORY_MAX = 8;
 
 // ───────────────────────────── (b) bandit rewards ─────────────────────────────
 
-/** Applies the shared-convention rewards for one day (hook_style, ad_format, price, hype, niche). Idempotent per world/day. */
+/** CTR that earns a full reward (1) to the hook style and ad format of a creative. */
+export const CTR_REWARD_SCALE = 0.05;
+/** A creative is "fresh" until this many impressions; afterwards its daily CTR mostly measures fatigue… */
+export const FRESH_CREATIVE_IMPRESSIONS = 30000;
+/** …and its reward to the hook/format bandits only weighs this much. */
+export const WORN_CREATIVE_WEIGHT = 0.25;
+
+/**
+ * Applies the shared-convention rewards for one day (hook_style, ad_format, price, hype, niche).
+ * Idempotent per day through CompanyState.lastRetroDay (survives save/reload): a second retro the
+ * same evening, or a retro replayed after loading a save, never double-counts the rewards.
+ */
 export function applyDailyRewards(world: WorldState, day: number): number {
-  const done = rewardedDays.get(world) ?? new Set<number>();
-  if (done.has(day)) return 0;
-  done.add(day);
-  rewardedDays.set(world, done);
+  const last = Number(world.company.lastRetroDay);
+  if (Number.isFinite(last) && last >= day) return 0;
+  world.company.lastRetroDay = day;
 
   const ix = indexWorld(world);
   const perCreative = new Map<string, { agg: FunnelAgg; nicheId: string | null }>();
@@ -45,12 +56,19 @@ export function applyDailyRewards(world: WorldState, day: number): number {
     perCreative.set(r.creativeId, c);
     if (p) perProduct.set(p.id, addRow(perProduct.get(p.id) ?? emptyAgg(), r));
   }
+  // Impressions each creative had already received before today (its fatigue, visible in the ad stats).
+  const seen = new Map<string, number>();
+  for (const r of world.market?.adStats ?? []) if (r.day < day && perCreative.has(r.creativeId)) seen.set(r.creativeId, (seen.get(r.creativeId) ?? 0) + r.impressions);
   let rewards = 0;
   for (const [creativeId, { agg, nicheId }] of perCreative) {
     const creative = ix.creatives.get(creativeId);
     if (!creative || !nicheId || agg.impressions < 300) continue;
-    const reward = clamp(ctrOf(agg) / 0.03);
-    const weight = clamp(agg.impressions / 1000, 0.5, 3);
+    // The hook and the format are judged on fresh audiences: a worn-out creative's CTR says "fatigue", not "bad
+    // style" (before, the best style of a niche — the one run the longest — was punished for its own fatigue).
+    // Scale 5 % instead of 3 %: good creatives run at 3-5 % CTR and used to all score 1, indistinguishable.
+    const reward = clamp(ctrOf(agg) / CTR_REWARD_SCALE);
+    const fresh = (seen.get(creativeId) ?? 0) < FRESH_CREATIVE_IMPRESSIONS ? 1 : WORN_CREATIVE_WEIGHT;
+    const weight = clamp(agg.impressions / 1000, 0.5, 3) * fresh;
     rewardArm(world, `hook_style:${nicheId}`, creative.hookStyle, reward, weight);
     rewardArm(world, `ad_format:${nicheId}`, creative.format, reward, weight);
     rewards += 2;
@@ -140,7 +158,8 @@ function matchesHeuristic(h: HeuristicDraft, d: LessonDraft): boolean {
 }
 
 function draftFromEngine(d: LessonDraft): HeuristicDraft {
-  const words = [...tokenSet(d.insight)].slice(0, 6).join(' ');
+  // numbers excluded: the same conclusion on fresher numbers keeps the same key (dedup, not a new lesson)
+  const words = [...new Set(comparable(d.insight).split(' ').filter(Boolean))].slice(0, 6).join(' ');
   return {
     ...d,
     key: `${TOPIC_TAGS[d.topic]}-${slugify(words, 40)}`,
@@ -174,13 +193,24 @@ export function reconcileDrafts(heuristics: HeuristicDraft[], engineDrafts: unkn
 
 // ───────────────────────────── (f) dedup ─────────────────────────────
 
-export function lessonKeyOf(l: Pick<Lesson, 'notePath'>): string {
-  return basenameOf(l.notePath ?? '').replace(/^jour-\d+-/, '');
+/** Stable dedup key of a lesson: Lesson.key, or (older saves) the suffix of its note file name. */
+export function lessonKeyOf(l: Pick<Lesson, 'notePath' | 'key'>): string {
+  return l.key || basenameOf(l.notePath ?? '').replace(/^jour-\d+-/, '');
 }
 
-/** Insight without its numbers (stemmed, so "1 jour" = "2 jours"): same comparable text = same conclusion. */
+/** Insight without its numbers (stemmed, so "1 jour" = "2 jours"). */
 function comparable(s: string): string {
   return tokenize(String(s ?? '').replace(/\d+(?:[.,]\d+)?/g, ' ')).join(' ');
+}
+
+/**
+ * What a lesson concludes: its directive clause (before " : ", the numbers that follow are only the
+ * justification) with the quoted terms kept verbatim — « 29 » → « 24 » or « story » → « pov » is a new
+ * conclusion (revision), while fresher numbers or another runner-up are a confirmation.
+ */
+export function conclusionOf(insight: string): string {
+  const head = String(insight ?? '').split(/\s:\s/)[0] ?? '';
+  return `${comparable(head)}|${quotedTerms(head).join('|')}`;
 }
 
 export function findDuplicateLesson(lessons: readonly Lesson[], d: Pick<HeuristicDraft, 'key' | 'topic' | 'insight'>): Lesson | undefined {
@@ -268,9 +298,10 @@ function fallbackMemo(k: DailyKpi, lessons: Lesson[], incidents: string[]): stri
   return parts.join(' ');
 }
 
-function lessonNoteBody(world: WorldState, l: Lesson, links: string[]): string {
+function lessonNoteBody(world: WorldState, l: Lesson, links: string[], history: readonly string[] = []): string {
   const agents = (world.company.agents ?? []).filter((a) => l.appliesTo.includes(a.id));
   const source = (world.company.agents ?? []).find((a) => a.id === l.source)?.name ?? l.source;
+  const hist = history.length ? ['', LESSON_HISTORY_SECTION, ...history.slice(-LESSON_HISTORY_MAX)] : [];
   return [
     `> ${l.insight}`,
     '',
@@ -284,7 +315,30 @@ function lessonNoteBody(world: WorldState, l: Lesson, links: string[]): string {
     '',
     '## Liens',
     [`Rétro du [[jour-${pad3(l.day)}]]`, ...links.map((x) => `[[${x}]]`)].join(' · '),
+    ...hist,
   ].join('\n');
+}
+
+/** History lines of an existing lesson note ("- **Confirmation — jour 4** …"), older "### …" blocks included. */
+export function lessonHistory(body: string | null | undefined): string[] {
+  const text = String(body ?? '');
+  const out: string[] = [];
+  const i = text.indexOf(`\n${LESSON_HISTORY_SECTION}\n`);
+  if (i >= 0) {
+    for (const line of text.slice(i + LESSON_HISTORY_SECTION.length + 2).split('\n')) {
+      if (/^##\s/.test(line)) break;
+      if (line.startsWith('- ')) out.push(line);
+    }
+  }
+  // notes written by an earlier version appended "### Confirmation — jour N" blocks
+  for (const m of text.matchAll(/^### (Révision|Confirmation) — jour (\d+)/gm)) out.push(`- **${m[1]} — jour ${m[2]}**`);
+  return out;
+}
+
+function historyLine(world: WorldState, l: Lesson, day: number, revised: boolean, reached: readonly string[]): string {
+  const agents = (world.company.agents ?? []).filter((a) => reached.includes(a.id));
+  const who = agents.length ? ` · nouveaux playbooks : ${agents.map((a) => `[[${agentNoteName(world, a)}]]`).join(' · ')}` : '';
+  return `- **${revised ? 'Révision' : 'Confirmation'} — jour ${day}** ([[jour-${pad3(day)}]]) : ${shorten(l.evidence || 'sans chiffre', 220)} · confiance ${fmtPct(l.confidence, 0)}${who}`;
 }
 
 // ───────────────────────────── runRetro ─────────────────────────────
@@ -354,17 +408,21 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
   for (const d of finalDrafts) {
     const dup = findDuplicateLesson(world.company.lessons, d);
     if (dup) {
-      const revised = comparable(dup.insight) !== comparable(d.insight);
-      if (!revised && dup.evidence === d.evidence) continue; // nothing new since last time
+      const revised = conclusionOf(dup.insight) !== conclusionOf(d.insight);
+      if (!revised && dup.evidence === d.evidence && dup.insight === d.insight) continue; // nothing new since last time
+      dup.key ??= slugify(d.key, 50);
       if (revised) {
         // the data now says something different: new wording everywhere, confidence restarts from the new sample
+        dup.confidence = d.confidence;
+      } else {
+        // same conclusion on fresher data: confidence rises with every confirmation
+        dup.confidence = round(Math.min(0.97, Math.max(dup.confidence, d.confidence) + 0.05 * d.confidence), 2);
+      }
+      if (dup.insight !== d.insight) {
+        // the insight's numbers are refreshed too (not only the evidence), in every playbook that holds the rule
         const old = dup.insight;
         dup.insight = d.insight;
-        dup.confidence = d.confidence;
         for (const id of replaceRuleEverywhere(world, old, d.insight)) changedAgents.add(id);
-      } else {
-        // same conclusion on fresher data: keep the rule text stable, raise confidence a little
-        dup.confidence = round(Math.min(0.97, Math.max(dup.confidence, d.confidence) + 0.05 * d.confidence), 2);
       }
       dup.evidence = d.evidence;
       const before = new Set(dup.appliesTo);
@@ -372,8 +430,9 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
       updated.push({ lesson: dup, draft: d, revised, reached: dup.appliesTo.filter((id) => !before.has(id)) });
       continue;
     }
-    if (created.length >= MAX_NEW_LESSONS_PER_RETRO) continue;
+    if (created.length >= MAX_NEW_LESSONS_PER_RETRO + (d.critical ? 1 : 0)) continue; // the rest waits for a later evening
     const lesson: Lesson = {
+      key: slugify(d.key, 50),
       id: nextId(world, 'les'),
       day,
       topic: d.topic,
@@ -398,32 +457,24 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
       failures.push(`${what} (${err instanceof Error ? err.message : String(err)})`);
     }
   };
-  const writeLessonNote = (lesson: Lesson, draft: HeuristicDraft) =>
+  const writeLessonNote = (lesson: Lesson, draft: HeuristicDraft, history: readonly string[] = [], tags: readonly string[] = []) =>
     brain.write({
       path: lesson.notePath,
       title: lessonTitle(lesson),
-      tags: unique(['lecon', TOPIC_TAGS[lesson.topic], ...draft.tags]),
-      body: lessonNoteBody(world, lesson, relevantLinks(lesson.topic, lesson.insight, draft.links)),
+      tags: unique(['lecon', TOPIC_TAGS[lesson.topic], ...draft.tags, ...tags]),
+      body: lessonNoteBody(world, lesson, relevantLinks(lesson.topic, lesson.insight, draft.links), history),
       day,
     });
 
   for (const { lesson, draft } of created) await safely(lesson.notePath, () => writeLessonNote(lesson, draft));
+  // a confirmed / revised lesson note is rewritten with the current insight and numbers on top and a short,
+  // capped history below (instead of an endless stack of appended blocks)
   for (const { lesson, draft, revised, reached } of updated) {
     await safely(lesson.notePath, async () => {
-      const exists = notes.some((n) => n.path === lesson.notePath) || (await brain.read(lesson.notePath))?.path === lesson.notePath;
-      if (!exists) return writeLessonNote(lesson, draft);
-      const agents = (world.company.agents ?? []).filter((a) => reached.includes(a.id));
-      return brain.append(
-        lesson.notePath,
-        [
-          `### ${revised ? 'Révision' : 'Confirmation'} — jour ${day} ([[jour-${pad3(day)}]])`,
-          ...(revised ? [`> ${lesson.insight}`] : []),
-          `- ${lesson.evidence}`,
-          `- Confiance : ${fmtPct(lesson.confidence, 0)}`,
-          ...(agents.length ? [`- Nouveaux playbooks : ${agents.map((a) => `[[${agentNoteName(world, a)}]]`).join(' · ')}`] : []),
-        ].join('\n'),
-        day,
-      );
+      const existing = await brain.read(lesson.notePath);
+      const own = existing && existing.path === lesson.notePath ? existing : null;
+      const history = [...lessonHistory(own?.body), historyLine(world, lesson, day, revised, reached)];
+      return writeLessonNote(lesson, draft, history, own?.tags ?? []);
     });
   }
   if (created.length) {
@@ -432,9 +483,11 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
     );
   }
 
-  // brain notes: playbooks (all of them the first time, so every [[Prénom]] link resolves)
-  const firstTime = !notes.some((n) => n.path.startsWith('playbooks/'));
-  const toRefresh = firstTime ? (world.company.agents ?? []).map((a) => a.id) : [...changedAgents];
+  // brain notes: playbooks of the agents whose rules changed, plus every agent who has no note yet (so each
+  // [[Prénom]] link resolves) — the seed vault only ships the department notes ("Playbook Growth"…)
+  const existingPaths = new Set(notes.map((n) => fold(n.path)));
+  const missing = (world.company.agents ?? []).filter((a) => !existingPaths.has(fold(agentNotePath(world, a)))).map((a) => a.id);
+  const toRefresh = unique([...changedAgents, ...missing]);
   if (toRefresh.length) await safely('playbooks/', () => writePlaybookNotes(world, brain, toRefresh, day));
 
   // KPI refreshed with today's lessons

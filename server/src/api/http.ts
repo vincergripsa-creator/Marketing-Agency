@@ -1,7 +1,9 @@
 /** Small, pure HTTP helpers (unit-tested): path safety, mime types, JSON bodies, input sanitising. */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { Difficulty, ScenarioConfig } from '../shared.js';
+import type { Difficulty, ScenarioConfig, Speed } from '../shared.js';
+
+export type { Speed };
 
 export class HttpError extends Error {
   readonly status: number;
@@ -105,6 +107,20 @@ export function sendError(res: ServerResponse, status: number, message: string):
   sendJson(res, status, { error: message });
 }
 
+/**
+ * HTTP status of an error thrown below the HTTP layer: HttpError, or any error carrying a numeric 4xx
+ * `status` / `statusCode` (e.g. the runtime's « Agent inconnu » → 404). Everything else is a 500.
+ */
+export function errorStatus(err: unknown): number {
+  if (err instanceof HttpError) return err.status;
+  if (err && typeof err === 'object') {
+    const e = err as { status?: unknown; statusCode?: unknown };
+    const s = typeof e.status === 'number' ? e.status : typeof e.statusCode === 'number' ? e.statusCode : NaN;
+    if (Number.isInteger(s) && s >= 400 && s < 500) return s;
+  }
+  return 500;
+}
+
 export const MAX_BODY_BYTES = 1_000_000;
 
 /** Reads a JSON object body. Empty body → {}. Throws HttpError 413 / 400. */
@@ -153,7 +169,6 @@ export function readJsonBody(req: IncomingMessage, limit = MAX_BODY_BYTES): Prom
 
 // ───────────────────────────── input validation ─────────────────────────────
 
-export type Speed = 1 | 2 | 4 | 8;
 export const SPEEDS: readonly Speed[] = [1, 2, 4, 8];
 export type ControlAction = 'play' | 'pause' | 'step' | 'day';
 

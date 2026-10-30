@@ -7,16 +7,24 @@ import type { AdFormat, AdScene, CreatorProfile, HookStyle, Product, VoiceOfCust
 import type { AdDraft } from '../../contracts.js';
 import { RISKY_AD_PHRASES } from '../lexicon.js';
 import { AD_FORMATS, conflictsWith, HOOK_STYLES } from '../playbook.js';
-import { bare, cap, clean, firstFit, fit, fmtEur, fmtNum, fmtPct, lf, lowerFirst, norm, q, shortLabel, theUnit, uniqStrings, withArticle, type LocalRng } from '../util.js';
+import { bare, bestLabel, cap, clauseLabel, clean, firstFit, fit, fmtEur, fmtNum, fmtPct, labelOf, lf, lowerFirst, norm, q, shortLabel, theUnit, uniqStrings, withArticle, type LocalRng } from '../util.js';
 import { nicheFromProduct } from './commerce.js';
-import { buildNicheCtx, de, FALLBACK, isInfinitive, type NicheCtx } from './niche.js';
+import { buildNicheCtx, de, FALLBACK, isInfinitive, looksLikeClause, type NicheCtx } from './niche.js';
+import { inline } from './studio.js';
 
 const HOOK_MAX = 90;
 const SCREEN_MAX = 50;
 
+/** Whole customer phrases (never cut): ≤ max chars, no inner colon. */
 function shortPhrases(c: NicheCtx, max = 40): string[] {
-  const p = c.phrases.map(bare).filter((x) => x.length >= 6 && x.length <= max);
-  return p.length ? p : c.phrases.map((x) => fit(bare(x), max));
+  return c.phrases.map(clean).filter((x) => bare(x).length >= 6 && bare(x).length <= max && !/[:;]/.test(bare(x)));
+}
+
+const isQuestion = (p: string | undefined): boolean => !!p && /\?\s*$/.test(p);
+
+/** « … » keeping the customer's question mark inside the quotes. */
+function qKeep(p: string): string {
+  return isQuestion(p) ? `« ${bare(p)} ? »` : q(p);
 }
 
 function audWord(c: NicheCtx): string {
@@ -24,27 +32,43 @@ function audWord(c: NicheCtx): string {
   return /[sx]$/.test(w) ? w : 'gens';
 }
 
+/** « faire sa déclaration… » said to « tu »: possessives follow (ta déclaration); a reflexive outcome (« s’endormir seul ») belongs to someone else. */
+function povOutcome(desired: string): string {
+  const d = lowerFirst(desired);
+  if (isInfinitive(d)) {
+    if (/^(s['’]|se\s)/i.test(d)) return '';
+    return `POV : tu as enfin réussi à ${d.replace(/(^|\s)sa\s/g, '$1ta ').replace(/(^|\s)son\s/g, '$1ton ').replace(/(^|\s)ses\s/g, '$1tes ')}.`;
+  }
+  return `POV : ${d}, et tu n’y croyais plus.`;
+}
+
+const HAS_DURATION = /\b(\d+|quelques|deux|trois)\s+(jours?|nuits?|semaines?|mois|minutes?|heures?)\b/i;
+
 function hookCandidates(style: HookStyle, c: NicheCtx, rng: LocalRng): string[] {
   const ph = rng.shuffle(shortPhrases(c));
   const p0 = ph[0];
-  const desired = lf(c.outcomes[0] ?? FALLBACK.outcomes[0]);
-  const mistake = (c.mistakes.find(isInfinitive) ?? c.mistakes[0] ?? FALLBACK.mistakes[0]);
-  const pb = fit(c.pbClause, 55);
+  const desired = bestLabel([c.goal, ...c.outcomes], 50, 8) ?? FALLBACK.outcomes[0];
+  const desiredL = lowerFirst(desired);
+  const mistake = bestLabel([...c.mistakes.filter(isInfinitive), ...c.mistakes, ...FALLBACK.mistakes], 48, 8)!;
+  // a pain usable after « pourquoi / quand / si » must be a whole subject + verb clause
+  const pb = c.pbShort && looksLikeClause(c.pbShort) ? lf(c.pbShort) : null;
   const pbQ = c.pbShort && c.pbShort.length <= 48 ? q(c.pbShort) : null;
-  const cl = c.pbIsClause; // "bébé se réveille…" can follow « pourquoi / quand / si »
   const { n, unit } = c.dur;
   const k = Math.min(5, Math.max(3, c.mistakes.length || 3));
-  const fact = c.facts.find((f) => /\d/.test(f) && f.length <= 80);
+  const fact = c.facts.map(bare).find((f) => /\d/.test(f) && f.length <= 80 && !/[:;]/.test(f));
+  const before = p0 && !isQuestion(p0) && bare(p0).length <= 32 ? q(p0) : null;
+  const after = bestLabel([c.goal, ...c.outcomes].filter((o) => o && !HAS_DURATION.test(o)), 36, 8);
   switch (style) {
     case 'question': return [
       p0 ? `Tu te dis ${q(p0)} ? Regarde ça avant ce soir.` : '',
-      cl ? `Pourquoi ${pb} ? La vraie raison va te surprendre.` : pbQ ? `${cap(pbQ)} ? La vraie raison va te surprendre.` : '',
-      p0 ? `${cap(q(p0))} ? Voilà ce que personne ne te dit.` : '',
+      pb ? `Pourquoi ${pb} ? La vraie raison va te surprendre.` : '',
+      pb ? `Pourquoi ${pb} ? Voici la vraie raison.` : '',
+      p0 ? (isQuestion(p0) ? `${cap(qKeep(p0))} Voilà ce que personne ne te dit.` : `${cap(q(p0))} : voilà ce que personne ne te dit.`) : '',
     ];
     case 'contrarian': return [
-      `Arrête ${de(shortLabel(mistake, 48))}. C’est ça qui entretient tout.`,
+      `Arrête ${de(mistake)}. C’est ça qui entretient tout.`,
       'Le conseil qu’on te répète partout ? C’est lui qui aggrave tout.',
-      cl ? `Non, ce n’est pas « normal » que ${fit(c.pbClause, 50)}.` : pbQ ? `${cap(pbQ)} n’est pas une fatalité. Vraiment pas.` : '',
+      pbQ ? `${cap(pbQ)}, ce n’est pas une fatalité. Vraiment pas.` : '',
     ];
     case 'story': return [
       p0 ? `Un commentaire nous a marqués : ${q(p0)}. Voilà ce qu’on a répondu.` : '',
@@ -52,29 +76,29 @@ function hookCandidates(style: HookStyle, c: NicheCtx, rng: LocalRng): string[] 
       'On a épluché les commentaires sur ce sujet. Une phrase revient tout le temps.',
     ];
     case 'stat': return [
-      fact ? `${cap(bare(fact))}. Et personne ne te le dit.` : '',
+      fact ? `${cap(fact)}. Et personne ne te le dit.` : '',
       `${n} ${unit}, ${c.stepCount} étapes, zéro prise de tête : la méthode ${c.adj}.`,
       `1 erreur, ${n} ${unit}, 1 plan : voilà comment on s’en sort.`,
     ];
     case 'pov': return [
       p0 ? `POV : tu tapes ${q(p0)} sur Google pour la 10e fois.` : '',
-      isInfinitive(desired) ? `POV : tu as enfin réussi à ${fit(desired, 55)}.` : `POV : ${fit(desired, 60)}, et tu n’y croyais plus.`,
-      cl ? `POV : tu découvres enfin pourquoi ${fit(c.pbClause, 50)}.` : 'POV : tu comprends enfin pourquoi ça bloque.',
+      povOutcome(desired),
+      pb ? `POV : tu découvres enfin pourquoi ${pb}.` : 'POV : tu comprends enfin pourquoi ça bloque.',
     ];
     case 'mistake': return [
-      `L’erreur que font presque tous les ${audWord(c)} : ${lowerFirst(shortLabel(mistake, 50))}.`,
-      cl ? `L’erreur n°1 quand ${fit(c.pbClause, 45)} (et comment l’éviter).` : pbQ ? `L’erreur n°1 derrière ${pbQ} (et comment l’éviter).` : '',
-      `Si tu fais ça, arrête tout de suite : ${lowerFirst(shortLabel(mistake, 48))}.`,
+      `L’erreur que font presque tous les ${audWord(c)} : ${lowerFirst(mistake)}.`,
+      pb ? `L’erreur n°1 quand ${pb} (et comment l’éviter).` : pbQ ? `L’erreur n°1 derrière ${pbQ} (et comment l’éviter).` : '',
+      `Si tu fais ça, arrête tout de suite : ${lowerFirst(mistake)}.`,
     ];
     case 'before_after': return [
-      p0 ? `Avant : ${q(fit(p0, 32))}. Après ${n} ${unit} : ${fit(desired, 36)}.` : '',
-      `Avant : l’épuisement. Après ${n} ${unit} de plan : ${fit(desired, 40)}.`,
+      before && after ? `Avant : ${before}. Après ${n} ${unit} : ${lowerFirst(after)}.` : '',
+      after ? `Avant : ${c.care ? 'l’épuisement' : 'le stress'}. Après ${n} ${unit} de plan : ${lowerFirst(after)}.` : '',
       `Ce qui a changé entre ${theUnit(c.dur.unitOne)} 1 et ${theUnit(c.dur.unitOne)} ${n}.`,
     ];
     case 'listicle': return [
-      cl ? `${k} choses à arrêter si ${fit(c.pbClause, 55)}.` : pbQ ? `${cap(pbQ)} ? ${k} choses à arrêter dès ce soir.` : '',
+      pb ? `${k} choses à arrêter si ${pb}.` : pbQ ? `${cap(pbQ)} : ${k} choses à arrêter dès ce soir.` : '',
       `${k} gestes simples qui changent tout (surtout le 2e).`,
-      cl ? `${k} erreurs qui font que ${fit(c.pbClause, 50)}.` : pbQ ? `${k} erreurs qui entretiennent ${pbQ}.` : '',
+      pbQ ? `${k} erreurs qui entretiennent ${pbQ}.` : '',
     ];
   }
 }
@@ -90,8 +114,21 @@ export function makeHook(style: HookStyle, c: NicheCtx, rng: LocalRng): string {
   const fitting = rng.shuffle(cands.filter((x) => x.length <= HOOK_MAX));
   // most of the time the writer picks the hook that names the problem or the audience
   if (fitting.length && rng.chance(0.7)) fitting.sort((a, b) => relevance(b, c) - relevance(a, c));
-  return firstFit(fitting.concat(cands), HOOK_MAX);
+  // never a hook cut with « … »: a short generic hook of the same style instead
+  return fitting[0] ?? SAFE_HOOKS[style];
 }
+
+/** Short hooks (≤ 90 chars) used only when every niche-specific candidate is too long. */
+const SAFE_HOOKS: Record<HookStyle, string> = {
+  question: 'Tu as l’impression d’avoir tout essayé ? Regarde ça avant ce soir.',
+  contrarian: 'Le conseil qu’on te répète partout ? C’est lui qui aggrave tout.',
+  story: 'On a épluché les commentaires sur ce sujet. Une phrase revient tout le temps.',
+  stat: '1 erreur, 1 plan, quelques minutes par jour : voilà comment on s’en sort.',
+  pov: 'POV : tu comprends enfin pourquoi ça bloque.',
+  mistake: 'L’erreur que presque tout le monde fait (et comment l’éviter).',
+  before_after: 'Avant / après : ce qui change quand on suit un vrai plan.',
+  listicle: '3 gestes simples qui changent tout (surtout le 2e).',
+};
 
 export function heuristicHooks(
   input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[] },
@@ -154,7 +191,10 @@ function screenText(s: string): string {
     .replace(/\s{2,}/g, ' ');
   if (compact.length <= SCREEN_MAX) return compact;
   const noTail = compact.replace(/\s+(la nuit|le soir|le matin|au quotidien|tous les jours)(\s*[?!.])?$/i, '$2');
-  return fit(noTail.length <= SCREEN_MAX ? noTail : compact, SCREEN_MAX);
+  if (noTail.length <= SCREEN_MAX) return noTail;
+  // never an ellipsis on screen: a whole head (« POV : tu découvres enfin pourquoi… » → its clean head)
+  const quoted = /«\s*([^»]+?)\s*»/.exec(compact);
+  return clauseLabel(compact, SCREEN_MAX, 10) ?? (quoted && quoted[1]!.length + 4 <= SCREEN_MAX ? `« ${quoted[1]} »` : null) ?? labelOf(compact, SCREEN_MAX);
 }
 
 function hashtagify(s: string): string {
@@ -196,8 +236,10 @@ export function heuristicAd(
   const hook = fit(clean(input.hook) || makeHook(style, c, rng), HOOK_MAX);
   const vis = VISUALS[format];
   const title = clean(input.product?.title) || 'le guide';
-  const phrase = rng.pick(shortPhrases(c, 44).concat(c.phrases.length ? [] : ['']));
-  const pain = c.pains[0] ? lf(c.pains[0]) : c.pbClause;
+  const phrases = shortPhrases(c, 44);
+  const phrase = phrases.length ? rng.pick(phrases) : '';
+  const pain = c.pbClause;
+  const painScreen = clauseLabel(c.pbShort ?? pain, 46) ?? 'Tu te reconnais ?';
   const step = c.steps[0] ?? FALLBACK.steps[0];
   const step2 = c.steps[1] ?? FALLBACK.steps[1];
   const example = c.examples.find((e) => e.length <= 170);
@@ -209,20 +251,20 @@ export function heuristicAd(
   scenes.push({ visual: vis[0]!, onScreenText: screenText(hook), voiceover: hook, durationSec: rng.int(2, 3) });
   scenes.push({
     visual: vis[1]!,
-    onScreenText: screenText(phrase ? q(phrase) : cap(fit(pain, 46))),
+    onScreenText: screenText(phrase ? q(phrase) : painScreen),
     voiceover: phrase ? `Si toi aussi tu te dis ${q(phrase)}, reste deux secondes.` : `${cap(pain)}… et l’impression d’avoir tout essayé.`,
     durationSec: rng.int(3, 4),
   });
   scenes.push({
     visual: vis[2]!,
     onScreenText: screenText(`1. ${shortLabel(step, 46)}`),
-    voiceover: `La méthode commence par un geste tout simple : ${lf(step)}. Ensuite : ${lf(step2)}. Une étape à la fois.`,
+    voiceover: `La méthode commence par un geste tout simple : ${inline(step)}. Ensuite : ${inline(step2)}. Une étape à la fois.`,
     durationSec: rng.int(4, 6),
   });
-  const proofVo = example ? sentence(example) : fact ? `Un repère que peu de gens connaissent : ${lf(fact)}.` : `Le plan tient en ${n} ${unit}, avec une checklist chaque soir.`;
+  const proofVo = example ? sentence(example) : fact ? `Un repère que peu de gens connaissent : ${inline(fact)}.` : `Le plan tient en ${n} ${unit}, avec une checklist chaque soir.`;
   scenes.push({
     visual: vis[3]!,
-    onScreenText: screenText(example ? 'Ce qu’on nous raconte :' : fact ? shortLabel(fact, 46) : `Plan de ${n} ${unit}`),
+    onScreenText: screenText(example ? 'Un cas concret' : fact ? shortLabel(fact, 46) : `Plan de ${n} ${unit}`),
     voiceover: proofVo,
     durationSec: rng.int(4, 5),
   });
@@ -237,7 +279,7 @@ export function heuristicAd(
   scenes.push({
     visual: vis[5]!,
     onScreenText: screenText(price ? `Guide PDF ${fmtEur(price)} — lien en bio` : 'Guide PDF — lien en bio'),
-    voiceover: `Le guide complet, « ${fit(title, 70)} », est en lien dans ma bio.`,
+    voiceover: `Le guide complet, « ${title} », est en lien dans ma bio.`,
     durationSec: 3,
   });
 
@@ -258,7 +300,7 @@ export function heuristicAd(
   while (total > 30) { const longest = scenes.reduce((a, b) => (b.durationSec > a.durationSec ? b : a)); longest.durationSec -= 1; total -= 1; }
   while (total < 12) { scenes[2]!.durationSec += 1; total += 1; }
 
-  const caption = fit(`${hook} Le guide « ${fit(title, 90)} » est en lien dans la bio. Sauvegarde pour ce soir.`, 260);
+  const caption = fit(`${hook} Le guide « ${title} » est en lien dans la bio. Sauvegarde pour ce soir.`, 260);
   return {
     hook,
     hookStyle: style,
@@ -304,7 +346,7 @@ export function heuristicOutreach(
   return [
     opener,
     compliment,
-    `On a créé « ${fit(title, 90)} », un guide PDF pour ${aud}.`,
+    `On a créé « ${title} », un guide PDF pour ${aud}.`,
     offer,
     'On t’envoie le guide gratuitement pour que tu juges par toi-même, sans engagement. Ça te dit qu’on en parle ?',
   ].join(' ');

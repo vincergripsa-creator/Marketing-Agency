@@ -1,5 +1,5 @@
 // Floating top bar: logo + tabs (left), agent search + counters + toggles (right).
-import { useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import type { AgentState, CompanySnapshot } from '../../../shared/types';
 import { Avatar, ChiefBadge, cx, Kbd } from './common';
 import { useApp } from './context';
@@ -21,21 +21,44 @@ export function TopBar({ tab, onTab, flowMode, onFlow, godMode, onGod, onNewScen
   const agents = snapshot?.company?.agents ?? [];
   const busy = agents.filter((a) => BUSY_STATUSES.has(a.status)).length;
   const badges = useMemo(() => tabBadges(snapshot), [snapshot]);
+  // phone layout (CSS ≤ 760px): tabs + tools collapse behind a menu button
+  const [menuOpen, setMenuOpen] = useState(false);
+  const headerRef = useRef<HTMLElement>(null);
+  const current = TABS.find((t) => t.id === tab);
+  const totalBadges = (badges.taches ?? 0) + (badges.mail ?? 0);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: PointerEvent) => { if (headerRef.current && !headerRef.current.contains(e.target as Node)) setMenuOpen(false); };
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setMenuOpen(false); } };
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('keydown', onKey, true);
+    return () => { window.removeEventListener('pointerdown', onDown, true); window.removeEventListener('keydown', onKey, true); };
+  }, [menuOpen]);
+
+  const pick = (id: TabId) => { onTab(id); setMenuOpen(false); };
 
   return (
-    <header className="topbar">
+    <header className={cx('topbar', menuOpen && 'menu-open')} ref={headerRef}>
       <div className="glass bar-pill tabs-pill">
         <div className="logo" title="Pixel Agency — agence marketing autonome">
           <PixelLogo size={20} />
           <span className="logo-text">Pixel Agency</span>
         </div>
-        <nav className="tabs" aria-label="Onglets">
+        <button type="button" className="menu-toggle" onClick={() => setMenuOpen((v) => !v)} aria-expanded={menuOpen} aria-controls="topbar-menu"
+          title={menuOpen ? 'Fermer le menu' : 'Menu : onglets et outils'}>
+          <span className="menu-current">{current?.label ?? 'Bureau'}</span>
+          {!menuOpen && totalBadges ? <span className="tab-badge">{totalBadges}</span> : null}
+          <Icon name={menuOpen ? 'x' : 'menu'} size={17} />
+        </button>
+        <nav className="tabs" id="topbar-menu" aria-label="Onglets">
           {TABS.map((t) => (
             <button
               key={t.id}
               type="button"
               className={cx('tab', tab === t.id && 'tab-active')}
-              onClick={() => onTab(t.id)}
+              aria-current={tab === t.id ? 'page' : undefined}
+              onClick={() => pick(t.id)}
               title={`${t.label} (touche ${t.key})`}
             >
               {t.label}
@@ -46,7 +69,7 @@ export function TopBar({ tab, onTab, flowMode, onFlow, godMode, onGod, onNewScen
       </div>
 
       <div className="glass bar-pill right-pill">
-        <AgentSearch agents={agents} inputRef={searchRef} />
+        <AgentSearch agents={agents} inputRef={searchRef} onPicked={() => setMenuOpen(false)} />
         <span className="agents-count" title="Agents occupés en ce moment">
           <span className="live-dot" />
           <strong>{agents.length}</strong> agents · <strong>{busy}</strong> en cours
@@ -62,7 +85,7 @@ export function TopBar({ tab, onTab, flowMode, onFlow, godMode, onGod, onNewScen
           aria-pressed={godMode}>
           <Icon name="eye" />
         </button>
-        <button type="button" className="btn btn-dark btn-sm new-btn" onClick={onNewScenario} title="Nouveau scénario">
+        <button type="button" className="btn btn-dark btn-sm new-btn" onClick={() => { setMenuOpen(false); onNewScenario(); }} title="Nouveau scénario">
           <Icon name="plus" size={14} /><span className="btn-label">Nouveau scénario</span>
         </button>
       </div>
@@ -83,7 +106,7 @@ function tabBadges(s: CompanySnapshot | null): Partial<Record<TabId, number>> {
   };
 }
 
-function AgentSearch({ agents, inputRef }: { agents: AgentState[]; inputRef: RefObject<HTMLInputElement | null> }) {
+function AgentSearch({ agents, inputRef, onPicked }: { agents: AgentState[]; inputRef: RefObject<HTMLInputElement | null>; onPicked?: () => void }) {
   const { lookups, openAgent } = useApp();
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
@@ -101,6 +124,7 @@ function AgentSearch({ agents, inputRef }: { agents: AgentState[]; inputRef: Ref
   const pick = (a: AgentState | undefined) => {
     if (!a) return;
     openAgent(a.id);
+    onPicked?.();
     setQ('');
     setOpen(false);
     inputRef.current?.blur();

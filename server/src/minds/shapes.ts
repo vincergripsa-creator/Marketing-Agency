@@ -8,6 +8,11 @@ import { clampNum, clean, isStr, strArr } from './util.js';
 
 export const VISUAL_TYPES: readonly VisualSpec['type'][] = ['timeline', 'bar_chart', 'checklist_card', 'quote', 'steps_diagram', 'icon_grid', 'do_dont'];
 
+/** "La suite est ici : X" → "X" (the label belongs to the layout, not to the title). */
+export function stripNextPrefix(s: string): string {
+  return clean(s).replace(/^(?:la\s+suite\s+est\s+ici\s*(?:[:—–-]\s*)?|la\s+suite\s*[:—–-]\s*)/i, '').trim();
+}
+
 export function str(v: unknown, fb: string): string {
   return isStr(v) ? clean(v) : fb;
 }
@@ -29,7 +34,47 @@ export function ensureVisual(v: unknown, fb: VisualSpec | null): VisualSpec | nu
     const raw = Array.isArray(o.values) ? o.values : [];
     values = labels.map((_, i) => Math.round(clampNum(raw[i], 0, 100, Math.max(10, 80 - i * 12))));
   }
-  return { type, title: str(o.title, fb?.title ?? 'Repères'), labels, values };
+  return { type, title: str(o.title, fb?.title ?? 'Repères'), labels: conventionLabels(type, labels), values };
+}
+
+const DO_RE = /^\s*(?:à|a)\s+faire\s*:\s*/iu;
+const DONT_RE = /^\s*(?:à|a)\s+éviter\s*:\s*|^\s*a\s+eviter\s*:\s*/iu;
+const DO_LOOSE = /^\s*(?:[+✓✔✅]\s*|(?:faire|do|oui|bon réflexe|à privilégier)\s*[:–—-]\s*)/iu;
+const DONT_LOOSE = /^\s*(?:[-✗✘❌×]\s*|(?:éviter|eviter|don'?t|non|mauvais réflexe|erreur)\s*[:–—-]\s*)/iu;
+
+function lowerHead(s: string): string {
+  const t = clean(s);
+  const first = t.split(/\s+/)[0] ?? '';
+  return /^\p{Lu}.*\p{Lu}/u.test(first) ? t : t.charAt(0).toLowerCase() + t.slice(1);
+}
+
+/**
+ * VisualSpec label conventions (shared/types.ts): do_dont labels are prefixed « À faire : » /
+ * « À éviter : » (unprefixed lists are read as « à éviter » first, then « à faire »); a quote is
+ * [citation, attribution] without surrounding guillemets.
+ */
+export function conventionLabels(type: VisualSpec['type'], labels: string[]): string[] {
+  if (type === 'do_dont') {
+    const tagged = labels.map((l) => {
+      if (DO_RE.test(l)) return { kind: 'do' as const, text: l.replace(DO_RE, '') };
+      if (DONT_RE.test(l)) return { kind: 'dont' as const, text: l.replace(DONT_RE, '') };
+      if (DONT_LOOSE.test(l) || /^\s*(ne pas|ne jamais|jamais|surtout pas)\b/i.test(l)) return { kind: 'dont' as const, text: l.replace(DONT_LOOSE, '') };
+      if (DO_LOOSE.test(l)) return { kind: 'do' as const, text: l.replace(DO_LOOSE, '') };
+      return { kind: null, text: l };
+    });
+    const loose = tagged.filter((t) => t.kind === null);
+    const half = Math.ceil(loose.length / 2);
+    let k = 0;
+    return tagged.map((t) => {
+      const kind = t.kind ?? (k++ < half ? 'dont' : 'do');
+      return `${kind === 'do' ? 'À faire' : 'À éviter'} : ${lowerHead(t.text)}`;
+    }).filter((l) => !/:\s*$/.test(l));
+  }
+  if (type === 'quote') {
+    const [quote, ...rest] = labels;
+    return [clean(quote ?? '').replace(/^[«"“]\s*/, '').replace(/\s*[»"”]$/, ''), ...rest].filter(Boolean);
+  }
+  return labels;
 }
 
 export function ensureChapter(v: unknown, fb: ChapterContent): ChapterContent {
@@ -69,7 +114,8 @@ export function ensurePdf(v: unknown, fb?: PdfContent): PdfContent {
     chapters,
     bonus: ensureChapter(o.bonus, f.bonus),
     nextStep: {
-      title: str(ns.title, f.nextStep.title),
+      // the title is the NEXT guide's title: « La suite est ici » belongs to the layout (PDF page, product card)
+      title: stripNextPrefix(str(ns.title, f.nextStep.title)) || stripNextPrefix(f.nextStep.title) || (str(ns.title, f.nextStep.title) ? 'Le guide suivant' : ''),
       text: str(ns.text, f.nextStep.text),
       upsellProductId: typeof ns.upsellProductId === 'string' ? ns.upsellProductId : f.nextStep.upsellProductId,
     },

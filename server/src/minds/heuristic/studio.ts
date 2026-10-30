@@ -5,11 +5,38 @@
 import type { ChapterContent, NicheBrief, PdfContent, VisualSpec, VoiceOfCustomer } from '../../shared.js';
 import type { Outline } from '../../contracts.js';
 import { CLICHE_TEMPLATES } from '../lexicon.js';
-import { conflictsWith, scrubDeep } from '../playbook.js';
+import { stripNextPrefix } from '../shapes.js';
+import { conflictsWith, containsBanned, scrubDeep } from '../playbook.js';
 import {
-  bare, cap, clean, extractAgeRange, fit, lf, lowerFirst, norm, ofAud, Pool, q, sentence, shortLabel, strArr, theUnit, uniqStrings, wordCount, type LocalRng,
+  bare, bestLabel, cap, clauseLabel, clean, composeTitle, labelOf, lf, lowerFirst, norm, ofAud, Pool, q, qv, sentence, shortLabel, strArr, theUnit,
+  uniqStrings, wordCount, type LocalRng,
 } from '../util.js';
 import { buildNicheCtx, de, FALLBACK, firstPerson, isInfinitive, titleCaseKeyword, type NicheCtx } from './niche.js';
+
+/** Research item embedded after a colon of ours: lowercase start, its own « : » turned into « — », no final dot. */
+export function inline(s: string): string {
+  return lf(s).replace(/\s+:\s+/g, ' — ').replace(/\s*;\s+/g, ', ');
+}
+
+
+/** The outcome promised on the cover (an upsell brief's goal, else the first desired outcome). */
+export function promiseOutcome(c: NicheCtx): string {
+  return lf(c.goal ?? c.outcomes[0] ?? FALLBACK.outcomes[0]);
+}
+
+/** Whole short labels for visuals (≤ max chars, never cut mid-phrase), completed by fallbacks. */
+function labelsFrom(items: readonly string[], max: number, k: number, fallback: readonly string[] = []): string[] {
+  const out: string[] = [];
+  // whole phrases and clause heads first; prepositional cuts only to complete the list
+  for (const tiers of [1, 2] as const) {
+    for (const it of [...items, ...fallback]) {
+      if (out.length >= k) break;
+      const l = clauseLabel(it, max, { tiers });
+      if (l && !out.some((o) => norm(o) === norm(l))) out.push(l);
+    }
+  }
+  return out.slice(0, k);
+}
 
 export type Kind = 'comprendre' | 'diagnostic' | 'methode' | 'erreurs' | 'situations' | 'programme' | 'durer';
 
@@ -41,60 +68,61 @@ export function inferKind(title: string, index: number, total: number): Kind {
 
 // ───────────────────────────── titles ─────────────────────────────
 
-function sansClause(c: NicheCtx): string | null {
-  for (const p of [...c.phrases, ...c.outcomes, ...c.objections]) {
-    const m = /\bsans\s+([^,.;!?»]{4,40})/i.exec(p);
-    if (m) return `sans ${bare(m[1]!)}`;
-  }
-  return null;
+/** A short customer phrase usable inside a title / hook: whole, no colon, no first-person « je… » cut. */
+function shortPhrase(c: NicheCtx, rng: LocalRng, max = 46): string | null {
+  // a question (« c'est normal ? ») cannot follow « Fini … » / « en finir avec … »
+  const ok = c.phrases.filter((p) => !/[?]\s*$/.test(p)).map(bare).filter((p) => p.length <= max && p.length >= 8 && !/[:;]/.test(p));
+  return ok.length ? rng.pick(ok) : null;
 }
 
-function shortPhrase(c: NicheCtx, rng: LocalRng, max = 46): string | null {
-  const ok = c.phrases.filter((p) => bare(p).length <= max && bare(p).length >= 8);
-  return ok.length ? bare(rng.pick(ok)) : c.phrases[0] ? fit(bare(c.phrases[0]), max) : null;
-}
+export const TITLE_MAX = 95;
 
 export function heuristicTitles(nicheIn: NicheBrief, vocIn: VoiceOfCustomer, count: number, rng: LocalRng): string[] {
   const c = buildNicheCtx(nicheIn, vocIn);
   const n = Number.isFinite(count) && count > 0 ? Math.min(30, Math.floor(count)) : 10;
-  const painT = cap(fit(c.pbClause, 70));
-  const audP = fit(c.audArt, 70);
-  const audS = c.audShort;
-  const ageSfx = c.age && !extractAgeRange([c.niche.audience]) ? ` (${c.age})` : '';
+  const P = c.painTitle;
+  const A = c.audTitle;
+  const Ac = c.audCore;
+  const age = c.age && !/\d/.test(Ac) ? ` (${c.age})` : '';
   const ph = shortPhrase(c, rng);
   const ph2 = shortPhrase(c, rng);
-  const desired = lf(c.outcomes[0] ?? FALLBACK.outcomes[0]);
-  const desiredQ = cap(fit(bare(c.outcomes[0] ?? FALLBACK.outcomes[0]), 50));
-  const desiredB = bare(c.outcomes[1] ?? c.outcomes[0] ?? FALLBACK.outcomes[1]);
-  const pbQ = c.pbShort ? cap(q(c.pbShort)) : null;
+  const desired = bestLabel([promiseOutcome(c), ...c.outcomes], 50, 10);
+  const desired2 = bestLabel([...c.outcomes.slice(1), ...c.outcomes], 46, 10);
+  const pbQ = c.pbShort ? q(c.pbShort) : null;
   const steps = c.stepCount;
   const errs = Math.min(5, Math.max(3, c.mistakes.length || 3));
-  const kw = titleCaseKeyword(c.niche.keywords[0] ?? c.niche.name);
-  const mistake = c.mistakes.find(isInfinitive);
-  const sans0 = sansClause(c);
-  const sans = sans0 && !norm(desired).includes(norm(sans0)) ? sans0 : null;
-  const { n: d, unit } = c.dur;
+  const kw = titleCaseKeyword(clauseLabel(c.niche.keywords[0] ?? '', 24) ?? c.niche.keywords[0] ?? c.niche.name);
+  // « arrêtez de ne pas déclarer » : a negative mistake cannot follow « arrêtez de »
+  const mistake = bestLabel(c.mistakes.filter((m) => isInfinitive(m) && !/^(ne|n['’])/i.test(bare(m))), 48, 10);
+  const D = `${c.dur.n} ${c.dur.unit}`;
+  const pour = (head: string): string[] => [`${head} pour ${A}`, `${head} pour ${Ac}`, `${head}${age}`, head];
+  // a shorter pain keeps the strongest formula (problem + method + duration) under 95 characters
+  const Ps = clauseLabel(P, 42, { min: 12 }) ?? P;
 
-  const all: string[] = [
-    `${painT} : la méthode ${c.adj} en ${d} ${unit} pour ${audP}${ageSfx}`,
-    ph ? `Fini ${q(ph)} : le plan pas à pas pour ${audP}` : `Fini les galères : le plan pas à pas pour ${audP}`,
-    `${cap(fit(c.problem, 70))} : ${steps} étapes concrètes pour ${audP}`,
-    `Objectif « ${desiredQ} » : le plan de ${d} ${unit} pour ${audP}`,
-    mistake ? `${cap(audS)} : arrêtez ${de(fit(bare(mistake), 60))} (et faites plutôt ceci)` : `${cap(audS)} : l’erreur qui entretient tout (et quoi faire à la place)`,
-    ph2 ? `De ${q(ph2)} à « ${fit(desiredB, 50)} » : le guide pratique pour ${audP}` : `Le guide pratique pour ${audP} : ${desired}`,
-    pbQ ? `${pbQ} : les ${errs} erreurs qui entretiennent tout (et quoi faire à la place)` : `Les ${errs} erreurs qui entretiennent le problème — guide pour ${audP}`,
-    `SOS ${kw} : le protocole ${c.adjM} pour ${audP}`,
-    `${cap(desired)} : la méthode ${c.adj} pour ${audP}${sans ? `, ${sans}` : ''}`,
-    ph ? `${d} ${unit} pour en finir avec ${q(ph)} — ${audS}` : `${d} ${unit} pour reprendre la main — ${audS}`,
-    pbQ ? `${pbQ} ? Pourquoi ça arrive, et comment s’en sortir en ${d} ${unit}` : `Pourquoi ça bloque, et comment s’en sortir en ${d} ${unit} — ${audS}`,
-    ph ? `${cap(audS)}${ageSfx} : le guide ${c.adjM} pour en finir avec ${q(ph)}` : `${cap(audS)}${ageSfx} : le guide ${c.adjM}, étape par étape`,
+  const formulas: (string | null)[][] = [
+    [...pour(`${P} : la méthode ${c.adj} en ${D}`), ...pour(`${Ps} : la méthode ${c.adj} en ${D}`)],
+    ph ? pour(`Fini ${q(ph)} : le plan pas à pas`) : pour('Fini les galères : le plan pas à pas'),
+    pour(`${P} : ${steps} étapes concrètes`),
+    desired ? [...pour(`Objectif « ${desired} » : le plan de ${D}`), `Objectif « ${desired} » en ${D}`] : [],
+    mistake ? [`${cap(Ac)} : arrêtez ${de(mistake)} (et faites plutôt ceci)`, `Arrêtez ${de(mistake)} : faites plutôt ceci`] : [],
+    ph2 && desired2 ? pour(`De ${q(ph2)} à « ${desired2} » : le guide pratique`) : [],
+    pbQ ? [`${cap(pbQ)} : les ${errs} erreurs qui entretiennent tout`, `${P} : les ${errs} erreurs qui entretiennent tout`] : [`${P} : les ${errs} erreurs qui entretiennent tout`],
+    pour(`SOS ${kw} : le protocole ${c.adjM}`),
+    desired ? [...pour(`${cap(desired)} : la méthode ${c.adj}`), `${cap(desired)} en ${D} : la méthode ${c.adj}`] : [],
+    ph ? [`${D} pour en finir avec ${q(ph)} — ${Ac}`, `${D} pour en finir avec ${q(ph)}`] : [`${D} pour reprendre la main — ${Ac}`],
+    [`${P} : pourquoi ça arrive et comment s’en sortir en ${D}`, `Pourquoi ça bloque et comment s’en sortir en ${D}`],
+    ph ? [`${cap(Ac)}${age} : le guide ${c.adjM} pour en finir avec ${q(ph)}`, `${cap(Ac)} : en finir avec ${q(ph)}`] : [`${cap(Ac)}${age} : le guide ${c.adjM}, étape par étape`],
+    [`${cap(Ac)} : le plan de ${D}, étape par étape`, `Le plan de ${D}, étape par étape`],
+    [`${P} : le guide ${c.adjM} en ${steps} étapes`],
   ];
-  let titles = uniqStrings(rng.shuffle(all.map(clean)));
-  // keep the strongest formula (problem + method + audience) first
-  const lead = clean(all[0]!);
-  titles = [lead, ...titles.filter((t) => t !== lead)];
-  let k = 2;
-  while (titles.length < n) titles.push(`${lead} — édition ${k++}`);
+  const all = formulas.map((f) => composeTitle(f.map((x) => (x ? cap(clean(x)) : x)), TITLE_MAX)).filter((t): t is string => !!t);
+  const lead = all[0] ?? composeTitle([`${P} : la méthode ${c.adj}`, `La méthode ${c.adj} en ${D}`], TITLE_MAX) ?? `La méthode ${c.adj} en ${D}`;
+  let titles = uniqStrings([lead, ...rng.shuffle(all.slice(1))]);
+  let k = 0;
+  const extra = [`Le guide ${c.adjM} pour ${Ac}`, `${cap(Ac)} : la méthode pas à pas`, `La méthode ${c.adj} en ${D}`, `${steps} étapes pour reprendre la main`];
+  while (titles.length < n && k < extra.length) titles = uniqStrings([...titles, cap(extra[k++]!)]);
+  k = 2;
+  while (titles.length < n) titles.push(`${lead} (version ${k++})`);
   return titles.slice(0, n);
 }
 
@@ -104,7 +132,7 @@ function chapterTitle(kind: Kind, c: NicheCtx, rng: LocalRng): string {
   const { n, unit, unitOne } = c.dur;
   switch (kind) {
     case 'comprendre': return rng.pick(['Comprendre ce qui se passe vraiment', 'Pourquoi ça bloque (et pourquoi ce n’est pas de votre faute)']);
-    case 'diagnostic': return 'Le diagnostic en 3 jours : observer avant d’agir';
+    case 'diagnostic': return c.care ? 'Le diagnostic en 3 jours : observer avant d’agir' : 'L’état des lieux en 3 jours : y voir clair avant d’agir';
     case 'methode': return `La méthode ${c.adj} en ${c.stepCount} étapes`;
     case 'erreurs': return `Les ${Math.min(5, Math.max(3, c.mistakes.length || 3))} erreurs qui entretiennent le problème`;
     case 'situations': return 'Les situations qui font tout dérailler (et quoi faire)';
@@ -118,11 +146,13 @@ function phases(c: NicheCtx): { label: string; action: string }[] {
   const U = cap(unit);
   const cuts = [0, Math.max(1, Math.round(n * 0.2)), Math.max(2, Math.round(n * 0.5)), Math.max(3, Math.round(n * 0.78)), n];
   const steps = c.steps.length >= 3 ? c.steps : [...c.steps, ...FALLBACK.steps].slice(0, 5);
+  // « Nuits 1 à 2 : tenir un journal pendant 5 nuits » contradicts itself: the phase gives the duration
+  const act = (s: string) => inline(s).replace(/\s+pendant\s+(?:\d+|quelques|deux|trois)\s+(?:nuits?|jours?|soirs?|semaines?|matins?)\b/iu, '');
   const acts = [
-    steps[0]!,
-    steps[1] ?? steps[0]!,
-    steps.slice(2, 4).map(lf).join(', puis ') || steps[0]!,
-    `consolider : garder tout ce qui marche et ne rien ajouter de nouveau`,
+    act(steps[0]!),
+    act(steps[1] ?? steps[0]!),
+    steps.slice(2, 4).map(act).join(', puis ') || act(steps[0]!),
+    'consolider — garder tout ce qui marche et ne rien ajouter de nouveau',
   ];
   const out: { label: string; action: string }[] = [];
   for (let i = 0; i < 4; i++) {
@@ -137,11 +167,13 @@ function points(kind: Kind, c: NicheCtx): string[] {
   const s = (arr: readonly string[], k: number) => arr.slice(0, k).map((x) => sentence(x));
   switch (kind) {
     case 'comprendre': return [...s(c.facts, 2), ...s(c.pains, 2)].slice(0, 4).concat(c.facts.length + c.pains.length ? [] : ['Le mécanisme qui entretient le problème.', 'Pourquoi les solutions « classiques » échouent.']);
-    case 'diagnostic': return ['Tenir un carnet d’observation pendant 3 jours.', 'Repérer le moment qui revient le plus.', 'Choisir une seule priorité.'];
+    case 'diagnostic': return c.care
+      ? ['Tenir un carnet d’observation pendant 3 jours.', 'Repérer le moment qui revient le plus.', 'Choisir une seule priorité.']
+      : ['Faire l’état des lieux sur une page pendant 3 jours.', 'Repérer le point qui bloque le plus souvent.', 'Choisir une seule priorité.'];
     case 'methode': return s(c.steps.length >= 3 ? c.steps : uniqStrings([...c.steps, ...FALLBACK.steps]), c.stepCount);
     case 'erreurs': return s(c.mistakes.length ? c.mistakes : FALLBACK.mistakes, 4);
-    case 'situations': return [...c.phrases.slice(0, 3).map((p) => `Quand on se dit ${q(p)}.`), 'Les jours sans énergie.'].slice(0, 4);
-    case 'programme': return phases(c).map((p) => `${p.label} : ${lf(p.action)}.`);
+    case 'situations': return [...c.phrases.slice(0, 3).map((p) => `Quand on se dit ${qv(p)}.`), 'Les jours sans énergie.'].slice(0, 4);
+    case 'programme': return phases(c).map((p) => `${p.label} : ${p.action}.`);
     case 'durer': return s(c.tips.length ? c.tips : FALLBACK.tips, 4);
   }
 }
@@ -157,13 +189,19 @@ function bonusTitle(c: NicheCtx, rng: LocalRng): string {
 export function heuristicOutline(title: string, nicheIn: NicheBrief, vocIn: VoiceOfCustomer, rng: LocalRng): Outline {
   const c = buildNicheCtx(nicheIn, vocIn);
   const kinds = ORDER[chapterCount(c)]!;
-  const next = c.pains.find((p) => norm(lf(p)) !== norm(c.pbClause) && !firstPerson(p) && p.length <= 90);
   return {
     title: clean(title) || cap(c.problem),
     chapters: kinds.map((k) => ({ title: chapterTitle(k, c, rng), points: points(k, c) })),
     bonusTitle: bonusTitle(c, rng),
-    nextStepTitle: next ? `La suite est ici : ${cap(fit(bare(next), 70))}` : 'La suite est ici : aller plus loin',
+    nextStepTitle: nextGuideTitle(c),
   };
+}
+
+/** Title of the next guide for the same reader (no « La suite est ici » prefix: the layout adds it). */
+export function nextGuideTitle(c: NicheCtx): string {
+  const used = norm(c.pbClause);
+  const next = bestLabel(c.pains.filter((p) => norm(lf(p)) !== used && !firstPerson(p)), 64, 12);
+  return next ? `En finir avec ${q(lf(next))}` : `Le guide suivant pour ${c.audCore}`;
 }
 
 // ───────────────────────────── the draft ─────────────────────────────
@@ -187,19 +225,32 @@ class Draft {
     this.examples = new Pool(c.examples, rng);
     this.facts = new Pool(c.facts);
     this.phrases = new Pool(c.phrases, rng);
-    this.pains = new Pool(c.pains);
-    this.outcomes = new Pool(c.outcomes.length ? c.outcomes : FALLBACK.outcomes);
+    // the main pain is quoted by the introduction itself: the pool hands out the others
+    const others = c.pains.filter((p) => norm(lf(p)) !== norm(c.pbClause));
+    this.pains = new Pool(others.length ? others : c.pains);
+    // the promised outcome lives on the cover / promise page: chapters use the OTHER outcomes
+    const promised = norm(promiseOutcome(c));
+    const rest = c.outcomes.filter((o) => norm(lf(o)) !== promised);
+    this.outcomes = new Pool(rest.length ? rest : FALLBACK.outcomes);
   }
 
-  tip(): string { return lf(this.tips.take()!); }
-  step(): string { return lf(this.steps.take()!); }
+  tip(): string { return inline(this.tips.take()!); }
+  step(): string { return inline(this.steps.take()!); }
   /** i-th step of the current chapter (falls back to the shared pool). */
-  cs(i: number): string { const s = this.chapterSteps[i]; return s ? lf(s) : this.step(); }
-  mistake(): string { return lf(this.mistakes.take()!); }
-  outcome(): string { return lf(this.outcomes.take()!); }
+  cs(i: number): string { const s = this.chapterSteps[i]; return s ? inline(s) : this.step(); }
+  mistake(): string { return inline(this.mistakes.take()!); }
+  outcome(): string { return inline(this.outcomes.take()!); }
   /** Facts are never repeated: once used, the templates fall back to fact-free wording. */
-  fact(): string | null { const f = this.facts.takeFresh(); return f ? lf(f) : null; }
-  phrase(): string | null { return this.phrases.take(); }
+  fact(): string | null { const f = this.facts.takeFresh(); return f ? inline(f) : null; }
+  /** Customer phrases already shown elsewhere on the same pages (a pull-quote): not reused nearby. */
+  readonly avoid = new Set<string>();
+  phrase(): string | null {
+    for (let k = 0; k < Math.max(1, this.phrases.size); k++) {
+      const p = this.phrases.take();
+      if (p === null || !this.avoid.has(norm(bare(p)))) return p;
+    }
+    return null;
+  }
   /** Pain as customer words, always quoted (works whatever its grammatical form). */
   painQ(): string { const p = this.pains.take(); return q(p ?? this.c.pbClause); }
 }
@@ -224,7 +275,7 @@ const PARAS: Record<Kind, Para[]> = {
     (d) => {
       const p = d.phrase();
       return p
-        ? `Quand on lit ${q(p)} dans un commentaire, on entend de l’épuisement. Mais on entend aussi un cercle : plus la situation dure, moins on a d’énergie pour tenir une règle, et plus on improvise. Or l’improvisation, c’est précisément ce qui entretient le problème. Ce guide sert d’abord à sortir de ce cercle.`
+        ? `Quand on lit ${qv(p)} dans un commentaire, on entend de l’épuisement. Mais on entend aussi un cercle : plus la situation dure, moins on a d’énergie pour tenir une règle, et plus on improvise. Or l’improvisation, c’est précisément ce qui entretient le problème. Ce guide sert d’abord à sortir de ce cercle.`
         : `Plus la situation dure, moins on a d’énergie pour tenir une règle, et plus on improvise. Or l’improvisation, c’est précisément ce qui entretient le problème. Ce guide sert d’abord à sortir de ce cercle, avec des gestes simples et toujours les mêmes.`;
     },
     (d) => `La bonne nouvelle, c’est qu’un mécanisme appris peut se désapprendre. Ce qui entretient la difficulté, ce sont souvent de petits gestes répétés, par exemple : ${d.mistake()}. Personne ne vous l’a dit, vous ne pouviez donc pas le savoir. À partir d’aujourd’hui, vous allez le savoir.`,
@@ -236,20 +287,26 @@ const PARAS: Record<Kind, Para[]> = {
     },
   ],
   diagnostic: [
-    () => 'Pourquoi observer d’abord ? Parce que la mémoire ment quand on est épuisé. On a l’impression que « c’est tout le temps », alors qu’un carnet révèle souvent deux ou trois moments précis où tout se joue. Ces moments-là sont vos leviers.',
-    (d) => `Le carnet tient sur une page : l’heure, ce qui s’est passé juste avant, votre réaction, et le résultat. Pas besoin d’application ni de tableau compliqué. Un détail compte : notez aussi les bons moments. Ce sont eux qui montrent ce qui marche déjà, par exemple quand vous pensez à ${d.tip()}.`,
+    (d) => d.c.care
+      ? 'Pourquoi observer d’abord ? Parce que la mémoire ment quand on est épuisé. On a l’impression que « c’est tout le temps », alors qu’un carnet révèle souvent deux ou trois moments précis où tout se joue. Ces moments-là sont vos leviers.'
+      : 'Pourquoi faire le point d’abord ? Parce que l’inquiétude grossit tout. On a l’impression que « tout est flou », alors qu’une page de notes révèle souvent deux ou trois points précis qui bloquent. Ces points-là sont vos leviers.',
+    (d) => d.c.care
+      ? `Le carnet tient sur une page : l’heure, ce qui s’est passé juste avant, votre réaction, et le résultat. Pas besoin d’application ni de tableau compliqué. Un détail compte : notez aussi les bons moments. Ce sont eux qui montrent ce qui marche déjà, par exemple quand vous pensez à ${d.tip()}.`
+      : `L’état des lieux tient sur une page : ce qui est déjà en place, ce qui bloque, ce qui vous inquiète et la prochaine échéance. Pas besoin d’outil compliqué. Notez aussi ce qui fonctionne déjà, par exemple : ${d.tip()}.`,
     (d) => {
       const p = d.phrase();
-      return `${p ? `Beaucoup nous ont écrit ${q(p)}. ` : ''}En relisant leur carnet après trois jours, la plupart repèrent un schéma qui se répète : même heure, même déclencheur, même réaction. C’est ce schéma, et lui seul, que vous allez travailler en premier.`;
+      return d.c.care
+        ? `${p ? `On lit souvent ${qv(p)}. ` : ''}Avec trois jours de carnet sous les yeux, on repère presque toujours un schéma qui se répète : même heure, même déclencheur, même réaction. C’est ce schéma, et lui seul, que vous allez travailler en premier.`
+        : `${p ? `On lit souvent ${qv(p)}. ` : ''}Une fois tout posé sur le papier, la plupart des gens découvrent que le blocage tient à un ou deux points précis. C’est ce point-là, et lui seul, que vous allez traiter en premier.`;
     },
-    () => 'Pendant ces trois jours, ne changez rien. C’est frustrant, mais c’est ce qui rend le diagnostic fiable : si vous modifiez tout en même temps, vous ne saurez jamais ce qui a vraiment fonctionné.',
+    (d) => `Pendant ces trois jours, ne changez rien : contentez-vous de noter. C’est frustrant, mais c’est ce qui rend ${d.c.care ? 'le diagnostic' : 'l’état des lieux'} fiable : si vous modifiez tout en même temps, vous ne saurez jamais ce qui a vraiment fonctionné.`,
   ],
   methode: [
     (d) => `Première étape : ${d.cs(0)}. Elle paraît simple, et c’est voulu : une méthode qu’on n’arrive pas à tenir un soir de fatigue ne sert à rien. Astuce de terrain : ${d.tip()}.`,
     (d) => `Ensuite, ${d.cs(1)}. C’est souvent l’étape qu’on saute quand on est pressé, et c’est pourtant elle qui fait la différence au bout d’une semaine. Faites-la au même moment chaque jour, même quand tout semble aller mieux.`,
     (d) => {
       const p = d.phrase();
-      return `La troisième étape demande un peu de constance : ${d.cs(2)}. ${p ? `Si vous vous dites ${q(p)}, c’est normal` : 'Les premiers jours sont les plus durs, c’est normal'} : le nouveau repère met quelques ${d.c.dur.unit} à s’installer, puis il devient automatique.`;
+      return `La troisième étape demande un peu de constance : ${d.cs(2)}. ${p ? `Si vous vous dites ${qv(p)}, c’est normal` : 'Les premiers jours sont les plus durs, c’est normal'} : le nouveau repère met quelques ${d.c.dur.unit} à s’installer, puis il devient automatique.`;
     },
     (d) => `Un détail qui change tout : ${d.tip()}. Ce n’est pas un gadget, c’est ce qui rend les étapes précédentes plus faciles à tenir. Les témoignages qui parlent de réussite mentionnent presque tous ce genre de petit ajustement.`,
   ],
@@ -262,9 +319,11 @@ const PARAS: Record<Kind, Para[]> = {
   situations: [
     (d) => {
       const p = d.phrase();
-      return `Situation n°1 : les jours où vous êtes à bout${p ? ` et où vous vous dites ${q(p)}` : ''}. Que faire ? Revenir à la version minimale du plan : une seule action, toujours la même — ${d.step()}. Une mauvaise journée n’efface pas les progrès.`;
+      return `Situation n°1 : les jours où vous êtes à bout${p ? ` et où vous vous dites ${qv(p)}` : ''}. Que faire ? Revenir à la version minimale du plan : une seule action, toujours la même — ${d.step()}. Une mauvaise journée n’efface pas les progrès.`;
     },
-    (d) => `Situation n°2 : l’entourage n’applique pas la même règle. C’est la cause de rechute la plus fréquente. Prenez cinq minutes pour vous mettre d’accord sur une seule consigne, écrite noir sur blanc, et affichez-la. Exemple de consigne : ${d.tip()}.`,
+    (d) => d.c.care
+      ? `Situation n°2 : l’entourage n’applique pas la même règle. C’est la cause de rechute la plus fréquente. Prenez cinq minutes pour vous mettre d’accord sur une seule consigne, écrite noir sur blanc, et affichez-la. Exemple de consigne : ${d.tip()}.`
+      : `Situation n°2 : une semaine trop chargée, et le plan passe à la trappe. C’est la cause d’abandon la plus fréquente. Gardez une seule action de dix minutes, notée dans votre agenda comme un rendez-vous. Par exemple : ${d.tip()}.`,
     () => 'Situation n°3 : un imprévu casse le rythme (maladie, voyage, changement d’horaires). Ne cherchez pas à « tenir quand même ». Mettez le plan en pause, puis reprenez au début de la phase où vous étiez, pendant 48 heures, avant de continuer.',
     (d) => `Situation n°4 : ça marchait, et tout recommence. C’est fréquent et ce n’est pas un échec. Vérifiez d’abord qu’une ancienne habitude n’est pas revenue, par exemple : ${d.mistake()}.`,
   ],
@@ -282,7 +341,7 @@ const PARAS: Record<Kind, Para[]> = {
   durer: [
     (d) => `À quoi ressemble la réussite ? Concrètement : ${d.outcome()}. Notez la date du jour où cela arrive pour la première fois. Les soirs de doute, cette date sera votre meilleure preuve.`,
     (d) => `Pour garder les acquis, trois réflexes suffisent. D’abord, ${d.tip()}. Ensuite, ${d.tip()}. Enfin, gardez votre carnet à portée de main : il vous dira tout de suite si une ancienne habitude revient.`,
-    (d) => `Si un jour tout semble remis en cause, rouvrez le chapitre des erreurs. Dans la grande majorité des rechutes décrites par nos lecteurs, une seule chose avait changé, par exemple : ${d.mistake()}. Corrigez ce point, et le reste suit.`,
+    (d) => `Si un jour tout semble remis en cause, rouvrez le chapitre des erreurs. Dans la plupart des rechutes décrites dans les témoignages, une seule chose avait changé, par exemple : ${d.mistake()}. Corrigez ce point, et le reste suit.`,
   ],
 };
 
@@ -301,7 +360,7 @@ const FILLERS: Para[] = [
 /** One natural mention of the reader per chapter (the reader must feel the guide was written for them). */
 const AUDIENCE_LINE: Record<Kind, (c: NicheCtx) => string> = {
   comprendre: (c) => `Chez ${c.audArt}, c’est presque toujours le même scénario.`,
-  diagnostic: (c) => `Pour ${c.audArt}, ces trois jours d’observation changent souvent tout le regard sur le problème.`,
+  diagnostic: (c) => `Pour ${c.audArt}, ces trois jours ${c.care ? 'd’observation' : 'de recul'} changent souvent tout le regard sur le problème.`,
   methode: (c) => `Chaque étape a été pensée pour ${c.audArt} : courte, concrète, réaliste.`,
   erreurs: (c) => `Ce sont celles qui reviennent le plus souvent chez ${c.audArt}.`,
   situations: (c) => `Ce sont les situations les plus décrites par ${c.audArt}.`,
@@ -313,15 +372,19 @@ function intro(kind: Kind, c: NicheCtx, rng: LocalRng): string {
   const { n, unit } = c.dur;
   const by: Record<Kind, string[]> = {
     comprendre: [
-      `Avant de changer quoi que ce soit, il faut comprendre le mécanisme qui se cache derrière ${q(fit(c.pbClause, 80))}, et pourquoi les solutions « classiques » échouent si souvent.`,
+      c.pbShort
+        ? `Avant de changer quoi que ce soit, il faut comprendre le mécanisme qui se cache derrière ${q(lf(c.pbShort))}, et pourquoi les solutions « classiques » échouent si souvent.`
+        : 'Avant de changer quoi que ce soit, il faut comprendre le mécanisme qui entretient la situation, et pourquoi les solutions « classiques » échouent si souvent.',
       `On ne règle bien que ce qu’on comprend. Ici, vous allez voir le mécanisme qui entretient la situation — et pourquoi ce n’est pas de votre faute.`,
     ],
-    diagnostic: ['On ne corrige bien que ce qu’on a observé. Pendant trois jours, vous allez simplement noter ce qui se passe, sans rien changer. C’est la base de tout le reste.'],
+    diagnostic: [c.care
+      ? 'On ne corrige bien que ce qu’on a observé. Pendant trois jours, vous allez simplement noter ce qui se passe, sans rien changer. C’est la base de tout le reste.'
+      : 'On ne corrige bien que ce qu’on a mesuré. Pendant trois jours, vous allez simplement faire le point, sans rien changer. C’est la base de tout le reste.'],
     methode: [
       'Voici le cœur du guide : la méthode, étape par étape. Chaque étape s’appuie sur la précédente — l’ordre compte plus que la perfection.',
       'Place à l’action. Les étapes qui suivent sont courtes, concrètes, et pensées pour être tenues même un jour de grande fatigue.',
     ],
-    erreurs: ['Ces erreurs, presque tout le monde les fait, souvent par amour ou par fatigue. Les repérer, c’est déjà faire la moitié du chemin.'],
+    erreurs: [`Ces erreurs, presque tout le monde les fait, souvent ${c.care ? 'par amour ou par fatigue' : 'par manque de temps ou par habitude'}. Les repérer, c’est déjà faire la moitié du chemin.`],
     situations: ['Même avec la meilleure méthode, il y a des jours où tout déraille. Voici les situations qui reviennent le plus dans les témoignages, et la réponse à donner à chacune.'],
     programme: [`Voici le plan concret sur ${n} ${unit}. Il est volontairement progressif : chaque phase n’ajoute qu’une seule nouveauté.`],
     durer: ['Le vrai défi n’est pas de réussir une semaine : c’est de tenir quand la vie reprend ses droits. Ce chapitre vous aide à garder les acquis.'],
@@ -335,18 +398,27 @@ function stepsFor(kind: Kind, points: string[], d: Draft): string[] {
   switch (kind) {
     case 'comprendre':
       steps = [
-        'Noter, pendant 24 heures, chaque moment difficile : l’heure et ce qui s’est passé juste avant',
+        d.c.care
+          ? 'Noter, pendant 24 heures, chaque moment difficile : l’heure et ce qui s’est passé juste avant'
+          : 'Noter, pendant 24 heures, chaque question ou blocage qui vous vient, avec son contexte',
         'Relire les mécanismes de ce chapitre et entourer celui qui vous ressemble le plus',
         `Repérer une habitude à arrêter dès cette semaine, par exemple : ${d.mistake()}`,
       ];
       break;
     case 'diagnostic':
-      steps = [
-        'Préparer une page avec quatre colonnes : heure, contexte, réaction, résultat',
-        'Tout noter pendant 3 jours, sans rien changer',
-        'Surligner les moments qui reviennent au moins deux fois',
-        'Choisir UN seul moment à travailler en priorité',
-      ];
+      steps = d.c.care
+        ? [
+          'Préparer une page avec quatre colonnes : heure, contexte, réaction, résultat',
+          'Tout noter pendant 3 jours, sans rien changer',
+          'Surligner les moments qui reviennent au moins deux fois',
+          'Choisir UN seul moment à travailler en priorité',
+        ]
+        : [
+          'Préparer une page avec quatre colonnes : déjà en place, ce qui bloque, ce qui inquiète, prochaine échéance',
+          'Tout noter pendant 3 jours, sans rien changer',
+          'Surligner les points qui reviennent au moins deux fois',
+          'Choisir UN seul point à traiter en priorité',
+        ];
       break;
     case 'methode':
       steps = fromPoints.length >= 3 ? fromPoints : uniqStrings([...fromPoints, ...d.c.steps, ...FALLBACK.steps]);
@@ -361,7 +433,7 @@ function stepsFor(kind: Kind, points: string[], d: Draft): string[] {
     case 'situations':
       steps = [
         'Préparer à l’avance votre « plan minimal » pour les jours sans énergie',
-        'Mettre tout le foyer d’accord sur une seule consigne écrite',
+        d.c.care ? 'Mettre tout le foyer d’accord sur une seule consigne écrite' : 'Bloquer dix minutes fixes dans l’agenda, même les semaines chargées',
         'Après un imprévu, reprendre la phase en cours pendant 48 heures avant de continuer',
       ];
       break;
@@ -376,11 +448,14 @@ function stepsFor(kind: Kind, points: string[], d: Draft): string[] {
 }
 
 function checklistFor(kind: Kind, steps: string[], c: NicheCtx): string[] {
-  const short = (s: string) => lowerFirst(shortLabel(s, 60));
+  // checklist lines are body text: the whole item when it is short enough, else its clean head
+  const short = (s: string) => lowerFirst(bare(s).length <= 72 ? inline(bare(s)) : labelOf(s, 64));
   switch (kind) {
-    case 'comprendre': return ['J’ai noté 24 heures d’observation', 'J’ai identifié le mécanisme principal', 'Je connais l’habitude à arrêter en premier', ...(c.facts[0] && c.facts[0].length <= 70 ? [`Je retiens : ${lf(c.facts[0])}`] : ['Je connais les repères clés du chapitre'])];
-    case 'diagnostic': return ['Mon carnet est prêt', 'J’ai noté 3 jours complets', 'J’ai repéré le moment qui revient le plus', 'J’ai choisi une seule priorité'];
-    case 'erreurs': return (c.mistakes.length ? c.mistakes : FALLBACK.mistakes).slice(0, 5).map((m) => `Je ne fais plus : ${short(m)}`);
+    case 'comprendre': return [c.care ? 'J’ai noté 24 heures d’observation' : 'J’ai noté mes blocages pendant 24 heures', 'J’ai identifié le mécanisme principal', 'Je connais l’habitude à arrêter en premier', ...(c.facts[0] && c.facts[0].length <= 70 ? [`Je retiens : ${inline(c.facts[0])}`] : ['Je connais les repères clés du chapitre'])];
+    case 'diagnostic': return c.care
+      ? ['Mon carnet est prêt', 'J’ai noté 3 jours complets', 'J’ai repéré le moment qui revient le plus', 'J’ai choisi une seule priorité']
+      : ['Ma page d’état des lieux est prête', 'J’ai noté 3 jours complets', 'J’ai repéré le point qui bloque le plus', 'J’ai choisi une seule priorité'];
+    case 'erreurs': return (c.mistakes.length ? c.mistakes : FALLBACK.mistakes).slice(0, 5).map((m) => `Je ne fais plus : ${lowerFirst(labelOf(m, 64))}`);
     case 'programme': return phases(c).map((p) => `Phase « ${p.label} » terminée`).concat('Carnet rempli chaque soir');
     default: return steps.slice(0, 5).map((s) => `Fait : ${short(s)}`);
   }
@@ -396,33 +471,49 @@ function descending(rng: LocalRng, k: number): number[] {
   return out;
 }
 
+/** Chart labels: ≤ 40 chars, whole phrases (see VisualSpec label conventions in shared/types.ts). */
+export const CHART_LABEL_MAX = 40;
+
 function visualFor(kind: Kind, steps: string[], d: Draft): VisualSpec {
   const c = d.c;
   switch (kind) {
     case 'comprendre': {
-      const labels = (c.pains.length >= 3 ? c.pains : [...c.pains, ...c.mistakes, ...FALLBACK.mistakes]).slice(0, 5).map((p) => shortLabel(p, 48));
+      const labels = labelsFrom(c.pains.map(headOfPain), CHART_LABEL_MAX, 5, [...c.mistakes, ...FALLBACK.mistakes]);
       return { type: 'bar_chart', title: 'Ce qui revient le plus dans les témoignages (indice de fréquence)', labels, values: descending(d.rng, labels.length) };
     }
     case 'diagnostic':
-      return { type: 'checklist_card', title: 'Votre grille d’observation (3 jours)', labels: ['Heure', 'Ce qui s’est passé juste avant', 'Ma réaction', 'Le résultat'], values: [] };
+      return c.care
+        ? { type: 'checklist_card', title: 'Votre grille d’observation (3 jours)', labels: ['Heure', 'Ce qui s’est passé juste avant', 'Ma réaction', 'Le résultat'], values: [] }
+        : { type: 'checklist_card', title: 'Votre page d’état des lieux (3 jours)', labels: ['Ce qui est déjà en place', 'Ce qui bloque', 'Ce qui m’inquiète', 'La prochaine échéance'], values: [] };
     case 'methode':
-      return { type: 'steps_diagram', title: `La méthode en ${steps.length} étapes`, labels: steps.map((s) => shortLabel(s, 48)), values: [] };
+      return { type: 'steps_diagram', title: `La méthode en ${steps.length} étapes`, labels: steps.map((s) => labelOf(s, 64)), values: [] };
     case 'erreurs': {
-      const dont = (c.mistakes.length ? c.mistakes : FALLBACK.mistakes).slice(0, 3);
-      const dos = [...c.tips, ...c.steps, ...FALLBACK.tips].slice(0, dont.length);
-      return { type: 'do_dont', title: 'À éviter / à faire à la place', labels: [...dont.map((m) => shortLabel(m, 44)), ...dos.map((t) => shortLabel(t, 44))], values: [] };
+      const dont = labelsFrom(c.mistakes.length ? c.mistakes : FALLBACK.mistakes, 52, 3, FALLBACK.mistakes);
+      const dos = labelsFrom([...c.tips, ...c.steps], 52, dont.length, FALLBACK.tips);
+      return {
+        type: 'do_dont',
+        title: 'À éviter / à faire à la place',
+        labels: [...dont.map((m) => `À éviter : ${lowerFirst(m)}`), ...dos.map((t) => `À faire : ${lowerFirst(t)}`)],
+        values: [],
+      };
     }
     case 'situations': {
-      const p = c.phrases[1] ?? c.phrases[0];
-      return { type: 'quote', title: 'Ce qu’on lit le plus souvent', labels: [p ? cap(bare(p)) : 'Une mauvaise journée n’efface pas les progrès', p ? 'Un commentaire parmi des dizaines du même genre' : 'La règle d’or des jours difficiles'], values: [] };
+      const p = c.phrases.map(bare).find((x, i) => i >= 1 && x.length <= 110) ?? c.phrases.map(bare).find((x) => x.length <= 110);
+      return { type: 'quote', title: 'Ce qu’on lit le plus souvent', labels: p ? [cap(p), 'Un commentaire parmi des dizaines du même genre'] : ['Une mauvaise journée n’efface pas les progrès', 'La règle d’or des jours difficiles'], values: [] };
     }
     case 'programme':
-      return { type: 'timeline', title: `Votre plan sur ${c.dur.n} ${c.dur.unit}`, labels: phases(c).map((p) => `${p.label} : ${lowerFirst(shortLabel(p.action, 44))}`), values: [] };
+      return { type: 'timeline', title: `Votre plan sur ${c.dur.n} ${c.dur.unit}`, labels: phases(c).map((p) => `${p.label} : ${lowerFirst(labelOf(p.action, 56))}`), values: [] };
     case 'durer': {
-      const labels = (c.tips.length >= 4 ? c.tips : [...c.tips, ...FALLBACK.tips]).slice(0, 6).map((t) => shortLabel(t, 40));
+      const labels = labelsFrom(c.tips, 56, 6, FALLBACK.tips);
       return { type: 'icon_grid', title: 'Vos réflexes pour tenir', labels, values: [] };
     }
   }
+}
+
+/** « Les accidents de nuit : tous les matins une flaque » → « Les accidents de nuit ». */
+function headOfPain(p: string): string {
+  const head = clean(p).split(/\s+[:;]\s+/)[0] ?? p;
+  return head.length >= 10 ? head : p;
 }
 
 function exampleFor(d: Draft): string | null {
@@ -433,17 +524,22 @@ function exampleFor(d: Draft): string | null {
   // no invented testimonial: an explicit, second-person scenario built from real customer words
   const k = d.rng.int(0, 2);
   const unit = d.c.dur.unitOne;
-  if (k === 0) return `Mise en situation : un soir, vous vous surprenez à penser ${q(p)}. Au lieu de tout changer d’un coup, vous appliquez une seule chose : ${d.step()}. Le lendemain, vous notez dans le carnet ce qui s’est passé, sans juger.`;
-  if (k === 1) return `Mise en situation : c’est ${theUnit(unit)} 4, et ${q(p)} vous revient en tête. C’est exactement le moment de tenir la règle choisie — ${d.step()} — plutôt que d’improviser. Cochez la case du jour : c’est cette régularité qui paie.`;
-  return `Mise en situation : vous lisez ce chapitre en vous disant ${q(p)}. Commencez petit, dès aujourd’hui : ${d.step()}. Ne jugez le résultat qu’après plusieurs ${d.c.dur.unit}, carnet en main.`;
+  if (k === 0) return `Mise en situation : un soir, vous vous surprenez à penser ${qv(p)}. Au lieu de tout changer d’un coup, vous appliquez une seule chose : ${d.step()}. Le lendemain, vous notez dans le carnet ce qui s’est passé, sans juger.`;
+  if (k === 1) return `Mise en situation : c’est ${theUnit(unit)} 4, et ${qv(p)} vous revient en tête. C’est exactement le moment de tenir la règle choisie (${d.step()}) plutôt que d’improviser. Cochez la case du jour : c’est cette régularité qui paie.`;
+  return `Mise en situation : vous lisez ce chapitre en vous disant ${qv(p)}. Commencez petit, dès aujourd’hui : ${d.step()}. Ne jugez le résultat qu’après plusieurs ${d.c.dur.unit}, carnet en main.`;
 }
 
 function buildChapter(title: string, pts: string[], kind: Kind, d: Draft, nParas: number): { chapter: ChapterContent; spare: Para[] } {
-  // numbered kinds keep their natural order, the others vary per seed
-  const ordered = kind === 'erreurs' || kind === 'programme' || kind === 'situations' || kind === 'methode' ? PARAS[kind].slice() : d.rng.shuffle(PARAS[kind]);
+  // numbered kinds keep their natural order, the others vary per seed (« Deuxième repère » always after the first one)
+  const ordered = kind === 'erreurs' || kind === 'programme' || kind === 'situations' || kind === 'methode' ? PARAS[kind].slice()
+    : kind === 'comprendre' ? [...d.rng.shuffle(PARAS[kind].slice(0, 3)), PARAS[kind][3]!] : d.rng.shuffle(PARAS[kind]);
   const used = ordered.slice(0, Math.min(nParas, ordered.length));
   const steps = stepsFor(kind, pts, d);
   d.chapterSteps = steps;
+  // the visual is chosen first: a customer phrase used as its pull-quote is not repeated by the example
+  const visual = visualFor(kind, steps, d);
+  d.avoid.clear();
+  if (visual.type === 'quote' && visual.labels[0]) d.avoid.add(norm(bare(visual.labels[0])));
   const chapter: ChapterContent = {
     title: clean(title),
     intro: `${intro(kind, d.c, d.rng)} ${AUDIENCE_LINE[kind](d.c)}`,
@@ -451,7 +547,7 @@ function buildChapter(title: string, pts: string[], kind: Kind, d: Draft, nParas
     steps,
     example: exampleFor(d),
     checklist: checklistFor(kind, steps, d.c).map((x) => cap(clean(x))),
-    visual: visualFor(kind, steps, d),
+    visual,
   };
   return { chapter, spare: ordered.slice(used.length) };
 }
@@ -462,10 +558,11 @@ function buildBonus(title: string, d: Draft): ChapterContent {
   const isCarnet = /carnet|suivi/i.test(t);
   const isPhrases = /phrase/i.test(t);
   const steps = isCarnet
-    ? [`Imprimer une grille de ${c.dur.n} cases`, 'Chaque soir, noter l’heure clé et un mot sur la journée', 'Le dimanche, relire la semaine et entourer le meilleur jour', 'Comparer la première et la dernière semaine']
+    ? [`Imprimer une grille de ${c.dur.n} cases`, 'Chaque soir, noter le point clé et un mot sur la journée', 'Le dimanche, relire la semaine et entourer le meilleur jour', 'Comparer la première et la dernière semaine']
     : isPhrases
-      ? ['Pour vous-même : « Une mauvaise journée n’efface pas les progrès. »', 'Pour l’entourage : « On applique tous la même règle, même si c’est dur ce soir. »', `Pour les remarques : « On suit un plan de ${c.dur.n} ${c.dur.unit}, on fera le bilan à la fin. »`, 'Pour vous encourager : « Hier était plus difficile qu’aujourd’hui. »']
+      ? ['Pour vous-même : « Une mauvaise journée n’efface pas les progrès. »', c.care ? 'Pour l’entourage : « On applique tous la même règle, même si c’est dur ce soir. »' : 'Pour vos proches : « Je suis un plan précis, je ferai le point à la fin. »', `Pour les remarques : « On suit un plan de ${c.dur.n} ${c.dur.unit}, on fera le bilan à la fin. »`, 'Pour vous encourager : « Hier était plus difficile qu’aujourd’hui. »']
       : ['Respirer et revenir au plan minimal : une seule action, toujours la même', `Relire la règle affichée : ${d.tip()}`, 'Noter ce qui s’est passé dans le carnet, sans jugement', 'Reprendre le plan normal dès le lendemain'];
+  const p0 = c.phrases[0];
   return {
     title: t,
     intro: isCarnet
@@ -474,13 +571,13 @@ function buildBonus(title: string, d: Draft): ChapterContent {
         ? 'Dans les moments difficiles, on manque de mots. Voici des phrases prêtes à l’emploi, à dire à voix haute ou à garder en tête.'
         : 'Imprimez cette page et gardez-la à portée de main. Elle résume quoi faire, dans l’ordre, quand tout déraille.',
     paragraphs: [
-      `Ce bonus a été conçu à partir des situations les plus citées par ${c.audArt}. ${c.phrases[0] ? `Quand on se dit ${q(c.phrases[0])}, on n’a ni le temps ni l’énergie de relire un guide entier : il faut une réponse immédiate.` : 'Dans ces moments-là, on n’a ni le temps ni l’énergie de relire un guide entier : il faut une réponse immédiate.'}`,
+      `Ce bonus a été conçu à partir des situations les plus citées par ${c.audArt}. ${p0 ? `Quand on se dit ${qv(p0)}, on n’a ni le temps ni l’énergie de relire un guide entier : il faut une réponse immédiate.` : 'Dans ces moments-là, on n’a ni le temps ni l’énergie de relire un guide entier : il faut une réponse immédiate.'}`,
       'Gardez-le simple : une page, quatre lignes, toujours les mêmes. C’est sa répétition qui le rend efficace, pas sa sophistication.',
     ],
     steps: steps.map(sentence),
     example: null,
-    checklist: ['Fiche imprimée', 'Fiche affichée là où elle sert', 'Entourage prévenu'],
-    visual: { type: 'checklist_card', title: shortLabel(t.replace(/^bonus\s*:\s*/i, ''), 48), labels: steps.map((s) => shortLabel(s, 42)), values: [] },
+    checklist: ['Fiche imprimée', 'Fiche affichée là où elle sert', c.care ? 'Entourage prévenu' : 'Rappel programmé dans l’agenda'],
+    visual: { type: 'checklist_card', title: labelOf(t.replace(/^bonus\s*:\s*/i, ''), 48), labels: steps.map((s) => labelOf(s, 64)), values: [] },
   };
 }
 
@@ -489,26 +586,33 @@ export function pdfWordCount(p: Omit<PdfContent, 'wordCount'> | PdfContent): num
   return wordCount([p.title, p.subtitle, p.promise, ...p.introduction, ...p.chapters.map(ch), ch(p.bonus), p.nextStep.title, p.nextStep.text].join(' '));
 }
 
+/**
+ * The introduction restates the PAIN with the customers' words (never the promise), says who the
+ * guide is for, then announces the promise ONCE (the intro page box repeats it: two mentions max).
+ */
 function introduction(d: Draft, nChapters: number, promise: string): string[] {
   const c = d.c;
   const [p1, p2] = [d.phrase(), d.phrase()];
   const pains = uniqStrings([d.painQ(), d.painQ()]);
+  const painQ = q(c.pbClause);
   const out: string[] = [];
   out.push(
     p1
-      ? `Si vous avez ouvert ce guide, votre quotidien ressemble sans doute à ceci : ${c.pbClause}. Peut-être l’avez-vous dit avec vos mots à vous : ${q(p1)}${p2 && p2 !== p1 ? `, ou encore ${q(p2)}` : ''}. Ces phrases, nous ne les avons pas inventées : elles reviennent sans cesse dans les commentaires, les forums et les avis que nous avons épluchés pour préparer ce guide.`
-      : `Si vous avez ouvert ce guide, votre quotidien ressemble sans doute à ceci : ${c.pbClause}. Ce n’est pas une impression : c’est l’une des difficultés les plus citées par ${c.audArt} dans les commentaires et les avis que nous avons épluchés pour préparer ce guide.`,
+      ? `Si vous avez ouvert ce guide, vous vous reconnaissez sans doute dans cette situation : ${painQ}. Peut-être l’avez-vous dit avec vos mots à vous : ${qv(p1)}${p2 && p2 !== p1 ? `, ou encore ${qv(p2)}` : ''}. Ces phrases, nous ne les avons pas inventées : elles reviennent sans cesse dans les commentaires, les forums et les avis que nous avons épluchés pour préparer ce guide.`
+      : `Si vous avez ouvert ce guide, vous vous reconnaissez sans doute dans cette situation : ${painQ}. Ce n’est pas une impression : c’est l’une des difficultés les plus citées par ${c.audArt} dans les commentaires et les avis que nous avons épluchés pour préparer ce guide.`,
   );
+  const notWill = c.care ? 'Ce n’est ni un manque de volonté ni un manque d’amour' : 'Ce n’est ni un manque de volonté ni un manque de sérieux';
   out.push(
     pains.length >= 2
-      ? `Le problème ne s’arrête jamais à un seul symptôme. On lit ${pains[0]}, puis ${pains[1]}, et au bout de quelques semaines s’installe cette impression d’avoir tout essayé sans que rien ne tienne. Ce n’est ni un manque de volonté ni un manque d’amour : c’est un manque de méthode claire, appliquée dans le bon ordre.`
-      : `Au bout de quelques semaines, la situation finit par peser sur tout le reste : l’humeur, l’énergie, la vie de famille ou le travail. Et s’installe cette impression d’avoir tout essayé sans que rien ne tienne. Ce n’est pas un manque de volonté : c’est un manque de méthode claire, appliquée dans le bon ordre.`,
+      ? `Le problème ne s’arrête jamais à un seul symptôme. On lit ${pains[0]}, puis ${pains[1]}, et au bout de quelques semaines s’installe cette impression d’avoir tout essayé sans que rien ne tienne. ${notWill} : c’est un manque de méthode claire, appliquée dans le bon ordre.`
+      : `Au bout de quelques semaines, la situation finit par peser sur tout le reste : l’humeur, l’énergie, la vie de famille ou le travail. Et s’installe cette impression d’avoir tout essayé sans que rien ne tienne. ${notWill} : c’est un manque de méthode claire, appliquée dans le bon ordre.`,
   );
-  out.push(`Ce guide a été écrit pour une seule personne : ${c.audArt}. Il traite un seul problème — ${c.problem} — et il le traite à fond. À la fin, vous aurez ${lf(promise)}. Pas de théorie interminable : ${nChapters} chapitres courts, des étapes numérotées, des exemples réels et une checklist à la fin de chaque chapitre.`);
+  const sameAsP1 = norm(c.problem) === norm(c.pbClause);
+  out.push(`Ce guide a été écrit pour un seul profil de lecteur : ${c.audArt}. Il traite un seul problème${sameAsP1 ? ', celui que vous venez de lire,' : `, ${q(c.problem)},`} et il le traite à fond. À la fin, vous aurez ${lf(promise)}. Pas de théorie interminable : ${nChapters} chapitres courts, des étapes numérotées, des exemples concrets et une checklist à la fin de chaque chapitre.`);
   if (c.facts.length >= 3) {
     out.push(`Avant de commencer, deux repères issus de nos recherches. D’abord : ${d.fact()}. Ensuite : ${d.fact()}. Garder ces deux points en tête évite une bonne partie des erreurs décrites plus loin.`);
   }
-  out.push(`Comment lire ce guide ? Lisez le premier chapitre ce soir, puis avancez d’un chapitre à la fois. Cochez la checklist avant de passer au suivant. Et si vous ne deviez retenir qu’une chose dès maintenant : ${lf(c.tips[0] ?? FALLBACK.tips[0])}.`);
+  out.push(`Comment lire ce guide ? Lisez le premier chapitre ce soir, puis avancez d’un chapitre à la fois. Cochez la checklist avant de passer au suivant. Et si vous ne deviez retenir qu’une chose dès maintenant : ${inline(c.tips[0] ?? FALLBACK.tips[0])}.`);
   return out;
 }
 
@@ -534,7 +638,7 @@ export function heuristicPdfContent(
   }
   const nParas = c.richness > 0.6 ? 3 : 2;
   const title = clean(input.title) || clean(outline.title) || cap(c.problem);
-  const outcome = lf(c.outcomes[0] ?? FALLBACK.outcomes[0]);
+  const outcome = inline(promiseOutcome(c));
   const promise = `un plan clair de ${c.dur.n} ${c.dur.unit} pour arriver à ceci : ${outcome}`;
   // the introduction is written first: it gets the first customer words and research facts
   const intro0 = introduction(d, chapters0.length, promise);
@@ -551,10 +655,10 @@ export function heuristicPdfContent(
     chapters,
     bonus,
     nextStep: {
-      title: upsell ? `La suite est ici : ${upsell}` : clean(outline.nextStepTitle) || 'La suite est ici',
+      title: stripNextPrefix(upsell || clean(outline.nextStepTitle)) || nextGuideTitle(c),
       text: upsell
         ? `Vous avez maintenant une méthode qui fonctionne et un plan pour la tenir. La prochaine étape logique, c’est « ${upsell} » : le même format, pensé pour ${c.audArt}, qui reprend là où ce guide s’arrête. Les lecteurs de ce guide y ont accès en priorité, directement depuis le lien de votre e-mail d’achat.`
-        : `Vous avez maintenant une méthode qui fonctionne et un plan pour la tenir. Notre prochain guide pour ${c.audArt} est en préparation : il reprendra exactement là où celui-ci s’arrête. Vous le recevrez en priorité, à l’adresse utilisée pour votre achat.`,
+        : `Vous avez maintenant une méthode qui fonctionne et un plan pour la tenir. Notre prochain guide pour ${c.audArt} est en préparation : il reprendra exactement là où celui-ci s’arrête. Vous serez prévenu en priorité, à l’adresse utilisée pour votre achat.`,
       upsellProductId: null,
     },
     wordCount: 0,
@@ -591,7 +695,8 @@ export function heuristicPdfContent(
 function insertFlatSentences(content: PdfContent, c: NicheCtx, rng: LocalRng, banned: readonly string[]): void {
   const n = Math.min(8, 4 + rng.int(0, 3) + (c.deep ? 1 : 0));
   const subj = c.subj;
-  const cliches = rng.shuffle(CLICHE_TEMPLATES).slice(0, n).map((t) => t.replace('{sujet}', subj.noun).replace('{diff}', subj.fem ? 'différente' : 'différent'));
+  // a cliché the agent learned to ban (« Ne jamais écrire … ») is no longer written at all
+  const cliches = rng.shuffle(CLICHE_TEMPLATES.filter((t) => !containsBanned(t, banned))).slice(0, n).map((t) => t.replace('{sujet}', subj.noun).replace('{diff}', subj.fem ? 'différente' : 'différent'));
   const slots: { arr: string[]; i: number }[] = [];
   content.introduction.forEach((_, i) => slots.push({ arr: content.introduction, i }));
   for (const ch of content.chapters) ch.paragraphs.forEach((_, i) => slots.push({ arr: ch.paragraphs, i }));

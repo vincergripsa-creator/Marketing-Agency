@@ -192,7 +192,13 @@ function timeline(doc: Doc, v: VisualSpec, labels: string[], width: number, t: P
     const count = labels.length;
     const seg = inner / count;
     const labelW = seg - 8;
-    const heights = labels.map((l) => measure(doc, l, t.body, size, labelW));
+    // « Phase : action » (VisualSpec convention): the phase in bold, the action under it
+    const parts = labels.map((l) => {
+      const m = /^(.{2,32}?)\s*:\s+(.+)$/u.exec(l);
+      return m ? { phase: m[1]!, action: m[2]!.charAt(0).toUpperCase() + m[2]!.slice(1) } : { phase: '', action: l };
+    });
+    const phaseH = parts.map((p) => (p.phase ? measure(doc, p.phase, t.bold, size, labelW) + 2 : 0));
+    const heights = parts.map((p, k) => phaseH[k]! + measure(doc, p.action, t.body, size, labelW));
     const contentH = 24 + 14 + Math.max(...heights) + 4;
     return frame(doc, t, v.title, width, contentH, (x, y) => {
       const lineY = y + 12;
@@ -206,7 +212,9 @@ function timeline(doc: Doc, v: VisualSpec, labels: string[], width: number, t: P
         doc.restore();
         const numColor = readableOn(k === xs.length - 1 ? t.p.accent : t.p.primary, t.ink);
         put(doc, String(k + 1), cx - 12, lineY - 5.5, { font: 'Helvetica-Bold', size: 10, color: numColor, width: 24, align: 'center' });
-        put(doc, labels[k], cx - labelW / 2, lineY + 22, { font: t.body, size, color: t.ink, width: labelW, align: 'center' });
+        const p = parts[k]!;
+        if (p.phase) put(doc, p.phase, cx - labelW / 2, lineY + 22, { font: t.bold, size, color: t.primaryInk, width: labelW, align: 'center' });
+        put(doc, p.action, cx - labelW / 2, lineY + 22 + phaseH[k]!, { font: t.body, size, color: t.ink, width: labelW, align: 'center' });
       });
     }, 'timeline');
   }
@@ -269,7 +277,8 @@ function barChart(doc: Doc, v: VisualSpec, labels: string[], width: number, t: P
         doc.roundedRect(x + trackX, barY, Math.max(12, (trackW * val) / 100), 12, 6).fill(grad);
       }
       doc.restore();
-      put(doc, val === null ? '–' : `${Math.round(val)} %`, x + trackX + trackW + 6, barY + 1.5, { font: t.bold, size: 9.5, color: t.primaryInk, width: valueW - 6, align: 'right' });
+      // values are a 0..100 index (VisualSpec convention), not a percentage of anything
+      put(doc, val === null ? '–' : `${Math.round(val)}`, x + trackX + trackW + 6, barY + 1.5, { font: t.bold, size: 9.5, color: t.primaryInk, width: valueW - 6, align: 'right' });
       cy += h + 10;
     });
   }, 'bar_chart');
@@ -395,7 +404,7 @@ function iconGrid(doc: Doc, v: VisualSpec, labels: string[], width: number, t: P
 const DO_PREFIX = /^\s*(?:[+✓✔✅]\s*|(?:à faire|a faire|faire|do|oui|bon réflexe|bon reflexe|à privilégier|a privilegier)\s*[:–—-]\s*)/iu;
 const DONT_PREFIX = /^\s*(?:[-✗✘❌×]\s*|(?:à éviter|a eviter|éviter|eviter|don'?t|non|mauvais réflexe|mauvais reflexe|erreur)\s*[:–—-]\s*)/iu;
 
-/** Splits do/don't labels: explicit prefixes ("À faire :", "+", "✓" / "À éviter :", "-", "✗", "Ne pas…"), else halves. */
+/** Splits do/don't labels: explicit prefixes ("À faire :", "+", "✓" / "À éviter :", "-", "✗", "Ne pas…"), else halves (first half = à éviter). */
 export function splitDoDont(labels: string[], values: number[] = []): { dos: string[]; donts: string[] } {
   const dos: string[] = [];
   const donts: string[] = [];
@@ -410,9 +419,10 @@ export function splitDoDont(labels: string[], values: number[] = []): { dos: str
   });
   if (loose.length) {
     if (dos.length === 0 && donts.length === 0) {
+      // unprefixed lists follow the minds' order: « à éviter » first, then « à faire »
       const half = Math.ceil(loose.length / 2);
-      dos.push(...loose.slice(0, half));
-      donts.push(...loose.slice(half));
+      donts.push(...loose.slice(0, half));
+      dos.push(...loose.slice(half));
     } else (dos.length <= donts.length ? dos : donts).push(...loose);
   }
   const clean = (a: string[]) => a.map((s) => s.trim()).filter(Boolean).map((s) => s.charAt(0).toUpperCase() + s.slice(1));

@@ -7,7 +7,7 @@ import { CONNECTORS, isCliche, RISK_RULES } from '../lexicon.js';
 import { ensurePdf, forEachText } from '../shapes.js';
 import { allText, bare, cap, clean, fit, lf, norm, q, sentence, splitSentences, strArr, type LocalRng } from '../util.js';
 import { safeVoc } from './niche.js';
-import { pdfWordCount } from './studio.js';
+import { inline, pdfWordCount } from './studio.js';
 
 // ───────────────────────────── humanize ─────────────────────────────
 
@@ -23,39 +23,55 @@ function flagMatcher(flagged: readonly string[]): (s: string) => boolean {
 
 /** Specific sentences drawn from the research, handed out once each. */
 class DetailBank {
-  private readonly queue: string[] = [];
+  private readonly queue: { text: string; key: string }[] = [];
   private i = 0;
 
-  constructor(voc: VoiceOfCustomer, rng: LocalRng, docText = '') {
+  constructor(voc: VoiceOfCustomer, rng: LocalRng, docText = '', promise = '') {
     const k = voc.knowledge;
-    const lanes: string[][] = [
-      rng.shuffle(voc.phrases).map((p, j) => (j % 2 === 0
-        ? `Une phrase revient sans cesse dans les commentaires : ${q(p)}. C’est précisément la situation que ce passage traite.`
-        : `${cap(q(p))} : c’est mot pour mot ce que nous ont écrit plusieurs lecteurs avant de commencer.`)),
-      k.tips.map((t) => `Détail concret qui change tout : ${lf(t)}.`),
-      k.facts.map((f) => `Repère précis issu de nos recherches : ${lf(f)}.`),
-      k.examples.map((e) => sentence(e)),
-      voc.desiredOutcomes.map((o) => `Ce que décrivent ceux qui ont réussi : ${lf(o)}.`),
-      k.mistakes.map((m) => `Le piège à éviter ici : ${lf(m)}.`),
+    // the promised outcome is never re-stated here (cover + promise page already carry it)
+    const p = norm(promise);
+    const outcomes = voc.desiredOutcomes.slice(1).filter((o) => !p.includes(norm(lf(o))));
+    // key = the research item itself: a fact the guide already states is « seen », whatever the wrapper sentence
+    const item = (raw: string, text: string) => ({ text, key: norm(inline(raw)).replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40) });
+    // each lane rotates its lead-ins: the same wording does not come back paragraph after paragraph
+    const wrap = (arr: readonly string[], forms: ((x: string) => string)[]) => arr.map((x, j) => item(x, forms[j % forms.length]!(x)));
+    const lanes: { text: string; key: string }[][] = [
+      wrap(rng.shuffle(voc.phrases), [
+        (ph) => `Une phrase revient sans cesse dans les commentaires : ${q(ph)}. C’est précisément la situation que ce passage traite.`,
+        (ph) => `${cap(q(ph))} : c’est mot pour mot ce qu’on lit dans les commentaires sur ce sujet.`,
+        (ph) => `Si vous vous êtes déjà dit ${q(ph)}, ce passage est pour vous.`,
+      ]),
+      wrap(k.tips, [
+        (t) => `Détail concret qui change tout : ${inline(t)}.`,
+        (t) => `Petit ajustement qui aide beaucoup : ${inline(t)}.`,
+        (t) => `À tester dès cette semaine : ${inline(t)}.`,
+      ]),
+      wrap(k.facts, [
+        (f) => `Repère précis issu de nos recherches : ${inline(f)}.`,
+        (f) => `Bon à savoir : ${inline(f)}.`,
+      ]),
+      k.examples.map((e) => item(e, sentence(e))),
+      // one outcome at most: more would read like the promise repeated chapter after chapter
+      wrap(outcomes.slice(0, 1), [(o) => `Un objectif réaliste à garder en tête : ${inline(o)}.`]),
+      wrap(k.mistakes, [
+        (m) => `Le piège à éviter ici : ${inline(m)}.`,
+        (m) => `Erreur fréquente à ce stade : ${inline(m)}.`,
+      ]),
     ];
     const max = Math.max(0, ...lanes.map((l) => l.length));
-    const all: string[] = [];
+    const all: { text: string; key: string }[] = [];
     for (let j = 0; j < max; j++) for (const lane of lanes) if (lane[j]) all.push(lane[j]!);
-    // details the document does not quote yet come first
-    const doc = norm(docText);
-    const seen = (s: string): boolean => {
-      const m = /«\s*([^»]+?)\s*»/.exec(s);
-      return doc.includes(norm(m ? m[1]! : bare(s)).slice(0, 40));
-    };
-    this.queue.push(...all.filter((s) => !seen(s)), ...all.filter(seen));
+    // details the document does not state yet come first
+    const doc = norm(docText).replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ');
+    const seen = (d: { key: string }): boolean => d.key.length > 0 && doc.includes(d.key);
+    this.queue.push(...all.filter((d) => !seen(d)), ...all.filter(seen));
   }
 
   next(avoid: string): string | null {
-    const a = norm(avoid);
+    const a = norm(avoid).replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ');
     while (this.i < this.queue.length) {
-      const s = this.queue[this.i++]!;
-      const core = norm(bare(s)).slice(0, 40);
-      if (!a.includes(core)) return s;
+      const d = this.queue[this.i++]!;
+      if (!a.includes(d.key)) return d.text;
     }
     return null;
   }
@@ -82,7 +98,7 @@ export function heuristicHumanize(contentIn: PdfContent, flagged: string[], vocI
   const voc = safeVoc(vocIn);
   const content = ensurePdf(contentIn);
   const isFlat = flagMatcher(flagged);
-  const bank = new DetailBank(voc, rng, allText(content));
+  const bank = new DetailBank(voc, rng, allText(content), content.promise);
   const stepPool = [...voc.knowledge.steps, ...voc.knowledge.tips].map(sentence);
   let stepI = 0;
 
@@ -90,12 +106,14 @@ export function heuristicHumanize(contentIn: PdfContent, flagged: string[], vocI
     const sents = splitSentences(text);
     if (sents.length === 0) return text;
     const kept: string[] = [];
-    for (const s of sents) {
-      if (!isFlat(s)) { kept.push(s); continue; }
+    const tail: string[] = [];
+    sents.forEach((s, i) => {
+      if (!isFlat(s)) { kept.push(s); return; }
       const rep = bank.next(text);
-      if (rep) kept.push(rep);
-    }
-    return varyOpenings(kept, rng).join(' ');
+      // a detail replacing the opening sentence goes to the end: « Situation n°3 : … » must still open its paragraph
+      if (rep) (i === 0 && sents.length > 1 ? tail : kept).push(rep);
+    });
+    return varyOpenings([...kept, ...tail], rng).join(' ');
   };
   const fixShort = (text: string): string => (isFlat(text) ? (stepPool[stepI++] ?? '') : text);
 
@@ -210,6 +228,12 @@ export function heuristicFactCheck(contentIn: PdfContent, vocIn: VoiceOfCustomer
       if (labels.length === 0) { fixed.push(s); continue; }
       const soft = soften(s, corpus);
       const before = clean(unmask(s, quotes));
+      // « Beaucoup de lecteurs voient… » is still a claim about readers nobody measured: drop it
+      const unverifiable = /\bbeaucoup d(?:e |['’])(?:lecteurs|clients|parents|utilisateurs|acheteurs)\b/i.test(soft);
+      if (unverifiable && sents.length > 1) {
+        issues.push(`${loc} — ${labels.join(' + ')} : « ${fit(before, 110)} » → phrase retirée (témoignage chiffré invérifiable).`);
+        continue;
+      }
       if (risks(soft, corpus).length === 0 && soft.length > 3) {
         fixed.push(soft);
         issues.push(`${loc} — ${labels.join(' + ')} : « ${fit(before, 110)} » → reformulé en « ${fit(clean(unmask(soft, quotes)), 110)} ».`);
