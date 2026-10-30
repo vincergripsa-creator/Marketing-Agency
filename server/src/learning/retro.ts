@@ -272,6 +272,7 @@ function placeholderAgent(): AgentState {
     avatar: { skin: '#f1c27d', hair: '#3b2a1a', shirt: '#7c5cbf', pants: '#2f2f3a', hairStyle: 1, accessory: 'glasses' },
     status: 'working', place: 'rh', currentTaskId: null, energy: 100, level: 1, xp: 0,
     perf: { done: 0, approved: 0, rejected: 0, failed: 0, score: 0 }, bubble: null,
+    roleId: 'hr_lead', gender: 'f', founder: true, hatKinds: [], hatDepts: [], hiredDay: 0, rampUntilDay: 0, notice: null,
   };
 }
 

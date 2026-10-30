@@ -36,6 +36,8 @@ export const DEFAULT_DEPTS: Record<DeptId, { name: string; color: string; icon: 
   finance: { name: 'Finance', color: '#16a34a', icon: 'FINANCE' },
   rh: { name: 'RH', color: '#db2777', icon: 'RH' },
   partenariats: { name: 'Partenariats', color: '#0ea5e9', icon: 'PARTENARIATS' },
+  video: { name: 'Studio Vidéo', color: '#dc2626', icon: 'VIDÉO' },
+  crm: { name: 'Communauté & Email', color: '#10b981', icon: 'COMMUNAUTÉ' },
 };
 
 export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
@@ -87,6 +89,19 @@ export const TASK_KIND_LABEL: Record<TaskKind, string> = {
   follow_missions: 'Suivi des missions',
   retro: 'Rétro du soir',
   performance_review: 'Revue RH',
+  headcount_review: 'Revue des effectifs',
+  recruit: 'Recrutement',
+  league_review: 'Clôture de saison',
+  open_channel: 'Ouverture de canal',
+  adapt_creative: 'Adaptation de créa',
+  write_search_ads: 'Annonces Search',
+  reconcile_channels: 'Rapprochement des canaux',
+  allocate_channels: 'Répartition entre canaux',
+  write_lead_magnet: 'Aimant à prospects',
+  write_email_sequence: 'Séquence e-mail',
+  send_broadcast: 'Envoi à la liste',
+  design_bump: 'Offre à la commande',
+  portfolio_review: 'Revue du portefeuille',
 };
 
 export const RESEARCH_KINDS: ReadonlySet<TaskKind> = new Set<TaskKind>(['scan_trends', 'mine_pains', 'scan_competitors', 'pick_opportunity']);
@@ -134,6 +149,7 @@ export const HOOK_LABEL: Record<HookStyle, string> = {
 };
 export const FORMAT_LABEL: Record<AdFormat, string> = {
   faceless_voiceover: 'Voix off faceless', text_slideshow: 'Diaporama texte', ugc_avatar: 'Avatar UGC', carousel: 'Carrousel',
+  static_image: 'Image fixe', search_text: 'Annonce Search',
 };
 
 export const INTENT_LABEL: Record<MessageIntent, string> = {
@@ -147,10 +163,10 @@ export const INTENT_TONE: Record<MessageIntent, Tone> = {
 };
 
 export const CHANNEL_LABEL: Record<InboxMessage['channel'], string> = {
-  email: 'E-mail', commentaire_tiktok: 'Commentaire TikTok', avis: 'Avis', dm: 'Message privé',
+  email: 'E-mail', commentaire_tiktok: 'Commentaire TikTok', commentaire_pub: 'Commentaire de pub', avis: 'Avis', dm: 'Message privé',
 };
 export const CHANNEL_ICON: Record<InboxMessage['channel'], IconName> = {
-  email: 'mail', commentaire_tiktok: 'music', avis: 'star', dm: 'dm',
+  email: 'mail', commentaire_tiktok: 'music', commentaire_pub: 'megaphone', avis: 'star', dm: 'dm',
 };
 export const MESSAGE_STATUS_LABEL: Record<InboxMessage['status'], string> = {
   open: 'Ouvert', replied: 'Répondu', resolved: 'Résolu', escalated: 'Escaladé',
@@ -163,6 +179,7 @@ export const LEDGER_LABEL: Record<LedgerType, string> = {
   capital: 'Capital', revenue: 'Ventes', refund: 'Remboursements', chargeback: 'Chargebacks', ad_spend: 'Pub TikTok',
   payment_fee: 'Frais de paiement', platform_fee: 'Frais plateforme', tool_subscription: 'Abonnements outils',
   compute: 'Compute Claude', creator_payout: 'Commissions créateurs', scam_loss: 'Pertes (arnaques)', discount: 'Remises',
+  salary: 'Salaires', recruiting: 'Recrutement',
 };
 
 /** Ledger entries with a 'hold:' ref: typed platform_fee on the server, but cash timing only (see derive.ts isReserve). */
@@ -178,9 +195,11 @@ export const LESSON_TOPIC_TONE: Record<Lesson['topic'], Tone> = {
 export const DELIVERABLE_LABEL: Record<Deliverable['kind'], string> = {
   pdf: 'Guide PDF', cover: 'Couverture', sales_page: 'Page de vente', ad_storyboard: 'Storyboard', ad_preview: 'Aperçu pub',
   report: 'Rapport', research: 'Recherche', note: 'Note',
+  page_preview: 'Aperçu des pages', lead_magnet: 'Aimant à prospects', email_sequence: 'Séquence e-mail',
 };
 export const DELIVERABLE_ICON: Record<Deliverable['kind'], IconName> = {
   pdf: 'file', cover: 'image', sales_page: 'store', ad_storyboard: 'film', ad_preview: 'music', report: 'chart', research: 'search', note: 'brain',
+  page_preview: 'image', lead_magnet: 'file', email_sequence: 'mail',
 };
 
 export const DIFFICULTY_INFO: Record<Difficulty, { label: string; text: string }> = {
@@ -237,6 +256,7 @@ export const ACTIVITY_META: Record<ActivityKind, { icon: IconName; label: string
   meeting: { icon: 'users', label: 'Réunion', chip: 'RÉUNION' },
   founder: { icon: 'crown', label: 'Fondateur', chip: 'FONDATEUR' },
   chat: { icon: 'chat', label: 'Discussion', chip: 'DISCUSSION' },
+  org: { icon: 'users', label: 'Équipe', chip: 'ÉQUIPE' },
 };
 
 // ───────────────────────────── Tools ─────────────────────────────
@@ -265,6 +285,7 @@ export const TOOL_LABEL: Record<ToolName, string> = {
   'inbox.read': 'Lire', 'inbox.reply': 'Répondre', 'inbox.refund': 'Rembourser',
   'finance.ledger': 'Grand livre', 'pdf.render': 'Rendu PDF', 'design.cover': 'Couvertures', 'design.storyboard': 'Storyboards',
   'web.page': 'Pages de vente', 'team.delegate': 'Déléguer', 'team.review': 'Relire',
+  'ads.channels': 'Canaux pub', 'ads.report': 'Rapports des canaux',
 };
 
 export function toolGroupsOf(tools: readonly ToolName[] | undefined) {

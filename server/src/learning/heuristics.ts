@@ -849,7 +849,7 @@ export const LESSON_KEYS = {
 export const EXPERIMENT_KEY_PREFIX = 'experience-';
 
 const EXP_TOPIC: Record<Experiment['dimension'], Lesson['topic']> = {
-  hook_style: 'ads', ad_format: 'ads', price: 'pricing', sales_hype: 'product', support_tone: 'support', niche: 'niche',
+  hook_style: 'ads', ad_format: 'ads', price: 'pricing', sales_hype: 'product', support_tone: 'support', niche: 'niche', agent_duel: 'ads',
 };
 
 function fmtExpValue(e: Experiment, v: number): string {

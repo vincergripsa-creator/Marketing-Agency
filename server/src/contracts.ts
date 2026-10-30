@@ -19,6 +19,7 @@ import type {
   MessageIntent, NicheBrief, PdfContent, Product, QualityReport, ReplyOutcome, SalesPage, ScenarioConfig,
   SupportReplyInput, TrendSignal, VoiceOfCustomer, WorldState, Activity, DailyKpi, Experiment, Task, TaskKind, AgentId,
   ModelTier, MindMode, NicheTruth, Order,
+  AdRatio, AudienceView, Broadcast, ChannelId, DesignEffort, EmailSequence, EmailStep, Skill, VideoCut, VisualReport,
 } from './shared.js';
 
 export type { CampaignInputShape };
@@ -50,7 +51,17 @@ export interface RunPaths { root: string; brain: string; files: string }
 
 export interface ToolResult { ok: boolean; message: string; id?: string }
 
-export interface AdReviewResult { status: 'approved' | 'rejected'; reason: string | null; strike: boolean }
+export interface AdReviewResult { status: 'approved' | 'rejected'; reason: string | null; strike: boolean; rule?: string; channel?: ChannelId }
+
+export interface ChannelSignal {
+  channel: ChannelId;
+  audience: number;            // 0..100, noisy: what Pinterest Trends or an audience planner would say
+  costHint: 'bas' | 'moyen' | 'élevé';
+  searchClicks?: number; cpc?: number; // google: Keyword Planner, ±30 %
+}
+export interface PlatformReportRow { day: number; channel: ChannelId; campaignId: string; spend: number; claimedPurchases: number; claimedRevenue: number }
+export interface ShopAttributionRow { day: number; channel: ChannelId; campaignId: string | null; sales: number; revenue: number }
+export interface ChannelAccountStatus { id: ChannelId; state: 'closed' | 'verifying' | 'open' | 'banned'; openDay: number | null; strikes: number; bannedUntilDay: number }
 
 export interface MarketTools {
   // research — noisy, partial views of the hidden truth
@@ -63,10 +74,10 @@ export interface MarketTools {
   setPrice(productId: string, price: number): ToolResult;
   setProductStatus(productId: string, status: 'paused' | 'killed' | 'live'): ToolResult;
   // TikTok ads
-  submitCreative(creativeId: string): AdReviewResult;  // compliance review; may add a strike / ban
+  submitCreative(creativeId: string, channel?: ChannelId): AdReviewResult;  // compliance review; may add a strike / ban
   createCampaign(input: CampaignInputShape): ToolResult;
   updateCampaign(campaignId: string, patch: { dailyBudget?: number; status?: 'active' | 'paused'; creativeIds?: string[] }): ToolResult;
-  getAdStats(sinceDay?: number): DailyAdStats[];
+  getAdStats(sinceDay?: number, channel?: ChannelId): DailyAdStats[];
   // organic + creators
   postOrganic(input: { productId: string | null; hook: string; hookStyle: HookStyle; format: AdFormat }): ToolResult;
   listCreators(nicheId: string): CreatorProfile[];
@@ -75,6 +86,24 @@ export interface MarketTools {
   listInbox(status?: 'open' | 'all'): InboxMessage[];
   replyToMessage(messageId: string, reply: SupportReplyInput, agentId: AgentId): ReplyOutcome; // evaluated immediately
   issueRefund(orderId: string, reason: string): ToolResult;
+  // channels, audience
+  channelStatus(): ChannelAccountStatus[];
+  requestChannel(channel: ChannelId): ToolResult;  // starts verificationDays
+  channelSignals(nicheId: string): ChannelSignal[];
+  getPlatformReport(channel: ChannelId, sinceDay?: number): PlatformReportRow[]; // the ad manager
+  getShopAttribution(sinceDay?: number): ShopAttributionRow[];                   // the shop's own orders
+  listStats(): AudienceView;
+  activateSequence(input: Omit<EmailSequence, 'id' | 'status' | 'day'>): ToolResult;
+  sendBroadcast(input: Pick<Broadcast, 'nicheId' | 'productId' | 'audience' | 'subject' | 'body' | 'angle' | 'hasUnsubscribe'>): ToolResult;
+}
+
+/** Phase 3: one adapter per platform. V1: five virtualAdapter(id), server/src/sim/adapters.ts. */
+export interface ChannelAdapter {
+  readonly id: ChannelId;
+  review(creativeId: string): AdReviewResult;
+  createCampaign(input: CampaignInputShape): ToolResult;
+  updateCampaign(campaignId: string, patch: { dailyBudget?: number; status?: 'active' | 'paused'; creativeIds?: string[] }): ToolResult;
+  report(sinceDay?: number): PlatformReportRow[];
 }
 
 export interface MarketDayResult {
@@ -109,10 +138,12 @@ export interface SimModule {
   announcedOutageDays(world: WorldState): number[];
   isAnnouncedOutage(world: WorldState, day: number): boolean;
   // heuristic quality scorers (used by QA agents AND by the market's conversion model)
-  scorePdf(content: PdfContent, ctx: { audience: string; problem: string; voc?: VoiceOfCustomer; design?: DesignSpec | null }): QualityReport;
+  scorePdf(content: PdfContent, ctx: { audience: string; problem: string; voc?: VoiceOfCustomer; design?: DesignSpec | null; visual?: VisualReport | null }): QualityReport;
   scoreSalesPage(sp: SalesPage, product: Product, voc?: VoiceOfCustomer): QualityReport;
   scoreCreative(c: AdCreative, product: Product, voc?: VoiceOfCustomer): QualityReport;
   scoreSupportReply(msg: InboxMessage, reply: SupportReplyInput): { score: number; issues: string[] };
+  scoreCut(cut: VideoCut): { pace: number; look: number; craft: number; notes: string[] };
+  scoreEmail(subject: string, body: string, voc: VoiceOfCustomer | undefined, bannedClaims: readonly string[]): { score: number; issues: string[] };
   /** What a guide really contains: words the reader has not met earlier in it, not its length. */
   guideSubstance(content: PdfContent): { freshWords: number };
   /** Generic phrases that make a PDF sound "AI" (used by scorePdf and the humanizer). */
@@ -133,20 +164,53 @@ export interface DifficultyProfile {
 
 // ───────────────────────────── deliverables/ ─────────────────────────────
 
+export interface PdfAudit {
+  pages: number; bytes: number; degraded: boolean;
+  textPages: number; shortPages: number;     // text pages with fill < 0.45
+  fillMean: number;                          // notes count at half weight
+  widows: number; strandedHeadings: number;  // both must be 0: paginate guarantees it, the audit proves it
+  railShare: number;                         // share of text pages with a rail element
+  figureKinds: number; figuresPerChapter: number; sheets: number;
+  overflow: number;                          // text ops wider than their box
+}
+export interface CoverAudit { art: number; thumbPx: number; lineBalance: number; contrast: number; titleLines: number }
+
 // deliverables/index.ts must export:
 export interface DeliverablesModule {
   designFor(input: { nicheName: string; category: string; seed: number; hint?: string; keywords?: string[] }): DesignSpec;
   renderCoverSvg(input: { title: string; subtitle: string; audience: string; design: DesignSpec; brand: string }): string; // 600x848 viewBox (A4 ratio)
   /** Writes a real A4 PDF: cover (vector art), contents, intro, chapters with numbered step boxes,
    *  example callouts, checklists, VisualSpec infographics, bonus, "La suite est ici" CTA page, page numbers. */
-  renderPdf(input: { product: Product; content: PdfContent; design: DesignSpec; brand: string; outFile: string; upsell?: { title: string; url: string } | null }): Promise<{ pages: number; bytes: number }>;
+  renderPdf(input: { product: Product; content: PdfContent; design: DesignSpec; brand: string; outFile: string; upsell?: { title: string; url: string } | null; effort?: DesignEffort }): Promise<{ pages: number; bytes: number; audit: PdfAudit; previews: { label: string; svg: string }[] }>;
   /** Self-contained HTML storefront page (inline CSS, inline cover SVG, fake checkout button). */
-  renderSalesPageHtml(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string }): string;
+  renderSalesPageHtml(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string; previews?: { label: string; svg: string }[]; figureSvg?: string | null }): string;
   /** 9:16 storyboard frames (SVG strings, 360x640 viewBox) + a self-contained HTML "TikTok" preview that plays the scenes. */
   renderAdStoryboard(input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string }): { frames: string[]; previewHtml: string };
+  pickArt(design: DesignSpec, effort: DesignEffort): { seed: number; score: number; explored: number };
+  coverAudit(input: { title: string; subtitle: string; audience: string; design: DesignSpec; brand: string }): CoverAudit;
+  visualReport(pdf: PdfAudit, cover: CoverAudit, effort: DesignEffort, explored: number): VisualReport;
+  /** 3 to 5 pages, the same type and art. */
+  renderLeadMagnet(input: { product: Product; content: PdfContent; design: DesignSpec; brand: string; outFile: string }): Promise<{ pages: number; bytes: number }>;
+  /** The guide's sheets, checklists and grids, as a printable kit. */
+  renderKit(input: { product: Product; content: PdfContent; design: DesignSpec; brand: string; outFile: string }): Promise<{ pages: number; bytes: number }>;
+  /** Still frames for a non-9:16 cut: 432×540, 540×540, 400×600. No canvas, no ffmpeg: works on every machine. */
+  renderAdCut(input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string; ratio: Exclude<AdRatio, 'text'> }): { frames: string[] };
 }
 
 // ───────────────────────────── minds/ (ContentEngine) ─────────────────────────────
+
+export interface Craft {
+  skill: Skill;
+  t: number;                   // effective talent, ramp applied
+  flaw: number;                // chance per flaw site
+  draws: number;               // drafts written
+  eye: number;                 // sd, in score points, of the agent's reading of its own drafts
+  sharp: number;               // Thompson samples averaged, 1 = today
+  passes: number;              // editing passes
+  reach: number;               // share of the flagged text one pass really fixes
+  tier?: ModelTier;            // claude mode only
+  effort?: 'low' | 'medium' | 'high'; // claude mode only
+}
 
 export interface MindContext {
   agent: AgentState;
@@ -155,6 +219,8 @@ export interface MindContext {
   lessons: Lesson[];           // relevant lessons
   day: number;
   brand?: string;              // scenario.companyName (signatures, sales pages)
+  craft?: Craft;               // undefined when talent is off or the kind has no skill
+  draw?: number;               // added to the engine's key only when > 0: draw 0 is the text of today
 }
 
 export interface Outline { title: string; chapters: { title: string; points: string[]; kind?: string }[]; bonusTitle: string; nextStepTitle: string }
@@ -179,6 +245,7 @@ export interface RedTeamFacts {
 export interface LessonDraft { topic: Lesson['topic']; insight: string; evidence: string; confidence: number; appliesToRoles: string[] }
 export interface DayPlanItem { kind: TaskKind; title: string; dept: Task['dept']; priority: 1 | 2 | 3; input: Record<string, unknown>; why: string }
 export interface DayPlan { focus: string; items: DayPlanItem[]; memo: string }
+export interface SearchAdDraft { headlines: string[]; descriptions: string[]; keywords: string[] } // 3-5 titles ≤ 30 chars, 2 descriptions ≤ 90
 export interface UsageEvent { tier: ModelTier; model: string; inputTokens: number; outputTokens: number; costEur: number; purpose: string }
 
 export interface ContentEngine {
@@ -200,6 +267,10 @@ export interface ContentEngine {
   chat(input: { history: { from: string; text: string }[]; text: string; situation: string }, ctx: MindContext): Promise<string>;
   extractLessons(input: { kpis: DailyKpi[]; experiments: Experiment[]; incidents: string[]; heuristicLessons: LessonDraft[] }, ctx: MindContext): Promise<LessonDraft[]>;
   dailyMemo(input: { day: number; kpi: DailyKpi; notes: string[] }, ctx: MindContext): Promise<string>;
+  writeSearchAd(input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] }, ctx: MindContext): Promise<SearchAdDraft>;
+  writeLeadMagnet(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer }, ctx: MindContext): Promise<PdfContent>;
+  writeEmailSequence(input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] }, ctx: MindContext): Promise<Omit<EmailStep, 'score'>[]>;
+  writeBroadcast(input: { product: Product; voc: VoiceOfCustomer; angle: string; audience: Broadcast['audience']; bannedClaims: string[] }, ctx: MindContext): Promise<{ subject: string; body: string; hasUnsubscribe: boolean }>;
   usage(): { calls: number; inputTokens: number; outputTokens: number; costEur: number; fallbacks: number };
 }
 
@@ -231,7 +302,7 @@ export interface BrainVault {
 export interface LearningModule {
   createBrainVault(paths: RunPaths): BrainVault;
   /** Thompson sampling over arms stored in world.company.bandits[dimension]. */
-  chooseArm(world: WorldState, dimension: string, arms: readonly string[], rng: Rng): string;
+  chooseArm(world: WorldState, dimension: string, arms: readonly string[], rng: Rng, sharp?: { samples: number; rng: Rng }): string;
   rewardArm(world: WorldState, dimension: string, arm: string, reward: number, weight?: number): void;
   armStats(world: WorldState, dimension: string): { key: string; mean: number; pulls: number }[];
   startExperiment(world: WorldState, e: Omit<Experiment, 'id' | 'status' | 'results' | 'winner' | 'endDay'>): Experiment;
@@ -254,13 +325,18 @@ export interface LearningModule {
 
 // ───────────────────────────── runtime/ ─────────────────────────────
 
-export interface CompanyOptions { paths: RunPaths; engine: ContentEngine; brain: BrainVault }
+export type ArchiveCollection = 'tasks' | 'missions' | 'orders' | 'customers' | 'ledger' | 'creatives' | 'campaigns' | 'products' | 'deliverables' | 'experiments';
+export interface ArchiveBatch { day: number; rows: Partial<Record<ArchiveCollection, unknown[]>>; dropFiles: string[] }
+export interface CompanyOptions {
+  paths: RunPaths; engine: ContentEngine; brain: BrainVault;
+  archive?: (batch: ArchiveBatch) => Promise<void>; // bench passes nothing: rows are dropped
+}
 
 export interface StepResult { day: number; tick: number; phase: WorldState['phase']; status: WorldState['status']; activities: number }
 
 // runtime/index.ts must export:
 export interface RuntimeModule {
-  /** Fresh world: market, roster (~30 agents in 11 departments), starting capital in the ledger, seed playbooks. */
+  /** Fresh world: market, the founding team, starting capital in the ledger, seed playbooks. */
   createWorld(scenario: ScenarioConfig, runId: string): WorldState;
   /** The autonomous company. Pure orchestration over the other modules. */
   Company: new (world: WorldState, opts: CompanyOptions) => CompanyApi;
@@ -276,6 +352,8 @@ export interface CompanyApi {
   giveMission(text: string, agentId?: AgentId): Promise<string>;  // returns mission id
   chat(agentId: AgentId, text: string): Promise<string>;           // agent's answer (French)
   approve(taskId: string, approved: boolean): void;                // founderApproval mode
+  /** Last resort of the session loop: the clock moves on, the digest says so. */
+  skipTick(reason: string): void;
 }
 
 // ───────────────────────────── api/ ─────────────────────────────

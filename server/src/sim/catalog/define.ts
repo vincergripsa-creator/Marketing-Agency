@@ -14,7 +14,7 @@ export interface NicheSpec {
   tiktokAffinity: number;
   cpmBase: number;
   hookAffinity: Record<HookStyle, number>;
-  formatAffinity: Record<AdFormat, number>;
+  formatAffinity: Partial<Record<AdFormat, number>>;
   refundSensitivity: number;
   complianceRisk: number;
   seasonality: [number, number, number, number, number, number, number]; // lundi … dimanche

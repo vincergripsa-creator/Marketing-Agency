@@ -7,6 +7,7 @@ import type { Product, Task } from '../src/shared.js';
 import type { BrainVault, ContentEngine, MindContext, RunPaths } from '../src/contracts.js';
 import { norm, upsellTopics, nextStepFor } from '../src/minds/index.js';
 import { finalWording } from '../src/deliverables/pdf.js';
+import { LEGACY } from './legacy.js';
 
 async function setup(seed = 21, nicheId = 'proprete-chiot') {
   const runtime = await import('../src/runtime/index.js');
@@ -18,13 +19,13 @@ async function setup(seed = 21, nicheId = 'proprete-chiot') {
   const { HANDLERS } = await import('../src/runtime/handlers/index.js');
   const root = mkdtempSync(join(tmpdir(), 'pixel-agency-shop-'));
   const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
-  const world = runtime.createWorld(runtime.defaultScenario({ seed, mindMode: 'heuristic' }), 'test-shop');
+  const world = runtime.createWorld(runtime.defaultScenario({ ...LEGACY, seed, mindMode: 'heuristic' }), 'test-shop');
   const engine = minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed });
   const brain = vault.createBrainVault(paths);
   await brain.init();
   const rng = createRng(world.rngState);
   const tools = sim.createMarketTools(world, rng);
-  const ctx = { world, engine, brain, tools, rng, paths, incidents: [] as string[], lastMarketNotes: [] as string[] };
+  const ctx = { world, engine, brain, tools, rng, channelRng: rng, ritual: async () => undefined, paths, incidents: [] as string[], lastMarketNotes: [] as string[] };
   ctx.world.company.research.voc[nicheId] = tools.minePains(nicheId, 'deep');
 
   /** Runs a handler like the company does: its output is stored on a done task. */
@@ -319,7 +320,7 @@ describe('a whole run, on its files', () => {
     const vault = (await import('../src/learning/index.js')) as unknown as { createBrainVault: (p: RunPaths) => BrainVault };
     root = mkdtempSync(join(tmpdir(), 'pixel-agency-shoprun-'));
     const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
-    world = runtime.createWorld(runtime.defaultScenario({ seed: 8, mindMode: 'heuristic', difficulty: 'facile' }), 'test-shoprun');
+    world = runtime.createWorld(runtime.defaultScenario({ ...LEGACY, seed: 8, mindMode: 'heuristic', difficulty: 'facile' }), 'test-shoprun');
     const engine = minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed: 8 });
     const brain = vault.createBrainVault(paths);
     await brain.init();

@@ -20,6 +20,7 @@ import { parsePlaybook } from '../src/runtime/playbook.js';
 import { financeSnapshot, recordLedger } from '../src/sim/index.js';
 import { parseNote, serializeNote } from '../src/learning/markdown.js';
 import { round, slugify, safeFileName, tokenize } from '../src/learning/text.js';
+import { LEGACY } from './legacy.js';
 
 // ───────────────────────────── fixture ─────────────────────────────
 
@@ -29,6 +30,7 @@ function agent(id: string, name: string, dept: DeptId, role: string, isChief = f
     avatar: { skin: '#f1c27d', hair: '#222', shirt: '#36c', pants: '#333', hairStyle: 0, accessory: 'none' },
     status: 'idle', place: dept, currentTaskId: null, energy: 100, level: 1, xp: 0,
     perf: { done: 0, approved: 0, rejected: 0, failed: 0, score: 0 }, bubble: null,
+    roleId: 'ghostwriter', gender: 'f', founder: false, hatKinds: [], hatDepts: [], hiredDay: 0, rampUntilDay: 0, notice: null,
   };
 }
 
@@ -1001,7 +1003,7 @@ describe('KPI / ledger invariant over a real 60-day headless company', () => {
         createContentEngine: (o: { mode: 'heuristic'; maxComputeEur: number; seed: number }) => ContentEngine;
       };
       const paths = await tempPaths();
-      const world = createWorld(defaultScenario({ seed, difficulty, mindMode: 'heuristic', horizonDays: 60 }), `test-invariant-${difficulty}-${seed}`);
+      const world = createWorld(defaultScenario({ ...LEGACY, seed, difficulty, mindMode: 'heuristic', horizonDays: 60 }), `test-invariant-${difficulty}-${seed}`);
       const company = new Company(world, { paths, engine: minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed }), brain: createBrainVault(paths) });
       const closes = new Map<number, number>();
       let forced = false;

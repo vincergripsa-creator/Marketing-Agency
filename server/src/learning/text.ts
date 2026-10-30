@@ -185,6 +185,8 @@ export const FORMAT_LABELS: Record<AdFormat, string> = {
   text_slideshow: 'diaporama texte',
   ugc_avatar: 'avatar UGC',
   carousel: 'carrousel',
+  static_image: 'image fixe',
+  search_text: 'annonce Search',
 };
 
 export const TOPIC_TAGS: Record<Lesson['topic'], string> = {
@@ -211,6 +213,8 @@ export const DEPT_PLAYBOOK_LABELS: Record<DeptId, string> = {
   finance: 'Finance',
   rh: 'RH',
   partenariats: 'Partenariats',
+  video: 'Vidéo',
+  crm: 'Communauté',
 };
 
 export const TASK_LABELS: Record<TaskKind, string> = {
@@ -248,6 +252,19 @@ export const TASK_LABELS: Record<TaskKind, string> = {
   follow_missions: 'suivi des missions',
   retro: 'rétro',
   performance_review: 'revue RH',
+  headcount_review: 'revue des effectifs',
+  recruit: 'recrutement',
+  league_review: 'clôture de saison',
+  open_channel: 'ouverture de canal',
+  adapt_creative: 'adaptation de créa',
+  write_search_ads: 'annonces Search',
+  reconcile_channels: 'rapprochement des canaux',
+  allocate_channels: 'répartition entre canaux',
+  write_lead_magnet: 'aimant à prospects',
+  write_email_sequence: 'séquence e-mail',
+  send_broadcast: 'envoi à la liste',
+  design_bump: 'offre à la commande',
+  portfolio_review: 'revue du portefeuille',
 };
 
 export const DIMENSION_LABELS: Record<string, string> = {

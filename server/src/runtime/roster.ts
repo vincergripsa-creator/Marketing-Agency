@@ -2,7 +2,7 @@
  * The agency's org chart: 11 departments (floating islands) and 31 agents.
  * Pure data — no imports from other modules so it can be used anywhere (tests, UI seeds).
  */
-import type { AgentDef, AvatarSpec, DeptDef, DeptId, ToolName } from '../shared.js';
+import type { AgentDef, AgentId, AvatarSpec, DeptDef, DeptId, RoleId, ToolName } from '../shared.js';
 
 // ───────────────────────────── Departments ─────────────────────────────
 // Island grid around the central plaza (0,0 = Direction + Cerveau + café). The ten other islands
@@ -76,7 +76,26 @@ function avatar(dept: DeptId, i: number, a: Omit<AvatarSpec, 'shirt' | 'pants'> 
   return { shirt: a.shirt ?? deptColor(dept), pants: PANTS[i % PANTS.length]!, skin: a.skin, hair: a.hair, hairStyle: a.hairStyle, accessory: a.accessory };
 }
 
-type AgentSeed = Omit<AgentDef, 'avatar'> & { look: Omit<AvatarSpec, 'shirt' | 'pants'> & { shirt?: string } };
+type Person = Pick<AgentDef, 'roleId' | 'gender' | 'founder'>;
+type AgentSeed = Omit<AgentDef, 'avatar' | keyof Person> & { look: Omit<AvatarSpec, 'shirt' | 'pants'> & { shirt?: string } };
+
+const person = (roleId: RoleId, gender: Person['gender'], founder = false): Person => ({ roleId, gender, founder });
+
+/** Who each of the 31 is in the role catalog. Moves to org/catalog.ts with the agents (P1.1). */
+const PEOPLE: Record<AgentId, Person> = {
+  camille: person('ceo', 'f', true), hugo: person('chief_of_staff', 'm'),
+  nadia: person('research_lead', 'f', true), malo: person('competitor_analyst', 'm'), yasmine: person('voc_analyst', 'f'),
+  elise: person('editor_in_chief', 'f', true), theo: person('ghostwriter', 'm'), lina: person('humanizer', 'f'), samuel: person('fact_checker', 'm'),
+  zoe: person('art_director', 'f', true), kenji: person('cover_designer', 'm'), maelle: person('layout_designer', 'f'),
+  leo: person('growth_lead', 'm', true), sarah: person('hook_writer', 'f'), adam: person('media_buyer_tiktok', 'm'),
+  chloe: person('video_editor', 'f'), tom: person('community_manager', 'm'),
+  clara: person('shop_lead', 'f', true), mehdi: person('sales_copywriter', 'm'), paul: person('pricing_manager', 'm'),
+  ines: person('support_lead', 'f'), lucas: person('support_agent', 'm'), fatou: person('support_agent', 'f'),
+  raphael: person('data_analyst', 'm'), emma: person('experiment_analyst', 'f'),
+  gabriel: person('cfo', 'm', true), alice: person('accountant', 'f'),
+  nora: person('hr_lead', 'f', true), axel: person('red_teamer', 'm'),
+  rayan: person('partnerships_lead', 'm'), louise: person('partner_manager', 'f'),
+};
 
 const SEEDS: AgentSeed[] = [
   // ── Direction
@@ -340,7 +359,7 @@ const SEEDS: AgentSeed[] = [
   },
 ];
 
-export const AGENTS: AgentDef[] = SEEDS.map(({ look, ...def }, i) => ({ ...def, avatar: avatar(def.dept, i, look) }));
+export const AGENTS: AgentDef[] = SEEDS.map(({ look, ...def }, i) => ({ ...def, avatar: avatar(def.dept, i, look), ...PEOPLE[def.id]! }));
 
 // ───────────────────────────── Seed playbooks ─────────────────────────────
 // Rules every member of a department starts with (from the seed brain). Machine-readable patterns
@@ -406,10 +425,20 @@ export const SEED_PLAYBOOKS: Record<DeptId, string[]> = {
     'Signaux d’alerte : faux abonnés, engagement anormal, avance énorme demandée.',
     "Petits créateurs de la niche d'abord : ils cherchent à monétiser leur audience.",
   ],
+  video: [
+    "Le hook se lit à l'écran dès la première seconde, avec les mots du client.",
+    "Un plan par idée : on coupe dès que l'image n'apporte plus rien.",
+    "Le texte et l'appel à l'action restent dans les zones sûres de chaque plateforme.",
+  ],
+  crm: [
+    "Écrire à la liste seulement quand on a quelque chose d'utile à lui dire.",
+    'Chaque e-mail porte un lien de désinscription qui marche.',
+    'Répondre aux commentaires avec les mots des clients, sans jamais promettre plus que le guide.',
+  ],
 };
 
-/** Brain note (file basename) of each department's playbook — linked from "00 - Accueil". */
-export const PLAYBOOK_NOTES: Record<DeptId, string> = {
+/** Brain note (file basename) of each department's playbook — linked from "00 - Accueil". `video` and `crm` join with their notes (P2.4). */
+export const PLAYBOOK_NOTES: Partial<Record<DeptId, string>> = {
   direction: 'Playbook Direction',
   recherche: 'Playbook Recherche',
   studio: 'Playbook Studio',

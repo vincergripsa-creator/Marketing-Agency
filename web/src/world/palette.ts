@@ -59,6 +59,8 @@ export const DEPT_FALLBACK_COLORS: Record<DeptId, string> = {
   finance: '#65a30d',
   rh: '#f472b6',
   partenariats: '#06b6d4',
+  video: '#dc2626',
+  crm: '#10b981',
 };
 
 export function deptColor(id: string, color: string | undefined): string {

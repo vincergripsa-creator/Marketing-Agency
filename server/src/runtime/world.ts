@@ -53,12 +53,17 @@ export function createWorld(scenario: ScenarioConfig, runId: string): WorldState
     xp: 0,
     perf: { done: 0, approved: 0, rejected: 0, failed: 0, score: 50 },
     bubble: null,
+    hatKinds: [],
+    hatDepts: [],
+    hiredDay: 0,
+    rampUntilDay: 0,
+    notice: null,
   }));
   const playbooks: Record<string, string[]> = {};
   for (const a of agents) playbooks[a.id] = [...SEED_PLAYBOOKS[a.dept]];
 
   const world: WorldState = {
-    version: 1,
+    version: 2,
     runId,
     createdAt: new Date().toISOString(),
     scenario: sc,

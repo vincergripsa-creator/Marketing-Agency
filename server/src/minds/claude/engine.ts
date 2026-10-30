@@ -6,11 +6,11 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import type {
-  AdFormat, CompetitorProduct, CreatorProfile, DailyKpi, Experiment, FinanceSnapshot, HookStyle, InboxMessage, Lesson, MindMode,
+  AdFormat, Broadcast, CompetitorProduct, CreatorProfile, DailyKpi, EmailStep, Experiment, FinanceSnapshot, HookStyle, InboxMessage, Lesson, MindMode,
   ModelTier, NicheBrief, Order, PdfContent, Product, QualityReport, SalesPage, SupportReplyInput, Task, TaskKind, TrendSignal, VoiceOfCustomer,
 } from '../../shared.js';
 import type {
-  AdDraft, ContentEngine, DayPlan, DayPlanItem, GuideGaps, LessonDraft, MindContext, OpportunityRanking, Outline, RedTeamFacts, RedTeamVerdict, UpsellContext, UsageEvent,
+  AdDraft, ContentEngine, DayPlan, DayPlanItem, GuideGaps, LessonDraft, MindContext, OpportunityRanking, Outline, RedTeamFacts, RedTeamVerdict, SearchAdDraft, UpsellContext, UsageEvent,
 } from '../../contracts.js';
 import { KIND_TITLE } from '../heuristic/direction.js';
 import { heuristicFactCheck } from '../heuristic/editing.js';
@@ -276,6 +276,24 @@ Incidents : ${json(input.incidents ?? [])}`,
 KPI : ${json(input.kpi)}
 Notes de l'équipe : ${json(input.notes ?? [])}`,
     });
+  }
+
+  // ───────────────────────────── heuristic for good: V1 writes no prompt for these four ─────────────────────────────
+
+  writeSearchAd(input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] }, ctx: MindContext): Promise<SearchAdDraft> {
+    return this.h.writeSearchAd(input, ctx);
+  }
+
+  writeLeadMagnet(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer }, ctx: MindContext): Promise<PdfContent> {
+    return this.h.writeLeadMagnet(input, ctx);
+  }
+
+  writeEmailSequence(input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] }, ctx: MindContext): Promise<Omit<EmailStep, 'score'>[]> {
+    return this.h.writeEmailSequence(input, ctx);
+  }
+
+  writeBroadcast(input: { product: Product; voc: VoiceOfCustomer; angle: string; audience: Broadcast['audience']; bannedClaims: string[] }, ctx: MindContext): Promise<{ subject: string; body: string; hasUnsubscribe: boolean }> {
+    return this.h.writeBroadcast(input, ctx);
   }
 
   // ───────────────────────────── studio ─────────────────────────────

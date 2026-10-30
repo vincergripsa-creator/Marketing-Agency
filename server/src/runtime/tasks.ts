@@ -50,12 +50,30 @@ export const KIND_META: Record<TaskKind, KindMeta> = {
   follow_missions: { dept: 'direction', work: 1, label: 'Suivre les missions et relancer', bubble: 'Je relance les dossiers en retard', keywords: 'suivi missions planification blocage', topics: ['process'] },
   retro: { dept: 'rh', work: 1, label: 'Rétro du soir', bubble: 'On fait la rétro', keywords: 'leçons erreurs objectifs', topics: ['process'] },
   performance_review: { dept: 'rh', work: 1, label: 'Revue RH hebdomadaire', bubble: 'Je fais les revues RH', keywords: 'performance coaching', topics: ['process'] },
+  headcount_review: { dept: 'rh', work: 1, label: 'Revue des effectifs', bubble: 'Je regarde qui manque', keywords: 'recrutement effectif charge masse salariale', topics: ['process', 'finance'] },
+  recruit: { dept: 'rh', work: 1, label: 'Recruter', bubble: 'Je fais passer le test', keywords: 'recrutement test candidat', topics: ['process'] },
+  league_review: { dept: 'rh', work: 1, label: 'Clôture de la saison', bubble: 'Je clos la saison', keywords: 'saison classement performance remplacement', topics: ['process'] },
+  open_channel: { dept: 'growth', work: 1, label: 'Ouvrir un canal', bubble: 'J’ouvre le compte publicitaire', keywords: 'canaux acquisition compte publicitaire', topics: ['ads'] },
+  adapt_creative: { dept: 'video', work: 1, label: 'Adapter une créa à un canal', bubble: 'Je recadre la créa', keywords: 'format ratio canal créative', topics: ['ads'] },
+  write_search_ads: { dept: 'growth', work: 1, label: 'Écrire des annonces Search', bubble: 'J’écris des annonces Search', keywords: 'annonces recherche mots-clés conformité', topics: ['ads'] },
+  reconcile_channels: { dept: 'analyse', work: 1, label: 'Rapprocher les canaux', bubble: 'Je rapproche les ventes déclarées', keywords: 'attribution canaux roas ventes', topics: ['ads', 'finance'] },
+  allocate_channels: { dept: 'finance', work: 1, label: 'Répartir le budget entre les canaux', bubble: 'Je répartis le budget', keywords: 'budget canaux roas marginal', topics: ['ads', 'finance'] },
+  write_lead_magnet: { dept: 'crm', work: 2, label: 'Écrire l’aimant à prospects', bubble: 'J’écris l’aimant à prospects', keywords: 'liste e-mail prospects guide offert', topics: ['ads', 'product'] },
+  write_email_sequence: { dept: 'crm', work: 2, label: 'Écrire la séquence e-mail', bubble: 'J’écris la séquence', keywords: 'séquence e-mail bienvenue liste', topics: ['ads', 'product'] },
+  send_broadcast: { dept: 'crm', work: 1, label: 'Envoyer un e-mail à la liste', bubble: 'J’écris à la liste', keywords: 'e-mail liste désinscription', topics: ['ads'] },
+  design_bump: { dept: 'boutique', work: 1, label: 'Préparer l’offre à la commande', bubble: 'Je prépare le kit', keywords: 'offre commande kit panier', topics: ['product', 'pricing'] },
+  portfolio_review: { dept: 'direction', work: 1, label: 'Revue du portefeuille', bubble: 'Je passe le portefeuille en revue', keywords: 'portefeuille produits contribution arbitrage', topics: ['product', 'finance'] },
 };
 
 export const ALL_KINDS = Object.keys(KIND_META) as TaskKind[];
 
-/** Kinds the CEO (or Claude, or a founder mission) may plan. The others are run by the runtime itself. */
-export const PLAN_KINDS: TaskKind[] = ALL_KINDS.filter((k) => !['plan_day', 'budget_review', 'retro', 'performance_review'].includes(k));
+/** Kinds the CEO (or Claude, or a founder mission) may plan. The others are run by the runtime itself. A package opens a V1 kind when it needs to (D57). */
+export const PLAN_KINDS: TaskKind[] = ALL_KINDS.filter((k) => !([
+  'plan_day', 'budget_review', 'retro', 'performance_review',
+  'headcount_review', 'recruit', 'league_review',
+  'open_channel', 'adapt_creative', 'write_search_ads', 'reconcile_channels', 'allocate_channels',
+  'write_lead_magnet', 'write_email_sequence', 'send_broadcast', 'design_bump', 'portfolio_review',
+] as TaskKind[]).includes(k));
 
 /** Kinds that only make sense for a product. */
 export const PRODUCT_KINDS: TaskKind[] = [

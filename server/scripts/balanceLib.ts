@@ -16,7 +16,7 @@ import { isUpsellProduct } from '../src/runtime/metrics.js';
 import * as BALANCE from '../src/sim/balance.js';
 import { financeSnapshot } from '../src/sim/finance.js';
 import type { RunPaths } from '../src/contracts.js';
-import type { DailyKpi, Difficulty, MindMode, WorldEvent, WorldState } from '../src/shared.js';
+import type { DailyKpi, Difficulty, MindMode, ScenarioConfig, WorldEvent, WorldState } from '../src/shared.js';
 
 export const DIFFICULTIES: readonly Difficulty[] = ['facile', 'normal', 'cauchemar'];
 
@@ -35,6 +35,8 @@ export interface RunSpec {
   runId?: string;
   /** Calibration overrides for this process, e.g. { 'ADS.baseCtr': 0.007, 'DIFFICULTY.cauchemar.cpmMultiplier': 1.5 }. */
   overrides?: Record<string, number>;
+  /** Scenario fields of this run, over the benchmark's own. */
+  scenario?: Partial<ScenarioConfig>;
 }
 
 export interface DayRow {
@@ -221,6 +223,7 @@ export async function runOne(spec: RunSpec): Promise<RunResult> {
       founderApproval: spec.founderApproval ?? false,
       maxComputeEur: 0,
       horizonDays: Math.max(60, spec.days),
+      ...spec.scenario,
     });
     const world = createWorld(scenario, runId);
     // No API key on purpose: a 'claude' benchmark measures the fallback, never spends money.

@@ -23,6 +23,7 @@ import { ensureVisual } from '../src/minds/shapes.js';
 import { nAd, nPdf } from '../src/minds/claude/normalize.js';
 import { noPrice, screenText } from '../src/minds/heuristic/ads.js';
 import type { UpsellContext } from '../src/contracts.js';
+import { LEGACY } from './legacy.js';
 
 // ───────────────────────────── fixtures ─────────────────────────────
 
@@ -34,6 +35,7 @@ function agent(over: Partial<AgentState> = {}): AgentState {
     avatar: { skin: '#f1c27d', hair: '#3b2a1a', shirt: '#7c5cff', pants: '#333', hairStyle: 1, accessory: 'glasses' },
     status: 'idle', place: 'studio', currentTaskId: null, energy: 90, level: 2, xp: 120,
     perf: { done: 4, approved: 3, rejected: 1, failed: 0, score: 72 }, bubble: null,
+    roleId: 'editor_in_chief', gender: 'f', founder: false, hatKinds: [], hatDepts: [], hiredDay: 0, rampUntilDay: 0, notice: null,
     ...over,
   };
 }
@@ -692,7 +694,7 @@ const LOST_N_DEGREE = /(^|[^n])°(?!C)/;
 const REAL_NICHES = ['sommeil-bebe', 'proprete-chiot', 'urssaf-micro'] as const;
 
 function realResearch(seed: number, nicheId: string): { brief: NicheBrief; voc: VoiceOfCustomer } {
-  const world = createWorld(defaultScenario({ seed }), `test-content-${seed}`);
+  const world = createWorld(defaultScenario({ ...LEGACY, seed }), `test-content-${seed}`);
   const tools = createMarketTools(world, createRng(seed));
   return { brief: tools.nicheBrief(nicheId)!, voc: tools.minePains(nicheId, 'deep') };
 }

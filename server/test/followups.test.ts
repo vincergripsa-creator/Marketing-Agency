@@ -17,6 +17,7 @@ import { reviewText } from '../src/sim/feedback.js';
 import { scorePdf, guideSubstance, untreatedPains } from '../src/sim/quality.js';
 import { catalogNiche, NICHE_CATALOG } from '../src/sim/niches.js';
 import { renderSalesPageHtml } from '../src/deliverables/index.js';
+import { LEGACY } from './legacy.js';
 
 const ALL_NICHES = NICHE_CATALOG.map((n) => n.id);
 const heuristic = (seed = 7) => createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed });
@@ -26,7 +27,7 @@ const ctx = (over: Partial<MindContext> = {}): MindContext => ({
 });
 
 function research(seed: number, nicheId: string): { brief: NicheBrief; voc: VoiceOfCustomer } {
-  const world = createWorld(defaultScenario({ seed }), `test-followups-${seed}`);
+  const world = createWorld(defaultScenario({ ...LEGACY, seed }), `test-followups-${seed}`);
   const tools = createMarketTools(world, createRng(seed));
   return { brief: tools.nicheBrief(nicheId)!, voc: tools.minePains(nicheId, 'deep') };
 }
@@ -130,7 +131,7 @@ describe('a follow-up is worth what it costs (V-D2)', () => {
 
   it('a follow-up is capped below a deeper guide, and never above it', async () => {
     const { parent, follow } = await guides('urssaf-micro');
-    const world = createWorld(defaultScenario({ seed: 3 }), 'test-cap');
+    const world = createWorld(defaultScenario({ ...LEGACY, seed: 3 }), 'test-cap');
     const up = product({ id: 'prd_up', content: follow, nicheId: 'urssaf-micro' });
     const main = product({ id: 'prd_main', content: parent, nicheId: 'urssaf-micro', price: 24, upsellProductId: 'prd_up' });
     world.company.products.push(main, up);

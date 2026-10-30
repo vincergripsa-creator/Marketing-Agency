@@ -2,7 +2,13 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { repoRoot, summarizeLedger } from '../core/index.js';
-import type { RunInfo, WorldState } from '../shared.js';
+import type { HookStyle, Product, RunInfo, WorldState } from '../shared.js';
+import { HOOK_STYLES } from '../minds/playbook.js';
+import { versionSince } from '../runtime/acquisition.js';
+import { doneOutputs } from '../runtime/ctx.js';
+import { fromBuyer } from '../runtime/metrics.js';
+import { CANDIDATES } from '../runtime/org/catalog.js';
+import { LEGACY_ORG } from '../runtime/org/constants.js';
 
 /** Saved run summary (shared with the UI: GET /api/runs). */
 export type { RunInfo };
@@ -172,6 +178,61 @@ function looksLikeWorld(v: unknown): v is WorldState {
   return typeof w.runId === 'string' && typeof w.day === 'number' && !!w.company && !!w.market && !!w.scenario && Array.isArray(w.ledger);
 }
 
+/** What compaction will ask of a product once its old tasks are gone (scale §7.2): read from them while they are all here. */
+function backfillProduct(w: WorldState, p: Product): void {
+  if (p.launchedDay != null) p.versionDay ??= versionSince(w, p);
+  p.stats.ratingSum ??= p.stats.reviews.reduce((s, r) => s + r.rating, 0);
+  p.stats.ratingCount ??= p.stats.reviews.length;
+  p.hooks ??= doneOutputs(w, 'write_ad_hooks', p.id).reverse()
+    .flatMap((o) => (Array.isArray(o.hooks) ? o.hooks as { hook?: unknown; hookStyle?: unknown }[] : []))
+    .filter((h): h is { hook: string; hookStyle: HookStyle } => typeof h?.hook === 'string' && HOOK_STYLES.includes(h.hookStyle as HookStyle))
+    .map(({ hook, hookStyle }) => ({ hook, hookStyle }))
+    .slice(0, 60);
+  const feedback: NonNullable<Product['feedback']> = [];
+  for (const t of w.company.tasks) {
+    if (t.kind !== 'reply_inbox' || t.status !== 'done') continue;
+    const replies = Array.isArray(t.output?.replies) ? t.output.replies as Record<string, unknown>[] : [];
+    for (const r of replies) {
+      const quality = r.detected === 'plainte_qualite';
+      if (r.productId !== p.id || !(quality || typeof r.complaint === 'string') || !fromBuyer(w, r.messageId, p.id)) continue;
+      feedback.push({ day: t.dayDone ?? t.dayCreated, text: typeof r.complaint === 'string' ? r.complaint : '', quality });
+    }
+  }
+  p.feedback ??= feedback.slice(-30);
+}
+
+/**
+ * Brings a save from before V1 up to version 2, once (§2.8). Every scenario field gets the value its absence meant, so the
+ * run goes on as it was. What a pillar owns (`company.org`, `company.growth`…) is filled by its `mount`.
+ */
+export function migrateWorld(w: WorldState): WorldState {
+  if (w.version >= 2) return w;
+  const s = w.scenario;
+  s.org ??= { ...LEGACY_ORG };
+  s.talent ??= 'off';
+  s.channelControl ??= 'tiktok_only';
+  s.videoModel ??= 'off';
+  s.visualModel ??= 'off';
+  s.scaling ??= false;
+  s.openEnded ??= false;
+  for (const a of w.company.agents) {
+    const def = CANDIDATES[a.id];
+    if (def) {
+      a.roleId ??= def.roleId;
+      a.gender ??= def.gender;
+      a.founder ??= def.founder;
+    }
+    a.hatKinds ??= [];
+    a.hatDepts ??= [];
+    a.hiredDay ??= 0;
+    a.rampUntilDay ??= 0;
+    a.notice ??= null;
+  }
+  for (const p of w.company.products) backfillProduct(w, p);
+  w.version = 2;
+  return w;
+}
+
 /** Loads runs/<runId>/world.json; null when missing or unreadable. */
 export async function loadWorld(runId: string, opts: { dir?: string } = {}): Promise<WorldState | null> {
   if (!isValidRunId(runId)) return null;
@@ -181,7 +242,7 @@ export async function loadWorld(runId: string, opts: { dir?: string } = {}): Pro
     if (!looksLikeWorld(parsed)) return null;
     if (!Array.isArray(parsed.activity)) parsed.activity = [];
     parsed.runId = runId;
-    return parsed;
+    return migrateWorld(parsed);
   } catch {
     return null;
   }

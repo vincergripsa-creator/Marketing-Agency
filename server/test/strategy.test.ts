@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CreatorProfile, InboxMessage, Lesson, Order, Product, Task } from '../src/shared.js';
 import type { BrainVault, ContentEngine, MindContext, RedTeamVerdict, RunPaths } from '../src/contracts.js';
+import { LEGACY } from './legacy.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..', '..');
@@ -23,12 +24,12 @@ async function setup(seed = 21) {
   const m = await modules();
   const root = mkdtempSync(join(tmpdir(), 'pixel-agency-strategy-'));
   const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
-  const world = m.createWorld(m.defaultScenario({ seed, mindMode: 'heuristic' }), 'test-strategy');
+  const world = m.createWorld(m.defaultScenario({ ...LEGACY, seed, mindMode: 'heuristic' }), 'test-strategy');
   const engine = m.minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed });
   const brain = m.vault.createBrainVault(paths);
   await brain.init();
   const rng = m.createRng(world.rngState);
-  const ctx = { world, engine, brain, tools: m.sim.createMarketTools(world, rng), rng, paths, incidents: [] as string[], lastMarketNotes: [] as string[] };
+  const ctx = { world, engine, brain, tools: m.sim.createMarketTools(world, rng), rng, channelRng: rng, ritual: async () => undefined, paths, incidents: [] as string[], lastMarketNotes: [] as string[] };
   return { ...m, world, engine, brain, ctx, root, paths, rng };
 }
 
@@ -464,7 +465,7 @@ describe('the Red Team is a gate on publish_product (C5)', () => {
     const m = await modules();
     const root = mkdtempSync(join(tmpdir(), 'pixel-agency-gate-'));
     const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
-    const world = m.createWorld(m.defaultScenario({ seed: 11, mindMode: 'heuristic' }), 'test-gate');
+    const world = m.createWorld(m.defaultScenario({ ...LEGACY, seed: 11, mindMode: 'heuristic' }), 'test-gate');
     const engine = m.minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed: 11 });
     const script = [...verdicts];
     engine.redTeam = async (input) => {
@@ -1156,7 +1157,7 @@ describe('over 45 days', () => {
     root = mkdtempSync(join(tmpdir(), 'pixel-agency-run-'));
     const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
     const seed = 14; // these tests read a healthy company: a seed where the run is one, not a property of the code
-    world = m.createWorld(m.defaultScenario({ seed, mindMode: 'heuristic' }), 'test-45');
+    world = m.createWorld(m.defaultScenario({ ...LEGACY, seed, mindMode: 'heuristic' }), 'test-45');
     const brain = m.vault.createBrainVault(paths);
     const company = new m.Company(world, { paths, engine: m.minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed }), brain });
     await company.runDays(45);

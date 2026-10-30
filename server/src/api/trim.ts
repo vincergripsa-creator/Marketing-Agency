@@ -150,8 +150,10 @@ export function trimContent(content: PdfContent | null | undefined, live = false
 
 export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS): Product {
   const stats = p.stats ?? { views: 0, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, rating: 0, reviews: [], upsellSales: 0 };
+  // What compaction leaves the company to read (scale §7.2): no panel reads it, and at its caps it weighs 9 KB a product.
+  const { hooks: _hooks, feedback: _feedback, ...kept } = p;
   return {
-    ...p,
+    ...kept,
     content: trimContent(p.content, limits.live),
     salesPage: limits.live ? null : p.salesPage,
     stats: { ...stats, reviews: lastN(stats.reviews, limits.reviewsPerProduct) },

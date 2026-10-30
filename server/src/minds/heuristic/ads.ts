@@ -248,6 +248,8 @@ const VISUALS: Record<AdFormat, string[]> = {
     'Carte 5 : le bonus offert',
     'Carte finale : couverture du guide + appel à l’action',
   ],
+  static_image: ['Image unique : accroche en gros, couverture du guide, appel à l’action'],
+  search_text: [], // text only, no scene
 };
 
 /** Customer quotes hidden behind a filler of the same length: their punctuation is not the sentence's. */

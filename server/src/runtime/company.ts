@@ -30,12 +30,11 @@ import { shelveProduct, cancelProductTasks } from './pipeline.js';
 import { situationFor } from './situation.js';
 import { AGENTS } from './roster.js';
 import { activeCampaigns, currentBudget } from './metrics.js';
+import { PILLARS, type Worked } from './pillars.js';
+import { STREAM } from './streams.js';
 import { dec, errorText, eur, idNum, round2, short, uniq } from './util.js';
 
 const MAX_CONCURRENT_CLAUDE = 6;
-
-/** Random streams of a run, keyed by (seed, stream, day, tick): the same seed is the same market, whatever the company decides. */
-const STREAM = { company: 1, tools: 2, market: 3, idleBreak: 4 };
 
 export function phaseOf(tick: number): DayPhase {
   if (tick <= 0) return 'morning';
@@ -84,7 +83,12 @@ export class Company implements CompanyApi {
     this.rng = streamRng(world.scenario.seed, STREAM.company, world.day, world.tick);
     this.tools = sim.createMarketTools(world, streamRng(world.scenario.seed, STREAM.tools, world.day, world.tick));
     this.memory = (world.memory ??= { idleTicks: {}, recalled: {}, minds: {}, incidents: [], lastMarketNotes: [] });
-    this.ctx = { world, engine: this.engine, brain: this.brain, tools: this.tools, rng: this.rng, paths: this.paths, incidents: this.memory.incidents, lastMarketNotes: this.memory.lastMarketNotes };
+    this.ctx = {
+      world, engine: this.engine, brain: this.brain, tools: this.tools, rng: this.rng, paths: this.paths, incidents: this.memory.incidents, lastMarketNotes: this.memory.lastMarketNotes,
+      channelRng: streamRng(world.scenario.seed, STREAM.channels, world.day, world.tick),
+      ritual: (kind, agentId, title) => this.runImmediate(kind, agentId, title),
+      archive: opts.archive,
+    };
     const m = (world.mind ?? {}) as Partial<Usage>;
     this.mindBase = { calls: m.calls || 0, inputTokens: m.inputTokens || 0, outputTokens: m.outputTokens || 0, costEur: m.costEur || 0, fallbacks: m.fallbacks || 0 };
     this.engineZero = safeUsage(this.engine) ?? { calls: 0, inputTokens: 0, outputTokens: 0, costEur: 0, fallbacks: 0 };
@@ -95,6 +99,7 @@ export class Company implements CompanyApi {
       if (def) a.taskKinds = uniq([...def.taskKinds, ...a.taskKinds]);
       a.level = Math.min(a.level, learning.MAX_LEVEL);
     }
+    for (const p of PILLARS) p.mount?.(world);
   }
 
   // ───────────────────────────── public API ─────────────────────────────
@@ -128,6 +133,7 @@ export class Company implements CompanyApi {
     }
     const activities = w.activity.filter((a) => idNum(a.id) > counterBefore).length;
     this.advance();
+    for (const p of PILLARS) p.stepEnd?.(w);
     return { day, tick, phase, status: w.status, activities };
   }
 
@@ -138,6 +144,12 @@ export class Company implements CompanyApi {
     this.tools = sim.createMarketTools(world, streamRng(world.scenario.seed, STREAM.tools, day, tick));
     this.ctx.rng = this.rng;
     this.ctx.tools = this.tools;
+    this.ctx.channelRng = streamRng(world.scenario.seed, STREAM.channels, day, tick);
+  }
+
+  /** The session loop's last resort lands with its loop (P9.1). */
+  skipTick(_reason: string): void {
+    throw new Error('not landed');
   }
 
   async runDays(days: number, onDay?: (kpi: DailyKpi) => void): Promise<void> {
@@ -328,6 +340,7 @@ export class Company implements CompanyApi {
       const a = agentById(w, task.assignee);
       if (a && a.currentTaskId === task.id) { a.currentTaskId = null; a.status = 'idle'; a.bubble = null; }
       this.honourRefusal(task);
+      for (const p of PILLARS) p.refused?.(this.ctx, task);
     }
   }
 
@@ -368,6 +381,7 @@ export class Company implements CompanyApi {
     // CFO first: the envelope frames every paid decision of the day.
     await this.runImmediate('budget_review', 'gabriel', 'Revue budgétaire du matin');
     const outage = reactToOutage(this.ctx);
+    for (const p of PILLARS) await p.morning?.(this.ctx);
 
     const ceo = agentById(w, 'camille')!;
     const heuristic = await buildHeuristicPlan(this.ctx);
@@ -417,7 +431,8 @@ export class Company implements CompanyApi {
     }
     this.cascadeCancel();
     const reviewing = new Set<AgentId>();
-    await this.processReviews(reviewing);
+    const worked: Worked[] = [];
+    await this.processReviews(reviewing, worked);
     assignReady(w);
 
     const ready: ReadyWork[] = [];
@@ -448,9 +463,11 @@ export class Company implements CompanyApi {
         task.workLeft -= 1;
         agent.energy = Math.max(0, agent.energy - 8);
       }
+      worked.push({ agentId: agent.id, taskId: task.id, kind: task.kind });
       if (task.workLeft <= 0) ready.push({ task, agent });
     }
     await this.runHandlers(ready);
+    for (const p of PILLARS) p.worked?.(this.ctx, worked);
   }
 
   private async marketClose(): Promise<void> {
@@ -460,6 +477,7 @@ export class Company implements CompanyApi {
     }
     const before = w.idCounter;
     const res = sim.tickMarket(w, streamRng(w.scenario.seed, STREAM.market, w.day));
+    for (const p of PILLARS) p.marketClosed?.(this.ctx);
     this.ctx.lastMarketNotes = this.memory.lastMarketNotes = Array.isArray(res.notes) ? res.notes.slice(0, 12) : [];
     // The market narrates its own events/messages: only add what it did not already say.
     const said = w.activity.filter((a) => idNum(a.id) > before);
@@ -494,6 +512,7 @@ export class Company implements CompanyApi {
       w.company.kpis.sort((a, b) => a.day - b.day);
     }
     if (w.day % 7 === 0) await this.runImmediate('performance_review', 'nora', `Revue RH de la semaine ${Math.ceil(w.day / 7)}`);
+    for (const p of PILLARS) await p.evening?.(this.ctx);
     const closed = closeMissions(w);
     if (closed.length) emit(w, { agentId: 'hugo', kind: 'thought', text: `Hugo : ${closed.length} mission(s) bouclée(s) aujourd'hui` });
     for (const m of closed) {
@@ -512,6 +531,7 @@ export class Company implements CompanyApi {
       a.place = a.dept;
       a.bubble = null;
     }
+    for (const p of PILLARS) await p.eveningEnd?.(this.ctx);
   }
 
   // ───────────────────────────── work mechanics ─────────────────────────────
@@ -636,6 +656,7 @@ export class Company implements CompanyApi {
     const mind: MindContext = read
       ? { brainNotes: read.brainNotes, lessons: this.lessonsById(read.lessonIds), agent, playbook: [...(w.company.playbooks[agent.id] ?? [])], day: w.day, brand: w.scenario.companyName || w.company.name }
       : await this.mindFor(agent, task.kind, this.taskQuery(task));
+    for (const p of PILLARS) Object.assign(mind, p.mind?.(this.ctx, task, agent));
     let outcome: HandlerOutcome;
     try {
       outcome = await spec.run(this.ctx, task, agent, mind);
@@ -688,7 +709,7 @@ export class Company implements CompanyApi {
     await this.finishTask(task);
   }
 
-  private async processReviews(reviewing: Set<AgentId>): Promise<void> {
+  private async processReviews(reviewing: Set<AgentId>, worked: Worked[]): Promise<void> {
     const w = this.world;
     const queue = w.company.tasks.filter((t) => t.status === 'review').sort((a, b) => a.priority - b.priority || idNum(a.id) - idNum(b.id));
     const count = new Map<AgentId, number>();
@@ -699,6 +720,7 @@ export class Company implements CompanyApi {
       if (n >= 3) continue;
       count.set(reviewer.id, n + 1);
       reviewing.add(reviewer.id);
+      worked.push({ agentId: reviewer.id, taskId: task.id, kind: task.kind, review: true });
       reviewer.status = 'reviewing';
       reviewer.bubble = `Je relis « ${short(task.title, 30)} »`;
       let res;
@@ -707,6 +729,7 @@ export class Company implements CompanyApi {
       } catch (e) {
         res = { verdict: 'approve' as const, notes: [`Relecture impossible (${short(errorText(e), 60)}) : validé par défaut.`], score: null };
       }
+      for (const p of PILLARS) p.reviewed?.(this.ctx, task, res);
       // Two rework cycles, then a decision: a logged waiver, or the end of the deliverable.
       if (res.verdict === 'changes' && task.attempts + 1 >= MAX_ATTEMPTS) res = await closeLoop(this.ctx, task, res);
       task.reviews.push({ by: reviewer.id, day: w.day, verdict: res.verdict, notes: res.notes });
@@ -761,6 +784,7 @@ export class Company implements CompanyApi {
     if (task.kind !== 'plan_day') {
       emit(w, { agentId: task.assignee, kind: 'task_done', text: `${agent?.name ?? 'L’équipe'} a terminé « ${short(task.title, 70)} »`, refs: { taskId: task.id, productId: productIdOf(task) } });
     }
+    for (const p of PILLARS) p.taskDone?.(this.ctx, task);
     const spec = HANDLERS[task.kind];
     if (spec?.onDone) {
       try {
@@ -822,14 +846,15 @@ export class Company implements CompanyApi {
     }
   }
 
-  /** Runs a ritual task right now (budget review, retro, HR review) and records it. */
+  /** Runs a ritual task right now (budget review, retro, HR review) and records it. A kind whose handler has not landed stays quiet (D48). */
   private async runImmediate(kind: TaskKind, agentId: AgentId, title: string): Promise<void> {
     const w = this.world;
+    const spec = HANDLERS[kind];
+    if (!spec) return;
     const agent = agentById(w, agentId) ?? chiefOf(w, KIND_META[kind].dept);
     if (!agent) return;
     const task = createTask(w, { kind, title, assignee: agent.id, createdBy: 'system', reviewer: null, workLeft: 0, priority: 1 });
     task.status = 'in_progress';
-    const spec = HANDLERS[kind];
     try {
       const mind = await this.mindFor(agent, kind, title);
       const outcome = await spec.run(this.ctx, task, agent, mind);

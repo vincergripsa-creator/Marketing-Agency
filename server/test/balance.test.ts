@@ -26,18 +26,19 @@ import * as BALANCE from '../src/sim/balance.js';
 import {
   aggregate, applyOverrides, findCliffs, findStalls, improved, median, runOne, type DayRow, type RunResult,
 } from '../scripts/balanceLib.js';
+import { LEGACY } from './legacy.js';
 
 // ───────────────────────────── fixtures ─────────────────────────────
 
 async function setup(seed = 21) {
   const root = mkdtempSync(join(tmpdir(), 'pixel-agency-balance-'));
   const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
-  const world = createWorld(defaultScenario({ seed, mindMode: 'heuristic' }), 'test-balance');
+  const world = createWorld(defaultScenario({ ...LEGACY, seed, mindMode: 'heuristic' }), 'test-balance');
   const engine: ContentEngine = createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed });
   const brain: BrainVault = createBrainVault(paths);
   await brain.init();
   const rng = createRng(world.rngState);
-  const ctx: RuntimeCtx = { world, engine, brain, tools: sim.createMarketTools(world, rng), rng, paths, incidents: [], lastMarketNotes: [] };
+  const ctx: RuntimeCtx = { world, engine, brain, tools: sim.createMarketTools(world, rng), rng, channelRng: rng, ritual: async () => undefined, paths, incidents: [], lastMarketNotes: [] };
   return { world, ctx, root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -137,21 +138,21 @@ describe('benchmark helpers (scripts/balanceLib)', () => {
 
 describe('5-day smoke runs (founder approval, Claude without key)', () => {
   it('founderApproval: the run goes on, publication waits for the founder, and approving lets the guide go live', async () => {
-    const waiting = await runOne({ difficulty: 'normal', seed: 7, days: 5, budget: 500, founderApproval: true });
+    const waiting = await runOne({ difficulty: 'normal', seed: 7, days: 5, budget: 500, scenario: LEGACY, founderApproval: true });
     expect(waiting.rows).toHaveLength(5);
     expect(waiting.awaitingFounder).toBeGreaterThan(0);
     expect(waiting.adSpend).toBe(0); // nothing is sold or advertised without the founder's click
     expect(waiting.kpiMismatchDays).toEqual([]);
     expect(waiting.nanDays).toEqual([]);
-    const approved = await runOne({ difficulty: 'normal', seed: 7, days: 5, budget: 500, founderApproval: true, autoApprove: true });
+    const approved = await runOne({ difficulty: 'normal', seed: 7, days: 5, budget: 500, scenario: LEGACY, founderApproval: true, autoApprove: true });
     expect(approved.awaitingFounder).toBe(0);
     expect(approved.live).toBeGreaterThan(0);
     expect(approved.kpiMismatchDays).toEqual([]);
   }, 60_000);
 
   it("mindMode 'claude' without an API key falls back to the heuristic engine and plays exactly the same run", async () => {
-    const claude = await runOne({ difficulty: 'normal', seed: 7, days: 5, budget: 500, mindMode: 'claude' });
-    const heuristic = await runOne({ difficulty: 'normal', seed: 7, days: 5, budget: 500, mindMode: 'heuristic' });
+    const claude = await runOne({ difficulty: 'normal', seed: 7, days: 5, budget: 500, scenario: LEGACY, mindMode: 'claude' });
+    const heuristic = await runOne({ difficulty: 'normal', seed: 7, days: 5, budget: 500, scenario: LEGACY, mindMode: 'heuristic' });
     expect(claude.mindMode).toBe('heuristic');
     expect(claude.rows).toHaveLength(5);
     expect(claude.nanDays).toEqual([]);
@@ -175,7 +176,7 @@ describe('learning calibration', () => {
   });
 
   it('hook/format rewards: scale 5 % CTR, and a worn-out creative barely moves the bandit', () => {
-    const world = createWorld(defaultScenario({ seed: 3, mindMode: 'heuristic' }), 'test-rewards');
+    const world = createWorld(defaultScenario({ ...LEGACY, seed: 3, mindMode: 'heuristic' }), 'test-rewards');
     const p = addProduct(world, 'prd_r');
     const creative = (id: string, hookStyle: 'story' | 'pov', format: 'carousel' | 'ugc_avatar') => ({
       id, productId: p.id, hook: id, hookStyle, format, scenes: [], caption: '', hashtags: [], cta: '', files: { storyboard: [], preview: null },
@@ -199,7 +200,7 @@ describe('learning calibration', () => {
 
 describe('CEO price decisions (strategy.priceMove)', () => {
   it('applies the winner of a concluded price test, and goes back to the control when it was inconclusive', () => {
-    const world = createWorld(defaultScenario({ seed: 3, mindMode: 'heuristic' }), 'test-price');
+    const world = createWorld(defaultScenario({ ...LEGACY, seed: 3, mindMode: 'heuristic' }), 'test-price');
     const ctx = { world } as unknown as RuntimeCtx;
     world.day = 18;
     const p = addProduct(world, 'prd_win', { price: 29, priceHistory: [{ day: 2, price: 24 }, { day: 10, price: 24 }, { day: 11, price: 29 }, { day: 17, price: 29 }] });
@@ -218,7 +219,7 @@ describe('CEO price decisions (strategy.priceMove)', () => {
   });
 
   it('rolls a raise back when it lowers the revenue per paid visitor, and never retries the abandoned tier', () => {
-    const world = createWorld(defaultScenario({ seed: 3, mindMode: 'heuristic' }), 'test-price');
+    const world = createWorld(defaultScenario({ ...LEGACY, seed: 3, mindMode: 'heuristic' }), 'test-price');
     const ctx = { world } as unknown as RuntimeCtx;
     world.day = 16;
     const p = addProduct(world, 'prd_raise', { price: 24, priceHistory: [{ day: 2, price: 19 }, { day: 10, price: 24 }] });
@@ -240,7 +241,7 @@ describe('CEO price decisions (strategy.priceMove)', () => {
   });
 
   it('steps one tier down when hundreds of paid visitors do not buy at this price', () => {
-    const world = createWorld(defaultScenario({ seed: 3, mindMode: 'heuristic' }), 'test-price');
+    const world = createWorld(defaultScenario({ ...LEGACY, seed: 3, mindMode: 'heuristic' }), 'test-price');
     const ctx = { world } as unknown as RuntimeCtx;
     world.day = 11;
     const p = addProduct(world, 'prd_dear', { price: 24, priceHistory: [{ day: 2, price: 24 }] });
@@ -251,7 +252,7 @@ describe('CEO price decisions (strategy.priceMove)', () => {
   });
 
   it('a guide under the paid floor is raised at once, and a price cut never goes back under it', () => {
-    const world = createWorld(defaultScenario({ seed: 3, mindMode: 'heuristic' }), 'test-price');
+    const world = createWorld(defaultScenario({ ...LEGACY, seed: 3, mindMode: 'heuristic' }), 'test-price');
     const ctx = { world } as unknown as RuntimeCtx;
     world.day = 6;
     const cheap = addProduct(world, 'prd_cheap', { price: 9, priceHistory: [{ day: 5, price: 9 }] });
@@ -336,7 +337,7 @@ describe('CEO kill rule and refund gate', () => {
   });
 
   it('16 % refunds do not stop a guide that pays back its ads net of refunds; they do when it loses money', async () => {
-    const world = createWorld(defaultScenario({ seed: 3, mindMode: 'heuristic' }), 'test-refunds');
+    const world = createWorld(defaultScenario({ ...LEGACY, seed: 3, mindMode: 'heuristic' }), 'test-refunds');
     world.day = 30;
     const p = addProduct(world, 'prd_refunds');
     addOrders(world, p, 10, 50, 8); // 16 %: significant (Wilson lower bound > 10 %)

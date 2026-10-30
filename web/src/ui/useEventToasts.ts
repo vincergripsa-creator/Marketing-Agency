@@ -10,6 +10,7 @@ const EVENT_ICON: Record<WorldEventKind, IconName> = {
   ad_rejected: 'ban', ad_account_warning: 'shield', ad_account_banned: 'ban', viral_organic: 'zap', competitor_clone: 'users',
   payment_hold: 'wallet', bad_review_wave: 'star', scam_attempt: 'alert', creator_offer: 'users', platform_outage: 'alert',
   seasonal_boost: 'trendUp', goal_reached: 'sparkle', bankrupt: 'alert', cpm_spike: 'trendUp', cpm_drop: 'trendDown', trend_shift: 'trendUp',
+  channel_opened: 'megaphone', channel_account_banned: 'ban',
 };
 const SEVERITY_TONE: Record<string, ToastTone> = { info: 'info', warn: 'warn', danger: 'bad', good: 'good' };
 const SALE_BURST = 2;

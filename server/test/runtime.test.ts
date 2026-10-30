@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 import type { DailyKpi, TaskKind } from '../src/shared.js';
 import type { BrainVault, ContentEngine, RunPaths } from '../src/contracts.js';
 import { AGENTS, DEPARTMENTS, PLAYBOOK_NOTES, SEED_PLAYBOOKS } from '../src/runtime/roster.js';
-import { KIND_META, createTask, depState } from '../src/runtime/tasks.js';
+import { KIND_META, PLAN_KINDS, createTask, depState } from '../src/runtime/tasks.js';
 import { addPlaybookRule, parsePlaybook, withTone } from '../src/runtime/playbook.js';
+import { LEGACY } from './legacy.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = join(here, '..', 'src');
@@ -16,6 +17,12 @@ const has = (mod: string) => existsSync(join(src, mod, 'index.ts'));
 const simPresent = has('sim');
 const modulesPresent = simPresent && has('deliverables') && has('learning') && has('minds');
 const ALL_KINDS = Object.keys(KIND_META) as TaskKind[];
+/** Kinds of V1 with no owner in the legacy team: they get theirs with reconcileOrg (P2.1). */
+const V1_KINDS: TaskKind[] = [
+  'headcount_review', 'recruit', 'league_review', 'open_channel', 'adapt_creative', 'write_search_ads', 'reconcile_channels', 'allocate_channels',
+  'write_lead_magnet', 'write_email_sequence', 'send_broadcast', 'design_bump', 'portfolio_review',
+];
+const LEGACY_KINDS = ALL_KINDS.filter((k) => !V1_KINDS.includes(k));
 
 describe('roster', () => {
   it('has 31 agents in 11 departments with unique ascii ids', () => {
@@ -44,7 +51,13 @@ describe('roster', () => {
   });
 
   it('every TaskKind can be done by at least one agent', () => {
-    for (const kind of ALL_KINDS) expect(AGENTS.some((a) => a.taskKinds.includes(kind)), kind).toBe(true);
+    for (const kind of LEGACY_KINDS) expect(AGENTS.some((a) => a.taskKinds.includes(kind)), kind).toBe(true);
+  });
+
+  it('counts 47 kinds, and missions still route on the 30 they always did (D57)', () => {
+    expect(ALL_KINDS).toHaveLength(47);
+    expect(LEGACY_KINDS).toHaveLength(34);
+    expect(PLAN_KINDS).toEqual(LEGACY_KINDS.filter((k) => !['plan_day', 'budget_review', 'retro', 'performance_review'].includes(k)));
   });
 
   it('islands do not overlap and stay within the 7×7 map, colours are distinct', () => {
@@ -147,10 +160,10 @@ describe('tasks', () => {
 describe.skipIf(!simPresent)('createWorld', () => {
   it('builds a complete, serialisable world', async () => {
     const { createWorld, defaultScenario } = await import('../src/runtime/index.js');
-    const sc = defaultScenario({ seed: 7 });
+    const sc = defaultScenario({ ...LEGACY, seed: 7 });
     expect(sc).toMatchObject({ name: 'Scénario normal', companyName: 'Pixel Agency', startingCash: 500, horizonDays: 60, difficulty: 'normal', mindMode: 'auto', founderApproval: false, chargeCompute: true, maxComputeEur: 3, goal: { targetProfit: 1000, byDay: 60 } });
     const w = createWorld(sc, 'test-run');
-    expect(w.version).toBe(1);
+    expect(w.version).toBe(2);
     expect(w.day).toBe(1);
     expect(w.tick).toBe(0);
     expect(w.phase).toBe('morning');
@@ -158,7 +171,7 @@ describe.skipIf(!simPresent)('createWorld', () => {
     expect(w.company.agents).toHaveLength(31);
     expect(w.company.departments).toHaveLength(11);
     for (const d of w.company.departments) expect(w.company.agents.some((a) => a.id === d.chiefId)).toBe(true);
-    for (const kind of ALL_KINDS) expect(w.company.agents.some((a) => a.taskKinds.includes(kind)), kind).toBe(true);
+    for (const kind of LEGACY_KINDS) expect(w.company.agents.some((a) => a.taskKinds.includes(kind)), kind).toBe(true);
     for (const a of w.company.agents) {
       expect(a.status).toBe('idle');
       expect(a.place).toBe(a.dept);
@@ -181,7 +194,7 @@ describe.skipIf(!modulesPresent)('reviews and founder approvals', () => {
     const learning = (await import('../src/learning/index.js')) as unknown as { createBrainVault: (p: RunPaths) => BrainVault };
     const root = mkdtempSync(join(tmpdir(), 'pixel-agency-review-'));
     const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
-    const world = createWorld(defaultScenario({ seed: 11, mindMode: 'heuristic' }), 'test-review');
+    const world = createWorld(defaultScenario({ ...LEGACY, seed: 11, mindMode: 'heuristic' }), 'test-review');
     const company = new Company(world, { paths, engine: minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed: 11 }), brain: learning.createBrainVault(paths) });
     return { world, company, root };
   }
@@ -253,7 +266,7 @@ describe.skipIf(!modulesPresent)('headless company (heuristic minds)', () => {
     const root = mkdtempSync(join(tmpdir(), 'pixel-agency-'));
     try {
       const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
-      const world = createWorld(defaultScenario({ seed: 42, mindMode: 'heuristic' }), 'test-headless');
+      const world = createWorld(defaultScenario({ ...LEGACY, seed: 42, mindMode: 'heuristic' }), 'test-headless');
       const engine = minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed: 42 });
       const company = new Company(world, { paths, engine, brain: learning.createBrainVault(paths) });
       const kpis: DailyKpi[] = [];
@@ -310,12 +323,12 @@ describe.skipIf(!modulesPresent)('acquisition policy, organic posts and mind con
     const learning = (await import('../src/learning/index.js')) as unknown as { createBrainVault: (p: RunPaths) => BrainVault };
     const root = mkdtempSync(join(tmpdir(), 'pixel-agency-acq-'));
     const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
-    const world = createWorld(defaultScenario({ seed, mindMode: 'heuristic' }), 'test-acq');
+    const world = createWorld(defaultScenario({ ...LEGACY, seed, mindMode: 'heuristic' }), 'test-acq');
     const engine = minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed });
     const brain = learning.createBrainVault(paths);
     await brain.init();
     const rng = createRng(world.rngState);
-    const ctx = { world, engine, brain, tools: sim.createMarketTools(world, rng), rng, paths, incidents: [] as string[], lastMarketNotes: [] as string[] };
+    const ctx = { world, engine, brain, tools: sim.createMarketTools(world, rng), rng, channelRng: rng, ritual: async () => undefined, paths, incidents: [] as string[], lastMarketNotes: [] as string[] };
     return { world, engine, brain, ctx, root, paths, sim };
   }
 
@@ -662,7 +675,7 @@ describe.skipIf(!modulesPresent)('a reloaded run', () => {
     const root = mkdtempSync(join(tmpdir(), 'pixel-agency-reload-'));
     const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
     const opts = { paths, engine: minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed }), brain: learning.createBrainVault(paths) };
-    const world = createWorld(defaultScenario({ seed, mindMode: 'heuristic', horizonDays: 90 }), 'test-reload');
+    const world = createWorld(defaultScenario({ ...LEGACY, seed, mindMode: 'heuristic', horizonDays: 90 }), 'test-reload');
     return { world, company: new Company(world, opts), reload: (w: typeof world) => new Company(w, opts), root };
   }
 
@@ -722,13 +735,13 @@ describe.skipIf(!modulesPresent)('the company obeys the founder and reacts to in
     const learning = (await import('../src/learning/index.js')) as unknown as { createBrainVault: (p: RunPaths) => BrainVault };
     const root = mkdtempSync(join(tmpdir(), 'pixel-agency-ops-'));
     const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
-    const world = createWorld(defaultScenario({ seed, mindMode: 'heuristic', horizonDays: 90 }), 'test-ops');
+    const world = createWorld(defaultScenario({ ...LEGACY, seed, mindMode: 'heuristic', horizonDays: 90 }), 'test-ops');
     const engine = minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed });
     const brain = learning.createBrainVault(paths);
     await brain.init();
     const company = new Company(world, { paths, engine, brain });
     const rng = createRng(world.rngState);
-    const ctx = { world, engine, brain, tools: sim.createMarketTools(world, rng), rng, paths, incidents: [] as string[], lastMarketNotes: [] as string[] };
+    const ctx = { world, engine, brain, tools: sim.createMarketTools(world, rng), rng, channelRng: rng, ritual: async () => undefined, paths, incidents: [] as string[], lastMarketNotes: [] as string[] };
     return { world, company, ctx, root, sim, engine };
   }
 

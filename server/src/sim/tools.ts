@@ -3,11 +3,12 @@
  * the company only ever talks to these functions.
  */
 import { clamp, emit, nextId, round2 } from '../core/index.js';
-import type { AdReviewResult, MarketTools, Rng, ToolResult } from '../contracts.js';
+import type { AdReviewResult, ChannelAccountStatus, MarketTools, Rng, ToolResult } from '../contracts.js';
 import type {
-  AdFormat, Campaign, CampaignInputShape, CompetitorProduct, CreatorProfile, HookStyle, InboxMessage, NicheBrief, Partnership, ReplyOutcome,
-  SupportReplyInput, TrendSignal, VoiceOfCustomer, WorldState,
+  AdFormat, AudienceView, Campaign, CampaignInputShape, ChannelId, CompetitorProduct, CreatorProfile, HookStyle, InboxMessage, NicheBrief, Partnership,
+  ReplyOutcome, SupportReplyInput, TrendSignal, VoiceOfCustomer, WorldState,
 } from '../shared.js';
+import { CHANNELS, CHANNEL_IDS } from '../shared.js';
 import { ADS, ORGANIC, RESEARCH, SCAM } from './balance.js';
 import { findBannedClaims } from './compliance.js';
 import { customerById, displayName } from './customers.js';
@@ -489,11 +490,30 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     return ok(`Commande ${order.id} remboursée (${fmtEur(amount)}).`, order.id);
   }
 
+  // ───────────── channels, audience: TikTok alone and no list, until P4.1 and P10.2 ─────────────
+
+  function channelStatus(): ChannelAccountStatus[] {
+    const a = m().adAccount;
+    return CHANNEL_IDS.map((id) => id === 'tiktok'
+      ? { id, state: a.banned ? 'banned' : 'open', openDay: 1, strikes: a.strikes, bannedUntilDay: a.bannedUntilDay }
+      : { id, state: 'closed', openDay: null, strikes: 0, bannedUntilDay: 0 });
+  }
+
+  function requestChannel(channel: ChannelId): ToolResult {
+    return fail(`${CHANNELS[channel].label} n'est pas ouvert à l'agence.`);
+  }
+
+  function listStats(): AudienceView {
+    return { size: 0, leads: 0, buyers: 0, byNiche: [], unsubscribed: 0, dailyCost: 0, recent: [], sequences: [] };
+  }
+
   return {
     searchTrends, listCompetitors, minePains, nicheBrief,
     publishProduct, setPrice, setProductStatus,
     submitCreative, createCampaign, updateCampaign, getAdStats,
     postOrganic, listCreators, proposePartnership,
     listInbox, replyToMessage, issueRefund,
+    channelStatus, requestChannel, channelSignals: () => [], getPlatformReport: () => [], getShopAttribution: () => [],
+    listStats, activateSequence: () => fail('Aucune liste e-mail pour le moment.'), sendBroadcast: () => fail('Aucune liste e-mail pour le moment.'),
   };
 }

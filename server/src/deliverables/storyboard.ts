@@ -2,7 +2,7 @@
  * TikTok storyboard: one 9:16 SVG frame per scene (360×640) + a self-contained HTML preview
  * with a phone mockup that plays the scenes with their durations and voice-over subtitles.
  */
-import type { AdCreative, AdScene, DesignSpec, Product } from '../shared.js';
+import type { AdCreative, AdRatio, AdScene, DesignSpec, Product } from '../shared.js';
 import { darken, isDark, mix, readableOn, rgba } from './color.js';
 import { cssFontStack, normalizeDesign } from './design.js';
 import { placeMotif } from './motifs.js';
@@ -22,6 +22,8 @@ const FORMAT_LABEL: Record<AdCreative['format'], string> = {
   text_slideshow: 'Diaporama texte',
   ugc_avatar: 'Avatar UGC',
   carousel: 'Carrousel',
+  static_image: 'Image fixe',
+  search_text: 'Annonce Search',
 };
 
 const HOOK_LABEL: Record<AdCreative['hookStyle'], string> = {
@@ -375,3 +377,8 @@ export function renderAdStoryboard(input: { creative: AdCreative; product: Produ
   return { frames, previewHtml: previewHtml(ctx, previewFrames) };
 }
 
+
+/** Still frames of a non-9:16 cut. No frames until P7.2: the market reads the script (D47). */
+export function renderAdCut(_input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string; ratio: Exclude<AdRatio, 'text'> }): { frames: string[] } {
+  return { frames: [] };
+}

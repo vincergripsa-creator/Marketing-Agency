@@ -3,11 +3,11 @@
  * Used for tests, demos, and as the per-call fallback of the Claude engine.
  */
 import type {
-  AdFormat, CompetitorProduct, CreatorProfile, DailyKpi, Experiment, FinanceSnapshot, HookStyle, InboxMessage, Lesson, MindMode,
+  AdFormat, Broadcast, CompetitorProduct, CreatorProfile, DailyKpi, EmailStep, Experiment, FinanceSnapshot, HookStyle, InboxMessage, Lesson, MindMode,
   NicheBrief, Order, PdfContent, Product, QualityReport, SalesPage, SupportReplyInput, Task, TaskKind, TrendSignal, VoiceOfCustomer,
 } from '../../shared.js';
 import type {
-  AdDraft, ContentEngine, DayPlan, DayPlanItem, GuideGaps, LessonDraft, MindContext, OpportunityRanking, Outline, RedTeamFacts, RedTeamVerdict, UpsellContext,
+  AdDraft, ContentEngine, DayPlan, DayPlanItem, GuideGaps, LessonDraft, MindContext, OpportunityRanking, Outline, RedTeamFacts, RedTeamVerdict, SearchAdDraft, UpsellContext,
 } from '../../contracts.js';
 import { parsePlaybook, scrubDeep, type PlaybookRules } from '../playbook.js';
 import { deepClone, seededRng, type LocalRng } from '../util.js';
@@ -161,6 +161,24 @@ export class HeuristicEngine implements ContentEngine {
   async dailyMemo(input: { day: number; kpi: DailyKpi; notes: string[] }, ctx: MindContext): Promise<string> {
     const { rules } = this.begin('dailyMemo', ctx, []);
     return scrubDeep(heuristicMemo(input), rules.banned);
+  }
+
+  // Land with P4.2 (writeSearchAd) and P11.2 (the other three). Nothing calls them before.
+
+  async writeSearchAd(_input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] }, _ctx: MindContext): Promise<SearchAdDraft> {
+    throw new Error('not landed');
+  }
+
+  async writeLeadMagnet(_input: { product: Product; content: PdfContent; voc: VoiceOfCustomer }, _ctx: MindContext): Promise<PdfContent> {
+    throw new Error('not landed');
+  }
+
+  async writeEmailSequence(_input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] }, _ctx: MindContext): Promise<Omit<EmailStep, 'score'>[]> {
+    throw new Error('not landed');
+  }
+
+  async writeBroadcast(_input: { product: Product; voc: VoiceOfCustomer; angle: string; audience: Broadcast['audience']; bannedClaims: string[] }, _ctx: MindContext): Promise<{ subject: string; body: string; hasUnsubscribe: boolean }> {
+    throw new Error('not landed');
   }
 
   usage(): Usage {

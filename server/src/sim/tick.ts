@@ -9,6 +9,7 @@ import type {
 } from '../shared.js';
 import { addAdTotals } from './adTotals.js';
 import { ADS, CONVERSION, CREATORS, ESCALATION, FEES, INBOX, ORGANIC, REFUNDS, REVIEWS, SCAM, STATS, UPSELL } from './balance.js';
+import { runClaims } from './claims.js';
 import { findBannedClaims } from './compliance.js';
 import { buyerArchetype, createCustomer, customerById, senderArchetype } from './customers.js';
 import { releaseHolds, rollEvents, seasonalBoostActive } from './events.js';
@@ -41,6 +42,8 @@ const NEUTRAL_REPORT: QualityReport = {
 /** Per-day caches + running totals. */
 class Day {
   readonly day: number;
+  /** The day's key: every phase and every later step takes its stream from it. */
+  dayKey = 0;
   cash: number;
   readonly traffic: Traffic[] = [];
   readonly newOrders: Order[] = [];
@@ -273,6 +276,7 @@ function runAds(d: Day): void {
   }
   if (blocked) d.notes.push(`Compte publicitaire suspendu jusqu'au jour ${m.adAccount.bannedUntilDay} : ${plural(blocked, 'campagne bloquée', 'campagnes bloquées')}.`);
   if (capped) d.notes.push('Trésorerie insuffisante : la diffusion des pubs a été plafonnée.');
+  runPaidTails(d);
 }
 
 // ───────────────────────────── 2. organic ─────────────────────────────
@@ -384,7 +388,7 @@ function newOrder(d: Day, p: Product, source: Order['source'], t: Pick<Traffic, 
   return o;
 }
 
-const SOURCE_LABEL: Record<Order['source'], string> = { ads: 'pubs TikTok', organic: 'TikTok organique', creator: 'créateurs', upsell: 'upsell « La suite est ici »' };
+const SOURCE_LABEL: Record<Order['source'], string> = { ads: 'pubs TikTok', organic: 'TikTok organique', creator: 'créateurs', upsell: 'upsell « La suite est ici »', email: 'e-mails', bump: 'offre à la commande' };
 
 function bookRevenue(d: Day, p: Product, source: Order['source'], count: number, amount: number): void {
   if (count <= 0 || amount <= 0) return;
@@ -821,9 +825,60 @@ function summarize(d: Day, result: MarketDayResult): void {
   result.notes = d.notes.slice();
 }
 
+// ───────────────────────────── phases still empty ─────────────────────────────
+// Their place and stream are already fixed in DAY_PHASES: the package that fills one writes its body and shifts nothing.
+
+/** P4.1. Called by runAds on its own stream: its free clicks must reach runSales the same day. */
+function runPaidTails(_d: Day): void { /* empty */ }
+/** P10.2 */
+function runEmail(_d: Day): void { /* empty */ }
+/** P10.2 */
+function runCapture(_d: Day): void { /* empty */ }
+/** P10.2 */
+function runBumps(_d: Day): void { /* empty */ }
+/** P4.1 */
+function updateWarmth(_d: Day): void { /* empty */ }
+/** P4.1 */
+function rollChannelEvents(_d: Day): void { /* empty */ }
+/** P10.2 */
+function runRivals(_d: Day): void { /* empty */ }
+
+function rollDayEvents(d: Day): void {
+  const before = d.world.market.events.length;
+  rollEvents(d.world, d.rng, d.diff);
+  for (const ev of d.world.market.events.slice(before)) {
+    d.eventIds.push(ev.id);
+    d.notes.push(`Événement : ${ev.title}.`);
+  }
+}
+
 // ───────────────────────────── entry point ─────────────────────────────
 
-const DAY_PHASES = [housekeeping, runAds, runOrganic, runCreators, runSales, runUpsells, runRefunds, runReviews, runFriendlyFraud, runInbox, runEscalations];
+/**
+ * The order of a close. Each phase draws from its own stream: one more click in the ads does not change who refunds, nor
+ * which event comes. A number is given once and for good, so a new phase takes a new number. null: the phase draws nothing.
+ */
+export const DAY_PHASES: readonly { run: (d: Day) => void; stream: number | null }[] = [
+  { run: housekeeping, stream: 0 },
+  { run: runAds, stream: 1 },
+  { run: runOrganic, stream: 2 },
+  { run: runCreators, stream: 3 },
+  { run: runEmail, stream: 100 },
+  { run: runSales, stream: 4 },
+  { run: runCapture, stream: 102 },
+  { run: runBumps, stream: 103 },
+  { run: runUpsells, stream: 5 },
+  { run: runRefunds, stream: 6 },
+  { run: runReviews, stream: 7 },
+  { run: runFriendlyFraud, stream: 8 },
+  { run: runInbox, stream: 9 },
+  { run: runEscalations, stream: 10 },
+  { run: (d) => runClaims(d.world, d.rng), stream: 1004 },
+  { run: updateWarmth, stream: null },
+  { run: rollDayEvents, stream: 11 },
+  { run: rollChannelEvents, stream: 1005 },
+  { run: runRivals, stream: 101 },
+];
 
 export function tickMarket(world: WorldState, rng: Rng): MarketDayResult {
   const day = world.day;
@@ -833,17 +888,10 @@ export function tickMarket(world: WorldState, rng: Rng): MarketDayResult {
     return result;
   }
   const d = new Day(world, rng, difficultyProfile(world.scenario?.difficulty ?? 'normal'));
-  // Each phase draws from its own stream: one more click in the ads does not change who refunds, nor which event comes.
-  const dayKey = rng.int(0, 0x7fffffff);
-  DAY_PHASES.forEach((run, i) => {
-    d.rng = streamRng(dayKey, i);
+  d.dayKey = rng.int(0, 0x7fffffff);
+  for (const { run, stream } of DAY_PHASES) {
+    if (stream !== null) d.rng = streamRng(d.dayKey, stream);
     run(d);
-  });
-  const before = world.market.events.length;
-  rollEvents(world, streamRng(dayKey, DAY_PHASES.length), d.diff);
-  for (const ev of world.market.events.slice(before)) {
-    d.eventIds.push(ev.id);
-    d.notes.push(`Événement : ${ev.title}.`);
   }
   // One-off launch costs, booked at the very first market close (store theme, domain, ad pixel, e-mail tool):
   // the agency starts slightly in the red, as any real one does, instead of "profitable" after its first sale.

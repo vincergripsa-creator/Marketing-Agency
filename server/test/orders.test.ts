@@ -21,6 +21,7 @@ import { killProduct } from '../src/runtime/pipeline.js';
 import { findBannedClaims, findPageClaims } from '../src/sim/compliance.js';
 import { scoreSalesPage } from '../src/sim/quality.js';
 import { LESSON_KEYS } from '../src/learning/index.js';
+import { LEGACY } from './legacy.js';
 
 async function setup(scenario: Record<string, unknown> = {}, seed = 5) {
   const { createWorld, defaultScenario, Company } = await import('../src/runtime/index.js');
@@ -30,13 +31,13 @@ async function setup(scenario: Record<string, unknown> = {}, seed = 5) {
   const learning = (await import('../src/learning/index.js')) as unknown as { createBrainVault: (p: RunPaths) => BrainVault };
   const root = mkdtempSync(join(tmpdir(), 'pixel-agency-orders-'));
   const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
-  const world = createWorld(defaultScenario({ seed, mindMode: 'heuristic', horizonDays: 90, ...scenario }), 'test-orders');
+  const world = createWorld(defaultScenario({ ...LEGACY, seed, mindMode: 'heuristic', horizonDays: 90, ...scenario }), 'test-orders');
   const engine = minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed });
   const brain = learning.createBrainVault(paths);
   await brain.init();
   const company = new Company(world, { paths, engine, brain });
   const rng = createRng(world.rngState);
-  const ctx = { world, engine, brain, tools: sim.createMarketTools(world, rng), rng, paths, incidents: [] as string[], lastMarketNotes: [] as string[] };
+  const ctx = { world, engine, brain, tools: sim.createMarketTools(world, rng), rng, channelRng: rng, ritual: async () => undefined, paths, incidents: [] as string[], lastMarketNotes: [] as string[] };
   return { world, company, ctx, root, sim, engine };
 }
 

@@ -170,6 +170,9 @@ export class AgencySession {
       tick: this.run?.world.tick ?? 0,
       lastError: this.lastError,
       minStartingCash: minStartingCash(),
+      pace: 'live',
+      watchers: 0,
+      backoffMs: null,
     };
   }
 

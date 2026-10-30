@@ -178,6 +178,7 @@ function agent(id: string, name: string): AgentState {
     avatar: { skin: '#f1c27d', hair: '#3b2a1a', shirt: '#7c5cff', pants: '#222', hairStyle: 1, accessory: 'glasses' },
     status: 'idle', place: 'studio', currentTaskId: null, energy: 80, level: 2, xp: 120,
     perf: { done: 3, approved: 3, rejected: 0, failed: 0, score: 82 }, bubble: null,
+    roleId: 'ghostwriter', gender: 'f', founder: false, hatKinds: [], hatDepts: [], hiredDay: 0, rampUntilDay: 0, notice: null,
   };
 }
 
@@ -218,7 +219,7 @@ function makeWorld(runId = 'run-20261030-120000'): WorldState {
   }
   const activity: Activity[] = Array.from({ length: 450 }, (_, i) => ({ id: `act_${i}`, day: 1 + (i % 30), tick: i % 12, at: 1_700_000_000_000 + i, agentId: null, kind: 'thought', text: `Activité ${i}` }));
   return {
-    version: 1, runId, createdAt: '2026-10-30T12:00:00.000Z',
+    version: 2, runId, createdAt: '2026-10-30T12:00:00.000Z',
     scenario: {
       name: 'Test', companyName: 'Pixel Agency', seed: 42, startingCash: 500, horizonDays: 60, difficulty: 'normal', mindMode: 'heuristic',
       founderApproval: false, chargeCompute: false, maxComputeEur: 3, goal: { targetProfit: 1000, byDay: 60 },
@@ -591,6 +592,20 @@ describe('what the UI may see', () => {
     expect(p.content!.chapters).toEqual([]);
     expect(p.content!.nextStep).toEqual(w.company.products[0]!.content!.nextStep);
     expect(serializeLiveSnapshot(w, FINANCE).length).toBeLessThan(serializeSnapshot(w, FINANCE).length);
+  });
+
+  it('keeps the hooks and feedback of a product in the world: no panel reads them, and at their caps they weigh 9 KB a product', () => {
+    const w = makeWorld();
+    const p = w.company.products[0]!;
+    p.hooks = Array.from({ length: 60 }, (_, i) => ({ hook: `Accroche ${i}`, hookStyle: 'question' }));
+    p.feedback = Array.from({ length: 30 }, (_, i) => ({ day: i, text: `Plainte ${i}`, quality: true }));
+    const snapshots = [buildSnapshot(w, FINANCE), JSON.parse(serializeSnapshot(w, FINANCE)) as CompanySnapshot, JSON.parse(serializeLiveSnapshot(w, FINANCE)) as CompanySnapshot];
+    for (const snap of snapshots) {
+      expect(snap.company.products[0]).not.toHaveProperty('hooks');
+      expect(snap.company.products[0]).not.toHaveProperty('feedback');
+    }
+    expect(p.hooks).toHaveLength(60);
+    expect(p.feedback).toHaveLength(30);
   });
 
   it('counts tasks on the whole list, whatever the snapshot keeps of it', () => {
@@ -1150,7 +1165,7 @@ describe('live session', () => {
     expect(await s.chat('Margaux', 'Coucou')).toBe('Bien reçu : Coucou'); // a first name works too
     expect(await s.mission('Écris des hooks', 'noam')).toBe('mis_42');
     // the live session info carries every SessionInfo field the UI reads
-    expect(Object.keys(s.info()).sort()).toEqual(['busy', 'day', 'intervalMs', 'lastError', 'minStartingCash', 'mindMode', 'playing', 'runId', 'speed', 'status', 'tick']);
+    expect(Object.keys(s.info()).sort()).toEqual(['backoffMs', 'busy', 'day', 'intervalMs', 'lastError', 'minStartingCash', 'mindMode', 'pace', 'playing', 'runId', 'speed', 'status', 'tick', 'watchers']);
     await s.approve('tsk_1', true);
     expect(fake.approvals).toContain('tsk_1:true');
     await expect(s.approve('tsk_absent', true)).rejects.toMatchObject({ status: 404 });

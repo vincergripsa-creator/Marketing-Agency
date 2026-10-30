@@ -11,14 +11,19 @@ import { GENERIC_PHRASES, guideSubstance, scoreCreative, scorePdf, scoreSalesPag
 import { tickMarket } from './tick.js';
 import { createMarketTools } from './tools.js';
 
+/** Land with sim/videoCraft.ts (P6.1) and sim/audience.ts (P10.2). Nothing calls them before. */
+const notLanded = (): never => { throw new Error('not landed'); };
+const scoreCut: SimModule['scoreCut'] = notLanded;
+const scoreEmail: SimModule['scoreEmail'] = notLanded;
+
 export {
   createMarketState, createMarketTools, tickMarket, recordLedger, financeSnapshot, lastClosedDay, announcedOutageDays, isAnnouncedOutage,
-  repayableLeft, isScamFlag, scorePdf, scoreSalesPage, scoreCreative, scoreSupportReply, guideSubstance, GENERIC_PHRASES, findNiche, difficultyProfile,
+  repayableLeft, isScamFlag, scorePdf, scoreSalesPage, scoreCreative, scoreSupportReply, scoreCut, scoreEmail, guideSubstance, GENERIC_PHRASES, findNiche, difficultyProfile,
 };
 
 // compile-time check that this module satisfies the contract
 const _contract: SimModule = {
   createMarketState, createMarketTools, tickMarket, recordLedger, financeSnapshot, lastClosedDay, announcedOutageDays, isAnnouncedOutage,
-  repayableLeft, isScamFlag, scorePdf, scoreSalesPage, scoreCreative, scoreSupportReply, guideSubstance, GENERIC_PHRASES, findNiche, difficultyProfile,
+  repayableLeft, isScamFlag, scorePdf, scoreSalesPage, scoreCreative, scoreSupportReply, scoreCut, scoreEmail, guideSubstance, GENERIC_PHRASES, findNiche, difficultyProfile,
 };
 void _contract;

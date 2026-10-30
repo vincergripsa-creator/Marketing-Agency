@@ -6,10 +6,11 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type {
-  Activity, AgentId, AgentState, Deliverable, NicheBrief, Product, Task, TaskKind, VoiceOfCustomer, WorldState,
+  Activity, ActivityKind, AgentId, AgentState, Deliverable, NicheBrief, Office, Product, Task, TaskKind, VoiceOfCustomer, WorldState,
 } from '../shared.js';
-import type { BrainVault, ContentEngine, MarketTools, RunPaths, Rng } from '../contracts.js';
+import type { BrainVault, CompanyOptions, ContentEngine, MarketTools, RunPaths, Rng } from '../contracts.js';
 import { emit, nextId } from '../core/index.js';
+import { officerId } from './org/officers.js';
 import { errorText } from './util.js';
 
 export interface RuntimeCtx {
@@ -18,15 +19,27 @@ export interface RuntimeCtx {
   brain: BrainVault;
   tools: MarketTools;
   rng: Rng;
+  /** Channel decisions: its own stream, rebuilt each tick. */
+  channelRng: Rng;
   paths: RunPaths;
   /** Today's notable events (French), handed to the evening retro. */
   incidents: string[];
   /** Notes of the last market close (for the daily report). */
   lastMarketNotes: string[];
+  /** Runs a task of a pillar right now, like the retro. Never waits for the founder (D48). */
+  ritual(kind: TaskKind, agentId: AgentId, title: string): Promise<void>;
+  /** Where compaction hands the rows it removes. Absent: they are dropped. */
+  archive?: CompanyOptions['archive'];
 }
 
 export function say(ctx: RuntimeCtx, agentId: AgentId | null, text: string, kind: Activity['kind'] = 'thought', refs?: Activity['refs'], extra?: Pick<Activity, 'toAgentId' | 'place'>): Activity {
   return emit(ctx.world, { agentId, kind, text, ...(refs ? { refs } : {}), ...(extra ?? {}) });
+}
+
+/** A line in the voice of whoever holds an office today. */
+export function speak(ctx: RuntimeCtx, office: Office, text: string, kind: ActivityKind = 'thought', refs?: Activity['refs']): Activity {
+  const id = officerId(ctx.world, office);
+  return say(ctx, id, `${nameOf(ctx, id)} : ${text}`, kind, refs);
 }
 
 export function incident(ctx: RuntimeCtx, text: string): void {

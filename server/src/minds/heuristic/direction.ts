@@ -15,6 +15,9 @@ export const KIND_DEPT: Record<TaskKind, DeptId> = {
   reply_inbox: 'support', handle_refund: 'support', find_creators: 'partenariats', negotiate_deal: 'partenariats',
   daily_report: 'analyse', run_experiment: 'analyse', budget_review: 'finance', retro: 'rh', performance_review: 'rh',
   reconcile_ledger: 'finance', weekly_pnl: 'finance', follow_missions: 'direction',
+  adapt_creative: 'video', write_lead_magnet: 'crm', write_email_sequence: 'crm', send_broadcast: 'crm', open_channel: 'growth', write_search_ads: 'growth',
+  reconcile_channels: 'analyse', allocate_channels: 'finance', design_bump: 'boutique', portfolio_review: 'direction',
+  headcount_review: 'rh', recruit: 'rh', league_review: 'rh',
 };
 
 export const KIND_TITLE: Record<TaskKind, string> = {
@@ -28,6 +31,11 @@ export const KIND_TITLE: Record<TaskKind, string> = {
   find_creators: 'Trouver des créateurs', negotiate_deal: 'Négocier avec un créateur', daily_report: 'Rapport chiffré', run_experiment: 'Lancer une expérience A/B',
   budget_review: 'Revue du budget', retro: 'Rétro : leçons du jour', performance_review: 'Revue RH des agents',
   reconcile_ledger: 'Rapprocher le grand livre', weekly_pnl: 'Sortir le P&L par produit', follow_missions: 'Suivre les missions et relancer',
+  headcount_review: 'Revoir les effectifs', recruit: 'Recruter', league_review: 'Clôturer la saison',
+  open_channel: 'Ouvrir un canal', adapt_creative: 'Adapter une créa à un canal', write_search_ads: 'Écrire des annonces Search',
+  reconcile_channels: 'Rapprocher les canaux', allocate_channels: 'Répartir le budget entre les canaux',
+  write_lead_magnet: 'Écrire l’aimant à prospects', write_email_sequence: 'Écrire la séquence e-mail', send_broadcast: 'Envoyer un e-mail à la liste',
+  design_bump: 'Préparer l’offre à la commande', portfolio_review: 'Revoir le portefeuille',
 };
 
 const ROUTES: { re: RegExp; kinds: TaskKind[] }[] = [
@@ -112,6 +120,8 @@ const ROLE_LENS: Record<DeptId, string> = {
   finance: 'De mon côté, je cale l’enveloppe et la trésorerie de demain sur ces chiffres.',
   rh: 'De mon côté, j’en fais une leçon à la rétro du soir.',
   partenariats: 'De mon côté, je regarde si les créateurs peuvent compenser.',
+  video: 'De mon côté, je regarde si le montage retient les gens ou les perd.',
+  crm: 'De mon côté, je regarde ce que la liste en dit et ce qu’on peut lui écrire.',
 };
 
 /** Line prefixes of the situation built by the runtime: the answer to a precise question is a line, not a summary. */

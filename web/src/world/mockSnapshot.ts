@@ -4,7 +4,7 @@
 import type {
   Activity, ActivityKind, AdCreative, AgentState, AvatarSpec, BanditArm, Campaign, CompanySnapshot, CreatorProfile, DailyAdStats,
   DailyKpi, DeptDef, DeptId, Deliverable, Experiment, FinanceSnapshot, InboxMessage, LedgerEntry, Lesson, Mission, ModelTier,
-  Order, OrganicPost, Partnership, PdfContent, Place, Product, Task, TaskKind, ToolName, WorldEvent, AgentStatus,
+  Order, OrganicPost, Partnership, PdfContent, Place, Product, RoleId, Task, TaskKind, ToolName, WorldEvent, AgentStatus,
 } from '../../../shared/types';
 
 const DAY = 10;
@@ -87,6 +87,22 @@ const ROWS: AgentRow[] = [
 
 const PANTS_DEFAULT = ['#2f3a56', '#3a3f5c', '#43405a', '#2b3445'];
 
+/** Role and gender of each row, then the eight founders. */
+const PEOPLE: Record<string, [RoleId, 'f' | 'm']> = {
+  camille: ['ceo', 'f'], hugo: ['chief_of_staff', 'm'],
+  nadia: ['research_lead', 'f'], malo: ['competitor_analyst', 'm'], yasmine: ['voc_analyst', 'f'],
+  elise: ['editor_in_chief', 'f'], theo: ['ghostwriter', 'm'], lina: ['humanizer', 'f'], samuel: ['fact_checker', 'm'],
+  zoe: ['art_director', 'f'], kenji: ['cover_designer', 'm'], maelle: ['layout_designer', 'f'],
+  leo: ['growth_lead', 'm'], sarah: ['hook_writer', 'f'], adam: ['media_buyer_tiktok', 'm'], chloe: ['video_editor', 'f'], tom: ['community_manager', 'm'],
+  clara: ['shop_lead', 'f'], mehdi: ['sales_copywriter', 'm'], paul: ['pricing_manager', 'm'],
+  ines: ['support_lead', 'f'], lucas: ['support_agent', 'm'], fatou: ['support_agent', 'f'],
+  raphael: ['data_analyst', 'm'], emma: ['experiment_analyst', 'f'],
+  gabriel: ['cfo', 'm'], alice: ['accountant', 'f'],
+  nora: ['hr_lead', 'f'], axel: ['red_teamer', 'm'],
+  rayan: ['partnerships_lead', 'm'], louise: ['partner_manager', 'f'],
+};
+const FOUNDERS = new Set(['camille', 'nadia', 'elise', 'zoe', 'leo', 'clara', 'gabriel', 'nora']);
+
 function buildAgents(rand: () => number): AgentState[] {
   return ROWS.map((r, i) => {
     const [skin, hair, style, acc, shirt, pants] = r.look;
@@ -107,6 +123,14 @@ function buildAgents(rand: () => number): AgentState[] {
       xp: done * 35 + Math.floor(rand() * 30),
       perf: { done, approved: done - rejected, rejected, failed, score: Math.round(62 + rand() * 33) },
       bubble: r.bubble ?? null,
+      roleId: PEOPLE[r.id]![0],
+      gender: PEOPLE[r.id]![1],
+      founder: FOUNDERS.has(r.id),
+      hatKinds: [],
+      hatDepts: [],
+      hiredDay: 0,
+      rampUntilDay: 0,
+      notice: null,
     };
   });
 }
