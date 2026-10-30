@@ -216,7 +216,12 @@ export function verdict({ world, finance, daysRun, filesDir, brainDir, worldFile
   let headline: string;
   const lastDay = world.tick === 0 ? Math.max(1, world.day - 1) : world.day;
   if (world.status === 'bankrupt' || finance.bankrupt) headline = `FAILLITE : trésorerie négative à la fin du jour ${lastDay} (${fmtEur(finance.cash)}). L'agence survit sans pub, sur l'organique et les créateurs à la commission.`;
-  else if (world.status === 'goal_reached' || (s.goal?.targetProfit > 0 && finance.profit >= s.goal.targetProfit)) headline = `OBJECTIF ATTEINT : ${fmtEur(finance.profit, true)} de profit (objectif ${fmtEur(s.goal.targetProfit)}).`;
+  else if (world.status === 'goal_reached' || (s.goal?.targetProfit > 0 && finance.profit >= s.goal.targetProfit)) {
+    const reachedDay = world.market?.events?.find((e) => e.kind === 'goal_reached')?.day ?? 0;
+    headline = reachedDay > s.goal.byDay
+      ? `OBJECTIF ATTEINT APRÈS L'ÉCHÉANCE : ${fmtEur(finance.profit, true)} de profit (objectif ${fmtEur(s.goal.targetProfit)} avant le jour ${s.goal.byDay}, atteint au jour ${reachedDay}).`
+      : `OBJECTIF ATTEINT : ${fmtEur(finance.profit, true)} de profit (objectif ${fmtEur(s.goal.targetProfit)}).`;
+  }
   else if (profitable && finance.profit7d > 0) headline = `RENTABLE : ${fmtEur(finance.profit, true)} de profit cumulé, et la dernière semaine gagne de l'argent.`;
   else if (profitable) headline = `RENTABLE, mais fragile : ${fmtEur(finance.profit, true)} cumulés, la dernière semaine perd ${fmtEur(-finance.profit7d)}.`;
   else headline = `PAS ENCORE RENTABLE : ${fmtEur(finance.profit, true)} depuis le départ.`;

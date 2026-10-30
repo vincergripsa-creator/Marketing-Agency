@@ -707,10 +707,12 @@ function creators(inp: RetroInput): HeuristicDraft[] {
 
 /** « Couper les pubs » stops a niche's paid ads (runtime/acquisition.ts): it takes a real sample, not one campaign's bad days. */
 export const NICHE_CUT_MIN_SPEND = 100;
+/** Days of ads behind the numbers of a niche lesson. */
+export const NICHE_WINDOW_DAYS = 7;
 
 function niches(inp: RetroInput): HeuristicDraft[] {
   const { world, day, ix } = inp;
-  const from = Math.max(1, day - 6);
+  const from = Math.max(1, day - NICHE_WINDOW_DAYS + 1);
   const per = new Map<string, FunnelAgg>();
   for (const r of adRows(world, from, day)) {
     const p = productOfRow(ix, r);

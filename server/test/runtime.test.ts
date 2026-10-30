@@ -504,6 +504,26 @@ describe.skipIf(!modulesPresent)('acquisition policy, organic posts and mind con
     }
   });
 
+  it('watchdog: a launch the founder just approved is not « stuck », whatever the hour of his yes', async () => {
+    const { world, ctx, root, sim } = await setup();
+    try {
+      const { buildHeuristicPlan } = await import('../src/runtime/strategy.js');
+      world.day = 30;
+      sim.recordLedger(world, { type: 'revenue', amount: 800, memo: 'Ventes (fixture)', ref: null });
+      const p = addProduct(world, 'prd_ok', { title: 'Potager sur balcon', launchedDay: 5 });
+      addOrders(world, p.id, 20, 12);
+      addCampaign(world, p.id, 'cpg_old', 26, 10, 30, 1.6);
+      // Asked on day 27, approved last evening: back to pending, no work tick has run since.
+      const approved = createTask(world, { kind: 'launch_campaign', input: { productId: p.id, askedBudget: 20, founderApproved: true } });
+      approved.dayCreated = 27;
+      await buildHeuristicPlan(ctx);
+      expect(approved.status).toBe('pending');
+      expect(approved.log.join(' ')).not.toContain('on repart de zéro');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('watchdog: when every product is "ads-dead" and nothing ran for 2 days, one minimum-budget test instead of idling', async () => {
     const { world, ctx, root, sim } = await setup();
     try {
@@ -632,6 +652,60 @@ describe.skipIf(!modulesPresent)('acquisition policy, organic posts and mind con
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+describe.skipIf(!modulesPresent)('a reloaded run', () => {
+  async function mount(seed: number) {
+    const { createWorld, defaultScenario, Company } = await import('../src/runtime/index.js');
+    const minds = (await import('../src/minds/index.js')) as unknown as { createContentEngine: (o: { mode: 'heuristic'; maxComputeEur: number; seed: number }) => ContentEngine };
+    const learning = (await import('../src/learning/index.js')) as unknown as { createBrainVault: (p: RunPaths) => BrainVault };
+    const root = mkdtempSync(join(tmpdir(), 'pixel-agency-reload-'));
+    const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
+    const opts = { paths, engine: minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed }), brain: learning.createBrainVault(paths) };
+    const world = createWorld(defaultScenario({ seed, mindMode: 'heuristic', horizonDays: 90 }), 'test-reload');
+    return { world, company: new Company(world, opts), reload: (w: typeof world) => new Company(w, opts), root };
+  }
+
+  /** Everything the run decided: only the wall clock, and what it stamps in a PDF, may differ. */
+  const decisions = (world: unknown): string => JSON.stringify(world, (k, v: unknown) => (k === 'at' || k === 'createdAt' || k === 'bytes' ? undefined : v));
+
+  async function play(seed: number, ticks: number, reloadEvery: number): Promise<string> {
+    const m = await mount(seed);
+    try {
+      let { world, company } = m;
+      for (let i = 1; i <= ticks; i++) {
+        await company.step();
+        if (reloadEvery && i % reloadEvery === 0) {
+          world = JSON.parse(JSON.stringify(world)) as typeof world;
+          company = m.reload(world);
+        }
+      }
+      return decisions(world);
+    } finally {
+      rmSync(m.root, { recursive: true, force: true });
+    }
+  }
+
+  it('goes on exactly like an uninterrupted one, whatever the tick of the reload', async () => {
+    const ticks = 14 * 12;
+    const straight = await play(7, ticks, 0);
+    expect(await play(7, ticks, 7) === straight).toBe(true); // 7 and 12 share no divisor: reloads fall on every tick of the day
+  }, 120_000);
+
+  it('a café break draws from its own stream: the company draws the same with or without it', async () => {
+    const nextDraw = async (idle: number) => {
+      const m = await mount(7);
+      try {
+        await m.company.step(); // the stand-up
+        for (const a of m.world.company.agents) m.world.memory!.idleTicks[a.id] = idle;
+        await m.company.step();
+        return (m.company as unknown as { rng: { next(): number } }).rng.next();
+      } finally {
+        rmSync(m.root, { recursive: true, force: true });
+      }
+    };
+    expect(await nextDraw(100)).toBe(await nextDraw(0));
+  }, 60_000);
 });
 
 // ───────────────────────────── fix phase: founder missions, incidents, back office ─────────────────────────────

@@ -37,17 +37,20 @@ export function AdsTab({ onClose }: { onClose(): void }) {
   const creatives = snapshot?.company?.creatives ?? [];
   const account = snapshot?.market?.adAccount ?? { strikes: 0, banned: false, bannedUntilDay: 0 };
   const organic = snapshot?.market?.organicPosts ?? [];
+  const totals = snapshot?.adTotals;
 
   const last7 = useMemo(() => aggregate(stats.filter((s) => s.day > day - 7)), [stats, day]);
+  // adStats only holds the last days, fewer in the stream than in GET /api/state: the chart and the cards read the server's totals
   const byDay = useMemo(() => {
+    if (totals) return totals.days.map((r) => ({ d: r.day, spend: r.spend, revenue: r.revenue }));
     const days = [...new Set(stats.map((s) => s.day))].sort((a, b) => a - b);
     return days.map((d) => ({ d, ...aggregate(stats.filter((s) => s.day === d)) }));
-  }, [stats]);
-  const byCreative = useMemo(() => {
+  }, [stats, totals]);
+  const recentByCreative = useMemo(() => {
     const m = new Map<string, DailyAdStats[]>();
-    for (const s of stats) m.set(s.creativeId, [...(m.get(s.creativeId) ?? []), s]);
+    for (const s of stats) if (s.day > day - 7) m.set(s.creativeId, [...(m.get(s.creativeId) ?? []), s]);
     return new Map([...m].map(([k, v]) => [k, aggregate(v)] as const));
-  }, [stats]);
+  }, [stats, day]);
   const comments = useMemo(() => {
     const out: (AdComment & { day: number; creativeId: string })[] = [];
     for (const s of [...stats].sort((a, b) => b.day - a.day)) {
@@ -145,7 +148,7 @@ export function AdsTab({ onClose }: { onClose(): void }) {
       </div>
       {shownCreatives.length === 0 ? <Empty compact icon="film">Aucune créa dans cette catégorie.</Empty> : (
         <div className="creative-grid">
-          {shownCreatives.map((c) => <CreativeCard key={c.id} c={c} agg={byCreative.get(c.id)} />)}
+          {shownCreatives.map((c) => <CreativeCard key={c.id} c={c} agg={totals?.creatives[c.id] ?? recentByCreative.get(c.id)} fatigue={recentByCreative.get(c.id)?.frequency ?? 0} />)}
         </div>
       )}
 
@@ -194,7 +197,9 @@ function AccountHealth({ strikes, banned, until, day }: { strikes: number; banne
   );
 }
 
-function CreativeCard({ c, agg }: { c: AdCreative; agg: Agg | undefined }) {
+type CreativeFigures = Pick<Agg, 'spend' | 'impressions' | 'clicks' | 'purchases' | 'revenue'> & { lastDay?: number };
+
+function CreativeCard({ c, agg, fatigue }: { c: AdCreative; agg: CreativeFigures | undefined; fatigue: number }) {
   const { runId, demo, lookups } = useApp();
   const [load, setLoad] = useState(false);
   const preview = c.files?.preview ? fileUrl(runId, c.files.preview) : '';
@@ -227,13 +232,16 @@ function CreativeCard({ c, agg }: { c: AdCreative; agg: Agg | undefined }) {
           {st === 'rejected' && c.review?.reason ? <span> — {c.review.reason}</span> : null}
         </div>
         {agg && agg.impressions > 0 ? (
-          <div className="creative-stats small">
-            <span><strong>{fmtCompact(agg.impressions)}</strong> impr.</span>
-            <span><strong>{fmtPct(ctr, 2)}</strong> CTR</span>
-            <span><strong>{fmtInt(agg.purchases)}</strong> achats</span>
-            <span className={roas >= 1.5 ? 'txt-good' : 'txt-bad'}><strong>{fmtRoas(roas)}</strong> ROAS</span>
-            {agg.frequency > 2.5 ? <span className="txt-warn" title="Fréquence élevée : l’audience se lasse">fatigue ×{agg.frequency.toFixed(1).replace('.', ',')}</span> : null}
-          </div>
+          <>
+            <div className="creative-stats small">
+              <span><strong>{fmtCompact(agg.impressions)}</strong> impr.</span>
+              <span><strong>{fmtPct(ctr, 2)}</strong> CTR</span>
+              <span><strong>{fmtInt(agg.purchases)}</strong> achats</span>
+              <span className={roas >= 1.5 ? 'txt-good' : 'txt-bad'}><strong>{fmtRoas(roas)}</strong> ROAS</span>
+              {fatigue > 2.5 ? <span className="txt-warn" title="Fréquence élevée : l’audience se lasse">fatigue ×{fatigue.toFixed(1).replace('.', ',')}</span> : null}
+            </div>
+            {agg.lastDay ? <div className="muted small">Bilan depuis le lancement · dernière diffusion J{agg.lastDay}</div> : null}
+          </>
         ) : <div className="muted small">Pas encore diffusée.</div>}
         <div className="muted small">J{c.createdDay} · {agentName(lookups, c.createdBy)} · {c.scenes?.length ?? 0} scènes</div>
         {c.files?.preview || c.files?.storyboard?.length ? (

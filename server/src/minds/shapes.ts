@@ -135,6 +135,7 @@ export function ensurePdf(v: unknown, fb?: PdfContent): PdfContent {
       upsellProductId: typeof ns.upsellProductId === 'string' ? ns.upsellProductId : f.nextStep.upsellProductId,
     },
     wordCount: typeof o.wordCount === 'number' ? o.wordCount : f.wordCount,
+    ...(o.howTo ?? f.howTo ? { howTo: (o.howTo ?? f.howTo) as PdfContent['howTo'] } : {}),
   };
 }
 

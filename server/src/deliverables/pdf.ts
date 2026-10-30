@@ -505,15 +505,6 @@ function fallbackCover(w: GuideWriter, product: Product, content: PdfContent): v
   put(doc, S(w.brand).toUpperCase(), 0, PAGE_H - 50, { font: 'Helvetica-Bold', size: 11, color: fg, width: PAGE_W, align: 'center', spacing: 2 });
 }
 
-function wordCountOf(content: PdfContent): number {
-  if (Number.isFinite(content.wordCount) && content.wordCount > 0) return content.wordCount;
-  const all = [
-    ...arr(content.introduction),
-    ...arr(content.chapters).flatMap((c) => [c.intro, ...arr(c.paragraphs), ...arr(c.steps), c.example ?? '', ...arr(c.checklist)]),
-  ].join(' ');
-  return all.split(/\s+/).filter(Boolean).length;
-}
-
 function promisePage(w: GuideWriter, product: Product, content: PdfContent): void {
   const { doc, t } = w;
   w.newPage('', true);
@@ -565,7 +556,7 @@ function promisePage(w: GuideWriter, product: Product, content: PdfContent): voi
   // what's inside
   const chapters = arr(content.chapters);
   if (chapters.length) {
-    w.subheading('Dans ce guide, vous allez :', 40);
+    w.subheading('Au sommaire de ce guide', 40);
     for (const ch of chapters.slice(0, 8)) {
       const s = S(ch.title);
       const h = Math.max(15, measure(doc, s, t.body, 10.6, CW - 30));
@@ -588,14 +579,15 @@ function promisePage(w: GuideWriter, product: Product, content: PdfContent): voi
   }
 
   // key figures
+  // actions, not « étapes »: the title says 8 steps, the method chapter; a sum of every list would contradict it
   const steps = chapters.reduce((s, c) => s + arr(c.steps).length, 0);
   const checks = chapters.reduce((s, c) => s + arr(c.checklist).length, 0);
-  const minutes = Math.max(5, Math.round(wordCountOf(content) / 200));
+  const sheets = [...chapters, content.bonus].filter((c) => c?.visual?.type === 'grid').length;
   const stats = [
     [String(chapters.length), chapters.length > 1 ? 'chapitres' : 'chapitre'],
-    [String(steps), steps > 1 ? 'étapes concrètes' : 'étape concrète'],
+    [String(steps), steps > 1 ? 'actions guidées' : 'action guidée'],
     [String(checks), 'points à cocher'],
-    [`${minutes} min`, 'de lecture'],
+    [String(sheets), sheets > 1 ? 'fiches à remplir' : 'fiche à remplir'],
   ];
   w.ensure(74);
   const y = doc.y;
@@ -611,11 +603,12 @@ function promisePage(w: GuideWriter, product: Product, content: PdfContent): voi
   doc.y = y + 56 + 16;
 
   // how to use it
-  const how = [
-    ['Lisez un chapitre à la fois', 'Chaque chapitre règle une partie précise du problème.'],
-    ['Appliquez le jour même', 'Les étapes sont pensées pour être testées tout de suite.'],
-    ['Cochez la checklist', 'Passez à la suite seulement quand tout est coché.'],
-  ];
+  // the box says what the introduction says: a project is read whole before buying, a habit one chapter at a time
+  const how = content.howTo?.length === 3 ? content.howTo.map(([head, text]) => [S(head), S(text)] as const) : [
+    ['Suivez l’ordre du guide', 'Chaque chapitre prépare le suivant.'],
+    ['Appliquez au fur et à mesure', 'Les étapes sont faites pour être utilisées, pas seulement lues.'],
+    ['Cochez la checklist', 'Elle vous dit où vous en êtes.'],
+  ] as const;
   const hw = (CW - 2 * 10) / 3;
   const headHs = how.map(([head]) => measure(doc, head, t.bold, 9.6, hw - 40));
   const textHs = how.map(([, text]) => measure(doc, text, t.body, 8.6, hw - 22));
@@ -878,7 +871,7 @@ function finalPage(w: GuideWriter, content: PdfContent, product: Product, upsell
       doc.save();
       doc.roundedRect(M.left, y, CW, boxH, 10).fill(t.card);
       doc.restore();
-      put(doc, 'Ce que vous savez faire maintenant', M.left + 16, y + 14, { font: t.bold, size: 11.5, color: t.primaryInk, width: CW - 32 });
+      put(doc, 'Ce que vous avez parcouru', M.left + 16, y + 14, { font: t.bold, size: 11.5, color: t.primaryInk, width: CW - 32 });
       [items.slice(0, half), items.slice(half)].forEach((col, c) => {
         let cy = y + 38;
         col.forEach((it) => {

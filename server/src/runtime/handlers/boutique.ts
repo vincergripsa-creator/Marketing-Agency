@@ -8,8 +8,8 @@ import { directivesOf, HYPE_ARMS, PRICE_ARMS } from '../playbook.js';
 import { createUpsellPipeline, killProduct } from '../pipeline.js';
 import { redTeamGate, reopenGate } from '../redteam.js';
 import { productNote } from '../notes.js';
-import { parentOf, priceCeiling } from '../metrics.js';
-import { linkUpsell, nicheCollision, pickUpsellSubject } from '../upsell.js';
+import { followUpLimit, parentOf, priceCeiling } from '../metrics.js';
+import { linkUpsell, nicheCollision, pickUpsellSubject, upsellContextOf } from '../upsell.js';
 import { eur, median, numOf, round2, short, str } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { NO_PRODUCT, requireProduct, studioMind } from './common.js';
@@ -91,7 +91,7 @@ export const boutiqueHandlers: HandlerMap = {
       if (!Number.isFinite(hype)) hype = 0.4;
       if (cap !== null && hype > cap) { hype = floorArm(HYPES, cap); source += ` (plafonné à ${cap})`; }
       const before = task.input.reason === 'lesson' && product.salesPage ? { page: product.salesPage, quality: sim.scoreSalesPage(product.salesPage, product, voc) } : null;
-      const sp = await ctx.engine.writeSalesPage({ product, content: product.content, voc, hype }, studioMind(ctx, task, mind));
+      const sp = await ctx.engine.writeSalesPage({ product, content: product.content, voc, hype, upsellOf: upsellContextOf(ctx.world, product) }, studioMind(ctx, task, mind));
       sp.hypeLevel = hype;
       sp.priceWritten = product.price;
       product.salesPage = sp;
@@ -135,7 +135,7 @@ export const boutiqueHandlers: HandlerMap = {
         price = nearestArm(PRICES, target); why = `prix cible du playbook (${target} €)`;
       } else if (reason === 'initial' || !product.launchedDay) {
         if (parent) {
-          price = stepArm(PRICES, parent.price || 14, +1); why = `upsell : un palier au-dessus du premier guide (${eur(parent.price)})`;
+          price = parent.price || 14; why = `upsell : aligné sur le premier guide (${eur(parent.price)})`;
         } else {
           const sweet = suggested ?? median(anchors) ?? 19;
           price = Math.max(9, floorArm(PRICES, Math.min(sweet, median(anchors) ?? sweet))); why = `on commence bas (suggestion ${eur(sweet)}${anchors.length ? `, ancres clients ${eur(Math.min(...anchors))}–${eur(Math.max(...anchors))}` : ''})`;
@@ -152,6 +152,9 @@ export const boutiqueHandlers: HandlerMap = {
         price = Number(learning.chooseArm(ctx.world, `price:${product.nicheId}`, arms.length ? arms : PRICE_ARMS, ctx.rng)); why = 'bandit de prix';
       }
       if (!Number.isFinite(price) || price <= 0) price = 14;
+      // only the founder may sell a follow-up above what the guide it follows justifies
+      const limit = reason === 'fondateur' ? null : followUpLimit(ctx.world, product);
+      if (limit !== null && price > limit) { price = floorArm(PRICES, limit); why = `${why} ; suite plus légère que le premier guide (${eur(parent?.price ?? limit)}) : ${eur(price)}`; }
       price = round2(price);
       if (product.launchedDay) {
         const res = ctx.tools.setPrice(product.id, price);

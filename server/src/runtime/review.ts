@@ -9,7 +9,7 @@ import { incident, productOf, runFileExists, say, vocOf } from './ctx.js';
 import { sim } from './modules.js';
 import { productNote } from './notes.js';
 import { bannedHits, directivesOf } from './playbook.js';
-import { excludedNiches, killProduct } from './pipeline.js';
+import { excludedNiches, killProduct, pauseProduct } from './pipeline.js';
 import { productPnls } from './accounting.js';
 import { eur, short, strArr, sum, uniq } from './util.js';
 import { creativeText } from './handlers/growth.js';
@@ -54,6 +54,11 @@ export async function closeLoop(ctx: RuntimeCtx, task: Task, res: ReviewResult):
   if (res.noWaiver && product && product.status !== 'live' && product.status !== 'killed') {
     await killProduct(ctx, product, `impossible de le rendre conforme en ${MAX_ATTEMPTS} tentatives (${first})`, 'camille');
     return { verdict: 'approve', notes: [...res.notes, 'Produit arrêté : il ne peut pas sortir en l’état.'], score: res.score };
+  }
+  // Already on sale with a page that breaks the rules: it leaves the store until the CEO's rework gives it a clean one.
+  if (res.noWaiver && product?.status === 'live' && task.kind === 'write_sales_page') {
+    await pauseProduct(ctx, product, `page de vente non conforme après ${MAX_ATTEMPTS} tentatives (${first})`, 'camille');
+    return { verdict: 'approve', notes: [...res.notes, 'Produit retiré de la vente : la page ne peut pas rester en l’état.'], score: res.score };
   }
   task.output = { ...(task.output ?? {}), waiver: { day: ctx.world.day, by: task.reviewer, notes: res.notes.slice(0, 3) } };
   incident(ctx, `Dérogation : « ${task.title} » validé après ${MAX_ATTEMPTS} tentatives sans atteindre le niveau attendu${res.score !== null ? ` (${res.score}/100)` : ''} : ${first}`);
@@ -122,6 +127,8 @@ export async function reviewTask(ctx: RuntimeCtx, task: Task, reviewer: AgentSta
       const hits = bannedHits(text, banned);
       if (hits.length) return { ...changes([`Expressions interdites : ${hits.join(', ')}.`], q.overall), noWaiver: true };
       if (q.compliance < 60) return { ...changes([`Promesse risquée (conformité ${q.compliance}/100) : baisser le niveau de promesse.`, ...q.issues.slice(0, 2)], q.overall), noWaiver: true };
+      const claims = blockers(q, ['compliance']);
+      if (claims.length) return { ...changes(claims.slice(0, 4), q.overall), noWaiver: true };
       if (q.promiseMatch < 55) return changes([`La page promet plus que le guide (adéquation ${q.promiseMatch}/100).`, ...q.issues.slice(0, 2)], q.overall);
       const blocked = blockers(q);
       if (blocked.length) return changes(blocked.slice(0, 4), q.overall);

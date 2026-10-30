@@ -12,6 +12,7 @@ import { sessionView } from './derive';
 import { EndBanner } from './EndBanner';
 import { SimHud } from './Hud';
 import { buildLookups } from './labels';
+import { MissionBar } from './MissionBar';
 import { ScenarioModal } from './ScenarioModal';
 import { AdsTab } from './tabs/AdsTab';
 import { CalendarTab } from './tabs/CalendarTab';
@@ -146,7 +147,7 @@ describe('task counts on the panels', () => {
     ...s,
     taskStats: {
       days: [{ day: s.day, created: 18, done: 18, failed: 0, cancelled: 0 }],
-      depts: { finance: { days: [{ day: s.day, created: 7, done: 7, failed: 0, cancelled: 0 }], kinds7d: { budget_review: 5 }, done: 90, avgDelayDays: 2.5 } },
+      depts: { finance: { days: [{ day: s.day, created: 7, done: 7, failed: 0, cancelled: 0 }], kinds7d: { budget_review: 5 }, done: 90, failed: 7, avgDelayDays: 2.5 } },
     },
   });
 
@@ -164,6 +165,104 @@ describe('task counts on the panels', () => {
     const s = stats(trimmed());
     const html = render({ ...s, taskStats: { ...s.taskStats!, days: [{ day: 3, created: 300, done: 300, failed: 0, cancelled: 0 }] } }, <TasksTab onClose={noop} />);
     expect(html).toContain('1 terminées les plus récentes affichées sur 300');
+  });
+  it('task list: failed and cancelled tasks are the run\'s too, and « Tout » counts them', () => {
+    const s = stats(trimmed());
+    const days = [{ day: 3, created: 66, done: 2, failed: 20, cancelled: 44 }];
+    const html = render({ ...s, taskStats: { ...s.taskStats!, days } }, <TasksTab onClose={noop} />);
+    expect(html).toMatch(/Échouées<span class="seg-count">64</);
+    expect(html).toContain('0 échouées ou annulées les plus récentes affichées sur 64');
+    expect(html).toMatch(/Tout<span class="seg-count">66</);
+    expect(html).toContain('Toutes les tâches · 66');
+  });
+});
+
+describe('the founder\'s missions', () => {
+  const base = mockSnapshot();
+  const dept = (i: number) => ({ ...base.company.missions[0]!, id: `mis_${i}`, day: 30, from: 'camille', text: `Studio : mission ${i}`, taskIds: [], status: 'open' as const });
+  const mine = { ...dept(0), id: 'mis_me', day: 3, from: 'founder' as const, text: 'Lance un guide sur le sommeil du bébé', taskIds: ['tsk_gone1', 'tsk_gone2', 'tsk_gone3'], doneTasks: 2, status: 'done' as const, outcome: 'En ligne depuis le jour 9.' };
+  const html = render({ ...base, company: { ...base.company, missions: [dept(1), dept(2), dept(3), dept(4), dept(5), mine] } }, <TasksTab onClose={noop} />);
+
+  it('his own mission is in the first four, even closed, behind a wall of department missions', () => {
+    expect(html).toContain('Lance un guide sur le sommeil du bébé');
+    expect(html).toContain('En ligne depuis le jour 9.');
+    expect(html).not.toContain('Studio : mission 5');
+  });
+  it('its progress is counted on all its tasks, not on those left in the snapshot', () => {
+    expect(html).toContain('2/3 tâches');
+  });
+});
+
+describe('Pub TikTok: a creative tells its whole life', () => {
+  const base = mockSnapshot();
+  const c = base.company.creatives[0]!;
+  const adTotals = {
+    days: [{ day: 3, spend: 12, revenue: 30 }, { day: 4, spend: 14, revenue: 21 }],
+    creatives: { [c.id]: { spend: 100, impressions: 20_000, clicks: 400, purchases: 9, revenue: 171, lastDay: 12 } },
+  };
+  const html = render({ ...base, market: { ...base.market, adStats: [] }, adTotals }, <AdsTab onClose={noop} />);
+
+  it('an ad that ran keeps its figures when its rows leave the window', () => {
+    const card = html.slice(html.indexOf(`« ${c.hook} »`));
+    expect(card.slice(0, card.indexOf('</article>'))).toContain('dernière diffusion J12');
+    expect(card.slice(0, card.indexOf('</article>'))).not.toContain('Pas encore diffusée');
+    expect(count(html, 'Pas encore diffusée')).toBe(base.company.creatives.length - 1);
+  });
+  it('the chart reads the same days whichever snapshot carried it', () => {
+    expect(html).not.toContain('Aucune campagne n’a encore tourné.');
+  });
+});
+
+describe('Galerie: the total of the run', () => {
+  const base = mockSnapshot();
+  const shown = base.company.deliverables.length;
+  it('says how much of it the page holds, and counts each kind on the run', () => {
+    const html = render({ ...base, deliverableCounts: { pdf: 32, cover: 12, sales_page: 12, report: 40, research: 87, ad_preview: 133, ad_storyboard: 133 } }, <GalleryTab onClose={noop} />);
+    expect(html).toContain(`${shown} sur 449 livrables`);
+    expect(html).toMatch(/seg-count">449</);
+    expect(html).toMatch(/seg-count">32</);
+  });
+  it('a complete list claims nothing more', () => {
+    const counts: NonNullable<CompanySnapshot['deliverableCounts']> = {};
+    for (const d of base.company.deliverables) counts[d.kind] = (counts[d.kind] ?? 0) + 1;
+    const html = render({ ...base, deliverableCounts: counts }, <GalleryTab onClose={noop} />);
+    expect(html).toContain(`${shown} livrables réels`);
+    expect(html).not.toContain(' sur ');
+  });
+});
+
+describe('Apprentissage: what an A/B test measures', () => {
+  const base = mockSnapshot();
+  const experiment = (o: Partial<CompanySnapshot['company']['experiments'][number]>) => ({
+    ...base.company.experiments[0]!, status: 'concluded' as const, variants: ['29', '24'], winner: '29',
+    results: { 29: { value: 0.4622, n: 502 }, 24: { value: 0.3641, n: 725 } }, ...o,
+  });
+  const learning = (e: ReturnType<typeof experiment>) => render({ ...base, company: { ...base.company, experiments: [e] } }, <LearningTab onClose={noop} />);
+
+  it('a price test is read in euros per visitor, not as a losing ROAS', () => {
+    const html = learning(experiment({ dimension: 'price', metric: 'roas' }));
+    expect(html).toContain('Profit par visiteur');
+    expect(html).toMatch(/0,46\s€/);
+    expect(html).not.toContain('0,46×');
+  });
+  it('a price test on refunds stays a rate, an ad test stays a ROAS', () => {
+    expect(learning(experiment({ dimension: 'price', metric: 'refund_rate' }))).toMatch(/46,2\s%/);
+    const ad = learning(experiment({ dimension: 'hook_style', metric: 'roas' }));
+    expect(ad).toContain('0,46×');
+    expect(ad).not.toContain('Profit par visiteur');
+  });
+});
+
+describe('a finished run', () => {
+  it('takes no more missions', () => {
+    const html = render({ ...mockSnapshot(), status: 'finished' }, <MissionBar />);
+    expect(html).toContain('Simulation terminée');
+    expect(html).toMatch(/<input[^>]*disabled=""/);
+  });
+  it('a run in progress still does', () => {
+    const html = render({ ...mockSnapshot(), status: 'goal_reached' }, <MissionBar />);
+    expect(html).not.toContain('Simulation terminée');
+    expect(html).not.toMatch(/<input[^>]*disabled=""/);
   });
 });
 
@@ -333,6 +432,17 @@ describe('run milestone banner', () => {
   });
   it('a reached goal keeps the agency running', () => {
     expect(banner('goal_reached')).toContain('continue de tourner');
+  });
+  it('a goal reached after the deadline says so, on the banner and on the Finance bar', () => {
+    const s = mockSnapshot();
+    const late: CompanySnapshot = { ...s, status: 'goal_reached', scenario: { ...s.scenario, goal: { targetProfit: 1000, byDay: 20 } }, goalReachedDay: 31 };
+    const html = render(late, <EndBanner onNewScenario={noop} onDismiss={noop} onFinance={noop} />);
+    expect(html).toContain('Objectif atteint après l’échéance');
+    expect(html).toContain('atteints au jour 31, l’échéance était le jour 20');
+    expect(html).not.toContain('Objectif atteint !');
+    expect(render(late, <FinanceTab onClose={noop} />)).toContain('Atteint au jour 31, après l’échéance');
+    const inTime = render({ ...late, goalReachedDay: 18 }, <FinanceTab onClose={noop} />);
+    expect(inTime).not.toContain('après l’échéance');
   });
   it('nothing while the run is ordinary', () => {
     expect(banner('running')).toBe('');

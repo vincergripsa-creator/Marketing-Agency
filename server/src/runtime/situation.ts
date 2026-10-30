@@ -7,6 +7,7 @@ import type { AgentState, DailyKpi } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { learning, sim } from './modules.js';
 import { productPnls } from './accounting.js';
+import { activeHolds } from './holds.js';
 import { activeCampaigns, currentBudget } from './metrics.js';
 import { founderMissionLines } from './missions.js';
 import { isOpen, openTasks, taskById } from './tasks.js';
@@ -70,6 +71,36 @@ function bestProductLine(ctx: RuntimeCtx): string | null {
     ...(product?.stats.rating ? [`note ${dec(product.stats.rating, 1)}/5`] : []),
   ];
   return `Meilleur produit sur 7 jours : « ${short(top.title, 60)} » avec ${eur(top.profit)} de profit (${facts.join(', ')})${second ? `, devant « ${short(second.title, 40)} » à ${eur(second.profit)}` : ''}`;
+}
+
+const totals = (rows: readonly DailyKpi[]) => ({ sales: sum(rows.map((k) => k.sales)), revenue: sum(rows.map((k) => k.revenue)), adSpend: sum(rows.map((k) => k.adSpend)), profit: sum(rows.map((k) => k.profit)) });
+
+/** The last 7 closed days as one total, and how they compare with the 7 before. */
+function weekLines(ctx: RuntimeCtx): string[] {
+  const { kpis } = ctx.world.company;
+  if (!kpis.length) return [];
+  const to = kpis[kpis.length - 1]!.day;
+  const week = totals(kpis.filter((k) => k.day > to - 7));
+  const before = kpis.filter((k) => k.day > to - 14 && k.day <= to - 7);
+  const lines = [`Semaine : sur les 7 derniers jours, ${week.sales} ventes, ${eur(week.revenue)} de CA, ${eur(week.adSpend)} de pub, résultat ${eur(round2(week.profit))}`];
+  if (before.length) {
+    const prev = totals(before);
+    lines.push(`Tendance : CA de ${eur(week.revenue)} sur 7 jours contre ${eur(prev.revenue)} les 7 jours d'avant, ${week.sales} ventes contre ${prev.sales}, pub ${eur(week.adSpend)} contre ${eur(prev.adSpend)}`);
+  }
+  return lines;
+}
+
+/** Each product by name: why it was stopped and on which day, or how it stands. */
+function productLines(ctx: RuntimeCtx): string[] {
+  const w = ctx.world;
+  const lines = w.company.products.flatMap((p) => {
+    const niche = w.company.research.trends.find((t) => t.nicheId === p.nicheId)?.name ?? p.nicheId;
+    const name = p.title === niche ? `« ${short(p.title, 60)} »` : `« ${short(p.title, 60)} » (${short(niche, 40)})`;
+    if (p.decision && p.decision.status === p.status) return [`Décision produit : ${name} ${p.status === 'killed' ? 'arrêté' : 'mis en pause'} le jour ${p.decision.day}, ${short(oneLine(p.decision.reason), 170)}`];
+    if (p.status === 'idea' || p.status === 'research') return [];
+    return [`Fiche produit : ${name} ${p.status === 'live' ? 'en ligne' : 'en production'}, ${p.stats.sales} ventes, ${p.stats.reviews.length ? `note ${dec(p.stats.rating, 1)}/5 sur ${p.stats.reviews.length} avis` : 'pas encore d’avis'}, prix ${eur(p.price)}`];
+  });
+  return [...lines, ...activeHolds(w).map((h) => `Ordre du fondateur : ${oneLine(h.reason)}`)];
 }
 
 /** Facts a member of each department would know by heart. */
@@ -149,6 +180,8 @@ export function situationFor(ctx: RuntimeCtx, agent: AgentState): string {
     live.length ? `En boutique : ${live.join(', ')}.` : 'Aucun produit en ligne pour l’instant.',
     ...deptFacts(ctx, agent).map((f) => `Mon poste : ${f}`),
     ...(best ? [`${best}.`] : []),
+    ...weekLines(ctx).map((l) => `${l}.`),
+    ...productLines(ctx).map((l) => `${l}.`),
     ...(kpi ? causeLines(ctx, kpi).map((c) => `${c}.`) : []),
     ...ctx.lastMarketNotes.slice(0, 4).map((n) => `Marché d'hier : ${oneLine(n)}.`),
     ...events.map((e) => `${e}.`),

@@ -4,7 +4,7 @@ import type { DeptId, Mission, Task, TaskStatus } from '../../../../shared/types
 import { api } from '../../api';
 import { Avatar, Bar, cx, DeliverableLink, Empty, Overlay, Pill, SectionTitle, Segmented } from '../common';
 import { useApp } from '../context';
-import { approvalAsk, doneTasksTotal, hasWaiver, redTeamView } from '../derive';
+import { approvalAsk, doneTasksTotal, failedTasksTotal, hasWaiver, redTeamView } from '../derive';
 import { fmtInt } from '../format';
 import { Icon } from '../icons';
 import {
@@ -47,10 +47,15 @@ export function TasksTab({ onClose }: { onClose(): void }) {
   }, [scoped, filter]);
 
   const deptIds = DEPT_ORDER.filter((d) => lookups.depts.size === 0 || lookups.depts.has(d));
-  // the snapshot keeps the latest finished tasks only: the count is the run's, the list says what it shows
+  // the snapshot keeps the latest finished tasks only: the counts are the run's, the list says what it shows
   const doneTotal = Math.max(doneTasksTotal(snapshot, dept) ?? 0, counts.done);
-  const doneHidden = doneTotal - counts.done;
-  const listShort = doneHidden > 0 && (filter === 'all' || filter === 'done');
+  const failedTotal = Math.max(failedTasksTotal(snapshot, dept) ?? 0, counts.failed);
+  const allTotal = counts.all + doneTotal - counts.done + failedTotal - counts.failed;
+  const listNotes = [
+    doneTotal > counts.done && (filter === 'all' || filter === 'done') ? `${fmtInt(counts.done)} terminées les plus récentes affichées sur ${fmtInt(doneTotal)}` : null,
+    failedTotal > counts.failed && (filter === 'all' || filter === 'failed') ? `${fmtInt(counts.failed)} échouées ou annulées les plus récentes affichées sur ${fmtInt(failedTotal)}` : null,
+  ].filter(Boolean);
+  const sectionCount = filter === 'all' ? allTotal : filter === 'done' ? doneTotal : filter === 'failed' ? failedTotal : visible.length;
 
   return (
     <Overlay title="État des tâches" subtitle={`Toute l’entreprise · jour ${snapshot?.day ?? 1}`} icon="list" onClose={onClose} size="md">
@@ -59,12 +64,12 @@ export function TasksTab({ onClose }: { onClose(): void }) {
 
       <div className="filters-row">
         <Segmented<Filter> size="sm" value={filter} onChange={(f) => { setFilter(f); setLimit(PAGE); }} options={[
-          { id: 'all', label: 'Tout', count: counts.all },
+          { id: 'all', label: 'Tout', count: allTotal },
           { id: 'running', label: 'En cours', count: counts.running },
           { id: 'review', label: 'En revue', count: counts.review },
           { id: 'waiting', label: 'En attente', count: counts.waiting },
           { id: 'done', label: 'Terminées', count: doneTotal },
-          { id: 'failed', label: 'Échouées', count: counts.failed },
+          { id: 'failed', label: 'Échouées', count: failedTotal },
         ]} />
         <select className="select" value={dept} onChange={(e) => { setDept(e.target.value as DeptId | 'all'); setLimit(PAGE); }} aria-label="Département">
           <option value="all">Toutes les équipes</option>
@@ -72,8 +77,8 @@ export function TasksTab({ onClose }: { onClose(): void }) {
         </select>
       </div>
 
-      <SectionTitle right={listShort ? <span className="muted small">{fmtInt(counts.done)} terminées les plus récentes affichées sur {fmtInt(doneTotal)}</span> : null}>
-        {TASK_SECTION[filter]} · {fmtInt(filter === 'done' ? doneTotal : visible.length)}
+      <SectionTitle right={listNotes.length ? <span className="muted small">{listNotes.join(' · ')}</span> : null}>
+        {TASK_SECTION[filter]} · {fmtInt(sectionCount)}
       </SectionTitle>
       {visible.length === 0 ?<Empty icon="list">{filter === 'running' ? 'Personne ne travaille en ce moment.' : 'Aucune tâche dans cette catégorie.'}</Empty> : null}
       <div className="task-cards">
@@ -137,7 +142,9 @@ function MissionsList({ missions }: { missions: Mission[] }) {
   const { lookups, openAgent, openProduct } = useApp();
   const [all, setAll] = useState(false);
   if (missions.length === 0) return null;
-  const sorted = [...missions].sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || b.day - a.day);
+  // the founder's own missions first: the departments open about seven a day
+  const rank = (m: Mission) => (m.from === 'founder' ? 0 : 2) + (m.status === 'open' ? 0 : 1);
+  const sorted = [...missions].sort((a, b) => rank(a) - rank(b) || b.day - a.day);
   const shown = all ? sorted : sorted.slice(0, 4);
   return (
     <div className="missions">
@@ -146,7 +153,9 @@ function MissionsList({ missions }: { missions: Mission[] }) {
       </SectionTitle>
       {shown.map((m) => {
         const ts = m.taskIds.map((id) => lookups.tasks.get(id)).filter((t): t is Task => !!t);
-        const done = ts.filter((t) => t.status === 'done').length;
+        // the server counts on every task: the snapshot only holds the latest ones
+        const done = m.doneTasks ?? ts.filter((t) => t.status === 'done').length;
+        const total = m.doneTasks === undefined ? ts.length : m.taskIds.length;
         const owner = lookups.agents.get(m.ownerId);
         const product = m.productId ? lookups.products.get(m.productId) : undefined;
         return (
@@ -158,11 +167,11 @@ function MissionsList({ missions }: { missions: Mission[] }) {
             </div>
             <div className="mission-card-meta muted small">
               J{m.day} · {m.from === 'founder' ? 'du fondateur' : `de ${agentName(lookups, m.from)}`} · pilote :{' '}
-              {owner ? <button type="button" className="link-btn" onClick={() => openAgent(owner.id)}>{owner.name}</button> : '—'} · {done}/{ts.length} tâches
+              {owner ? <button type="button" className="link-btn" onClick={() => openAgent(owner.id)}>{owner.name}</button> : '—'} · {done}/{total} tâches
             </div>
             {m.outcome ? <div className="mission-outcome small">{m.outcome}</div> : null}
             {product ? <button type="button" className="link-btn small" onClick={() => openProduct(product.id)} title="Voir le produit"><Icon name="package" size={11} /> {product.title}</button> : null}
-            {ts.length ? <Bar value={done / ts.length} height={4} color={m.status === 'failed' ? '#dc2626' : '#16a34a'} /> : null}
+            {total ? <Bar value={done / total} height={4} color={m.status === 'failed' ? '#dc2626' : '#16a34a'} /> : null}
           </div>
         );
       })}

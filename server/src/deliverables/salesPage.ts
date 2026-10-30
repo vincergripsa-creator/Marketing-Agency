@@ -215,8 +215,6 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
   const price = formatPrice(product.price);
   const content = product.content;
   const chapterCount = content?.chapters?.length ?? sp?.chapterBlurbs?.length ?? 0;
-  const words = content?.wordCount ?? 0;
-  const minutes = words > 0 ? Math.max(5, Math.round(words / 200)) : null;
   const headline = sp?.headline || product.title;
   const sub = sp?.subheadline || product.subtitle;
   // the button is written once, the price moves: it always shows the price of the day
@@ -241,7 +239,7 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
   const facts = [
     chapterCount ? `${chapterCount} chapitres concrets${bonusTitle ? ' + 1 bonus offert' : ''}` : null,
     'Téléchargement immédiat (PDF)',
-    minutes ? `Se lit en ${minutes} min, s’applique dès ce soir` : 'Méthode pas à pas, sans jargon',
+    'Méthode pas à pas, sans jargon',
   ].filter(Boolean) as string[];
 
   const fonts = d.titleFont.startsWith('Times')

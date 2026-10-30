@@ -11,27 +11,36 @@ import { agentColor, agentName, DELIVERABLE_ICON, DELIVERABLE_LABEL } from '../l
 type Filter = 'all' | Deliverable['kind'];
 
 const IMAGE_KINDS: ReadonlySet<Deliverable['kind']> = new Set(['cover', 'ad_storyboard']);
+const PAGE = 240;
 
 export function GalleryTab({ onClose }: { onClose(): void }) {
   const { snapshot } = useApp();
   const [filter, setFilter] = useState<Filter>('all');
+  const [limit, setLimit] = useState(PAGE);
   const all = snapshot?.company?.deliverables ?? [];
-  const kinds = useMemo(() => [...new Set(all.map((d) => d.kind))], [all]);
+  // the snapshot keeps the latest ad frames only: the counts are the run's, the subtitle says what the page holds
+  const counts = snapshot?.deliverableCounts;
+  const kinds = useMemo(() => [...new Set([...all.map((d) => d.kind), ...Object.keys(counts ?? {}) as Deliverable['kind'][]])], [all, counts]);
+  const countOf = (k: Deliverable['kind']) => counts?.[k] ?? all.filter((d) => d.kind === k).length;
+  const total = kinds.reduce((n, k) => n + countOf(k), 0);
   const list = useMemo(() => [...all].filter((d) => filter === 'all' || d.kind === filter).sort((a, b) => b.day - a.day || b.id.localeCompare(a.id)), [all, filter]);
 
   return (
-    <Overlay title="Galerie" subtitle={`${fmtInt(all.length)} livrables réels produits par l’équipe`} icon="image" onClose={onClose}>
+    <Overlay title="Galerie" subtitle={all.length < total ? `${fmtInt(all.length)} sur ${fmtInt(total)} livrables réels produits par l’équipe · tous les guides, les pubs les plus récentes` : `${fmtInt(total)} livrables réels produits par l’équipe`} icon="image" onClose={onClose}>
       <div className="filters-row">
-        <Segmented<Filter> size="sm" value={filter} onChange={setFilter} options={[
-          { id: 'all', label: 'Tout', count: all.length },
-          ...kinds.map((k) => ({ id: k, label: DELIVERABLE_LABEL[k] ?? k, count: all.filter((d) => d.kind === k).length })),
+        <Segmented<Filter> size="sm" value={filter} onChange={(f) => { setFilter(f); setLimit(PAGE); }} options={[
+          { id: 'all', label: 'Tout', count: total },
+          ...kinds.map((k) => ({ id: k, label: DELIVERABLE_LABEL[k] ?? k, count: countOf(k) })),
         ]} />
       </div>
       {list.length === 0 ? <Empty icon="image">Aucun livrable pour l’instant : les premiers guides, couvertures et pubs apparaîtront ici.</Empty> : (
         <div className="gallery">
-          {list.slice(0, 240).map((d) => <Tile key={d.id} d={d} />)}
+          {list.slice(0, limit).map((d) => <Tile key={d.id} d={d} />)}
         </div>
       )}
+      {list.length > limit ? (
+        <button type="button" className="btn btn-sm more-btn" onClick={() => setLimit((l) => l + PAGE)}>Afficher {fmtInt(Math.min(PAGE, list.length - limit))} livrables de plus</button>
+      ) : null}
     </Overlay>
   );
 }

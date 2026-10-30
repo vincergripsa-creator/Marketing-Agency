@@ -9,7 +9,8 @@ import type { Lesson, Product, Task, TaskKind } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, latestOutput, nameOf, productOf, say, vocOf } from './ctx.js';
 import { learning, sim } from './modules.js';
-import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, fromBuyer, isProductFeedback, isUpsellProduct, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO } from './metrics.js';
+import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, fromBuyer, isProductFeedback, isUpsellProduct, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO } from './metrics.js';
+import { adsHeldSince, launchHold, productHold } from './holds.js';
 import { createProductPipeline, createUpsellPipeline, createV2Pipeline, excludedNiches, killProduct, openTasksForProduct, pauseProduct, resumePipeline } from './pipeline.js';
 import { guideGaps } from './redteam.js';
 import { createTask, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, PRODUCT_KINDS } from './tasks.js';
@@ -17,7 +18,7 @@ import { openMessages, urgency } from './handlers/support.js';
 import { experimentCandidate } from './handlers/ops.js';
 import {
   ACQUISITION_KINDS, acquisitionCandidates, adBanActive, bestCandidate, companyPaidBlock, daysWithoutAds, isReworking, launchableCreatives,
-  LOSS_WINDOW_DAYS, MAX_IDLE_DAYS, MIN_CAMPAIGN_BUDGET, productHealth, productPaidBlock, promotionBlock, recentLoss, recentProfits, refundsTooHigh, refundsWorthRework, versionSince as versionSinceOf,
+  lessonDay, LOSS_WINDOW_DAYS, MAX_IDLE_DAYS, MIN_CAMPAIGN_BUDGET, productHealth, productPaidBlock, promotionBlock, recentLoss, recentProfits, refundsTooHigh, refundsWorthRework, versionSince as versionSinceOf,
 } from './acquisition.js';
 
 /**
@@ -55,6 +56,8 @@ export const RESEARCH_REFRESH_DAYS = 7;
 export const COMFORTABLE_RUNWAY_DAYS = 30;
 /** Days between two rewrites of a sales page: a page needs traffic before it is judged again. */
 export const PAGE_REWORK_GAP_DAYS = 7;
+/** Guides waiting for the founder's word before the company stops starting new ones: enough to choose from. */
+export const MAX_AWAITED_PUBLISHES = 2;
 
 function planItem(kind: TaskKind, input: Record<string, unknown>, why: string, priority: 1 | 2 | 3 = 2, title?: string): DayPlanItem {
   return { kind, title: title ?? KIND_META[kind].label, dept: KIND_META[kind].dept, priority, input, why };
@@ -117,7 +120,7 @@ async function ceoDecisions(ctx: RuntimeCtx, notes: string[], items: DayPlanItem
     notes.push(`« ${p.title} » mis en pause (${h.severe}) → v${p.version + 1}.`);
   }
   for (const p of w.company.products.filter((x) => x.status === 'paused')) {
-    if (handled.has(p.id) || openTasksForProduct(ctx, p.id).length) continue;
+    if (handled.has(p.id) || productHold(w, p.id) || openTasksForProduct(ctx, p.id).length) continue;
     if (p.version >= 3) {
       await killProduct(ctx, p, `en pause depuis la v${p.version} sans version acceptable`, 'camille');
       notes.push(`« ${p.title} » arrêté après ${p.version - 1} réécriture(s).`);
@@ -135,14 +138,17 @@ async function ceoDecisions(ctx: RuntimeCtx, notes: string[], items: DayPlanItem
     if (!p.launchedDay || online < 7) continue;
     const m = productMetrics(w, p.id, Math.max(h.since, w.day - KILL_WINDOW_DAYS));
     const upsell = isUpsellProduct(w, p.id);
-    // Upsells live off their parent's buyers: they are not judged on their own acquisition.
+    // Upsells live off their parent's buyers: they are not judged on their own acquisition, and neither is an orphan
+    // before a paid test of its own (it had no ads by design: those weeks say nothing about what it can sell alone).
+    const unjudged = upsell || (m.spend <= 0 && !!parentOf(w, p.id));
     // "Failing" needs a real sample: either enough paid visitors to see that nobody buys, or two weeks without
     // traction. (Before: < 3 sales after 7 days, i.e. ~100 € of ads and 200 visitors — at a 2 % conversion that
     // is bad luck one time in five, and it killed the first niche, often the best one, in a third of the runs.)
     // Without ads, "no traction" only counts for a guide that was really shown (organic posts): one the budget went
     // past has proved nothing, it costs nothing to keep and its turn may come.
     const posts = w.market.organicPosts.filter((x) => x.productId === p.id && x.day >= w.day - KILL_WINDOW_DAYS).length;
-    const failing = !upsell && !isReworking(w, p.id) && m.sales < KILL_MAX_SALES && (m.spend > 0 ? m.roas < KILL_MAX_ROAS : !adsOff && posts >= KILL_MIN_POSTS)
+    // Neither has one the founder kept off the ads: his refusal is not the market's.
+    const failing = !unjudged && !isReworking(w, p.id) && m.sales < KILL_MAX_SALES && (m.spend > 0 ? m.roas < KILL_MAX_ROAS : !adsOff && posts >= KILL_MIN_POSTS && !adsHeldSince(w, p.id, w.day - KILL_WINDOW_DAYS))
       && (m.landingViews >= KILL_MIN_VIEWS || online >= KILL_NO_TRACTION_DAYS);
     // Quality dead-end: even the v3 is rated badly by its own buyers → stop selling it, it hurts the brand.
     const hopeless = p.version >= 3 && online >= 5 && h.reviews.length >= 5 && h.rating > 0 && h.rating < 3.2;
@@ -279,12 +285,19 @@ export function reactToOutage(ctx: RuntimeCtx): boolean {
     incident(ctx, `Panne de paiement du jour ${w.day} : pubs en pause, aucune vente possible`);
     return true;
   }
-  const held = w.company.campaigns.filter((c) => c.pausedFor === 'outage');
-  if (!held.length) return false;
+  const { resumed, left } = resumeCampaigns(ctx, 'outage');
+  if (resumed.length) say(ctx, 'leo', `Léo : la panne est passée, ${resumed.length} campagne(s) reprennent ce matin`, 'ad');
+  if (left.length) say(ctx, 'leo', `Léo : ${left.length} campagne(s) restent en pause après la panne (produit, budget ou compte) : ${short(left.join(', '), 90)}`, 'ad');
+  return false;
+}
+
+/** Campaigns paused for this reason start again inside the CFO's envelope, unless their product can no longer take ads. */
+export function resumeCampaigns(ctx: RuntimeCtx, reason: 'outage' | 'founder', productId?: string): { resumed: string[]; left: string[] } {
+  const w = ctx.world;
   let room = currentBudget(w).adCap - committedAdBudget(w);
   const resumed: string[] = [];
   const left: string[] = [];
-  for (const c of held) {
+  for (const c of w.company.campaigns.filter((x) => x.pausedFor === reason && (!productId || x.productId === productId))) {
     delete c.pausedFor;
     const p = productOf(ctx, c.productId);
     const daily = Math.min(c.dailyBudget, Math.floor(room));
@@ -295,9 +308,7 @@ export function reactToOutage(ctx: RuntimeCtx): boolean {
     room -= c.dailyBudget;
     resumed.push(c.name);
   }
-  if (resumed.length) say(ctx, 'leo', `Léo : la panne est passée, ${resumed.length} campagne(s) reprennent ce matin`, 'ad');
-  if (left.length) say(ctx, 'leo', `Léo : ${left.length} campagne(s) restent en pause après la panne (produit, budget ou compte) : ${short(left.join(', '), 90)}`, 'ad');
-  return false;
+  return { resumed, left };
 }
 
 interface AcquisitionPlan { launchedFor: Product | null; blocked: string | null }
@@ -331,8 +342,9 @@ function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
     const p = cand.product;
     let inFlight = openTasks(w, (t) => t.input.productId === p.id && (t.kind === 'launch_campaign' || t.kind === 'write_ad_hooks' || t.kind === 'produce_ad'));
     // Watchdog: acquisition tasks that have been sitting for 2+ days while nothing runs are stuck → start again.
+    // Waiting for the founder is not being stuck, and neither is a task he just approved: it runs at the next work tick.
     if (inFlight.length && idle >= MAX_IDLE_DAYS && !companyBlock && (!cand.block || !cand.block.hard)
-      && inFlight.every((t) => t.status !== 'awaiting_founder' && t.status !== 'in_progress' && t.dayCreated <= w.day - MAX_IDLE_DAYS)) {
+      && inFlight.every((t) => t.status !== 'awaiting_founder' && t.input.founderApproved !== true && t.status !== 'in_progress' && t.dayCreated <= w.day - MAX_IDLE_DAYS)) {
       for (const t of inFlight) { t.status = 'cancelled'; t.dayDone = w.day; logTask(t, `Jour ${w.day} : annulée — bloquée depuis le jour ${t.dayCreated}, on repart de zéro.`); }
       say(ctx, 'camille', `Camille : ${idle} jours sans pub et ${inFlight.length} tâche(s) d'acquisition bloquée(s) sur « ${short(p.title, 40)} » — on repart de zéro`, 'thought', { productId: p.id });
       inFlight = [];
@@ -393,9 +405,9 @@ function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
   return { launchedFor, blocked };
 }
 
-/** The active lesson with this key, if it was learned on the current version. */
+/** The active lesson with this key, if the retro last confirmed it on the current version. */
 function lessonOf(ctx: RuntimeCtx, key: string, since: number): Lesson | null {
-  return ctx.world.company.lessons.find((l) => l.key === key && l.day >= since) ?? null;
+  return ctx.world.company.lessons.find((l) => l.key === key && lessonDay(l) >= since) ?? null;
 }
 
 export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
@@ -411,9 +423,13 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   const live = products.filter((p) => p.status === 'live');
   const building = products.filter((p) => !['live', 'killed', 'paused'].includes(p.status));
   const open = (kind: TaskKind, pid?: string) => openTasks(w, (t) => t.kind === kind && (!pid || t.input.productId === pid)).length > 0;
+  // A guide waiting for the founder's word is out of the team's hands: the company does not stop for it.
+  const awaited = (p: Product) => openTasks(w, (t) => t.kind === 'publish_product' && t.status === 'awaiting_founder' && t.input.productId === p.id).length > 0;
+  const producing = building.filter((p) => !awaited(p));
+  const mayStart = !launchHold(w) && building.length - producing.length < MAX_AWAITED_PUBLISHES;
 
   // 1. Nothing to sell and nothing in the oven → find the next niche.
-  if (!live.length && !building.length && !open('scan_trends') && !open('pick_opportunity') && !open('mine_pains')) {
+  if (mayStart && !live.length && !producing.length && !open('scan_trends') && !open('pick_opportunity') && !open('mine_pains')) {
     const excluded = excludedNiches(ctx, { includeActive: true });
     const shortlist = w.company.research.shortlist.filter((id) => !excluded.includes(id));
     if (w.company.research.trends.length && shortlist.length) items.push(planItem('pick_opportunity', {}, 'La shortlist a encore des niches non testées : on choisit la suivante.', 1));
@@ -429,8 +445,8 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   const earning = mains.filter((p) => launchedLately(p) || (profits14.get(p.id) ?? 0) > 0);
   const capacity = clamp(Math.floor(budget.adCap / AD_ROOM_PER_MAIN), 1, MAX_MAINS);
   const comfortable = !budget.survival && !budget.bankrupt && budget.cash >= w.scenario.startingCash && (budget.runwayDays === null || budget.runwayDays >= COMFORTABLE_RUNWAY_DAYS);
-  const inProduction = building.some((p) => !isUpsellProduct(w, p.id));
-  if ((live.length || products.some((p) => p.status === 'paused')) && !inProduction && earning.length < capacity && !open('scan_trends') && !open('pick_opportunity') && !budget.survival && w.status !== 'bankrupt') {
+  const inProduction = producing.some((p) => !isUpsellProduct(w, p.id));
+  if (mayStart && (live.length || products.some((p) => p.status === 'paused')) && !inProduction && earning.length < capacity && !open('scan_trends') && !open('pick_opportunity') && !budget.survival && w.status !== 'bankrupt') {
     const lastCreated = Math.max(0, ...products.filter((p) => !isUpsellProduct(w, p.id)).map((p) => p.createdDay));
     const sinceLast = day - lastCreated;
     const settled = earning.every((p) => {
@@ -457,7 +473,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
 
   // 1c. The market moves: a weekly watch (trends, competitors of what we sell) while the company can look ahead.
   const lastScan = Math.max(0, ...w.company.tasks.filter((t) => t.kind === 'scan_trends' && t.status !== 'cancelled' && t.status !== 'failed').map((t) => t.dayDone ?? t.dayCreated));
-  if (live.length && day - lastScan >= RESEARCH_REFRESH_DAYS && !open('scan_trends') && !budget.survival && w.status !== 'bankrupt') {
+  if ((live.length || building.length > producing.length) && day - lastScan >= RESEARCH_REFRESH_DAYS && !open('scan_trends') && !budget.survival && w.status !== 'bankrupt') {
     items.push(planItem('scan_trends', { refresh: true }, 'Veille hebdomadaire : nouvelles tendances, prix et concurrents.', 3, 'Rafraîchir la veille du marché'));
   }
 
@@ -512,14 +528,14 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
     const qualityLesson = lessonOf(ctx, learning.LESSON_KEYS.quality(pid), since);
     const lessonBacked = !!qualityLesson && (refundBad || (health.reviews.length >= 3 && health.rating > 0 && health.rating < 3.8));
     if ((complaints >= 3 || ratingBad || refundBad || lessonBacked) && p.version < 3 && !reworking && day - since >= 2) {
-      const why = complaints >= 3 ? `${complaints} plaintes qualité remontées par le support` : ratingBad ? `note moyenne ${dec(health.rating, 1)}/5` : lessonBacked ? `leçon du jour ${qualityLesson!.day}` : `taux de remboursement ${pct(v.refundRate)}`;
+      const why = complaints >= 3 ? `${complaints} plaintes qualité remontées par le support` : ratingBad ? `note moyenne ${dec(health.rating, 1)}/5` : lessonBacked ? `leçon du jour ${lessonDay(qualityLesson!)}` : `taux de remboursement ${pct(v.refundRate)}`;
       items.push(reworkItem(ctx, p, `Boucle qualité : ${why} → v${p.version + 1}.`));
     }
     // A conversion lesson of the retro rewrites the page; it does not stay a sentence in a playbook.
     const pageLesson = lessonOf(ctx, learning.LESSON_KEYS.page(pid), since);
     const lastPage = Math.max(p.launchedDay ?? 0, ...w.company.tasks.filter((t) => t.kind === 'write_sales_page' && t.status === 'done' && t.input.productId === pid).map((t) => t.dayDone ?? 0));
-    if (pageLesson && pageLesson.day >= lastPage && day - lastPage >= PAGE_REWORK_GAP_DAYS && !reworking && !open('write_sales_page', pid)) {
-      items.push(planItem('write_sales_page', { productId: pid, reason: 'lesson', fixes: ['Reprendre les mots exacts des clients et traiter leurs objections avant qu’ils les posent.'] }, `Leçon du jour ${pageLesson.day} : ${short(pageLesson.insight, 110)}`, 2, titled('write_sales_page', p, ' (leçon de conversion)')));
+    if (pageLesson && lessonDay(pageLesson) >= lastPage && day - lastPage >= PAGE_REWORK_GAP_DAYS && !reworking && !open('write_sales_page', pid)) {
+      items.push(planItem('write_sales_page', { productId: pid, reason: 'lesson', fixes: ['Reprendre les mots exacts des clients et traiter leurs objections avant qu’ils les posent.'] }, `Leçon du jour ${lessonDay(pageLesson)} : ${short(pageLesson.insight, 110)}`, 2, titled('write_sales_page', p, ' (leçon de conversion)')));
     }
 
     const priceExp = w.company.experiments.find((e) => e.status === 'running' && e.dimension === 'price' && e.hypothesis.includes(p.title.slice(0, 30)));
@@ -533,7 +549,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
     const liked = p.stats.reviews.length < 3 || p.stats.rating >= 3.8;
     const profitable = all.sales >= 10 && liked && (m7.spend > 0 ? m7.roas >= 1.5 : m7.sales >= 5);
     const noSubject = latestOutput(w, 'design_upsell', pid)?.noSubject === true; // already looked: nothing distinct to sell them
-    if (!upsell && !p.upsellProductId && profitable && !noSubject && !open('design_upsell', pid)) {
+    if (!upsell && !p.upsellProductId && profitable && !noSubject && !launchHold(w) && !open('design_upsell', pid)) {
       items.push(planItem('design_upsell', { productId: pid }, `Produit rentable (ROAS 7 j ${Number.isFinite(m7.roas) ? dec(m7.roas) : '∞'}, ${all.sales} ventes) : la suite pour le même public.`, 2, titled('design_upsell', p)));
     }
   }
@@ -572,13 +588,13 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
 
   // Focus + memo.
   const fin = sim.financeSnapshot(w);
-  const lead = live[0] ?? building[0];
+  const lead = live[0] ?? producing[0] ?? building[0];
   let focus: string;
   if (w.status === 'bankrupt') focus = 'Trésorerie négative : zéro dépense, support et organique uniquement';
   else if (budget.outage) focus = 'Panne de paiement annoncée : pubs en pause, on avance sur le support et la production';
   else if (budget.survival) focus = 'Mode survie : organique, créateurs à la commission, aucune pub non rentable';
   else if (!live.length && !building.length) focus = 'Trouver une niche rentable (règle du un)';
-  else if (!live.length && lead) focus = `Sortir « ${short(lead.title, 50)} » : la chaîne de production tourne`;
+  else if (!live.length && lead) focus = awaited(lead) ? `« ${short(lead.title, 50)} » attend la décision du fondateur` : `Sortir « ${short(lead.title, 50)} » : la chaîne de production tourne`;
   else if (live.some((p) => activeCampaigns(w, p.id).length)) focus = fin.roas7d >= 1.5 ? 'Scaler ce qui marche et préparer la suite' : 'Rendre les pubs rentables : couper, tester, itérer';
   else if (acquisition.launchedFor) focus = `Lancer l'acquisition de « ${short(acquisition.launchedFor.title, 50)} »`;
   else if (acquisition.blocked) focus = `Pub payante en pause (${short(acquisition.blocked, 90)}) : organique, créateurs et support`;
@@ -637,7 +653,8 @@ export function mergePlans(ctx: RuntimeCtx, heuristic: DayPlan, engine: DayPlan 
   const out = new Map<string, DayPlanItem>();
   for (const raw of engine?.items ?? []) {
     const it = normalizeItem(ctx, raw);
-    if (it) out.set(itemKey(it.kind, it.input), it);
+    // What the founder took off the shelf stays there, whatever the engine plans.
+    if (it && !(typeof it.input.productId === 'string' && productHold(ctx.world, it.input.productId))) out.set(itemKey(it.kind, it.input), it);
   }
   for (const it of heuristic.items) {
     const key = itemKey(it.kind, it.input);
@@ -706,7 +723,7 @@ const MISSION_RULES: [RegExp, TaskKind][] = [
   [/hook|cr[ée]a|pub tiktok|nouvelle pub|vid[ée]o/i, 'write_ad_hooks'],
   [/campagne|budget pub|scale|stop-loss|roas/i, 'optimize_ads'],
   [/organique|poster|post /i, 'post_organic'],
-  [/prix|tarif/i, 'set_price'],
+  [/prix|tarif|\b(?:mets?|passe|fixe|vends?)\b(?!.*\b(?:budget|par jour)\b).*\d\s*(?:€|euros?)(?!\s*\/)/i, 'set_price'],
   [/page de vente|copywriting/i, 'write_sales_page'],
   [/couverture/i, 'design_cover'],
   [/r[ée][ée]cri|am[ée]liore|qualit[ée]|humanis|v2/i, 'humanize_pdf'],
@@ -724,7 +741,8 @@ const MISSION_RULES: [RegExp, TaskKind][] = [
 /** Keyword routing when the engine could not interpret a founder mission. */
 export function keywordMission(ctx: RuntimeCtx, text: string): DayPlanItem[] {
   const kinds = uniq(MISSION_RULES.filter(([rx]) => rx.test(text)).map(([, k]) => k)).slice(0, 3);
-  if (!kinds.length) kinds.push('daily_report');
+  const vague = !kinds.length;
+  if (vague) kinds.push('daily_report');
   const out: DayPlanItem[] = [];
   for (const kind of kinds) {
     const input: Record<string, unknown> = {};
@@ -732,6 +750,7 @@ export function keywordMission(ctx: RuntimeCtx, text: string): DayPlanItem[] {
     if (kind === 'write_ad_hooks') { input.produce = 2; input.launch = !activeCampaigns(ctx.world).length; }
     if (kind === 'red_team') input.subject = 'pdf';
     if (kind === 'daily_report') input.day = Math.max(1, ctx.world.day - 1);
+    if (vague) input.vague = true;
     const it = normalizeItem(ctx, { kind, title: `${KIND_META[kind].label} (mission du fondateur)`, dept: KIND_META[kind].dept, priority: 1, input, why: `Mission du fondateur : ${short(text, 80)}` });
     if (it) out.push(it);
   }

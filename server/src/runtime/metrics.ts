@@ -58,12 +58,27 @@ export function activeCampaigns(world: WorldState, productId?: string): Campaign
   return world.company.campaigns.filter((c) => c.status === 'active' && (!productId || c.productId === productId));
 }
 
+/** An upsell lives off its parent's buyers, so only while the parent is on sale: an orphan is a guide like any other. */
 export function isUpsellProduct(world: WorldState, productId: string): boolean {
-  return world.company.products.some((p) => p.upsellProductId === productId && p.id !== productId);
+  return world.company.products.some((p) => p.upsellProductId === productId && p.id !== productId && p.status === 'live');
 }
 
 export function parentOf(world: WorldState, productId: string): Product | undefined {
   return world.company.products.find((p) => p.upsellProductId === productId && p.id !== productId);
+}
+
+/** A follow-up with at least this share of the new text of the guide it follows is worth its price. */
+const FOLLOW_UP_DEPTH = 0.9;
+
+/**
+ * The highest price a follow-up can be sold at, null when `p` follows nothing: never above the guide it follows,
+ * and below it as long as it holds less to read. A buyer compares the two side by side on the last page.
+ */
+export function followUpLimit(world: WorldState, p: Product): number | null {
+  const parent = parentOf(world, p.id);
+  if (!parent || !(parent.price > 0)) return null;
+  const deep = !!p.content && !!parent.content && sim.guideSubstance(p.content).freshWords >= sim.guideSubstance(parent.content).freshWords * FOLLOW_UP_DEPTH;
+  return deep ? parent.price : parent.price - 1;
 }
 
 /** Insults and jokes say nothing about the guide, and neither does a review of the support: a brief is built on what readers say about the content. */
@@ -136,6 +151,12 @@ export function priceTiers(world: WorldState, p: Product): PriceTier[] {
  * customers' anchors and competitors), not the highest anchor anyone ever quoted.
  */
 export function priceCeiling(world: WorldState, p: Product): { ceiling: number; why: string } {
+  const measured = measuredCeiling(world, p);
+  const limit = followUpLimit(world, p);
+  return limit !== null && limit < measured.ceiling ? { ceiling: limit, why: 'une suite ne se vend pas plus cher que le guide qu’elle prolonge' } : measured;
+}
+
+function measuredCeiling(world: WorldState, p: Product): { ceiling: number; why: string } {
   const { research } = world.company;
   const anchors = (research.voc[p.nicheId]?.priceAnchors ?? []).filter((x) => x > 0);
   const rivals = (research.competitors[p.nicheId] ?? []).map((c) => c.price).filter((x) => x > 0);

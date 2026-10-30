@@ -33,6 +33,20 @@ export function findBannedClaims(texts: readonly (string | null | undefined)[], 
   return found;
 }
 
+/** Words that deny what follows, up to three words before it: « sans chiffre inventé ni promesse miracle ». */
+const DENIAL = "(^|[^a-z0-9])((?:sans|ni|pas de|pas d'|aucune?|jamais de|jamais d')(?:\\s+[a-z0-9'-]+){0,3}\\s+)";
+
+/**
+ * What a sales page claims itself, unlike what it quotes (« Ça doit encore être une arnaque minceur ») or denies
+ * (« ni promesse miracle »). The platform's own review stays literal: it is findBannedClaims.
+ */
+export function findPageClaims(texts: readonly (string | null | undefined)[], extra: readonly string[] = []): string[] {
+  let page = texts.filter(Boolean).join(' \n ');
+  for (let unquoted = page.replace(/«[^«»]*»/g, ' '); unquoted !== page; unquoted = page.replace(/«[^«»]*»/g, ' ')) page = unquoted;
+  const hay = stripAllowed(norm(page));
+  return findBannedClaims([page], extra).filter((claim) => hasPhrase(hay.replace(new RegExp(`${DENIAL}${norm(claim).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'g'), '$1$2'), claim));
+}
+
 /** Exaggeration markers: not banned, but they inflate promises (refunds, promise gap). */
 export const HYPE_WORDS: readonly string[] = [
   'révolutionnaire', 'ultime', 'incroyable', 'magique', 'définitif', 'le seul guide', 'la seule méthode', 'choquant',

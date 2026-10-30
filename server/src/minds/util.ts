@@ -312,6 +312,11 @@ export function subjectNoun(texts: readonly string[]): { noun: string; fem: bool
   return { noun: 'situation', fem: true };
 }
 
+/** A title without its own guillemets, to print inside ours (« « La peur… » : … » is never right). */
+export function plainTitle(s: string): string {
+  return clean(s).replace(/«\s*/g, '').replace(/\s*»/g, '');
+}
+
 /** Whole short label for diagrams / checklists (never cut mid-phrase, no ellipsis). */
 export function shortLabel(s: string, max = 34): string {
   return labelOf(s, max);
@@ -360,7 +365,7 @@ export function endsDangling(s: string): boolean {
 
 /** « ne / n’ » without its second half (« je ne savais ») is a cut negation. « Nettoyer », « neuf » are not one. */
 function brokenNegation(s: string): boolean {
-  const n = ` ${norm(s)} `;
+  const n = ` ${norm(s)} `.replace(/\sn'importe\s/g, ' importe ');
   const i = n.search(/\s(?:ne\s|n')/);
   if (i < 0) return false;
   return !/\b(pas|plus|jamais|rien|personne|aucun|aucune|guere|que|qu'|ni)\b/.test(n.slice(i + 2));
@@ -403,6 +408,13 @@ function headOk(s: string, min: number, max: number): boolean {
   return labelOk(s, min, max) && s.trim().split(/\s+/).length >= 2;
 }
 
+/** « personnelles et professionnelles », « mensuellement ou trimestriellement » : cut between two alike words, the phrase says less, or something false. */
+function pairedWords(head: string, rest: string): boolean {
+  const a = norm(head).split(/[\s']+/).pop() ?? '';
+  const b = norm(rest).split(/[\s,.;:']+/)[0] ?? '';
+  return a.length >= 5 && b.length >= 5 && a.slice(-3) === b.slice(-3);
+}
+
 export interface LabelOptions { min?: number; tiers?: 1 | 2 }
 
 /**
@@ -443,6 +455,7 @@ export function clauseLabel(s: string | null | undefined, max: number, min: numb
         from = i + 1;
         const head = bare(t.slice(0, Math.max(0, i - 1)));
         if (NEGATIVE.test(norm(head)) && !REASON_CUTS.has(w)) continue;
+        if ((w === ' et ' || w === ' ou ') && pairedWords(head, t.slice(i - 1 + w.length))) continue;
         if (headOk(head, mn, max) && (!best || head.length > best.length)) best = head;
       }
     }

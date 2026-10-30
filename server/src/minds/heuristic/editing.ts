@@ -32,7 +32,7 @@ class DetailBank {
   private readonly queue: { text: string; key: string }[] = [];
 
   constructor(voc: VoiceOfCustomer, rng: LocalRng, private doc: string) {
-    const core = materialOf(voc, doc);
+    const core = materialOf(voc, doc).known;
     const tipLead = rng.shuffle(['Détail concret à retenir', 'Petit ajustement qui aide beaucoup', 'À tester cette semaine']);
     const factLead = rng.shuffle(['Bon à savoir', 'Repère utile', 'À garder en tête']);
     const fresh = (arr: readonly string[]) => arr.map((raw) => ({ raw, key: keyOf(raw) })).filter((x) => !this.doc.includes(x.key));
@@ -67,10 +67,11 @@ function squash(s: string): string {
 }
 
 /** The research this guide was written from: a follow-up guide must not receive the main guide's details. */
-function materialOf(voc: VoiceOfCustomer, doc: string): Material {
+function materialOf(voc: VoiceOfCustomer, doc: string): { known: Material; reserve: Material[] } {
   const { core, topics } = parseKnowledge(voc.knowledge);
   const used = (m: Material): number => [...m.steps.map((s) => s.text), ...m.facts].filter((x) => doc.includes(keyOf(x))).length;
-  return Object.values(topics).find((t) => used(t) >= 2) ?? core;
+  const topic = Object.values(topics).find((t) => used(t) >= 2);
+  return topic ? { known: topic, reserve: [] } : { known: core, reserve: Object.values(topics) };
 }
 
 /** Comparable form of a research item: a detail is « seen » whatever the sentence around it. */
@@ -96,45 +97,78 @@ function varyOpenings(sents: string[], rng: LocalRng): string[] {
 }
 
 /** Words that say nothing about the subject of a pain. */
-const GAP_STOP = new Set(['pour', 'avec', 'sans', 'dans', 'plus', 'tout', 'tous', 'toute', 'toutes', 'mais', 'nous', 'vous', 'elle', 'elles', 'sont', 'fait', 'faire', 'cette', 'comme', 'quand', 'encore', 'toujours', 'bien', 'trop', 'avant', 'apres', 'leur', 'votre', 'notre', 'meme', 'peut', 'rien', 'etre', 'avoir', 'donc', 'alors']);
+const GAP_STOP = new Set(['sais', 'sait', 'savoir', 'faut', 'veux', 'peur', 'quoi', 'comment', 'pour', 'avec', 'sans', 'dans', 'plus', 'tout', 'tous', 'toute', 'toutes', 'mais', 'nous', 'vous', 'elle', 'elles', 'sont', 'fait', 'faire', 'cette', 'comme', 'quand', 'encore', 'toujours', 'bien', 'trop', 'avant', 'apres', 'leur', 'votre', 'notre', 'meme', 'peut', 'rien', 'etre', 'avoir', 'donc', 'alors']);
+
+const gapStems = (t: string): string[] => norm(t).split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !GAP_STOP.has(w)).map((w) => w.slice(0, 5));
 
 /** Words shared with the customer's: how close a chapter or an answer is to a pain. */
 function overlapWith(a: string, b: string): number {
-  const shortStems = (t: string): string[] => norm(t).split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !GAP_STOP.has(w)).map((w) => w.slice(0, 5));
-  const have = new Set(shortStems(b));
-  return new Set(shortStems(a).filter((w) => have.has(w))).size;
+  const have = new Set(gapStems(b));
+  return new Set(gapStems(a).filter((w) => have.has(w))).size;
+}
+
+/** An example this short is what the Red Team counts as none (guideGaps): the pass replaces it. */
+const THIN_EXAMPLE = 40;
+
+/** The numbered paragraphs of the errors and situations chapters. */
+const NUMBERED = /^(?:Erreur|Situation) n°\d+/;
+
+/** A word found in more than this share of the answers (« peinture » in a painting guide) says nothing about which one fits. */
+const COMMON_ANSWER_WORD = 0.15;
+
+/** The stems of a pain that can tell one answer from another. */
+function tellingStems(pain: string, answers: readonly string[]): string[] {
+  const stems = [...new Set(gapStems(pain))];
+  return stems.filter((w) => answers.filter((a) => gapStems(a).includes(w)).length <= Math.max(1, answers.length * COMMON_ANSWER_WORD));
 }
 
 /**
  * A fix pass adds what the Red Team found missing, from the research only: the situation or tip that answers a
- * pain nobody treated, in the chapter closest to it, and an example for a chapter without one. A gap the research
- * cannot fill stays open: the Red Team sees it again rather than a sentence made up to tick the box.
+ * pain nobody treated, in the chapter closest to it, and an example for a chapter without one. `reserve` is the research
+ * of the follow-up subjects: a main guide draws on it only for what its own research cannot answer. A gap the research
+ * cannot fill stays open: the Red Team sees it again rather than a sentence made up to tick the box. The same goes for
+ * a customer's question with no real answer: printed next to whatever shares a word with it, it stays unanswered.
  */
-function fillGaps(out: PdfContent, gaps: GuideGaps, known: Material): void {
+function fillGaps(out: PdfContent, gaps: GuideGaps, known: Material, reserve: readonly Material[] = []): void {
   const doc = (): string => squash(allText(out));
-  const answers = [
-    ...known.situations.map((s) => ({ when: s.when, text: `Si ${lf(s.when)} : ${inline(s.what)}` })),
-    ...known.pairs.filter((p) => p.fix).map((p) => ({ when: p.mistake, text: `À éviter : ${lf(p.mistake)}. À la place : ${inline(p.fix!)}` })),
-    ...known.tips.map((t) => ({ when: t, text: cap(inline(t)) })),
+  const answersOf = (m: Material) => [
+    ...m.situations.map((s) => ({ when: s.when, text: `Si ${lf(s.when)} : ${inline(s.what)}` })),
+    ...m.pairs.filter((p) => p.fix).map((p) => ({ when: p.mistake, text: `À éviter : ${lf(p.mistake)}. À la place : ${inline(p.fix!)}` })),
+    ...m.tips.map((t) => ({ when: cap(inline(t)), text: cap(inline(t)) })),
   ];
+  const answers = answersOf(known);
+  const spare = reserve.flatMap(answersOf);
+  const said = [...answers, ...spare].map((a) => `${a.when} ${a.text}`);
   for (const pain of strArr(gaps.pains)) {
     const here = doc();
-    const fresh = answers.filter((a) => !here.includes(squash(a.text).slice(0, 40)));
-    const scored = fresh.map((a) => ({ a, n: overlapWith(pain, `${a.when} ${a.text}`) })).sort((x, y) => y.n - x.n);
-    const best = scored[0];
-    if (!best || best.n === 0) continue;
+    const telling = tellingStems(pain, said);
+    const needed = Math.min(2, Math.max(1, telling.length));
+    // a word of the case itself counts double: « Bébé recrache tout… » is the case « bébé recrache tout », not a tip that says « poncez » in passing
+    const fit = (a: { when: string; text: string }): number => telling.reduce((sum, w) => sum + (a.when !== a.text && gapStems(a.when).includes(w) ? 2 : gapStems(a.text).includes(w) ? 1 : 0), 0);
+    const rank = (list: typeof answers) => list.filter((a) => !here.includes(squash(a.text).slice(0, 40)))
+      .map((a) => ({ a, n: fit(a) })).filter((x) => x.n >= needed).sort((x, y) => y.n - x.n);
+    const scored = rank(answers);
+    const printed = (a: { when: string }): boolean => here.includes(squash(a.when).slice(0, 30));
+    const best = scored.find((x) => !printed(x.a)) ?? (scored.length ? undefined : rank(spare).find((x) => !printed(x.a)));
+    if (!best) {
+      // the guide already answers it in other words, and the fix of an error stays in its chapter: the question points there
+      const done = scored.find((x) => printed(x.a));
+      const at = done && out.chapters.flatMap((ch) => ch.paragraphs.map((text) => ({ ch, text }))).find((x) => NUMBERED.test(x.text) && squash(x.text).includes(squash(done.a.when).slice(0, 30)));
+      if (at) at.ch.paragraphs.push(`On lit souvent : « ${bare(pain)} ». La réponse est plus haut : ${NUMBERED.exec(at.text)![0]!.toLowerCase()}.`);
+      continue;
+    }
     const chapter = [...out.chapters].sort((x, y) => overlapWith(pain, allText({ chapters: [y] })) - overlapWith(pain, allText({ chapters: [x] })))[0];
     chapter?.paragraphs.push(`On lit souvent : « ${bare(pain)} ». ${sentence(best.a.text)}`);
   }
-  // Examples of the research first, then its documented situations and ready-made models: each one used once.
-  const examples = [...known.examples, ...known.situations.map((s) => `si ${lf(s.when)}, ${lf(s.what)}`), ...known.models];
+  // Examples of the research first, then its ready-made models, each one used once. A situation is no example: the guide already prints it.
+  const examples = [...known.examples, ...known.models, ...reserve.flatMap((m) => [...m.examples, ...m.models])];
   for (const title of strArr(gaps.chapters)) {
-    const ch = out.chapters.find((c) => c.title === title && !c.example);
+    const ch = out.chapters.find((c) => c.title === title && (c.example ?? '').length <= THIN_EXAMPLE);
     if (!ch) continue;
     const here = doc();
     const fresh = examples.filter((e) => !here.includes(squash(e).slice(0, 40)));
     const best = fresh.sort((a, b) => overlapWith(b, allText({ chapters: [ch] })) - overlapWith(a, allText({ chapters: [ch] })))[0];
-    if (best) { ch.example = `Exemple type : ${sentence(best)}`; examples.splice(examples.indexOf(best), 1); }
+    if (best) { ch.example = /^exemple/i.test(best) ? sentence(best) : `Exemple type : ${sentence(best)}`; examples.splice(examples.indexOf(best), 1); }
   }
 }
 
@@ -143,7 +177,7 @@ export function heuristicHumanize(contentIn: PdfContent, flagged: string[], vocI
   const content = ensurePdf(contentIn);
   const isFlat = flagMatcher(flagged);
   const bank = new DetailBank(voc, rng, squash(allText(content)));
-  const known = materialOf(voc, squash(allText(content)));
+  const { known, reserve } = materialOf(voc, squash(allText(content)));
   const stepPool = [...known.steps.map((s) => s.text), ...known.tips].map(sentence);
   let stepI = 0;
 
@@ -173,7 +207,7 @@ export function heuristicHumanize(contentIn: PdfContent, flagged: string[], vocI
     if (ch.paragraphs.length === 0) ch.paragraphs.push(bank.any() ?? sentence(ch.intro || ch.title));
   }
   if (out.introduction.length === 0) out.introduction.push(bank.any() ?? sentence(out.promise || out.title));
-  if (gaps) fillGaps(out, gaps, known);
+  if (gaps) fillGaps(out, gaps, known, reserve);
   dropRepeats(out);
   out.wordCount = pdfWordCount(out);
   return out;

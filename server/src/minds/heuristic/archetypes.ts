@@ -34,6 +34,8 @@ export interface ArchetypeDef {
   short: { 5: string[]; 6: string[] };
   promise(c: NicheCtx, outcome: string): string;
   subtitle(c: NicheCtx): string;
+  /** The « Comment utiliser ce guide » box of the promise page: what the introduction says, in three steps. */
+  howTo: [string, string][];
   /** Lead title formulas, strongest first. */
   titles(c: NicheCtx, a: { P: string; Ps: string; D: string; steps: number; desired: string | null }): string[];
   introOpen(c: NicheCtx, a: { pain: string; p1: string | null; p2: string | null }): string;
@@ -47,6 +49,9 @@ export interface ArchetypeDef {
 }
 
 const D = (c: NicheCtx): string => `${c.dur.n} ${c.dur.unit}`;
+const femUnit = (c: NicheCtx): boolean => /^(nuit|semaine)$/.test(c.dur.unitOne);
+/** « un jour », « une nuit » : the plan's unit with its article. */
+const aUnit = (c: NicheCtx): string => `${femUnit(c) ? 'une' : 'un'} ${c.dur.unitOne}`;
 /** Framing wording of this niche: two guides of the same archetype do not read alike. */
 const v = (c: NicheCtx, ...xs: string[]): string => xs[archetypeSlot(c.niche.nicheId) % xs.length]!;
 /** « à » + the short audience (aux parents, à la famille). */
@@ -125,6 +130,7 @@ const genericFillers: Para[] = [
 
 const HABITUDE: ArchetypeDef = {
   id: 'habitude',
+  howTo: [['Lisez un chapitre à la fois', 'Chaque chapitre règle une partie précise du problème, et l’observation vient avant le plan.'], ['Appliquez le jour même', 'Les gestes sont pensés pour être testés tout de suite.'], ['Cochez la checklist', 'Passez à la suite quand tout est coché.']],
   stepNoun: { word: 'geste', fem: false },
   plan: 'parallele',
   planColumn: 'Jour',
@@ -207,13 +213,15 @@ const HABITUDE: ArchetypeDef = {
         (d) => `${d.kinds.has('observation') ? 'Ce plan commence une fois l’observation terminée. ' : ''}${v(d.c, 'Il ne fonctionne pas par phases qui se remplacent : ce qui est en place le reste.', 'Rien ne remplace rien : vous gardez les premiers gestes jusqu’au bout.', 'Les premiers gestes restent actifs du début à la fin.', 'Les habitudes des premières semaines restent en place jusqu’à la fin.')}`,
         modelPara,
         (d) => v(d.c, `Chaque ${d.c.dur.unitOne}, lisez la ligne du tableau, faites ce qu’elle dit, cochez. Si une ligne saute, ne la rattrapez pas : reprenez simplement à la suivante.`, `Le tableau se lit ligne par ligne : une ligne, une case. Une case manquée ne se rattrape pas, on passe à la suivante.`, `Une ligne par ${d.c.dur.unitOne}, une case à cocher. Si vous en manquez une, continuez avec la suivante, sans doubler.`, `Une ligne par ${d.c.dur.unitOne}, cochée le soir. Une ligne ratée ne compte pas double : vous reprenez simplement à la suivante.`),
-        (d) => v(d.c, `Résistez à l’envie d’en faire plus. La stabilité est le meilleur signe que le plan fonctionne, et un ${d.c.dur.unitOne} calme vaut mieux qu’un ${d.c.dur.unitOne} héroïque suivi d’un abandon.`, `N’ajoutez rien au plan pendant ces ${D(d.c)}, même si vous avez de l’énergie : la régularité compte plus que l’élan.`, `Quand tout va bien, la tentation est d’accélérer. Gardez le rythme prévu : c’est lui qui installe l’habitude.`, `Ne cherchez pas à compenser une semaine moyenne : tenez le rythme prévu, et laissez le temps faire sa part.`),
+        (d) => v(d.c, `Résistez à l’envie d’en faire plus. La stabilité est le meilleur signe que le plan fonctionne, et ${aUnit(d.c)} calme vaut mieux qu’${aUnit(d.c)} héroïque suivi${femUnit(d.c) ? 'e' : ''} d’un abandon.`, `N’ajoutez rien au plan pendant ces ${D(d.c)}, même si vous avez de l’énergie : la régularité compte plus que l’élan.`, `Quand tout va bien, la tentation est d’accélérer. Gardez le rythme prévu : c’est lui qui installe l’habitude.`, `Ne cherchez pas à compenser une semaine moyenne : tenez le rythme prévu, et laissez le temps faire sa part.`),
       ],
       checks: (c) => ['Tableau imprimé ou recopié', `Première ligne cochée`, `Bilan prévu à la fin des ${D(c)}`],
     },
     {
       kind: 'durer', role: 'durer',
       title: () => 'Garder les acquis quand la vie reprend le dessus',
+      steps: () => ['Choisir un jour fixe par mois pour relire votre carnet', 'Reprendre la première semaine du plan dès qu’une ancienne habitude revient', 'Noter la date du jour où le résultat est acquis'],
+      checks: () => ['Mon rendez-vous du mois est dans l’agenda', 'Je sais par quoi reprendre en cas de recul', 'Mon carnet reste à portée de main'],
       intro: (c) => `${v(c, 'Le vrai défi n’est pas de réussir une semaine, c’est de tenir quand tout redevient normal.', 'Une fois le plan terminé, le plus important reste à faire.', 'La fin du plan n’est pas la fin de l’histoire.', 'Tenir longtemps demande moins d’efforts qu’on ne le croit, à condition de garder quelques repères.')} C’est l’étape la plus négligée par ${c.audCore}.`,
       paras: [
         (d) => { const o = d.outcome(); return o ? v(d.c, `À quoi ressemble la réussite ? Concrètement : ${o}. Notez la date du jour où cela arrive pour la première fois : les soirs de doute, cette date sera votre meilleure preuve.`, `Votre repère de réussite : ${o}. Le jour où c’est acquis, notez la date dans le carnet.`, `Gardez ce cap en tête : ${o}. Quand vous y êtes, écrivez-le : les périodes de doute reviennent, et cette note aide.`, `Votre objectif reste simple : ${o}. Mesurez-le à la fin du plan, et une fois par mois ensuite.`) : null; },
@@ -229,6 +237,7 @@ const HABITUDE: ArchetypeDef = {
 
 const PROJET: ArchetypeDef = {
   id: 'projet',
+  howTo: [['Lisez tout avant d’acheter', 'Vous saurez ce qui vous attend, et ce qu’il est inutile de payer.'], ['Reprenez chapitre par chapitre', 'Le matériel à portée de main, une étape après l’autre.'], ['Cochez la checklist', 'Elle évite d’oublier une préparation qui ne se rattrape pas.']],
   stepNoun: { word: 'étape', fem: true },
   plan: 'phases',
   planColumn: 'Quand',
@@ -317,6 +326,16 @@ const PROJET: ArchetypeDef = {
     {
       kind: 'finitions', role: 'durer',
       title: () => 'Faire durer le résultat',
+      steps: (c) => [
+        v(c, 'Attendre plusieurs jours avant de poser un objet lourd sur le meuble', 'Vider et nettoyer les pots à la fin de la saison'),
+        v(c, 'Nettoyer avec un chiffon à peine humide, sans produit abrasif', 'Noter ce qui a donné, où et avec quel arrosage'),
+        v(c, 'Garder un petit pot de peinture pour les retouches', 'Prévoir dès janvier les semis du printemps suivant'),
+      ],
+      checks: (c) => [
+        v(c, 'Le temps de durcissement est respecté', 'Les pots sont nettoyés'),
+        v(c, 'Un pot de retouche est gardé', 'Mes notes de la saison sont rangées'),
+        v(c, 'Les produits utilisés sont notés', 'Les semis du printemps sont prévus'),
+      ],
       intro: (c) => `${v(c, 'Le meuble est terminé, mais c’est maintenant qu’il faut en prendre soin.', 'La saison se termine, et c’est le moment de préparer la suivante.')} Ce dernier chapitre aide ${c.audCore} à faire durer le résultat.`,
       paras: [
         (d) => { const o = d.outcome(); return o ? v(d.c, `Ce que vous visiez : ${o}. Prenez une photo du résultat, et notez ce que vous avez utilisé : vous en aurez besoin pour le prochain meuble.`, `Votre objectif pour l’an prochain : ${o}. Notez ce qui a poussé, où, et avec quel arrosage.`) : null; },
@@ -332,6 +351,7 @@ const PROJET: ArchetypeDef = {
 
 const DEMARCHE: ArchetypeDef = {
   id: 'demarche',
+  howTo: [['Gardez votre espace ouvert', 'Faites chaque étape au moment où vous la lisez.'], ['Gardez chaque preuve', 'Une attestation, un seul dossier, nommé avec la date.'], ['Cochez la checklist', 'Vous voyez d’un coup d’œil ce qui reste à faire.']],
   stepNoun: { word: 'étape', fem: true },
   plan: 'phases',
   planColumn: 'Quand',
@@ -412,13 +432,15 @@ const DEMARCHE: ArchetypeDef = {
       paras: [
         () => 'Ces étapes se font dans l’ordre, chacune en une séance courte. Elles ne se reproduisent pas : une fois posées, elles travaillent pour vous.',
         modelPara,
-        () => 'Ne cherchez pas à tout faire en une soirée. Une étape par jour laisse le temps de vérifier une information sur le site officiel, ou de poser une question, avant de passer à la suivante.',
+        () => 'Ne cherchez pas à tout faire en une soirée. Une séance à la fois laisse le temps de vérifier une information sur le site officiel, ou de poser une question, avant de passer à la suivante.',
       ],
       checks: () => ['Semaine de mise en place bloquée', 'Rappels programmés', 'Première échéance notée'],
     },
     {
       kind: 'rituel', role: 'durer',
       title: () => 'Votre rituel pour ne plus y penser',
+      steps: () => ['Bloquer dans l’agenda un rendez-vous de 15 minutes avant chaque échéance', 'Télécharger chaque attestation et la ranger dans le même dossier', 'Relire chaque janvier votre taux, votre périodicité et les seuils de l’année'],
+      checks: () => ['Mon rendez-vous récurrent est noté', 'Mon dossier d’attestations est à jour', 'Mon rappel de janvier est programmé'],
       intro: (c) => `La bonne démarche est celle qu’on oublie entre deux échéances. Ce chapitre donne ${toAud(c)} un rituel court, à répéter.`,
       paras: [
         (d) => { const o = d.outcome(); return o ? `Ce que vous visez maintenant : ${o}. Cela tient à un rendez-vous fixe avec vous-même, noté dans l’agenda comme un client.` : null; },
@@ -434,6 +456,7 @@ const DEMARCHE: ArchetypeDef = {
 
 const EXAMEN: ArchetypeDef = {
   id: 'examen',
+  howTo: [['Commencez par l’épreuve', 'Sachez ce qui est évalué avant de réviser quoi que ce soit.'], ['Mesurez votre point de départ', 'Le plan se règle sur ce que vous aurez mesuré.'], ['Cochez la checklist', 'Elle montre ce qui est solide et ce qu’il reste à travailler.']],
   stepNoun: { word: 'étape', fem: true },
   plan: 'phases',
   planColumn: 'Quand',
@@ -521,6 +544,8 @@ const EXAMEN: ArchetypeDef = {
     {
       kind: 'finale', role: 'durer',
       title: () => 'La dernière ligne droite',
+      steps: () => ['Arrêter les nouveautés 3 jours avant l’épreuve', 'Préparer la veille la tenue, la convocation et le trajet', 'Se coucher à l’heure habituelle la veille'],
+      checks: () => ['Plus rien de nouveau à apprendre', 'Mon sac et mon trajet sont prêts', 'Mon heure de coucher est fixée'],
       intro: (c) => `${v(c, 'Les derniers jours ne servent pas à en faire plus.', 'La dernière semaine n’est pas faite pour apprendre encore.', 'À quelques jours de l’examen, le travail change de nature.')} Ce temps sert à arriver reposé, avec tout ce que ${c.audCore} ont déjà construit.`,
       paras: [
         (d) => { const o = d.outcome(); return o ? `${v(d.c, 'Ce que vous visez, concrètement', 'Votre objectif pour ce jour-là', 'Gardez ce cap')} : ${o}. ${v(d.c, 'Écrivez-le, et relisez-le quand le doute arrive.', 'Dites-le à voix haute avant d’entrer.', 'Notez-le en haut de votre planning.')}` : null; },
@@ -536,6 +561,7 @@ const EXAMEN: ArchetypeDef = {
 
 const EVENEMENT: ArchetypeDef = {
   id: 'evenement',
+  howTo: [['Lisez avant de réserver', 'C’est l’ordre des décisions qui fait le budget.'], ['Remplissez le budget', 'Avant de contacter qui que ce soit.'], ['Cochez la checklist', 'Chaque décision prise libère la suivante.']],
   stepNoun: { word: 'décision', fem: true },
   plan: 'phases',
   planColumn: 'Quand',
@@ -623,6 +649,8 @@ const EVENEMENT: ArchetypeDef = {
     {
       kind: 'derniere', role: 'durer',
       title: () => 'La dernière ligne droite, sans stress',
+      steps: (c) => ['Confirmer chaque réservation une semaine avant', 'Réunir les documents et les montants sur une seule page', v(c, 'Confier à quelqu’un de confiance ce qui reste à suivre le jour même', 'Garder une réserve pour les imprévus des derniers jours')],
+      checks: () => ['Les réservations sont confirmées', 'Tout tient sur une seule page', 'Le dernier budget est à jour'],
       intro: (c) => `${v(c, 'Quand tout est prévu, les derniers jours deviennent les meilleurs.', 'Une fois sur place, votre seul travail est de profiter.')} Ce chapitre aide ${c.audCore} à le vivre sereinement.`,
       paras: [
         (d) => { const o = d.outcome(); return o ? v(d.c, `Rappelez-vous ce que vous êtes en train de construire : ${o}. C’est ce repère qui permet de dire non aux dernières idées qui coûtent cher.`, `Gardez ce cap : ${o}. Il aide à dire non aux dépenses de dernière minute.`) : null; },
@@ -638,6 +666,7 @@ const EVENEMENT: ArchetypeDef = {
 
 const SYSTEME: ArchetypeDef = {
   id: 'systeme',
+  howTo: [['Lisez le cycle en entier', 'Vous verrez comment les étapes s’enchaînent.'], ['Lancez un premier tour', 'Sans chercher à tout réussir du premier coup.'], ['Cochez, puis ajustez', 'C’est le deuxième tour qui montre quoi changer.']],
   stepNoun: { word: 'maillon', fem: false },
   plan: 'phases',
   planColumn: 'Quand',
@@ -726,6 +755,8 @@ const SYSTEME: ArchetypeDef = {
     {
       kind: 'rythme', role: 'durer',
       title: () => 'Trouver votre rythme de croisière',
+      steps: () => ['Fixer un bilan de 10 minutes chaque mois', 'Garder ce qui a marché et retirer une tâche qui n’a rien donné', 'Relancer le cycle au début, sans le réinventer'],
+      checks: () => ['Mon bilan du mois est dans l’agenda', 'Je sais ce que je garde', 'Mon prochain cycle est lancé'],
       intro: (c) => `${v(c, 'Après quelques cycles, le système doit coûter moins d’énergie qu’au début.', 'Une fois le rythme pris, tout devient plus léger.', 'Le plus dur est de tenir une fois les premiers résultats arrivés.')} Ce chapitre aide ${c.audCore} à trouver un rythme qui dure.`,
       paras: [
         (d) => { const o = d.outcome(); return o ? `${v(d.c, 'Le cap reste le même', 'Votre objectif', 'Ce que vous visez')} : ${o}. ${v(d.c, 'Mesurez ce résultat une fois par mois, pas tous les jours.', 'Regardez ce chiffre une fois par mois.', 'Faites le point à la fin de chaque mois.')}` : null; },
@@ -741,6 +772,7 @@ const SYSTEME: ArchetypeDef = {
 
 const PALIERS: ArchetypeDef = {
   id: 'paliers',
+  howTo: [['Lisez à deux', 'Chaque adulte qui donne à manger doit avoir les mêmes repères.'], ['Un palier à la fois', 'Passez au suivant quand celui-ci est devenu facile.'], ['Cochez la checklist', 'Elle dit ce qui est en place avant le prochain repas.']],
   stepNoun: { word: 'palier', fem: false },
   plan: 'phases',
   planColumn: 'Quand',
@@ -828,6 +860,8 @@ const PALIERS: ArchetypeDef = {
     {
       kind: 'quotidien', role: 'durer',
       title: () => 'Installer tout ça dans le quotidien',
+      steps: () => ['Prévoir deux repas par semaine à la table familiale', 'Revoir les aliments à risque avec chaque nouvelle personne qui garde bébé', 'Noter dans le carnet tout aliment à reproposer la semaine suivante'],
+      checks: () => ['Les repas en famille sont en place', 'Chaque adulte connaît les repères', 'Le carnet reste à jour'],
       intro: (c) => `Une fois les paliers franchis, il reste à faire entrer tout ça dans une vraie semaine. Ce chapitre aide ${c.audCore} à le faire sans y passer ses journées.`,
       paras: [
         (d) => { const o = d.outcome(); return o ? `Le cap, c’est ceci : ${o}. Il se construit repas après repas, sans pression.` : null; },
@@ -841,85 +875,222 @@ const PALIERS: ArchetypeDef = {
 
 // ───────────────────────────── guide de suite ─────────────────────────────
 
-/** A follow-up guide treats one sub-problem: its own chapters, never the parent's sections. */
-export const SUITE: ArchetypeDef = {
-  id: 'suite',
-  stepNoun: { word: 'étape', fem: true },
-  plan: 'phases',
-  planColumn: 'Quand',
-  short: { 5: ['angle', 'reglages', 'ecueils', 'resistances', 'mini-plan'], 6: ['angle', 'reglages', 'ecueils', 'resistances', 'mini-plan'] },
-  promise: (c, o) => `un plan ciblé de ${D(c)} pour arriver à ceci : ${o}`,
-  subtitle: (c) => `Le guide ciblé pour ${c.audArt} qui veulent régler ce point précis`,
-  titles: (c) => [c.topic?.title ?? ''],
-  introOpen: (c, a) => `Ce guide ne reprend rien de ce que vous avez déjà appris. Il traite un seul sujet, celui qu’on repousse le plus longtemps : ${a.pain}.${a.p1 ? ` Vous l’avez peut-être dit ainsi : ${a.p1}${a.p2 ? `, ou encore ${a.p2}` : ''}.` : ''}`,
-  introWhy: (_c, a) => `Ce sujet mérite un guide à part, parce qu’il obéit à sa propre logique.${a.pains.length ? ` On peut régler ${a.pains[0]} et rester bloqué ici pendant des mois.` : ' On peut avoir tout réglé par ailleurs et rester bloqué ici pendant des mois.'}`,
-  introUse: (c, a) => `Il a été écrit pour ${c.audArt}, et il part de zéro sur ce sujet. À la fin, vous aurez ${lf(a.promise)}. ${cap(String(a.chapters))} chapitres ciblés, un plan court et une fiche à imprimer.`,
-  introRead: () => 'Comment l’utiliser ? Lisez-le d’une traite, puis commencez le plan le jour même, tant que le sujet est frais.',
-  whyFallback: [
-    'Elle ne prend que quelques minutes, et elle conditionne tout le reste de ce plan.',
-    'Vérifiez qu’elle est en place avant d’aller plus loin.',
-    'Gardez-la simple : ce sont les réglages les plus discrets qui tiennent le mieux.',
-  ],
-  situationsFallback: [
-    { when: 'rien ne bouge après quelques jours', what: 'Reprenez la première étape et vérifiez qu’elle est bien en place avant d’en changer une autre.' },
-    { when: 'la situation empire d’abord', what: 'C’est fréquent quand un fonctionnement installé change : tenez encore quelques jours avant de conclure.' },
-  ],
-  fillers: [
-    () => 'Ce sujet demande de la régularité plus que du temps. Quelques minutes bien placées valent mieux qu’une longue séance de rattrapage le week-end.',
-    () => 'Notez chaque jour une seule observation. Elle vous dira ce qui bouge avant même que vous le sentiez.',
-    () => 'Si deux réglages semblent se contredire, gardez le plus simple et testez-le pendant quelques jours avant d’ajouter l’autre.',
-    () => 'Ne cherchez pas à régler ce sujet et à lancer autre chose en même temps. Un seul chantier à la fois : c’est ce qui permet de voir ce qui marche.',
-    ...genericFillers,
-  ],
-  chapters: [
-    {
-      kind: 'angle', role: 'comprendre',
-      title: (c) => `Pourquoi ce sujet résiste : ${lf(c.pbShort ?? c.pbClause)}`,
-      intro: (c) => `Avant d’agir, il faut voir ce qui rend ce point différent. Ce chapitre explique ${toAud(c)} pourquoi les réponses habituelles ne suffisent pas ici.`,
-      paras: [
-        (d) => { const f = d.facts(2); return f ? `${f} Voilà pourquoi ce sujet ne se règle pas comme les autres.` : 'Ce sujet a sa propre logique, et elle explique pourquoi les réponses habituelles ne tiennent pas.'; },
-        (d) => { const f = d.facts(2); return f ? `${f} Une fois ces points compris, les réglages suivants paraissent beaucoup plus logiques.` : null; },
-        () => 'Vous n’avez pas besoin de tout reprendre à zéro. Il suffit d’ajouter quelques réglages précis, au bon moment, sans toucher à ce qui fonctionne déjà.',
-      ],
-      steps: () => ['Noter à quel moment ce sujet vous pose le plus de difficultés', 'Entourer dans ce chapitre ce qui vous surprend', 'Décider du jour où vous commencez'],
-      checks: () => ['Je comprends pourquoi ce sujet résiste', 'Je sais à quel moment il se pose', 'Ma date de départ est fixée'],
-    },
-    {
-      kind: 'reglages', role: 'methode',
-      title: (_c, n) => `Les ${n} réglages à mettre en place`,
-      intro: (c) => `Voici les réglages propres à ce sujet, écrits pour ${c.audCore}. Ils s’appliquent dans l’ordre, un seul à la fois.`,
-      paras: [],
-    },
-    {
-      kind: 'ecueils', role: 'erreurs',
-      title: (_c, n) => `Les ${n} faux pas propres à ce sujet`,
-      intro: (c) => `Ces faux pas sont spécifiques à ce sujet : même ${c.audCore} les plus organisés y tombent, justement parce qu’ils partent d’un bon réflexe.`,
-      paras: [],
-      steps: () => ['Repérer le faux pas qui vous concerne', 'Appliquer sa correction dès aujourd’hui', 'Vérifier le résultat après quelques jours'],
-    },
-    {
-      kind: 'resistances', role: 'situations',
-      title: (_c, n) => `Les ${n} cas qui résistent`,
-      intro: (c) => `Certains cas ne cèdent pas au premier essai. Voici ce que ${c.audCore} peuvent faire quand le réglage de base ne suffit pas.`,
-      paras: [],
-      steps: () => ['Identifier votre cas', 'Tester la réponse pendant quelques jours', 'Revenir au plan principal dès que ça repart'],
-    },
-    {
-      kind: 'mini-plan', role: 'programme',
-      title: (c) => `Votre plan ciblé de ${D(c)}, étape par étape`,
-      intro: (c) => `Un plan court, centré sur un seul objectif, à suivre sans rien changer d’autre dans votre organisation.`,
-      paras: [
-        () => 'Suivez les lignes dans l’ordre, chacune à son moment. Ce plan est court exprès : il doit tenir à côté de votre quotidien, pas à sa place.',
-        () => 'À la fin, gardez seulement ce qui a marché. Tout ce qui n’a pas changé la situation peut être abandonné sans regret.',
-      ],
-      checks: () => ['Plan noté dans l’agenda', 'Fiche imprimée', 'Bilan de fin de plan prévu'],
-    },
-  ],
+/** What a follow-up guide says in its own name: the framing of a tax calendar is not the framing of a puppy's habits. */
+interface SuiteVoice {
+  stepNoun: { word: string; fem: boolean };
+  howTo: [string, string][];
+  open: string[]; why: string[]; read: string[]; tools: string[];
+  angle: string[]; calm: string[];
+  gearTitle(n: number): string; gear: string[];
+  faultTitle(n: number): string; fault: string;
+  caseTitle(n: number): string; cases: string;
+  plan: string; planRead: string[]; planEnd: string;
+}
+
+const VOICES: Record<GuideArchetype, SuiteVoice> = {
+  habitude: {
+    stepNoun: { word: 'geste', fem: false },
+    howTo: [['Lisez-le en une fois', 'Ce guide ne traite qu’un seul moment.'], ['Observez avant d’agir', 'Le plan s’appuie sur vos notes.'], ['Cochez au fil du plan', 'Une ligne à la fois, sans rattraper celles qui sautent.']],
+    open: ['Le reste de la journée peut s’améliorer, un moment continue de tout dérégler', 'Le plus gros peut être réglé, il reste ce moment où tout repart de travers', 'On peut avoir apaisé la journée et rester coincé sur ce point précis', 'Les bonnes habitudes tiennent jusqu’au moment où celle-ci reprend le dessus'],
+    why: ['Ce moment a sa propre mécanique : ce qui marche ailleurs ne s’y applique pas tel quel.', 'Ici, le déclencheur n’est pas le même, et les gestes habituels ne suffisent pas.', 'Ce comportement suit son propre rythme, et c’est ce rythme qu’il faut déplacer.', 'Cette habitude se nourrit d’un contexte précis : c’est ce contexte qu’il faut changer.'],
+    read: ['Lisez-le en une fois, puis commencez par observer : le plan s’appuie sur vos notes, pas sur une règle générale.', 'Lisez-le en une fois, puis suivez le plan dans l’ordre, sans sauter de palier.', 'Prenez-le le soir, avant de changer quoi que ce soit : les premières nuits servent à comprendre.', 'Commencez par noter vos soirées : c’est cette page qui dira par quoi commencer.'],
+    tools: ['des gestes à installer dans l’ordre, un plan à cocher et une fiche à imprimer', 'un escalier d’exercices, un plan à cocher et un tableau à imprimer', 'une routine du soir, un plan nuit après nuit et un journal à imprimer', 'un rituel du soir, un plan à cocher et un journal à imprimer'],
+    angle: ['Avant de changer quoi que ce soit, il faut voir ce qui déclenche ce moment.', 'Avant de partir plus longtemps, il faut voir ce qui se passe quand la porte se ferme.', 'Avant de fermer une porte, il faut comprendre ce qui réveille la maison.', 'Avant de vous interdire quoi que ce soit, il faut voir ce qui déclenche l’envie.'],
+    calm: ['Rien de ce qui fonctionne déjà n’a besoin de bouger : on ajoute seulement quelques gestes, au bon moment.', 'Cela s’apprend comme le reste, par toutes petites étapes, sans brusquer personne.', 'Ce rythme se déplace en quelques nuits, à condition de ne plus y répondre.', 'Il ne s’agit pas de se priver : il s’agit de changer ce qui se passe autour de ce moment.'],
+    gearTitle: (n) => `Les ${n} gestes à mettre en place`,
+    gear: ['Ces gestes visent uniquement ce moment. Ils s’installent l’un après l’autre, pas tous le même jour.', 'Chaque geste s’ajoute au précédent, et on ne passe au suivant que si tout reste calme.', 'Ces gestes se regroupent le soir : c’est là que se prépare la nuit.', 'Ces gestes changent le décor de la soirée, un par un, sans toucher au reste de la journée.'],
+    faultTitle: (n) => `Les ${n} faux pas propres à ce moment`,
+    fault: 'Ces faux pas partent d’un bon réflexe : ils calment sur l’instant et entretiennent le problème ensuite.',
+    caseTitle: (n) => `Les ${n} cas qui résistent`,
+    cases: 'Certains jours, le geste de base ne suffit pas.',
+    plan: 'Le plan installe ces gestes dans l’ordre, sans toucher au reste de votre organisation.',
+    planRead: ['Une ligne à la fois, cochée le soir. Si une ligne saute, reprenez simplement à la suivante.', 'Allongez seulement quand tout est resté calme, et redescendez d’un cran au moindre signe de stress.', 'Une réponse donnée à 3 h relance tout : tenez les lignes du plan, même les nuits difficiles.', 'Une ligne par soir, notée avant de vous coucher. Une soirée ratée ne compte pas double.'],
+    planEnd: 'À la fin du plan, gardez ce qui a fait bouger les choses et laissez le reste.',
+  },
+  projet: {
+    stepNoun: { word: 'étape', fem: true },
+    howTo: [['Lisez avant de commencer', 'Vous saurez quoi acheter, et dans quel ordre agir.'], ['Reprenez étape par étape', 'Le projet sous les yeux, une étape terminée à la fois.'], ['Cochez la checklist', 'Elle évite de sauter ce qui ne se rattrape pas.']],
+    open: ['Avant la belle finition, il y a souvent un obstacle qu’on préfère ne pas regarder', 'Certains projets semblent impossibles dès le départ, à cause d’un seul point'],
+    why: ['Ce point se traite avant le reste : ce qui n’est pas réglé ici se verra à la fin.', 'Cette contrainte change les choix de départ : ce qui marche ailleurs échoue ici.'],
+    read: ['Lisez-le une fois avant de sortir les outils, puis reprenez-le chapitre par chapitre, le projet sous les yeux.', 'Lisez-le avant d’acheter quoi que ce soit : les choix du premier chapitre décident de toute la saison.'],
+    tools: ['les étapes dans l’ordre, les problèmes les plus courants et une fiche à imprimer', 'un calendrier de semis, les problèmes les plus courants et une carte à remplir'],
+    angle: ['Ce chapitre montre ce que cette contrainte impose, avant le premier geste.', 'Ce chapitre montre ce que ce balcon permet vraiment, avant le premier semis.'],
+    calm: ['Une fois ce point compris, le reste du projet redevient un enchaînement d’étapes simples.', 'Un balcon sans soleil direct a ses propres atouts : il suffit de choisir ce qui s’y plaît.'],
+    gearTitle: (n) => `Les ${n} étapes, une par une`,
+    gear: ['Chaque étape se termine avant de passer à la suivante : l’ordre n’est pas une préférence.', 'Le calendrier impose son ordre : chaque étape a sa période.'],
+    faultTitle: (n) => `Les ${n} erreurs à éviter sur ce point`,
+    fault: 'Ces erreurs viennent presque toujours de l’envie d’aller trop vite.',
+    caseTitle: (n) => `Les ${n} problèmes et leur solution`,
+    cases: 'Un défaut se rattrape presque toujours, à condition de le traiter dans le bon ordre.',
+    plan: 'Voici comment répartir le travail, à votre rythme et sans rien sauter.',
+    planRead: ['Chaque ligne a besoin que la précédente soit terminée : une étape sautée se paie à la fin.', 'Suivez les mois dans l’ordre : ce qui n’a pas été semé à temps se rattrape rarement.'],
+    planEnd: 'Une fois le plan terminé, notez ce que vous avez fait et ce que vous avez utilisé : ce sera votre repère la prochaine fois.',
+  },
+  demarche: {
+    stepNoun: { word: 'étape', fem: true },
+    howTo: [['Gardez votre agenda ouvert', 'Notez chaque date au moment où vous la lisez.'], ['Vérifiez sur les sites officiels', 'Une date ou un seuil peut changer d’une année à l’autre.'], ['Cochez au fil de l’année', 'Chaque ligne a son moment : inutile de tout faire d’un coup.']],
+    open: ['Une fois les déclarations en place, ce sont d’autres échéances qui arrivent sans prévenir'],
+    why: ['Ces sujets dépendent d’un autre calendrier et d’autres organismes que vos déclarations habituelles.'],
+    read: ['Gardez votre agenda ouvert à côté, et notez chaque date au moment où vous la lisez.'],
+    tools: ['un calendrier de l’année, les cas qui posent problème et un tableau à imprimer'],
+    angle: ['Ce chapitre pose ce qui distingue ce sujet du reste de vos démarches.'],
+    calm: ['Rien de tout cela n’exige de comptable : il faut surtout savoir quelle date regarder, et où.'],
+    gearTitle: (n) => `Les ${n} rendez-vous de l’année`,
+    gear: ['Ces étapes se répartissent sur l’année : chacune a son moment, et aucune ne demande plus d’une séance.'],
+    faultTitle: (n) => `Les ${n} oublis qui coûtent cher`,
+    fault: 'Ces erreurs coûtent cher parce qu’on les découvre à l’échéance, quand il est trop tard pour les corriger.',
+    caseTitle: (n) => `Les ${n} cas particuliers à connaître`,
+    cases: 'La règle générale ne couvre pas tout : voici ce qu’on fait quand une date est passée ou qu’un doute reste.',
+    plan: 'Ce calendrier se lit dans l’ordre de l’année : chaque ligne tombe à une période précise.',
+    planRead: ['Notez chaque ligne dans votre agenda dès aujourd’hui, avec un rappel une semaine avant.'],
+    planEnd: 'Chaque année, vérifiez sur les sites officiels ce qui a changé : une date ou un seuil peut bouger, la logique reste.',
+  },
+  examen: {
+    stepNoun: { word: 'étape', fem: true },
+    howTo: [['Mesurez d’abord', 'Repérez ce qui vous fait perdre des points.'], ['Entraînez-vous en conditions', 'À voix haute et chronométré, jamais en simple relecture.'], ['Cochez au fil du plan', 'Une séance tenue vaut mieux qu’un rattrapage.']],
+    open: ['Le score global peut progresser, une partie de l’épreuve continue de tout faire perdre', 'Un candidat bien préparé peut encore perdre ses moyens sur ce point', 'Même quand les révisions avancent, une partie de l’épreuve fait encore peur'],
+    why: ['Cette partie demande un entraînement à part : l’enchaînement et la fatigue y comptent autant que le niveau.', 'Cet exercice ne se prépare pas en apprenant : il se prépare en répondant à voix haute.', 'Cette épreuve ne se révise pas comme les autres : elle se répète.'],
+    read: ['Commencez par mesurer ce qui vous fait perdre des points, puis suivez le plan jour après jour.', 'Gardez ce guide à côté de vos cartes : chaque chapitre se travaille à voix haute.', 'Prenez-le avec un chronomètre et une personne pour vous écouter : cette préparation se fait debout, pas à un bureau.'],
+    tools: ['une méthode d’entraînement, les pièges à connaître et une grille à imprimer', 'une méthode en quatre temps, des cartes d’entraînement et une grille à imprimer', 'un plan d’oral, des répétitions minutées et une grille à imprimer'],
+    angle: ['Ce chapitre montre ce qui est vraiment évalué ici, et ce qui ne l’est pas.', 'Ce chapitre montre ce que le jury observe vraiment dans ces moments-là.', 'Ce chapitre montre comment l’épreuve se déroule, et ce qui est noté.'],
+    calm: ['Vous n’avez pas besoin d’en savoir plus : vous avez besoin de vous entraîner autrement.', 'Personne n’attend de vous une réponse de soignant diplômé : on attend une façon de raisonner.', 'Le jury n’attend pas un texte parfait : il attend une réflexion que vous savez défendre.'],
+    gearTitle: (n) => `Les ${n} étapes de l’entraînement`,
+    gear: ['Chaque étape se travaille dans les conditions de l’épreuve, jamais en simple relecture.', 'Chaque étape se travaille à voix haute, chronomètre en main.', 'Chaque étape se répète debout, devant quelqu’un, jamais en silence.'],
+    faultTitle: (n) => `Les ${n} pièges de cette partie`,
+    fault: 'Ces pièges coûtent cher à des candidats qui connaissent pourtant leur sujet.',
+    caseTitle: (n) => `Les ${n} moments de flottement, et quoi faire`,
+    cases: 'Même avec un bon entraînement, il y aura un moment de flottement : voici comment le traverser.',
+    plan: 'Ce plan va du plus simple à la mise en conditions réelles.',
+    planRead: ['Si une séance saute, gardez avant tout la suivante : un entraînement régulier vaut mieux qu’un rattrapage.', 'Une carte par jour vaut mieux que dix la veille : gardez le rythme, même court.', 'Une répétition courte chaque jour vaut mieux qu’une longue le week-end.'],
+    planEnd: 'Les derniers jours, n’ajoutez rien de nouveau : répétez ce qui est déjà solide.',
+  },
+  evenement: {
+    stepNoun: { word: 'décision', fem: true },
+    howTo: [['Lisez avant d’engager de l’argent', 'L’ordre des décisions fait le prix.'], ['Gardez le tableau à jour', 'Chaque montant y entre dès qu’il est connu.'], ['Cochez au fil du plan', 'Une décision prise libère la suivante.']],
+    open: ['Le budget global peut être posé, c’est ensuite que les montants dérapent', 'Le budget peut être juste sur le papier et filer dès le premier jour'],
+    why: ['Tout se joue dans un moment précis, face à une personne ou à un prix : il faut savoir quoi dire et quoi regarder.', 'Tout se joue dans de petites décisions quotidiennes, prises sur place et sans recul.'],
+    read: ['Lisez-le à deux avant de répondre au moindre devis : c’est l’ordre des demandes qui fait le prix.', 'Lisez-le avant de partir, et gardez le plan sur votre téléphone : c’est là-bas qu’il vous servira.'],
+    tools: ['une méthode en étapes, les pièges à éviter et un tableau à imprimer', 'un plafond quotidien, les bons réflexes sur place et un carnet à imprimer'],
+    angle: ['Ce chapitre montre où se cachent les vrais écarts de prix.', 'Ce chapitre montre où part l’argent une fois sur place, jour après jour.'],
+    calm: ['Il ne s’agit pas de renoncer à ce qui compte : il s’agit de savoir où part l’argent.', 'On peut très bien manger et se déplacer sans se ruiner, à condition de connaître les bons réflexes.'],
+    gearTitle: (n) => `Les ${n} décisions à prendre dans l’ordre`,
+    gear: ['Ces décisions se prennent dans l’ordre : chacune prépare la suivante.', 'Ces décisions se prennent avant d’arriver, puis chaque matin sur place.'],
+    faultTitle: (n) => `Les ${n} erreurs qui font déraper la note`,
+    fault: 'Aucune de ces erreurs ne paraît grave sur le moment : c’est le total qui le montre.',
+    caseTitle: (n) => `Les ${n} imprévus et comment réagir`,
+    cases: 'Tout ne se passera pas comme prévu : voici comment réagir sans sortir du budget.',
+    plan: 'Le plan répartit ces décisions dans le temps, pour qu’aucune ne soit prise dans l’urgence.',
+    planRead: ['Bloquez chaque ligne dans votre agenda : une décision sans date finit prise à la dernière minute.', 'Une ligne par étape du voyage : relisez-la le matin, avant de sortir.'],
+    planEnd: 'À la fin, comparez le prévu et le réel : cet écart vous dira quoi ajuster.',
+  },
+  systeme: {
+    stepNoun: { word: 'étape', fem: true },
+    howTo: [['Lisez-le une fois', 'Vous verrez la règle à poser, et pourquoi.'], ['Appliquez une nouveauté à la fois', 'À côté de ce qui tourne déjà.'], ['Cochez, puis ajustez', 'La fin du plan dit ce qu’il faut garder.']],
+    open: ['Le système tourne, jusqu’au moment où ce point vient tout bloquer', 'Tout se passe bien jusqu’au jour où ce problème arrive', 'La méthode peut être en place, ce point continue de vous coûter'],
+    why: ['Ce point revient chaque semaine : tant qu’il n’a pas sa règle, il se rejoue à chaque repas.', 'Ce problème arrive rarement, mais il coûte cher quand il arrive : mieux vaut avoir sa réponse prête.', 'Ce point se décide une fois, au calme, avant la prochaine conversation.'],
+    read: ['Lisez-le une fois, puis appliquez une seule nouveauté par semaine.', 'Lisez-le avant votre prochaine vente : une annonce se protège avant le litige, pas après.', 'Lisez-le avec une calculatrice : vos chiffres à vous valent mieux qu’une moyenne.'],
+    tools: ['une routine en étapes, les blocages les plus fréquents et un tableau à imprimer', 'une procédure en étapes, des réponses prêtes et un tableau à imprimer', 'un calcul en étapes, des réponses aux objections et une feuille à imprimer'],
+    angle: ['Ce chapitre montre pourquoi ce point se répète, et ce qui l’entretient.', 'Ce chapitre montre comment naît un litige, et ce qui décide de son issue.', 'Ce chapitre montre d’où vient un prix, et pourquoi il se défend.'],
+    calm: ['Il ne s’agit pas de tout revoir : une règle claire suffit souvent à sortir de ce cercle.', 'Une annonce précise et une réponse calme règlent déjà l’essentiel.', 'Un prix calculé se défend bien plus facilement qu’un prix deviné.'],
+    gearTitle: (n) => `Les ${n} étapes de votre nouvelle routine`,
+    gear: ['Une fois posées, ces étapes se répètent sans y repenser : c’est ce qui fait gagner du temps.', 'Ces étapes se mettent en place avant le problème, pas pendant.', 'Ces étapes se font une fois, au calme, puis servent à chaque nouveau client.'],
+    faultTitle: (n) => `Les ${n} erreurs qui reviennent`,
+    fault: 'Ces erreurs sont discrètes : elles ne se voient qu’à la fin, dans le résultat.',
+    caseTitle: (n) => `Les ${n} blocages et leur solution`,
+    cases: 'Même avec une bonne règle, certains cas coincent : voici comment les débloquer sans tout arrêter.',
+    plan: 'Le plan installe cette règle progressivement, à côté de ce qui tourne déjà.',
+    planRead: ['Tenez les lignes dans l’ordre : si l’une saute, reportez-la sans rien ajouter.', 'Appliquez ces lignes dès votre prochaine annonce, sans attendre le premier litige.', 'Faites ces lignes dans l’ordre : le calcul vient avant la discussion.'],
+    planEnd: 'À la fin, regardez ce qui a vraiment changé et gardez uniquement cela.',
+  },
+  paliers: {
+    stepNoun: { word: 'étape', fem: true },
+    howTo: [['Lisez à deux', 'Chaque adulte concerné doit avoir les mêmes repères.'], ['Parlez-en au professionnel', 'Avant le premier essai, surtout en cas d’antécédents.'], ['Un essai à la fois', 'Notez-le, puis attendez avant le suivant.']],
+    open: ['Les premiers repas se passent bien, et une nouvelle inquiétude prend toute la place'],
+    why: ['Cette étape se prépare à part, avec des repères de sécurité qui lui sont propres.'],
+    read: ['Lisez-le à deux, et parlez-en au professionnel qui suit votre enfant avant le premier essai.'],
+    tools: ['des repères de sécurité, des étapes claires et un tableau à imprimer'],
+    angle: ['Ce chapitre pose ce qu’il faut savoir avant le premier essai, et ce qu’il faut surveiller ensuite.'],
+    calm: ['Une inquiétude devient plus légère quand elle a une liste de repères et un numéro à appeler.'],
+    gearTitle: (n) => `Les ${n} étapes de l’introduction`,
+    gear: ['On avance un pas après l’autre, et seulement quand le précédent s’est bien passé.'],
+    faultTitle: (n) => `Les ${n} erreurs à éviter`,
+    fault: 'Ces erreurs viennent de l’inquiétude ou de conseils dépassés, et toutes se corrigent.',
+    caseTitle: (n) => `Les ${n} situations qui inquiètent`,
+    cases: 'Voici comment réagir quand quelque chose vous inquiète, sans dramatiser ni minimiser.',
+    plan: 'Ce calendrier est indicatif : c’est votre enfant et le professionnel qui le suit qui donnent le rythme.',
+    planRead: ['Un essai à la fois, noté dans le tableau. En cas de doute, attendez avant le suivant.'],
+    planEnd: 'Une fois un aliment accepté, gardez-le au menu : la suite se joue dans la répétition.',
+  },
 };
+
+/**
+ * A follow-up guide treats one sub-problem: its own chapters, never the parent's sections, in the words of its
+ * family of guides. Its padding comes from that family too: the generic bank is about changing a habit.
+ */
+function suiteOf(base: ArchetypeDef, s: SuiteVoice): ArchetypeDef {
+  return {
+    id: 'suite',
+    stepNoun: s.stepNoun,
+    plan: 'phases',
+    planColumn: 'Quand',
+    short: { 5: ['angle', 'reglages', 'ecueils', 'resistances', 'mini-plan'], 6: ['angle', 'reglages', 'ecueils', 'resistances', 'mini-plan'] },
+    howTo: s.howTo,
+    promise: (c, o) => `un plan ciblé de ${D(c)} pour arriver à ceci : ${o}`,
+    subtitle: (c) => `Le guide ciblé pour ${c.audArt} qui veulent régler ce point précis`,
+    titles: (c) => [c.topic?.title ?? ''],
+    introOpen: (c, a) => `${v(c, ...s.open)} : ${a.pain}.${a.p1 ? ` Vous l’avez peut-être dit ainsi : ${a.p1}${a.p2 ? `, ou encore ${a.p2}` : ''}.` : ''}`,
+    introWhy: (c, a) => `${v(c, ...s.why)}${a.pains.length ? ` On peut régler ${a.pains[0]} et rester bloqué ici pendant des mois.` : ''}`,
+    introUse: (c, a) => `Il a été écrit pour ${c.audArt}, et il part de zéro sur ce sujet. À la fin, vous aurez ${lf(a.promise)}. Au programme : ${a.chapters} chapitres ciblés, ${v(c, ...s.tools)}.`,
+    introRead: (c) => `Comment l’utiliser ? ${v(c, ...s.read)}`,
+    whyFallback: base.whyFallback,
+    situationsFallback: base.situationsFallback,
+    fillers: base.fillers.filter((f) => !genericFillers.includes(f)),
+    chapters: [
+      {
+        kind: 'angle', role: 'comprendre',
+        title: (c) => `Pourquoi ce sujet résiste : ${lf(c.pbShort ?? c.pbClause)}`,
+        intro: (c) => `${v(c, ...s.angle)} Point de départ pour ${c.audCore} : ${pb(c)}.`,
+        paras: [(d) => d.facts(2) || null, (d) => d.facts(2) || null, (d) => d.facts(2) || null, (d) => v(d.c, ...s.calm)],
+        steps: () => ['Noter à quel moment ce sujet vous pose le plus de difficultés', 'Entourer dans ce chapitre ce qui vous surprend', 'Décider du jour où vous commencez'],
+        checks: () => ['Je comprends pourquoi ce sujet résiste', 'Je sais à quel moment il se pose', 'Ma date de départ est fixée'],
+      },
+      {
+        kind: 'reglages', role: 'methode',
+        title: (_c, n) => s.gearTitle(n),
+        intro: (c) => `${v(c, ...s.gear)} Tout est écrit pour ${c.audCore}.`,
+        paras: [modelPara],
+      },
+      {
+        kind: 'ecueils', role: 'erreurs',
+        title: (_c, n) => s.faultTitle(n),
+        intro: (c) => `${s.fault} Voici ce que ${c.audCore} rencontrent le plus.`,
+        paras: [],
+        steps: () => ['Repérer ce qui vous concerne dans cette liste', 'Appliquer la correction dès aujourd’hui', 'Noter la date du changement'],
+      },
+      {
+        kind: 'resistances', role: 'situations',
+        title: (_c, n) => s.caseTitle(n),
+        intro: (c) => `${s.cases} Ces réponses sont pensées pour ${c.audCore}.`,
+        paras: [],
+        steps: () => ['Repérer le cas qui vous concerne', 'Appliquer la réponse de ce chapitre', 'Reprendre le plan à la ligne suivante'],
+      },
+      {
+        kind: 'mini-plan', role: 'programme',
+        title: (c) => `Votre plan ciblé de ${D(c)}, étape par étape`,
+        intro: (c) => `${s.plan} Objectif, sur ${D(c)} : ${lf(c.goal ?? c.pbClause)}.`,
+        paras: [(d) => v(d.c, ...s.planRead), modelPara, keepUp, () => s.planEnd],
+        checks: () => ['Plan noté dans l’agenda', 'Fiche imprimée', 'Bilan de fin de plan prévu'],
+      },
+    ],
+  };
+}
 
 export const ARCHETYPES: Record<GuideArchetype, ArchetypeDef> = {
   habitude: HABITUDE, projet: PROJET, demarche: DEMARCHE, examen: EXAMEN, evenement: EVENEMENT, systeme: SYSTEME, paliers: PALIERS,
 };
+
+/** The follow-up guides of each family. */
+export const SUITES = Object.fromEntries((Object.keys(ARCHETYPES) as GuideArchetype[]).map((a) => [a, suiteOf(ARCHETYPES[a], VOICES[a])])) as Record<GuideArchetype, ArchetypeDef>;
 
 /** Chapter defs for a chapter count; an empty result never happens (the 5-chapter list is the minimum). */
 export function chaptersFor(def: ArchetypeDef, count: number): ChapterDef[] {

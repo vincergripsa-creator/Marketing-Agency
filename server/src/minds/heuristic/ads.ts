@@ -6,16 +6,17 @@
  * the only social proof it may use is a review a buyer really left on the product.
  */
 import type { AdFormat, AdScene, CreatorProfile, HookStyle, Product, Review, VoiceOfCustomer } from '../../shared.js';
-import type { AdDraft } from '../../contracts.js';
+import type { AdDraft, UpsellContext } from '../../contracts.js';
 import { NAMED_CASE, RISK_RULES, RISKY_AD_PHRASES } from '../lexicon.js';
 import { AD_FORMATS, conflictsWith, HOOK_STYLES } from '../playbook.js';
-import { bare, bestLabel, cap, clauseLabel, clean, fit, fmtEur, fmtNum, fmtPct, labelOf, lf, lowerFirst, norm, ofAud, q, shortLabel, theUnit, uniqStrings, withArticle, type LocalRng } from '../util.js';
+import { bare, bestLabel, cap, clauseLabel, clean, fit, fmtEur, fmtNum, fmtPct, labelOf, lf, lowerFirst, norm, ofAud, plainTitle, q, theUnit, uniqStrings, withArticle, type LocalRng } from '../util.js';
 import { nicheFromProduct } from './commerce.js';
 import { buildNicheCtx, de, FALLBACK, isInfinitive, looksLikeClause, type NicheCtx } from './niche.js';
 import { inline } from './studio.js';
 
 const HOOK_MAX = 90;
 const SCREEN_MAX = 50;
+const MIN_NAMED_HOOKS = 3;
 
 /** Whole customer phrases (never cut): ≤ max chars, no inner colon. */
 function shortPhrases(c: NicheCtx, max = 40): string[] {
@@ -43,6 +44,9 @@ function everyone(c: NicheCtx): string {
 /** « faire sa déclaration » said to « tu »: the possessives follow. */
 const toTu = (s: string): string => s.replace(/(^|\s)sa\s/g, '$1ta ').replace(/(^|\s)son\s/g, '$1ton ').replace(/(^|\s)ses\s/g, '$1tes ');
 
+/** The same for a mistake, where the possessive may be someone else's: in « forcer bébé à finir son assiette », the plate is the baby's. */
+const toTuMistake = (m: string): string => (/\b(?:bebe|chiot|chat|enfants?|patient|personne|client)\b/.test(norm(m)) ? m : toTu(m)).replace(/\bvotre\b/g, 'ton').replace(/\bvos\b/g, 'tes');
+
 /** A reflexive outcome (« s’endormir seul ») belongs to someone else: no POV for it. */
 function povOutcome(desired: string): string {
   const d = lowerFirst(desired);
@@ -58,31 +62,46 @@ function bonusOf(p: Product | null | undefined): string | null {
   return bare(clean(p?.content?.bonus?.title).replace(/^bonus\s*(?:offert\s*)?[:—–-]\s*/i, '')) || null;
 }
 
+/** What follows a cut and made it true: « lancer une nouvelle étape | pendant une maladie ». */
+const LIMIT_AFTER = /^\s*(?:avant|pendant|apres|des|depuis|tant|tard|trop|sans|juste|a chaque|tous les)\b/;
+
+/** A sentence said in few words: whole when it fits, else its head, unless what is left out is what makes it true. */
+function told(m: string, max: number): string | null {
+  const t = bare(m);
+  if (t.length <= max) return cap(t);
+  const head = clauseLabel(m, max, { min: 8, tiers: 1 });
+  return head && !LIMIT_AFTER.test(norm(t).slice(norm(head).length)) ? head : null;
+}
+
 const stoppable = (m: string): boolean => isInfinitive(m) && !/^(ne|n['’])/i.test(m);
+
+/** What the pack already tells every buyer is no discovery: never « ce que personne ne te dit ». */
+const COMMON_KNOWLEDGE = /sur (?:le|chaque) pot\b|sur l['’]emballage|sur la notice/i;
 
 /** Each variable of a hook comes from the guide or its research: one sentence is never shared by two audiences. */
 function hookCandidates(style: HookStyle, c: NicheCtx, rng: LocalRng, bonus: string | null): string[] {
   const ph = rng.shuffle(shortPhrases(c));
   const says = ph.filter((p) => !isQuestion(p)).slice(0, 5);
-  // an outcome is quoted whole or not at all: « Après 60 jours de plan : un profil » promises nothing
-  const outcomes = uniqStrings([c.goal, ...c.outcomes].map((o) => bare(o ?? ''))).filter((o) => o.length >= 8 && o.length <= 50);
-  const desired = outcomes[0] ?? FALLBACK.outcomes[0];
+  // an outcome is quoted whole or not at all: « Après 60 jours de plan : un profil » promises nothing. A follow-up only promises its own.
+  const outcomes = uniqStrings([c.goal, ...(c.upsellOf ? [] : c.outcomes)].map((o) => bare(o ?? ''))).filter((o) => o.length >= 8 && o.length <= 50);
+  const desired = outcomes[0] ?? (c.upsellOf ? '' : FALLBACK.outcomes[0]);
   const desiredL = lowerFirst(desired);
-  const mistakes = uniqStrings(rng.shuffle([...c.mistakes.filter(isInfinitive), ...c.mistakes]).map((m) => clauseLabel(m, 48, 8))).slice(0, 5);
+  const sayable = uniqStrings(rng.shuffle([...c.mistakes.filter(isInfinitive), ...c.mistakes]).map((m) => told(m, 48)).filter((m): m is string => !!m && !/\bvous\b/i.test(m)));
+  const mistakes = uniqStrings([...sayable.filter((m) => c.mistakes.some((x) => bare(x) === m)), ...sayable]).slice(0, 5).map(toTuMistake);
   if (!mistakes.length) mistakes.push(bestLabel(FALLBACK.mistakes, 48, 8)!);
   // « arrêtez de ne pas déclarer » : a negative mistake cannot follow « arrête de »
   const toStop = mistakes.filter(stoppable);
-  const pairs = rng.shuffle(c.pairs).filter((p) => p.fix).map((p) => ({ m: clauseLabel(p.mistake, 34, 8), f: clauseLabel(p.fix, 34, 8) }))
-    .filter((p): p is { m: string; f: string } => !!p.m && !!p.f).slice(0, 3);
+  const pairs = rng.shuffle(c.pairs).filter((p) => p.fix).map((p) => ({ m: told(p.mistake, 34), f: told(p.fix!, 34) }))
+    .filter((p): p is { m: string; f: string } => !!p.m && !!p.f).slice(0, 3).map((p) => ({ m: toTuMistake(p.m), f: toTuMistake(p.f) }));
   // a pain usable after « pourquoi / quand / si » must be a whole subject + verb clause
   const pb = c.pbShort && looksLikeClause(c.pbShort) ? lf(c.pbShort) : null;
   const pbQ = c.pbShort && c.pbShort.length <= 48 ? q(c.pbShort) : null;
   const { n, unit, unitOne } = c.dur;
   const k = Math.min(5, Math.max(3, c.mistakes.length || 3));
-  const facts = c.facts.map(bare).filter((f) => /\d/.test(f) && f.length <= 80 && !/[:;]/.test(f) && !NAMED_CASE.test(f)).slice(0, 3);
+  const facts = c.facts.map(bare).filter((f) => /\d/.test(f) && f.length <= 80 && !/[:;]/.test(f) && !NAMED_CASE.test(f) && !COMMON_KNOWLEDGE.test(f)).slice(0, 3);
   const afters = outcomes.filter((o) => o.length <= 40 && !HAS_DURATION.test(o)).slice(0, 2);
   const step = bestLabel(rng.shuffle(c.method.map((m) => m.text)), 48, 8);
-  const timeless = !HAS_DURATION.test(desiredL);
+  const timeless = !!desiredL && !HAS_DURATION.test(desiredL);
   switch (style) {
     case 'question': return [
       ...ph.slice(0, 4).map((p) => (isQuestion(p) ? `${cap(qKeep(p))} Voilà ce que personne ne te dit.` : `Tu te dis ${q(p)} ? Regarde ça avant ce soir.`)),
@@ -117,7 +136,7 @@ function hookCandidates(style: HookStyle, c: NicheCtx, rng: LocalRng, bonus: str
     ];
     case 'pov': return [
       ...ph.slice(0, 4).map((p) => `POV : tu tapes ${q(p)} sur Google pour la 10e fois.`),
-      povOutcome(desired),
+      desired ? povOutcome(desired) : '',
       pb ? `POV : tu découvres enfin pourquoi ${pb}.` : 'POV : tu comprends enfin pourquoi ça bloque.',
       ...toStop.slice(0, 3).map((m) => `POV : tu arrêtes enfin ${de(m)}.`),
       `POV : ${theUnit(unitOne)} ${n} du plan, et tu coches la dernière case.`,
@@ -152,14 +171,19 @@ function relevance(hook: string, c: NicheCtx): number {
   return norm(hook).split(/[^a-z0-9]+/).filter((w) => key.has(w)).length;
 }
 
-export function makeHook(style: HookStyle, c: NicheCtx, rng: LocalRng, bonus: string | null = null): string {
-  const fitting = rng.shuffle(uniqStrings(hookCandidates(style, c, rng, bonus)).filter((x) => x.length <= HOOK_MAX));
+export function makeHook(style: HookStyle, c: NicheCtx, rng: LocalRng, bonus: string | null = null, used: ReadonlySet<string> = new Set()): string {
+  const every = rng.shuffle(uniqStrings(hookCandidates(style, c, rng, bonus)).filter((x) => x.length <= HOOK_MAX));
+  // a hook this product already said comes back only when nothing else is left
+  const fresh = every.filter((h) => !used.has(h));
+  const fitting = fresh.length ? fresh : every;
   // never a hook cut with « … »: a short generic hook of the same style instead
   if (!fitting.length) return SAFE_HOOKS[style];
-  // most of the time the writer picks among the hooks that best name the problem or the audience, not always the same one
+  // most of the time the writer picks among the hooks that best name the problem or the audience, not always the same one;
+  // one or two named hooks are not a choice, they would take most of the draws
   const named = fitting.map((h) => ({ h, r: relevance(h, c) })).filter((x) => x.r > 0).sort((a, b) => b.r - a.r);
-  const best = named.slice(0, Math.max(3, Math.ceil(named.length / 2)));
-  return best.length && rng.chance(0.7) ? rng.pick(best).h : fitting[0]!;
+  if (named.length < MIN_NAMED_HOOKS) return fitting[0]!;
+  const best = named.slice(0, Math.max(MIN_NAMED_HOOKS, Math.ceil(named.length / 2)));
+  return rng.chance(0.7) ? rng.pick(best).h : fitting[0]!;
 }
 
 /** Short hooks (≤ 90 chars) used only when every niche-specific candidate is too long. */
@@ -175,15 +199,20 @@ const SAFE_HOOKS: Record<HookStyle, string> = {
 };
 
 export function heuristicHooks(
-  input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[] },
+  input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[]; upsellOf?: UpsellContext | null; usedHooks?: string[] },
   rng: LocalRng,
   preferred: HookStyle[],
 ): { hookStyle: HookStyle; hook: string }[] {
-  const c = buildNicheCtx(nicheFromProduct(input.product, input.voc), input.voc);
+  const c = buildNicheCtx(nicheFromProduct(input.product, input.voc), input.voc, input.upsellOf ?? null);
   const asked = (input.styles ?? []).filter((s) => HOOK_STYLES.includes(s));
   const styles = uniqStrings([...preferred, ...(asked.length ? asked : ['question', 'mistake', 'pov'])]) as HookStyle[];
   const bonus = bonusOf(input.product);
-  return styles.map((s) => ({ hookStyle: s, hook: makeHook(s, c, rng, bonus) }));
+  const used = new Set(input.usedHooks ?? []);
+  return styles.map((s) => {
+    const hook = makeHook(s, c, rng, bonus, used);
+    used.add(hook);
+    return { hookStyle: s, hook };
+  });
 }
 
 const VISUALS: Record<AdFormat, string[]> = {
@@ -281,6 +310,9 @@ export function screenText(s: string): string {
     .replace(/:\s+voilà (?:comment )?/i, ': ')
     .replace(/\s{2,}/g, ' ');
   if (compact.length <= SCREEN_MAX) return compact;
+  // « Arrête de sortir les plants de tomates avant mi-mai. » : cut short, the ban would cover the whole season
+  const stop = /^arrête\s+d(?:e\s+|['’])(.+?)[.!]/iu.exec(compact);
+  if (stop && stop[1]!.length + 7 <= SCREEN_MAX) return `Stop : ${stop[1]}`;
   const payoff = screenPayoff(compact);
   if (payoff) return payoff;
   const head = firstSentence(compact);
@@ -343,24 +375,26 @@ function quotableReviews(p: Product | null | undefined): Review[] {
 }
 
 export function heuristicAd(
-  input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[] },
+  input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[]; upsellOf?: UpsellContext | null },
   rng: LocalRng,
   rules: { banned: string[]; preferredFormats: AdFormat[] },
 ): AdDraft {
-  const c = buildNicheCtx(nicheFromProduct(input.product, input.voc), input.voc);
+  const c = buildNicheCtx(nicheFromProduct(input.product, input.voc), input.voc, input.upsellOf ?? null);
   const style: HookStyle = HOOK_STYLES.includes(input.hookStyle) ? input.hookStyle : 'question';
   const format: AdFormat = AD_FORMATS.includes(input.format) ? input.format : (rules.preferredFormats[0] ?? 'faceless_voiceover');
   const bonus = bonusOf(input.product);
   const hook = fit(clean(input.hook) || makeHook(style, c, rng, bonus), HOOK_MAX);
   const vis = VISUALS[format];
-  const title = clean(input.product?.title) || 'le guide';
+  const title = plainTitle(clean(input.product?.title)) || 'le guide';
   const phrases = shortPhrases(c, 44);
   const phrase = phrases.length ? rng.pick(phrases) : '';
   const pain = c.pbClause;
   const painScreen = clauseLabel(c.pbShort ?? pain, 46) ?? 'Tu te reconnais ?';
   const step = c.steps[0] ?? FALLBACK.steps[0];
   const step2 = c.steps[1] ?? FALLBACK.steps[1];
-  const fact = c.facts.find((f) => f.length <= 120 && !NAMED_CASE.test(f));
+  const fact = c.facts.find((f) => f.length <= 120 && !NAMED_CASE.test(f) && !COMMON_KNOWLEDGE.test(f));
+  // on screen, a fact is whole or absent: half of a fact is another fact (« Le chiffre d’affaires se déclare mensuellement »)
+  const factScreen = c.facts.map((f) => bare(f)).find((f) => f.length <= SCREEN_MAX && !/[:;]/.test(f) && !NAMED_CASE.test(f) && !COMMON_KNOWLEDGE.test(f)) ?? null;
   const stepScreen = clauseLabel(step, 46);
   const { n, unit } = c.dur;
 
@@ -384,10 +418,10 @@ export function heuristicAd(
   const review = reviews.length ? rng.pick(reviews) : null;
   const quote = review ? q(review.text) : '';
   const proofVo = review ? `Un acheteur a écrit sur le guide : ${quote}.`
-    : fact ? `Un repère que peu de gens connaissent : ${inline(fact)}.` : `Le plan tient en ${n} ${unit}, avec une checklist à chaque chapitre.`;
+    : fact ? `Un repère à garder en tête : ${inline(factScreen ?? fact)}.` : `Le plan tient en ${n} ${unit}, avec une checklist à chaque chapitre.`;
   scenes.push({
     visual: vis[3]!,
-    onScreenText: screenText(review ? (quote.length <= SCREEN_MAX ? quote : `Avis vérifié : ${review.rating}/5`) : fact ? shortLabel(fact, 46) : `Plan de ${n} ${unit}`),
+    onScreenText: screenText(review ? (quote.length <= SCREEN_MAX ? quote : `Avis vérifié : ${review.rating}/5`) : factScreen ?? `Plan de ${n} ${unit}`),
     voiceover: proofVo,
     durationSec: rng.int(4, 5),
   });

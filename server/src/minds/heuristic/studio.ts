@@ -12,7 +12,7 @@ import { conflictsWith, containsBanned, scrubDeep } from '../playbook.js';
 import {
   bare, bestLabel, cap, clauseLabel, clean, composeTitle, endsDangling, hashString, labelOf, lf, lowerFirst, norm, q, qv, sentence, splitSentences, uniqStrings, wordCount, type LocalRng,
 } from '../util.js';
-import { ARCHETYPES, asStep, chaptersFor, SUITE, type ArchetypeDef, type ChapterDef, type Para, type Role } from './archetypes.js';
+import { ARCHETYPES, asStep, chaptersFor, SUITES, type ArchetypeDef, type ChapterDef, type Para, type Role } from './archetypes.js';
 import { belongsToFollowUp, buildNicheCtx, de, FALLBACK, firstPerson, headOf, isInfinitive, titleCaseKeyword, type NicheCtx } from './niche.js';
 import { buildPlan, type PlanModel } from './plan.js';
 import type { BonusSpec, SheetSpec } from './profiles.js';
@@ -35,7 +35,7 @@ export function promiseOutcome(c: NicheCtx): string {
 
 /** The archetype that writes this guide. */
 export function archetypeDef(c: NicheCtx): ArchetypeDef {
-  return c.upsellOf ? SUITE : ARCHETYPES[c.archetype];
+  return (c.upsellOf ? SUITES : ARCHETYPES)[c.archetype];
 }
 
 /** Whole short labels for visuals (≤ max chars, never cut mid-phrase), completed by fallbacks. */
@@ -372,9 +372,9 @@ function visualFor(ch: ChapterDef, d: Draft, def: ArchetypeDef, plan: PlanModel,
     case 'comprendre': {
       const loop = c.profile?.loop;
       if (loop && !c.upsellOf && c.archetype === 'habitude') return { type: 'steps_diagram', title: 'La boucle à casser', labels: loop, values: [] };
-      // never a bare list of mistakes under a neutral title: « Donner des aliments durs » next to an icon reads as advice
-      if (c.upsellOf) return { type: 'do_dont', title: 'Les faux pas à éviter', labels: labelsFrom(c.mistakes, 60, 3, FALLBACK.mistakes).flatMap((m, i) => [`À éviter : ${lowerFirst(m)}`, ...(i === 0 ? [`À faire : ${lowerFirst(FALLBACK.tips[3]!)}`] : [])]), values: [] };
-      const labels = labelsFrom([...c.pains.map(headOf), ...c.phrases], 40, 6, ['Le même problème, encore et encore']);
+      // the few words of a sub-problem are quoted whole: « Versement libératoire oui » is nobody's sentence
+      const labels = c.upsellOf ? uniqStrings([...c.ownPains, ...c.phrases].map((x) => cap(bare(headOf(x)))).filter((x) => x.length <= 60)).slice(0, 6)
+        : labelsFrom([...c.pains.map(headOf), ...c.phrases], 40, 6, ['Le même problème, encore et encore']);
       return { type: 'icon_grid', title: 'Ce que vous nous décrivez', labels, values: [] };
     }
     case 'diagnostic':
@@ -389,13 +389,15 @@ function visualFor(ch: ChapterDef, d: Draft, def: ArchetypeDef, plan: PlanModel,
       return { type: 'do_dont', title: 'À éviter / à faire à la place', labels: [...use.map((p) => `À éviter : ${lowerFirst(p.m)}`), ...use.map((p) => `À faire : ${lowerFirst(p.f)}`)], values: [] };
     }
     case 'situations': {
+      // a quote is a customer's or nothing: no aphorism signed by nobody
       const p = d.pullQuote();
-      return { type: 'quote', title: 'Une phrase qu’on lit souvent', labels: p ? [cap(bare(p)), 'Phrase relevée dans nos recherches'] : ['Un imprévu ne défait pas ce qui est déjà acquis', 'Le repère des jours difficiles'], values: [] };
+      if (p) return { type: 'quote', title: 'Une phrase qu’on lit souvent', labels: [cap(bare(p)), 'Phrase relevée dans nos recherches'], values: [] };
+      return { type: 'icon_grid', title: 'Les cas de ce chapitre', labels: labelsFrom(situationsOf(c, def).map((s) => s.when), 56, 6), values: [] };
     }
     case 'programme':
       return gridVisual(plan.sheet);
     case 'durer': {
-      const labels = labelsFrom(steps, 56, 6, [...c.method.map((m) => m.text), ...FALLBACK.tips]);
+      const labels = labelsFrom(steps, 56, 6, c.keep);
       return { type: 'icon_grid', title: 'Vos réflexes pour la suite', labels, values: [] };
     }
   }
@@ -405,26 +407,19 @@ const DURER_STEPS = ['Noter ce qui a le mieux marché', 'Choisir ce que vous gar
 const DURER_CHECKS = ['Ce qui a marché est noté', 'La date de bilan est fixée', 'Les notes restent à portée de main'];
 
 /** Lists are built from the niche's own material; the framing lists only complete a thin research. */
-function stepsFor(ch: ChapterDef, d: Draft, plan: PlanModel, def: ArchetypeDef): string[] {
+function stepsFor(ch: ChapterDef, d: Draft, plan: PlanModel): string[] {
   const c = d.c;
   const framing = ch.steps?.(c) ?? DURER_STEPS;
   const research = (k: number): string[] => { const t = d.tipsLeft(k); return t.length >= 3 ? t : [...t, ...framing].slice(0, Math.max(3, t.length)); };
-  // what the reader keeps aiming at, in the niche's own words
-  const goals = (): string[] => { const o = c.outcomes.filter((x) => norm(lf(x)) !== norm(promiseOutcome(c))).slice(0, 3); return o.length >= 3 ? o.map((x) => `Garder en vue : ${inline(x)}`) : framing; };
   switch (ch.role) {
     case 'methode': return c.method.slice(0, MAX_STEPS).map((m) => m.text);
     // one line per method step: no step of the method can disappear from the plan
     case 'programme': return plan.rows.flatMap((r) => r.actions.map((a) => `${r.label} : ${a}`)).slice(0, MAX_STEPS);
     case 'comprendre': return research(3);
-    case 'durer': return goals();
-    case 'erreurs': {
-      const fixes = rendered(c).map((p) => p.fix).filter((f): f is string => !!f);
-      return fixes.length >= 3 ? fixes.slice(0, 5) : framing;
-    }
-    case 'situations': {
-      const list = situationsOf(c, def);
-      return list.length >= 3 ? list.slice(0, 4).map((s) => `Écrire ce que vous ferez si ${inline(s.when)}`) : framing;
-    }
+    // a fix without its mistake is not a step (« Déclarer 0 € à chaque échéance »), and an answer printed above is not one to write
+    case 'durer':
+    case 'erreurs':
+    case 'situations': return framing;
     case 'diagnostic': {
       const sheet = c.profile?.sheet;
       return sheet ? [framing[0]!, `Remplir chaque ligne : ${sheet.columns.map((x) => lf(x)).join(', ')}`, ...framing.slice(2)] : framing;
@@ -447,11 +442,12 @@ function checklistFor(ch: ChapterDef, steps: string[], c: NicheCtx): string[] {
       const framing = ch.checks?.(c) ?? DURER_CHECKS;
       return c.profile ? [`${c.profile.sheet.title} : fait`, framing[0]!, framing[2]!] : framing;
     }
-    case 'erreurs': return rendered(c).slice(0, 5).map((p) => `Je ne fais plus : ${short(p.mistake)}`);
-    case 'situations': return (c.situations.length ? c.situations.slice(0, 3).map((s) => `Réponse notée : ${short(s.when)}`) : ch.checks?.(c)) ?? DURER_CHECKS;
-    case 'durer': return c.method.slice(0, 3).map((m) => `Je garde : ${short(m.text)}`);
+    // « Je ne fais plus : ne pas déclarer » says the opposite of what it means
+    case 'erreurs': return rendered(c).map((p) => `${/^(ne|n['’])/i.test(bare(p.mistake)) ? 'Je corrige' : 'Je ne fais plus'} : ${short(p.mistake)}`);
+    case 'situations': return steps.map((s) => `Fait : ${short(s)}`);
+    case 'durer':
     case 'programme': return ch.checks?.(c) ?? DURER_CHECKS;
-    case 'methode': return steps.slice(0, 5).map((s) => `Fait : ${short(s)}`);
+    case 'methode': return steps.map((s) => `Fait : ${short(s)}`);
   }
 }
 
@@ -468,7 +464,7 @@ function buildChapter(ch: ChapterDef, title: string, d: Draft, def: ArchetypeDef
     ...ch.role === 'methode' ? methodParas(d, def) : ch.role === 'erreurs' ? errorParas(d) : ch.role === 'situations' ? situationParas(d, def) : [],
     ...ch.paras.map((p: Para) => d.once(p(d))).filter((x): x is string => !!x),
   ];
-  const steps = uniqStrings(stepsFor(ch, d, plan, def)).map(asStep);
+  const steps = uniqStrings(stepsFor(ch, d, plan)).map(asStep);
   const visual = visualFor(ch, d, def, plan, steps);
   const chapter: ChapterContent = {
     title: clean(title),
@@ -613,6 +609,7 @@ export function heuristicPdfContent(
     introduction: intro0,
     chapters,
     bonus: buildBonus(c),
+    howTo: def.howTo,
     nextStep: nextStepFor({ audience: c.audArt, upsell: upsell ? { title: upsell } : null }),
     wordCount: 0,
   };

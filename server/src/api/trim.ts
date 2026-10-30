@@ -4,9 +4,10 @@
  */
 import { summarizeLedger } from '../core/index.js';
 import type {
-  AdCreative, ChapterContent, CompanySnapshot, CompanyState, DailyAdStats, DayTaskCounts, DeptId, DeptTaskCounts, FinanceSnapshot, InboxMessage,
-  MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, Task, TaskKind, TaskStats, WorldState,
+  AdCreative, AdTotals, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, FinanceSnapshot,
+  InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, Task, TaskKind, TaskStats, WorldState,
 } from '../shared.js';
+import { addAdTotals } from '../sim/adTotals.js';
 import { announcedOutageDays } from '../sim/outage.js';
 
 export interface SnapshotLimits {
@@ -174,10 +175,24 @@ function trimCreatives(creatives: AdCreative[], keepIds: Set<string>, limits: Sn
   return limits.live ? kept.map(lightCreative) : kept;
 }
 
-function trimMissions(missions: Mission[], limit: number): Mission[] {
+/** The latest missions, the open ones and every mission of the founder; their progress is counted on the whole task list. */
+function trimMissions(missions: Mission[], tasks: Task[], limit: number): Mission[] {
   const all = arr(missions);
   const start = Math.max(0, all.length - limit);
-  return all.filter((m, i) => i >= start || m.status === 'open');
+  const done = new Set(arr(tasks).filter((t) => t.status === 'done').map((t) => t.id));
+  return all
+    .filter((m, i) => i >= start || m.status === 'open' || m.from === 'founder')
+    .map((m) => ({ ...m, doneTasks: arr(m.taskIds).filter((id) => done.has(id)).length }));
+}
+
+const isAdFrame = (d: Deliverable) => d.kind === 'ad_storyboard' || d.kind === 'ad_preview';
+
+/** Guides, covers, pages and reports stay: only ad frames, by far the most numerous, are cut to the latest ones. */
+function trimDeliverables(deliverables: Deliverable[], limit: number): Deliverable[] {
+  const all = arr(deliverables);
+  const firstAd = Math.max(0, all.filter(isAdFrame).length - limit);
+  let seen = 0;
+  return all.filter((d) => !isAdFrame(d) || seen++ >= firstAd);
 }
 
 export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LIMITS): CompanyState {
@@ -197,11 +212,11 @@ export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LI
     agents: arr(c.agents),
     departments: arr(c.departments),
     tasks: trimTasks(c.tasks, limits),
-    missions: trimMissions(c.missions, limits.missions),
+    missions: trimMissions(c.missions, c.tasks, limits.missions),
     products: arr(c.products).map((p) => trimProduct(p, limits)),
     creatives: trimCreatives(c.creatives, liveCreativeIds, limits),
     campaigns,
-    deliverables: lastN(c.deliverables, limits.deliverables),
+    deliverables: trimDeliverables(c.deliverables, limits.deliverables),
     research: { trends: arr(research.trends), voc, competitors: limits.live ? {} : research.competitors ?? {}, shortlist: arr(research.shortlist) },
     lessons: lastN(c.lessons, limits.lessons),
     experiments: experiments.filter((e, i) => i >= expStart || e.status === 'running'),
@@ -239,6 +254,31 @@ export function trimAdStats(stats: DailyAdStats[], day: number, limits: Snapshot
     .map((s) => ({ ...s, comments: arr(s.comments).slice(0, limits.commentsPerStat) }));
 }
 
+/** Figures of the whole run: what the market retired plus the rows it holds, for the creatives a snapshot keeps. */
+export function adTotalsOf(market: WorldState['market'] | undefined, creatives: AdCreative[]): AdTotals {
+  const wanted = new Set(creatives.map((c) => c.id));
+  const totals: Record<string, CreativeAdTotals> = {};
+  for (const id of wanted) {
+    const retired = market?.retiredAdTotals?.[id];
+    if (retired) totals[id] = { ...retired };
+  }
+  const days = new Map<number, AdTotals['days'][number]>();
+  for (const s of arr(market?.adStats)) {
+    let row = days.get(s.day);
+    if (!row) days.set(s.day, row = { day: s.day, spend: 0, revenue: 0 });
+    row.spend = r2(row.spend + s.spend);
+    row.revenue = r2(row.revenue + s.revenue);
+    if (wanted.has(s.creativeId)) addAdTotals(totals, s);
+  }
+  return { days: [...days.values()].sort((a, b) => a.day - b.day), creatives: totals };
+}
+
+function deliverableCountsOf(deliverables: Deliverable[]): CompanySnapshot['deliverableCounts'] {
+  const counts: NonNullable<CompanySnapshot['deliverableCounts']> = {};
+  for (const d of arr(deliverables)) counts[d.kind] = (counts[d.kind] ?? 0) + 1;
+  return counts;
+}
+
 /** Finance from the ledger only, used when the sim's financeSnapshot is unavailable or throws: the same summary. */
 export function estimateFinance(world: WorldState): FinanceSnapshot {
   const { capital: _capital, ...finance } = summarizeLedger(arr(world.ledger), world.day ?? 0, announcedOutageDays(world));
@@ -272,29 +312,31 @@ const oldestFirst = (rows: Map<number, DayTaskCounts>): DayTaskCounts[] => [...r
 /** Counts of the WHOLE task list: the task list of a snapshot is trimmed, these numbers never are. */
 export function taskStatsOf(tasks: Task[] | null | undefined, day: number): TaskStats {
   const days = new Map<number, DayTaskCounts>();
-  const depts = new Map<DeptId, { rows: Map<number, DayTaskCounts>; kinds7d: Partial<Record<TaskKind, number>>; done: number; delay: number }>();
+  const depts = new Map<DeptId, { rows: Map<number, DayTaskCounts>; kinds7d: Partial<Record<TaskKind, number>>; done: number; failed: number; delay: number }>();
   const recent = day - DEPT_HISTORY_DAYS;
   const kindsFrom = day - KIND_WINDOW_DAYS;
   for (const t of arr(tasks)) {
     let d = depts.get(t.dept);
-    if (!d) depts.set(t.dept, d = { rows: new Map(), kinds7d: {}, done: 0, delay: 0 });
+    if (!d) depts.set(t.dept, d = { rows: new Map(), kinds7d: {}, done: 0, failed: 0, delay: 0 });
     dayRow(days, t.dayCreated).created += 1;
     if (t.dayCreated > recent) dayRow(d.rows, t.dayCreated).created += 1;
     if ((t.dayDone ?? t.dayCreated) > kindsFrom) d.kinds7d[t.kind] = (d.kinds7d[t.kind] ?? 0) + 1;
     if (t.dayDone === null || t.dayDone === undefined) continue;
     if (t.status === 'done') { d.done += 1; d.delay += t.dayDone - t.dayCreated; }
+    if (t.status === 'failed' || t.status === 'cancelled') d.failed += 1;
     if (t.status !== 'done' && t.status !== 'failed' && t.status !== 'cancelled') continue;
     dayRow(days, t.dayDone)[t.status] += 1;
     if (t.dayDone > recent) dayRow(d.rows, t.dayDone)[t.status] += 1;
   }
   const out: Partial<Record<DeptId, DeptTaskCounts>> = {};
-  for (const [id, d] of depts) out[id] = { days: oldestFirst(d.rows), kinds7d: d.kinds7d, done: d.done, avgDelayDays: d.done ? r2(d.delay / d.done) : null };
+  for (const [id, d] of depts) out[id] = { days: oldestFirst(d.rows), kinds7d: d.kinds7d, done: d.done, failed: d.failed, avgDelayDays: d.done ? r2(d.delay / d.done) : null };
   return { days: oldestFirst(days), depts: out };
 }
 
 /** Builds the UI-safe snapshot. `market.niches` (hidden truth) never leaves the server unless `god`. */
 export function buildSnapshot(world: WorldState, finance: FinanceSnapshot, god = false, limits: SnapshotLimits = DEFAULT_LIMITS): CompanySnapshot {
   const m = world.market;
+  const company = trimCompany(world.company, limits);
   const snap: CompanySnapshot = {
     runId: world.runId,
     scenario: world.scenario,
@@ -303,7 +345,7 @@ export function buildSnapshot(world: WorldState, finance: FinanceSnapshot, god =
     phase: world.phase,
     status: world.status,
     mind: world.mind,
-    company: trimCompany(world.company, limits),
+    company,
     market: {
       // still typed InboxMessage for the UI code that reads it: the field itself is gone from the payload
       inbox: trimInbox(m?.inbox ?? [], limits) as InboxMessage[],
@@ -320,6 +362,9 @@ export function buildSnapshot(world: WorldState, finance: FinanceSnapshot, god =
     ledger: lastN(world.ledger, limits.ledger),
     activity: lastN(world.activity, limits.activity),
     taskStats: taskStatsOf(world.company?.tasks, world.day),
+    adTotals: adTotalsOf(m, company.creatives),
+    deliverableCounts: deliverableCountsOf(world.company?.deliverables),
+    goalReachedDay: arr(m?.events).find((e) => e.kind === 'goal_reached')?.day ?? null,
   };
   if (god) snap.godMode = godModeOf(world, limits);
   return snap;

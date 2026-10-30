@@ -13,7 +13,8 @@ import type { AgentId, Product, Task, TaskKind } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, latestOutput, nameOf, runFileExists, say } from './ctx.js';
 import type { GuideGaps } from '../contracts.js';
-import { createTask, isOpen, KIND_META, logTask, type TaskSpec } from './tasks.js';
+import { addHold } from './holds.js';
+import { createTask, isOpen, KIND_META, logTask, openTasks, type TaskSpec } from './tasks.js';
 import { activeCampaigns } from './metrics.js';
 import { productNote, writePostMortem } from './notes.js';
 import { unlinkUpsell } from './upsell.js';
@@ -170,25 +171,79 @@ export function resumePipeline(ctx: RuntimeCtx, product: Product, opts: Pipeline
   return created;
 }
 
+/** Cancels one open task: nobody works on it, nobody is asked about it. */
+export function dropTask(ctx: RuntimeCtx, t: Task, reason: string): void {
+  t.status = 'cancelled';
+  t.dayDone = ctx.world.day;
+  logTask(t, `Jour ${ctx.world.day} : annulée — ${reason}`);
+  const pa = ctx.world.company.pendingApprovals.indexOf(t.id);
+  if (pa >= 0) ctx.world.company.pendingApprovals.splice(pa, 1);
+  const agent = ctx.world.company.agents.find((a) => a.currentTaskId === t.id);
+  if (agent) { agent.currentTaskId = null; agent.status = 'idle'; agent.bubble = null; }
+}
+
 /** Cancels every open task of a product (cascade-safe). */
-export function cancelProductTasks(ctx: RuntimeCtx, productId: string, reason: string): number {
-  let n = 0;
-  for (const t of ctx.world.company.tasks) {
-    if (!isOpen(t) || t.input.productId !== productId) continue;
-    t.status = 'cancelled';
-    t.dayDone = ctx.world.day;
-    logTask(t, `Jour ${ctx.world.day} : annulée — ${reason}`);
-    const pa = ctx.world.company.pendingApprovals.indexOf(t.id);
-    if (pa >= 0) ctx.world.company.pendingApprovals.splice(pa, 1);
-    const agent = ctx.world.company.agents.find((a) => a.currentTaskId === t.id);
-    if (agent) { agent.currentTaskId = null; agent.status = 'idle'; agent.bubble = null; }
-    n++;
-  }
-  return n;
+export function cancelProductTasks(ctx: RuntimeCtx, productId: string, reason: string, kinds?: TaskKind[]): number {
+  const open = openTasksForProduct(ctx, productId, kinds);
+  for (const t of open) dropTask(ctx, t, reason);
+  return open.length;
 }
 
 /** Task kinds that promote a product: cancelled when it is paused for quality. */
 const PROMOTION_TASKS: TaskKind[] = ['post_organic', 'write_ad_hooks', 'produce_ad', 'launch_campaign', 'find_creators', 'negotiate_deal'];
+/** Task kinds that lead to paid ads: cancelled when the founder stops them. */
+export const PAID_AD_TASKS: TaskKind[] = ['write_ad_hooks', 'produce_ad', 'launch_campaign'];
+
+/**
+ * The founder stops paid ads, on one product or on all of them: running campaigns pause until he lifts it (a campaign
+ * off for an outage stays off), and the work leading to a launch stops. Organic posts go on.
+ */
+export function stopPaidAds(ctx: RuntimeCtx, productId: string | null, reason: string): { paused: number; cancelled: number } {
+  const w = ctx.world;
+  let paused = 0;
+  for (const c of w.company.campaigns) {
+    if (productId && c.productId !== productId) continue;
+    if (c.status === 'active') {
+      try { ctx.tools.updateCampaign(c.id, { status: 'paused' }); } catch { /* ignore */ }
+      c.status = 'paused';
+      c.pausedFor = 'founder';
+      paused++;
+    } else if (c.pausedFor === 'outage') c.pausedFor = 'founder';
+  }
+  const tasks = openTasks(w, (t) => PAID_AD_TASKS.includes(t.kind) && (!productId || t.input.productId === productId));
+  for (const t of tasks) dropTask(ctx, t, reason);
+  return { paused, cancelled: tasks.length };
+}
+
+/**
+ * The founder takes a product off the shelf: off sale, out of production, nobody reworks it until he says so.
+ * The missions that were waiting for it end here: it will not ship by itself.
+ */
+export function shelveProduct(ctx: RuntimeCtx, product: Product, reason: string, by: AgentId = 'camille'): number {
+  const w = ctx.world;
+  if (product.status === 'killed') return 0;
+  if (product.status === 'live') {
+    try { ctx.tools.setProductStatus(product.id, 'paused'); } catch { /* the runtime status below is authoritative */ }
+  }
+  product.status = 'paused';
+  product.decision = { day: w.day, status: 'paused', reason };
+  stopPaidAds(ctx, product.id, reason);
+  const cancelled = cancelProductTasks(ctx, product.id, reason);
+  addHold(w, { kind: 'product', productId: product.id, until: null, reason });
+  closeProductMissions(ctx, product, reason);
+  say(ctx, by, `${nameOf(ctx, by)} met « ${short(product.title, 50)} » de côté : ${reason}${cancelled ? ` (${cancelled} tâche(s) annulée(s))` : ''}`, 'thought', { productId: product.id });
+  incident(ctx, `Produit « ${product.title} » mis de côté : ${reason}`);
+  return cancelled;
+}
+
+/** The founder missions still waiting for this product fail: it was stopped, not delivered. */
+export function closeProductMissions(ctx: RuntimeCtx, product: Product, reason: string): void {
+  for (const m of ctx.world.company.missions) {
+    if (m.from !== 'founder' || m.status !== 'open' || !m.wantsProduct || !(m.productId === product.id || m.nicheId === product.nicheId)) continue;
+    m.status = 'failed';
+    m.outcome = `« ${product.title} » ne sortira pas : ${reason}.`;
+  }
+}
 
 /**
  * CEO decision: take a product off sale until its next version is ready (bad rating / refunds).
@@ -202,18 +257,10 @@ export async function pauseProduct(ctx: RuntimeCtx, product: Product, reason: st
     try { ctx.tools.updateCampaign(c.id, { status: 'paused' }); } catch { /* ignore */ }
     c.status = 'paused';
   }
-  let cancelled = 0;
-  for (const t of ctx.world.company.tasks) {
-    if (!isOpen(t) || t.input.productId !== product.id || !PROMOTION_TASKS.includes(t.kind)) continue;
-    t.status = 'cancelled';
-    t.dayDone = ctx.world.day;
-    logTask(t, `Jour ${ctx.world.day} : annulée — produit mis en pause (${reason})`);
-    const pa = ctx.world.company.pendingApprovals.indexOf(t.id);
-    if (pa >= 0) ctx.world.company.pendingApprovals.splice(pa, 1);
-    const agent = ctx.world.company.agents.find((a) => a.currentTaskId === t.id);
-    if (agent) { agent.currentTaskId = null; agent.status = 'idle'; agent.bubble = null; }
-    cancelled++;
-  }
+  product.decision = { day: ctx.world.day, status: 'paused', reason };
+  const promotion = openTasksForProduct(ctx, product.id, PROMOTION_TASKS);
+  for (const t of promotion) dropTask(ctx, t, `produit mis en pause (${reason})`);
+  const cancelled = promotion.length;
   say(ctx, by, `${nameOf(ctx, by)} retire « ${short(product.title, 50)} » de la vente : ${reason} — on ne le pousse plus avant la v${product.version + 1}${cancelled ? ` (${cancelled} tâche(s) de promotion annulée(s))` : ''}`, 'thought', { productId: product.id });
   incident(ctx, `Produit « ${product.title} » mis en pause pour qualité : ${reason}`);
   try {
@@ -226,6 +273,7 @@ export async function killProduct(ctx: RuntimeCtx, product: Product, reason: str
   if (product.status === 'killed') return;
   const wasPublished = product.launchedDay !== null;
   product.status = 'killed';
+  product.decision = { day: ctx.world.day, status: 'killed', reason };
   if (wasPublished) {
     try { ctx.tools.setProductStatus(product.id, 'killed'); } catch { /* store may already have removed it */ }
   }

@@ -8,6 +8,7 @@
  */
 import type { AdCreative, Lesson, Product, Review, WorldState } from '../shared.js';
 import { productPnls } from './accounting.js';
+import { adsHold } from './holds.js';
 import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, isUpsellProduct, productMetrics } from './metrics.js';
 import { learning, sim } from './modules.js';
 import { isOpen } from './tasks.js';
@@ -163,11 +164,24 @@ export function recentProfits(world: WorldState, days: number): Map<string, numb
 
 const CUT_LESSON = /^\s*(couper|arr[êe]ter|stopper)\b.*\bpubs?\b/i;
 
-/** The retro's « Couper les pubs de la niche … » about this version: the team does not spend against its own lesson. */
+/** The day a lesson last said what it says now. */
+export function lessonDay(l: Lesson): number {
+  return l.changedDay ?? l.day;
+}
+
+/**
+ * The retro's « Couper les pubs de la niche … » about this version: the team does not spend against its own lesson.
+ * A rewrite alone does not make it about this version: its numbers must not hold ads shown before it went online.
+ */
 export function cutLesson(world: WorldState, p: Product): Lesson | null {
   const key = learning.LESSON_KEYS.niche(p.nicheId);
   const since = versionSince(world, p);
-  return world.company.lessons.find((l) => l.key === key && l.day >= since && CUT_LESSON.test(l.insight)) ?? null;
+  const inNiche = (id: string): boolean => world.company.products.some((x) => x.id === id && x.nicheId === p.nicheId);
+  return world.company.lessons.find((l) => {
+    if (l.key !== key || lessonDay(l) < since || !CUT_LESSON.test(l.insight)) return false;
+    const from = lessonDay(l) - learning.NICHE_WINDOW_DAYS + 1;
+    return !world.market.adStats.some((s) => s.day >= from && s.day < since && s.spend > 0 && inNiche(s.productId));
+  }) ?? null;
 }
 
 /** A rework (rewrite → republish) of the product is in progress. */
@@ -235,11 +249,13 @@ export interface PaidBlock { reason: string; hard: boolean; final?: boolean }
 
 /** Product-level reason not to start a new paid campaign today. */
 export function productPaidBlock(world: WorldState, p: Product): PaidBlock | null {
+  const held = adsHold(world, p.id);
+  if (held) return { reason: held.reason, hard: true, final: true };
   const promo = promotionBlock(world, p);
   if (promo) return { reason: promo, hard: true, final: true };
   if (isUpsellProduct(world, p.id)) return { reason: 'upsell vendu via « La suite est ici », pas en pub froide', hard: true };
   const cut = cutLesson(world, p);
-  if (cut) return { reason: `leçon du jour ${cut.day} : ${cut.insight.split(' : ')[0]}`, hard: true, final: true };
+  if (cut) return { reason: `leçon du jour ${lessonDay(cut)} : ${cut.insight.split(' : ')[0]}`, hard: true, final: true };
   const h = adHistory(world, p.id, versionSince(world, p));
   // "Ads-dead": stop paying for this version; one fresh test is allowed a week after the last campaign.
   if (h.losers >= ADS_DEAD_LOSERS && (h.streakRoas ?? 0) < ADS_DEAD_ROAS && (h.lastEndDay === null || world.day <= h.lastEndDay + ADS_DEAD_RETRY_DAYS)) {
@@ -260,6 +276,8 @@ export function adBanActive(world: WorldState): boolean {
 
 /** Company-level reason why no paid campaign can start today, or null. */
 export function companyPaidBlock(world: WorldState): string | null {
+  const held = adsHold(world);
+  if (held) return held.reason;
   if (currentBudget(world).outage) return `panne de paiement annoncée aujourd'hui : aucune vente possible, aucune dépense pub`;
   if (adBanActive(world)) return `compte publicitaire TikTok suspendu jusqu'au jour ${world.market.adAccount.bannedUntilDay}`;
   const b = currentBudget(world);

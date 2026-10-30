@@ -224,6 +224,85 @@ describe('money decides, on the current version (C3)', () => {
     } finally { clean(e.root); }
   });
 
+  it('a « Couper les pubs » rewritten on the current version blocks it and quotes the day of the rewrite, not its first date', async () => {
+    const e = await setup();
+    try {
+      const acq = await import('../src/runtime/acquisition.js');
+      const { createTask } = await import('../src/runtime/tasks.js');
+      const p = addProduct(e.world, 'prd_cut', { version: 2 });
+      const republish = createTask(e.world, { kind: 'publish_product', input: { productId: p.id, republish: true } });
+      republish.status = 'done';
+      republish.dayDone = 40;
+      closeDay(e.world, 50);
+      const key = e.learning.LESSON_KEYS.niche(p.nicheId);
+      e.world.company.lessons.push(lesson({ key, day: 33, insight: `Couper les pubs de la niche « Chat » ou retravailler l'offre : ROAS de 0,61 sur 6 jours.` }));
+      expect(acq.productPaidBlock(e.world, p)).toBeNull(); // written on the version before
+      e.world.company.lessons[0]!.changedDay = 47;
+      const block = acq.productPaidBlock(e.world, p)!;
+      expect(block).toMatchObject({ hard: true, final: true });
+      expect(block.reason).toContain('leçon du jour 47');
+    } finally { clean(e.root); }
+  });
+
+  it('a lesson rewritten on numbers that still hold the previous version does not bar the new one', async () => {
+    const e = await setup();
+    try {
+      const acq = await import('../src/runtime/acquisition.js');
+      const { createTask } = await import('../src/runtime/tasks.js');
+      const p = addProduct(e.world, 'prd_cut', { version: 2 });
+      addCampaign(e.world, e.sim, p, 'cpg_v1', 36, 38, 40, 0.5); // the last 3 days of the v1
+      const republish = createTask(e.world, { kind: 'publish_product', input: { productId: p.id, republish: true } });
+      republish.status = 'done';
+      republish.dayDone = 40;
+      closeDay(e.world, 44);
+      const key = e.learning.LESSON_KEYS.niche(p.nicheId);
+      e.world.company.lessons.push(lesson({ key, day: 33, changedDay: 41, insight: `Couper les pubs de la niche « Chat » ou retravailler l'offre : ROAS de 0,50 sur 3 jours.` }));
+      expect(acq.cutLesson(e.world, p)).toBeNull(); // the window of J41 is J35-41: all of its ads are the v1's
+      e.world.company.lessons[0]!.changedDay = 45;
+      expect(acq.cutLesson(e.world, p)).not.toBeNull(); // the window of J45 is J39-45: no ad of the v1 left
+    } finally { clean(e.root); }
+  });
+
+  it('an upsell whose parent is gone is a guide like any other: it is a candidate, and it gets its ads', async () => {
+    const e = await setup();
+    try {
+      const acq = await import('../src/runtime/acquisition.js');
+      const { isUpsellProduct } = await import('../src/runtime/metrics.js');
+      const { buildHeuristicPlan } = await import('../src/runtime/strategy.js');
+      const parent = addProduct(e.world, 'prd_parent', { upsellProductId: 'prd_next' });
+      const next = addProduct(e.world, 'prd_next', { title: 'Les siestes de 30 minutes', launchedDay: 8 });
+      closeDay(e.world, 12);
+      expect(isUpsellProduct(e.world, next.id)).toBe(true);
+      expect(acq.acquisitionCandidates(e.world).map((c) => c.product.id)).toEqual(['prd_parent']);
+      expect(acq.productPaidBlock(e.world, next)!.reason).toContain('upsell');
+
+      parent.status = 'killed';
+      expect(isUpsellProduct(e.world, next.id)).toBe(false);
+      expect(acq.acquisitionCandidates(e.world).map((c) => c.product.id)).toEqual(['prd_next']);
+      expect(acq.productPaidBlock(e.world, next)).toBeNull();
+      const plan = await buildHeuristicPlan(e.ctx);
+      expect(plan.items.some((i) => i.input.productId === next.id && ['launch_campaign', 'write_ad_hooks'].includes(i.kind))).toBe(true);
+    } finally { clean(e.root); }
+  });
+
+  it('an orphan is not judged on the weeks it spent as an upsell: only a paid test of its own can kill it', async () => {
+    const e = await setup();
+    try {
+      const { buildHeuristicPlan } = await import('../src/runtime/strategy.js');
+      addProduct(e.world, 'prd_parent', { status: 'killed', upsellProductId: 'prd_next' });
+      const next = addProduct(e.world, 'prd_next', { title: 'Les siestes de 30 minutes' });
+      addOrders(e.world, e.sim, next, 8, 6);
+      e.sim.recordLedger(e.world, { type: 'revenue', amount: 900, memo: 'Ventes (fixture)', ref: null });
+      closeDay(e.world, 45);
+      for (let i = 0; i < 6; i++) e.world.market.organicPosts.push({ id: `org_${i}`, day: 35 + i, productId: next.id, hook: 'h', hookStyle: 'pov', format: 'carousel', views: 100, likes: 1, clicks: 1, sales: 0, viral: false });
+      await buildHeuristicPlan(e.ctx);
+      expect(next.status).toBe('live'); // shown as a follow-up, never given its chance in ads
+      addCampaign(e.world, e.sim, next, 'cpg_test', 38, 44, 30, 0.3);
+      await buildHeuristicPlan(e.ctx);
+      expect(next.status).toBe('killed');
+    } finally { clean(e.root); }
+  });
+
   it('a running campaign of a barred product is stopped, a founder-forced one is not', async () => {
     const e = await setup();
     try {
@@ -1076,9 +1155,10 @@ describe('over 45 days', () => {
     const m = await modules();
     root = mkdtempSync(join(tmpdir(), 'pixel-agency-run-'));
     const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
-    world = m.createWorld(m.defaultScenario({ seed: 13, mindMode: 'heuristic' }), 'test-45');
+    const seed = 14; // these tests read a healthy company: a seed where the run is one, not a property of the code
+    world = m.createWorld(m.defaultScenario({ seed, mindMode: 'heuristic' }), 'test-45');
     const brain = m.vault.createBrainVault(paths);
-    const company = new m.Company(world, { paths, engine: m.minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed: 13 }), brain });
+    const company = new m.Company(world, { paths, engine: m.minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed }), brain });
     await company.runDays(45);
     reviewNote = (await brain.read('rh/revue-semaine-6.md'))?.body ?? '';
   }, 120_000);

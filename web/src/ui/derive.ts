@@ -143,6 +143,14 @@ export function doneTasksTotal(s: CompanySnapshot | null | undefined, dept: Dept
   return stats.days.reduce((n, d) => n + d.done, 0);
 }
 
+/** Failed or cancelled tasks of the whole run, by one team or by all of them. null without server counts. */
+export function failedTasksTotal(s: CompanySnapshot | null | undefined, dept: DeptId | 'all'): number | null {
+  const stats = s?.taskStats;
+  if (!stats) return null;
+  if (dept !== 'all') return stats.depts?.[dept]?.failed ?? 0;
+  return stats.days.reduce((n, d) => n + d.failed + d.cancelled, 0);
+}
+
 export interface DeptDay {
   day: number;
   doneCount: number;
@@ -170,6 +178,26 @@ export function deptCalendar(s: CompanySnapshot | null | undefined, dept: DeptId
     out.push({ day, doneCount, createdCount, done, created, hidden: Math.max(0, doneCount - done.length, createdCount - created.length) });
   }
   return out;
+}
+
+// ───────────────────────────── Run status ─────────────────────────────
+
+export const RUN_STATUS: Record<string, string> = { running: 'en cours', paused: 'en pause', bankrupt: 'faillite', goal_reached: 'objectif atteint', finished: 'terminée' };
+
+/** The pill of the run on screen: a finished run is not « en cours ». */
+export function currentRunPill(status: CompanySnapshot['status'] | undefined): { label: string; tone: 'green' | 'neutral' | 'red' } {
+  return { label: RUN_STATUS[status ?? 'running'] ?? 'en cours', tone: status === 'finished' ? 'neutral' : status === 'bankrupt' ? 'red' : 'green' };
+}
+
+/** Reached, but after the deadline the founder set: the same milestone, not the same result. */
+export function goalLate(s: CompanySnapshot | null | undefined): boolean {
+  const byDay = s?.scenario?.goal?.byDay;
+  const day = s?.goalReachedDay;
+  return typeof byDay === 'number' && typeof day === 'number' && day > byDay;
+}
+
+export function goalTitle(s: CompanySnapshot | null | undefined): string {
+  return goalLate(s) ? 'Objectif atteint après l’échéance' : 'Objectif atteint !';
 }
 
 // ───────────────────────────── Founder approvals ─────────────────────────────

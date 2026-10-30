@@ -37,7 +37,7 @@ function parallelPlan(c: NicheCtx): PlanModel {
   const steps = c.method.map((s, i) => {
     const from = Math.min(n, Math.max(1, s.from ?? stagger(i, c.method.length, n)));
     return { s, from, to: Math.min(n, Math.max(from, s.to ?? n)) };
-  });
+  }).sort((a, b) => a.from - b.from);
   const starts = [...new Set(steps.map((x) => x.from))].sort((a, b) => a - b);
   const rows: PlanRow[] = starts.map((from) => {
     const group = steps.filter((x) => x.from === from);
@@ -53,7 +53,7 @@ function parallelPlan(c: NicheCtx): PlanModel {
     if (fresh.length) text = `Démarrer : ${fresh.map((x) => act(x.s)).join(' ; ')}`;
     else if (d === n) text = 'Bilan final : comparer avec vos premières notes';
     else if (unitOne !== 'semaine' && d % 7 === 0) text = 'Bilan de la semaine : relire vos notes, ajuster un seul point';
-    else text = `Priorité : ${act(active[(d - 1) % Math.max(1, active.length)]?.s ?? steps[0]!.s)}`;
+    else text = `Continuer : ${act((active[active.length - 1] ?? steps[0]!).s)}`;
     cells.push([text, null]);
   }
   return {

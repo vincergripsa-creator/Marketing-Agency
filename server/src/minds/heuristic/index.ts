@@ -106,17 +106,17 @@ export class HeuristicEngine implements ContentEngine {
     return scrubDeep(heuristicRedTeam(input), rules.banned);
   }
 
-  async writeSalesPage(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number }, ctx: MindContext): Promise<SalesPage> {
+  async writeSalesPage(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<SalesPage> {
     const { rng, rules } = this.begin('writeSalesPage', ctx, productSubjects(input.product), input.product?.title, input.hype);
     return scrubDeep(heuristicSalesPage(input, rng, { maxHype: rules.maxHype, banned: rules.banned, brand: this.brand(ctx) }), rules.banned);
   }
 
-  async writeAdHooks(input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[] }, ctx: MindContext): Promise<{ hookStyle: HookStyle; hook: string }[]> {
+  async writeAdHooks(input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[]; upsellOf?: UpsellContext | null; usedHooks?: string[] }, ctx: MindContext): Promise<{ hookStyle: HookStyle; hook: string }[]> {
     const { rng, rules } = this.begin('writeAdHooks', ctx, productSubjects(input.product), input.product?.title, (input.styles ?? []).join(','));
     return scrubDeep(heuristicHooks(input, rng, rules.preferredHooks), rules.banned);
   }
 
-  async writeAd(input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[] }, ctx: MindContext): Promise<AdDraft> {
+  async writeAd(input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[]; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<AdDraft> {
     const { rng, rules } = this.begin('writeAd', ctx, productSubjects(input.product), input.product?.title, input.hook, input.hookStyle, input.format);
     const draft = heuristicAd(input, rng, { banned: rules.banned, preferredFormats: rules.preferredFormats });
     return scrubDeep(draft, [...rules.banned, ...(input.bannedClaims ?? [])]);

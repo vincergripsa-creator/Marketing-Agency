@@ -101,6 +101,7 @@ export type LiveSessionInfo = Required<SessionInfo>;
 type SessionEventName = 'tick' | 'run' | 'state';
 
 const BASE_INTERVAL_MS = 2000;
+const RUN_FINISHED = 'Ce run est terminé (horizon atteint) : lance une nouvelle simulation.';
 const MAX_CONSECUTIVE_ERRORS = 3;
 
 export class AgencySession {
@@ -256,14 +257,17 @@ export class AgencySession {
   play(speed?: Speed): void {
     const run = this.mounted();
     if (speed) this._speed = speed;
-    if (isTerminal(run.world.status)) {
-      throw new HttpError(409, 'Ce run est terminé (horizon atteint) : lance une nouvelle simulation.');
-    }
+    this.assertNotFinished(run);
     this._playing = true;
     if (run.world.status === 'paused') run.world.status = 'running';
     if (!this.loopRunning) this.startLoop(120);
     else if (this.timer) this.startLoop(Math.min(250, BASE_INTERVAL_MS / this._speed)); // waiting → apply new speed now
     this.events.emit('state');
+  }
+
+  /** A finished run stays readable, but nothing happens in it any more: a refusal, not a « Compris » that nobody will honour. */
+  private assertNotFinished(run: MountedRun): void {
+    if (isTerminal(run.world.status)) throw new HttpError(409, RUN_FINISHED);
   }
 
   pause(): void {
@@ -385,7 +389,8 @@ export class AgencySession {
   }
 
   async control(action: ControlAction, speed?: Speed): Promise<LiveSessionInfo> {
-    this.mounted();
+    const run = this.mounted();
+    if (action === 'step' || action === 'day') this.assertNotFinished(run);
     switch (action) {
       case 'play':
         this.play(speed);
@@ -446,6 +451,7 @@ export class AgencySession {
   async mission(text: string, agentId?: string): Promise<string> {
     await this.switching;
     const run = this.mounted();
+    this.assertNotFinished(run);
     const target = agentId ? this.resolveAgent(agentId) : null;
     if (agentId && !target) throw new HttpError(404, `Agent inconnu : ${agentId}`);
     const id = await run.company.giveMission(text, target ?? undefined);
@@ -481,6 +487,7 @@ export class AgencySession {
     await this.switching;
     const run = this.mounted();
     if (!this.hasTask(taskId)) throw new HttpError(404, `Tâche inconnue : ${taskId}`);
+    this.assertNotFinished(run);
     run.company.approve(taskId, approved);
     this.touch();
   }

@@ -181,12 +181,14 @@ function Experiments({ experiments }: { experiments: Experiment[] }) {
         const values = e.variants.map((v) => e.results?.[v]?.value ?? 0);
         const max = Math.max(0.0001, ...values);
         const isRate = e.metric === 'ctr' || e.metric === 'cvr' || e.metric === 'refund_rate' || e.metric === 'resolution';
+        // a price test compares euros per visitor, whatever its metric says (experimentValueKind on the server)
+        const perVisitor = e.dimension === 'price' && e.metric !== 'refund_rate';
         const status = EXPERIMENT_STATUS[e.status];
         return (
           <div key={e.id} className="experiment card">
             <div className="bandit-head">
               <Pill tone={status.tone} title={status.title}>{status.label}</Pill>
-              <span className="muted small">{EXPERIMENT_DIM_LABEL[e.dimension] ?? e.dimension} · {METRIC_LABEL[e.metric] ?? e.metric} · J{e.day}{e.endDay ? ` → J${e.endDay}` : ''} · {agentName(lookups, e.owner)}</span>
+              <span className="muted small">{EXPERIMENT_DIM_LABEL[e.dimension] ?? e.dimension} · {perVisitor ? 'Profit par visiteur' : METRIC_LABEL[e.metric] ?? e.metric} · J{e.day}{e.endDay ? ` → J${e.endDay}` : ''} · {agentName(lookups, e.owner)}</span>
             </div>
             <div className="exp-hyp">{e.hypothesis}</div>
             {e.variants.map((v) => {
@@ -196,7 +198,7 @@ function Experiments({ experiments }: { experiments: Experiment[] }) {
                 <div key={v} className={cx('arm', e.winner === v && 'arm-best')}>
                   <span className="arm-label">{e.winner === v ? <Icon name="crown" size={11} /> : null} {label}</span>
                   <Bar value={(r?.value ?? 0) / max} color={e.winner === v ? '#16a34a' : '#9ec5f4'} height={7} />
-                  <span className="arm-val">{r ? (isRate ? fmtPct(r.value, 1) : e.metric === 'roas' ? fmtRoas(r.value) : fmtDec(r.value, 2)) : '—'}</span>
+                  <span className="arm-val" title={perVisitor ? 'Par visiteur' : undefined}>{r ? (perVisitor ? fmtEur(r.value) : isRate ? fmtPct(r.value, 1) : e.metric === 'roas' ? fmtRoas(r.value) : fmtDec(r.value, 2)) : '—'}</span>
                   <span className="arm-pulls muted">n={fmtInt(r?.n ?? 0)}</span>
                 </div>
               );

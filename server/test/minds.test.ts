@@ -1078,7 +1078,7 @@ describe('mistakes, plan, charts and bonus keep their promises', () => {
       for (const para of errors) {
         const pair = core.pairs.find((x) => norm(para).includes(norm(x.mistake).slice(0, 30)))!;
         expect(pair, para).toBeTruthy();
-        expect(norm(para), para).toContain(norm(pair.fix!).replace(/\.$/, '').slice(0, 30));
+        expect(norm(para), para).toContain(norm(pair.fix!).replace(/\s+:\s+/g, ' — ').replace(/\.$/, '').slice(0, 30));
       }
     }
   });
@@ -1525,7 +1525,7 @@ describe('hooks do not run out', () => {
   it('each style has fresh texts for two weeks of daily posts, on every niche', async () => {
     for (const id of ALL_NICHES) {
       const hooks = await hooksOf(id, 14);
-      for (const s of STYLES) expect(hooks.get(s)!.size, `${id} ${s}`).toBeGreaterThanOrEqual(1);
+      for (const s of STYLES) expect(hooks.get(s)!.size, `${id} ${s}`).toBeGreaterThanOrEqual(2);
       expect([...hooks.values()].reduce((n, set) => n + set.size, 0), id).toBeGreaterThanOrEqual(28);
     }
   });

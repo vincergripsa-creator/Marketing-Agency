@@ -234,7 +234,7 @@ function makeWorld(runId = 'run-20261030-120000'): WorldState {
       missions: Array.from({ length: 100 }, (_, i) => ({ id: `mis_${i}`, day: 1, from: 'ag_noam', text: `Mission ${i}`, ownerId: 'ag_noam', taskIds: [], status: i === 3 ? 'open' as const : 'done' as const })),
       products: [product('prd_1', 34), product('prd_2', 5)],
       creatives: [], campaigns: [],
-      deliverables: Array.from({ length: 400 }, (_, i) => ({ id: `dlv_${i}`, kind: 'pdf' as const, title: `PDF ${i}`, productId: 'prd_1', creativeId: null, path: `files/prd_1/v1/guide.pdf`, createdBy: 'ag_margaux', day: 1, quality: 80 })),
+      deliverables: Array.from({ length: 400 }, (_, i) => ({ id: `dlv_${i}`, kind: i % 40 === 0 ? 'pdf' as const : 'ad_storyboard' as const, title: `Livrable ${i}`, productId: 'prd_1', creativeId: null, path: `files/prd_1/v1/guide.pdf`, createdBy: 'ag_margaux', day: 1, quality: 80 })),
       research: { trends: [{ nicheId: 'niche_sommeil', name: 'Sommeil de bébé', audience: 'Parents', category: 'parentalité', searchInterest: 70, tiktokBuzz: 60, competitionHint: 'moyenne', sampleTitles: [] }], voc: {}, competitors: {}, shortlist: [] },
       lessons: Array.from({ length: 300 }, (_, i) => ({ id: `les_${i}`, day: 1 + (i % 30), topic: 'ads' as const, insight: `Le hook « stat » bat « question » (${i})`, evidence: 'CTR 3,1 % vs 1,4 %', confidence: (i % 10) / 10, source: 'ag_noam', appliesTo: [], notePath: `lecons/l-${i}.md` })),
       experiments: [],
@@ -419,7 +419,7 @@ describe('snapshot trimming', () => {
 
   it('applies every documented limit and never leaks the hidden truth', () => {
     const snap = buildSnapshot(world, FINANCE);
-    expect(snap.company.deliverables).toHaveLength(250);
+    expect(snap.company.deliverables.filter((d) => d.kind === 'ad_storyboard')).toHaveLength(250);
     expect(snap.company.deliverables.at(-1)!.id).toBe('dlv_399');
     expect(snap.company.lessons).toHaveLength(150);
     expect(snap.company.lessons.at(-1)!.id).toBe('les_299');
@@ -615,6 +615,66 @@ describe('what the UI may see', () => {
     const snap = buildSnapshot(w, FINANCE, false, TIGHT_LIMITS);
     expect(snap.company.tasks.filter((t) => t.status === 'done').length).toBeLessThanOrEqual(TIGHT_LIMITS.doneTasks);
     expect(snap.taskStats!.days.find((d) => d.day === 2)!.done).toBe(500);
+  });
+});
+
+describe('what the snapshot keeps of the run', () => {
+  const finance = FINANCE;
+  const adRow = (day: number, creativeId: string, spend = 10): WorldState['market']['adStats'][number] => ({ day, campaignId: 'cmp_1', creativeId, productId: 'prd_1', spend, impressions: 1000, clicks: 20, ctr: 0.02, cpc: 0.5, cpm: 10, landingViews: 15, purchases: 1, revenue: 19, roas: 1.9, frequency: 1.2, comments: [] });
+  const creative = (id: string) => ({ id, productId: 'prd_1', hook: id, hookStyle: 'question', format: 'carousel', scenes: [], caption: '', hashtags: [], cta: '', files: { storyboard: [], preview: null }, quality: null, review: { status: 'approved', reason: null, day: 1 }, createdDay: 1, createdBy: 'ag_noam' }) as unknown as WorldState['company']['creatives'][number];
+
+  it('a creative keeps its figures once its rows leave the window, and the chart is the same in both snapshots', () => {
+    const w = makeWorld();
+    w.day = 61;
+    w.company.creatives = [creative('old'), creative('recent')];
+    w.market.adStats = [...Array.from({ length: 10 }, (_, i) => adRow(20 + i, 'old')), adRow(60, 'recent', 7), adRow(60, 'gone', 3)];
+    for (const snap of [buildSnapshot(w, finance, false, TIGHT_LIMITS), buildSnapshot(w, finance, false, DEFAULT_LIMITS)]) {
+      expect(snap.market.adStats.some((s) => s.creativeId === 'old')).toBe(false);
+      expect(snap.adTotals!.creatives.old).toEqual({ spend: 100, impressions: 10_000, clicks: 200, purchases: 10, revenue: 190, lastDay: 29 });
+      expect(snap.adTotals!.days).toHaveLength(11);
+      expect(snap.adTotals!.days.at(-1)).toEqual({ day: 60, spend: 10, revenue: 38 });
+      expect(snap.adTotals!.creatives.gone).toBeUndefined(); // only the creatives of this snapshot: its size stays bounded
+    }
+  });
+
+  it('rows the market retired still count in the whole life of a creative', () => {
+    const w = makeWorld();
+    w.company.creatives = [creative('old')];
+    w.market.retiredAdTotals = { old: { spend: 40, impressions: 5000, clicks: 90, purchases: 3, revenue: 57, lastDay: 12 } };
+    w.market.adStats = [adRow(29, 'old')];
+    const snap = buildSnapshot(w, finance, false, TIGHT_LIMITS);
+    expect(snap.adTotals!.creatives.old).toEqual({ spend: 50, impressions: 6000, clicks: 110, purchases: 4, revenue: 76, lastDay: 29 });
+    expect(w.market.retiredAdTotals.old!.spend).toBe(40); // a snapshot reads the world, it never adds to it
+  });
+
+  it('every mission of the founder stays, with its progress counted on the whole task list', () => {
+    const w = makeWorld();
+    const done = w.company.tasks.filter((t) => t.status === 'done').slice(0, 3).map((t) => t.id);
+    const failed = w.company.tasks.find((t) => t.status === 'failed')!.id;
+    w.company.missions.unshift({ id: 'mis_founder', day: 1, from: 'founder', text: 'Lance un guide', ownerId: 'ag_noam', taskIds: [...done, failed], status: 'done', outcome: 'En ligne.', productId: 'prd_1' });
+    const snap = buildSnapshot(w, finance, false, TIGHT_LIMITS);
+    const m = snap.company.missions.find((x) => x.id === 'mis_founder');
+    expect(m).toMatchObject({ outcome: 'En ligne.', productId: 'prd_1', doneTasks: 3 });
+    expect(snap.company.tasks.some((t) => t.id === done[0])).toBe(false); // the oldest tasks left the list, not the count
+    expect(snap.company.missions.filter((x) => x.from !== 'founder' && x.status !== 'open')).toHaveLength(TIGHT_LIMITS.missions);
+  });
+
+  it('guides and covers are never pushed out by ad frames, and the counts are the run\'s', () => {
+    const w = makeWorld();
+    const snap = buildSnapshot(w, finance, false, TIGHT_LIMITS);
+    expect(snap.company.deliverables.filter((d) => d.kind === 'pdf')).toHaveLength(10);
+    expect(snap.company.deliverables.filter((d) => d.kind === 'ad_storyboard')).toHaveLength(TIGHT_LIMITS.deliverables);
+    expect(snap.deliverableCounts).toEqual({ pdf: 10, ad_storyboard: 390 });
+  });
+
+  it('failed and cancelled tasks are counted per team on the whole run', () => {
+    const w = makeWorld();
+    const stats = taskStatsOf([
+      { ...w.company.tasks[0]!, dept: 'growth', status: 'failed', dayCreated: 1, dayDone: 1 },
+      { ...w.company.tasks[0]!, dept: 'growth', status: 'cancelled', dayCreated: 2, dayDone: 2 },
+      { ...w.company.tasks[0]!, dept: 'growth', status: 'done', dayCreated: 2, dayDone: 2 },
+    ], 90);
+    expect(stats.depts.growth).toMatchObject({ done: 1, failed: 2, days: [] });
   });
 });
 
@@ -1024,6 +1084,10 @@ describe('cli', () => {
     expect(text).toContain('Meilleur produit : « Bébé dort enfin (prd_1) »');
     expect(text).toContain('Leçons clés');
     expect(text).toContain('runs/x/files');
+    const lateWorld = { ...w, status: 'goal_reached' as const, market: { ...w.market, events: [{ id: 'e', day: 31, kind: 'goal_reached' as const, title: '', description: '', severity: 'info' as const }] } };
+    const late = verdict({ world: { ...lateWorld, scenario: { ...w.scenario, goal: { targetProfit: 1000, byDay: 20 } } }, finance: { ...FINANCE, profit: 1100 }, daysRun: 40, filesDir: 'f', brainDir: 'b', worldFile: 'w' });
+    expect(late).toContain("OBJECTIF ATTEINT APRÈS L'ÉCHÉANCE");
+    expect(late).toContain('avant le jour 20, atteint au jour 31');
     const poor = verdict({ world: { ...w, company: { ...w.company, products: [], lessons: [] } }, finance: { ...FINANCE, profit: -120, profit7d: -30 }, daysRun: 10, filesDir: 'f', brainDir: 'b', worldFile: 'w' });
     expect(poor).toContain('PAS ENCORE RENTABLE');
     expect(poor).toContain('aucune vente');
@@ -1155,6 +1219,18 @@ describe('live session', () => {
     await until(() => !s.playing);
     expect(() => s.play()).toThrow(/terminé/);
     await expect(s.control('play')).rejects.toMatchObject({ status: 409 });
+    // nothing can happen in a finished run: no « Compris », no task that will never run
+    const stepsAtEnd = fake.steps;
+    const missionsAtEnd = s.world.company.missions.length;
+    await expect(s.control('step')).rejects.toMatchObject({ status: 409 });
+    await expect(s.control('day')).rejects.toMatchObject({ status: 409 });
+    await expect(s.mission('Lance un guide sur le sommeil du bébé')).rejects.toMatchObject({ status: 409 });
+    s.world.company.tasks.push({ id: 'tsk_end' } as WorldState['company']['tasks'][number]);
+    await expect(s.approve('tsk_end', true)).rejects.toMatchObject({ status: 409 });
+    s.world.company.tasks.pop();
+    expect(fake.steps).toBe(stepsAtEnd);
+    expect(s.world.company.missions).toHaveLength(missionsAtEnd);
+    await expect(s.control('pause')).resolves.toBeTruthy();
     expect(fake.maxInFlight).toBe(1);
     const finishedId = s.world.runId;
     await s.shutdown();

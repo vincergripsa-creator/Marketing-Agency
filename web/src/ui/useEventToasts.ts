@@ -1,6 +1,7 @@
 // Turns snapshot changes into toasts: world events, sale bursts, run status changes.
 import { useEffect, useRef } from 'react';
 import type { CompanySnapshot, WorldEvent, WorldEventKind } from '../../../shared/types';
+import { goalLate, goalTitle } from './derive';
 import { fmtEur } from './format';
 import type { IconName } from './icons';
 import type { ToastInput, ToastTone } from './Toasts';
@@ -57,7 +58,7 @@ export function useEventToasts(snapshot: CompanySnapshot | null, push: (t: Toast
 
     if (s.status !== snapshot.status) {
       const hadEvent = fresh.some((e) => e.kind === 'goal_reached' || e.kind === 'bankrupt');
-      if (!hadEvent && snapshot.status === 'goal_reached') push({ tone: 'good', icon: 'sparkle', title: 'Objectif atteint !', text: `Profit cumulé ${fmtEur(snapshot.finance?.profit)}`, ttl: 9000 });
+      if (!hadEvent && snapshot.status === 'goal_reached') push({ tone: goalLate(snapshot) ? 'info' : 'good', icon: 'sparkle', title: goalTitle(snapshot), text: `Profit cumulé ${fmtEur(snapshot.finance?.profit)}`, ttl: 9000 });
       if (!hadEvent && snapshot.status === 'bankrupt') push({ tone: 'bad', icon: 'alert', title: 'Faillite', text: 'La trésorerie est négative : l’agence continue en mode survie.', ttl: 9000 });
       if (snapshot.status === 'finished') push({ tone: 'info', icon: 'flag', title: 'Fin de la simulation', text: `Horizon atteint au jour ${snapshot.day}.` });
       s.status = snapshot.status;

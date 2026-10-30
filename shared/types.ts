@@ -170,6 +170,7 @@ export interface Mission {
   productId?: string | null; // the resulting product
   outcome?: string | null;  // French, where it stands, written for the founder
   relaunches?: number;      // chains restarted by the chief of staff after a dead end
+  doneTasks?: number;       // snapshot only: its done tasks, counted on the whole task list
 }
 
 export interface ChatMessage { id: string; day: number; from: 'founder' | AgentId; text: string; at: number }
@@ -198,6 +199,7 @@ export interface PdfContent {
   bonus: ChapterContent;      // "free gift inside" chapter
   nextStep: { title: string; text: string; upsellProductId: string | null }; // "La suite est ici"
   wordCount: number;
+  howTo?: [string, string][]; // « Comment utiliser ce guide » box: [head, text], three of them; a neutral box without it
 }
 
 /**
@@ -301,6 +303,7 @@ export interface Product {
   priceHistory: { day: number; price: number }[];
   brief?: { angle: string };  // internal positioning note, never customer-facing
   pagePrint?: string;         // what sales-page.html shows of the live product (price, reviews…): when it changes, the page is re-rendered
+  decision?: { day: number; status: 'paused' | 'killed'; reason: string }; // why it was last stopped (French), for the founder's questions
 }
 
 // ───────────────────────────── TikTok ads (virtual platform) ─────────────────────────────
@@ -337,8 +340,10 @@ export interface Campaign {
   targeting: { interests: string[]; ageMin: number; ageMax: number };
   startDay: number;
   createdBy: AgentId;
-  pausedFor?: 'outage';     // paused for an announced outage: resumed the next morning
+  pausedFor?: 'outage' | 'founder'; // outage: resumed the next morning; founder: resumed when he lifts his order
   founderForced?: boolean;  // launched by the founder against the company's own stop rules: only he (or the stop-loss) ends it
+  founderCap?: number;      // approval mode: the daily budget the founder agreed to
+  raiseRefusedDay?: number; // approval mode: the day he last refused a raise
 }
 
 export interface CampaignInputShape {
@@ -355,6 +360,9 @@ export interface DailyAdStats {
   frequency: number;          // creative fatigue indicator
   comments: AdComment[];
 }
+
+/** A creative's ad figures, every day added up. */
+export interface CreativeAdTotals { spend: number; impressions: number; clicks: number; purchases: number; revenue: number; lastDay: number }
 
 export interface OrganicPost {
   id: string; day: number; productId: string | null; hook: string; hookStyle: HookStyle;
@@ -525,6 +533,7 @@ export interface NicheBrief {
 export interface Lesson {
   key?: string;               // stable dedup key (topic + subject)
   id: string; day: number; topic: 'ads' | 'pricing' | 'product' | 'support' | 'niche' | 'finance' | 'process' | 'partnership';
+  changedDay?: number;        // last retro that rewrote it (`day` stays the day it was first learned)
   insight: string;            // French one-liner, actionable
   evidence: string;           // numbers backing it
   confidence: number;         // 0..1
@@ -629,6 +638,7 @@ export interface MarketState {
   modifiers: { cpmMultiplier: number; cpmUntilDay: number; paymentHoldUntilDay: number; outageDay: number };
   adAccount: { strikes: number; banned: boolean; bannedUntilDay: number };
   creativeImpressions: Record<string, number>; // cumulative, for fatigue
+  retiredAdTotals?: Record<string, CreativeAdTotals>; // adStats rows past their retention, added up by creative
 }
 
 export interface CompanyState {
@@ -653,6 +663,36 @@ export interface CompanyState {
   budget?: { day: number; adCap: number; survival: boolean; note: string } | null; // CFO envelope of the day
   lastRetroDay?: number;                    // idempotence of the evening retro (survives save/reload)
   pnl?: WeeklyPnl[];                        // weekly P&L per product, oldest first
+  holds?: FounderHold[];                    // the founder's standing decisions, ended ones included
+}
+
+/**
+ * A standing decision of the founder: the plan and the handlers respect it until it ends, whatever their own rules
+ * say. An order lasts until he lifts it; a refusal lasts for a cooldown.
+ */
+export interface FounderHold {
+  id: string;
+  kind: 'ads' | 'advances' | 'launches' | 'product'; // paid ads (all, or one product's), creators' advances, new products, one product off sale
+  productId: string | null;
+  day: number;
+  until: number | null;     // last day it holds, null until lifted
+  reason: string;           // French, read in the feed
+  liftedDay?: number;
+}
+
+/** What an agent read in the brain before starting a task. Lessons by id: the retro keeps rewriting them. */
+export interface TaskMind { brainNotes: { path: string; title: string; excerpt: string }[]; lessonIds: string[] }
+
+/**
+ * What the company carries from one tick to the next beyond its records. It is saved with the world, so a run reloaded
+ * at any tick goes on exactly as if it had never stopped.
+ */
+export interface CompanyMemory {
+  idleTicks: Record<AgentId, number>;   // ticks spent idle in a row
+  recalled: Record<AgentId, string[]>;  // lessons the agent last quoted, oldest first
+  minds: Record<string, TaskMind>;      // open tasks whose agent already read the brain
+  incidents: string[];                  // today's notable events, for the evening retro
+  lastMarketNotes: string[];            // notes of the last market close
 }
 
 export interface WorldState {
@@ -671,6 +711,7 @@ export interface WorldState {
   market: MarketState;
   ledger: LedgerEntry[];
   activity: Activity[];       // ring buffer (last ~600)
+  memory?: CompanyMemory;     // absent from older saves and until the company is mounted
 }
 
 // ───────────────────────────── What the UI receives ─────────────────────────────
@@ -701,6 +742,9 @@ export interface CompanySnapshot {
     intents: Record<string, MessageIntent>;   // message id → ground truth, for the messages of this snapshot
   };
   taskStats?: TaskStats;            // counted on every task, whatever company.tasks keeps
+  adTotals?: AdTotals;              // counted on every ad row, whatever market.adStats keeps
+  deliverableCounts?: Partial<Record<Deliverable['kind'], number>>; // the whole run, whatever company.deliverables keeps
+  goalReachedDay?: number | null;   // the day the goal was reached, whatever market.events keeps
   session?: SessionInfo;            // live server loop state (play/pause, speed)
 }
 
@@ -711,12 +755,18 @@ export interface DeptTaskCounts {
   days: DayTaskCounts[];            // last 14 days, oldest first, days without any task left out
   kinds7d: Partial<Record<TaskKind, number>>; // last 7 days (dayDone, else dayCreated), by kind
   done: number;                     // done tasks of the whole run
+  failed: number;                   // failed or cancelled tasks of the whole run
   avgDelayDays: number | null;      // their average dayDone - dayCreated
 }
 
 export interface TaskStats {
   days: DayTaskCounts[];            // every day of the run with a task, oldest first
   depts: Partial<Record<DeptId, DeptTaskCounts>>;
+}
+
+export interface AdTotals {
+  days: { day: number; spend: number; revenue: number }[]; // every day the market still holds, oldest first
+  creatives: Record<string, CreativeAdTotals>;             // the whole life of the creatives of this snapshot
 }
 
 /** What moves on every tick: the light 'tick' event carries it between two full snapshots. */

@@ -5,6 +5,7 @@ import type { RuntimeCtx } from '../ctx.js';
 import { addDeliverable, nicheBriefOf, nicheName, productOf, say, vocOf, writeNote } from '../ctx.js';
 import { learning } from '../modules.js';
 import { createTask, isOpen } from '../tasks.js';
+import { launchHold } from '../holds.js';
 import { createProductPipeline, excludedNiches, killProduct } from '../pipeline.js';
 import { guideGaps, pdfFingerprint, redTeamFacts, settleRedTeam } from '../redteam.js';
 import { productInNiche } from '../missions.js';
@@ -168,6 +169,8 @@ export const researchHandlers: HandlerMap = {
       const { research } = ctx.world.company;
       // A niche the founder asked for by name beats the team's own exclusions (killed before, already rejected…).
       const forced = str(task.input.nicheId);
+      const held = forced ? null : launchHold(ctx.world);
+      if (held) return { summary: `Pas de nouvelle niche : ${held.reason}.`, skipReview: true, output: { skipped: true } };
       const already = forced ? productInNiche(ctx, forced) : undefined;
       if (already) return { summary: `« ${short(already.title, 60)} » existe déjà dans cette niche : pas de doublon.`, skipReview: true, output: { productId: already.id, nicheId: forced, existing: true } };
       const excluded = uniq([...excludedNiches(ctx, { includeActive: true }), ...strArr(task.input.excludeNicheIds)]).filter((id) => id !== forced);

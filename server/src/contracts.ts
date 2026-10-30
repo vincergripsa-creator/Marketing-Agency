@@ -113,6 +113,8 @@ export interface SimModule {
   scoreSalesPage(sp: SalesPage, product: Product, voc?: VoiceOfCustomer): QualityReport;
   scoreCreative(c: AdCreative, product: Product, voc?: VoiceOfCustomer): QualityReport;
   scoreSupportReply(msg: InboxMessage, reply: SupportReplyInput): { score: number; issues: string[] };
+  /** What a guide really contains: words the reader has not met earlier in it, not its length. */
+  guideSubstance(content: PdfContent): { freshWords: number };
   /** Generic phrases that make a PDF sound "AI" (used by scorePdf and the humanizer). */
   GENERIC_PHRASES: readonly string[];
   /** Hidden truth lookup (runtime uses it ONLY for god-mode; agents must use MarketTools). */
@@ -188,9 +190,9 @@ export interface ContentEngine {
   humanize(input: { content: PdfContent; flagged: string[]; voc: VoiceOfCustomer; gaps?: GuideGaps | null }, ctx: MindContext): Promise<PdfContent>;
   factCheck(input: { content: PdfContent; voc: VoiceOfCustomer }, ctx: MindContext): Promise<{ issues: string[]; content: PdfContent; claims?: string[] }>;
   redTeam(input: { subject: 'idea' | 'pdf' | 'sales_page' | 'ad'; summary: string; quality: QualityReport | null; facts?: RedTeamFacts | null }, ctx: MindContext): Promise<RedTeamVerdict>;
-  writeSalesPage(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number }, ctx: MindContext): Promise<SalesPage>;
-  writeAdHooks(input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[] }, ctx: MindContext): Promise<{ hookStyle: HookStyle; hook: string }[]>;
-  writeAd(input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[] }, ctx: MindContext): Promise<AdDraft>;
+  writeSalesPage(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<SalesPage>;
+  writeAdHooks(input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[]; upsellOf?: UpsellContext | null; usedHooks?: string[] }, ctx: MindContext): Promise<{ hookStyle: HookStyle; hook: string }[]>;
+  writeAd(input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[]; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<AdDraft>;
   writeSupportReply(input: { message: InboxMessage; product: Product | null; order: Order | null; policy: string[]; customer?: { name: string; archetype: string } | null }, ctx: MindContext): Promise<SupportReplyInput>;
   writeOutreach(input: { creator: CreatorProfile; product: Product; offer: { upfront: number; commission: number } }, ctx: MindContext): Promise<string>;
   planDay(input: { day: number; finance: FinanceSnapshot; kpis: DailyKpi[]; products: Product[]; openTasks: Task[]; lessons: Lesson[]; founderMissions: string[]; heuristicPlan: DayPlan }, ctx: MindContext): Promise<DayPlan>;
@@ -246,6 +248,8 @@ export interface LearningModule {
   MAX_LEVEL: number;
   /** Keys of the lessons the company turns into decisions. */
   LESSON_KEYS: { page(productId: string): string; quality(productId: string): string; niche(nicheId: string): string; advance: string };
+  /** Days of ads behind the numbers of a niche lesson. */
+  NICHE_WINDOW_DAYS: number;
 }
 
 // ───────────────────────────── runtime/ ─────────────────────────────

@@ -7,6 +7,7 @@ import type { DifficultyProfile, MarketDayResult, Rng } from '../contracts.js';
 import type {
   AdCreative, Customer, DailyAdStats, InboxMessage, MessageIntent, NicheTruth, Order, Product, QualityReport, WorldEvent, WorldEventKind, WorldState,
 } from '../shared.js';
+import { addAdTotals } from './adTotals.js';
 import { ADS, CONVERSION, CREATORS, ESCALATION, FEES, INBOX, ORGANIC, REFUNDS, REVIEWS, SCAM, STATS, UPSELL } from './balance.js';
 import { findBannedClaims } from './compliance.js';
 import { buyerArchetype, createCustomer, customerById, senderArchetype } from './customers.js';
@@ -774,7 +775,11 @@ function housekeeping(d: Day): void {
 function prune(d: Day): void {
   const m = d.world.market;
   const minDay = d.day - STATS.keepAdStatsDays;
-  if (m.adStats.length && m.adStats[0]!.day < minDay) m.adStats = m.adStats.filter((s) => s.day >= minDay);
+  if (m.adStats.length && m.adStats[0]!.day < minDay) {
+    const retired = (m.retiredAdTotals ??= {});
+    for (const s of m.adStats) if (s.day < minDay) addAdTotals(retired, s);
+    m.adStats = m.adStats.filter((s) => s.day >= minDay);
+  }
   const inboxMin = d.day - INBOX.keepDays;
   if (m.inbox.length && m.inbox[0]!.day < inboxMin) m.inbox = m.inbox.filter((x) => x.day >= inboxMin || x.status === 'open' || x.status === 'replied');
 }

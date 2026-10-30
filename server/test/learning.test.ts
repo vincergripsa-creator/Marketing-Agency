@@ -606,6 +606,7 @@ describe('runRetro', () => {
     expect(hookLesson.insight).toContain('3,90 %'); // (200 + 190) / 10 000 impressions
     expect(hookLesson.insight).not.toContain('4,00 %');
     expect(hookLesson.evidence).toMatch(/jours 1 à 2/);
+    expect(hookLesson).toMatchObject({ day: 1, changedDay: 2 }); // learned on day 1, what it says now dates from day 2
     expect(world.company.playbooks.sarah).toContain(hookLesson.insight);
     expect(world.company.playbooks.sarah!.some((r) => r.includes('4,00 %'))).toBe(false);
     const hookNote = await brain.read(hookLesson.notePath);

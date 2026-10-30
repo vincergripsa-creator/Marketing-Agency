@@ -512,6 +512,7 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
       touched.add(dup);
       if (!revised && dup.evidence === d.evidence && dup.insight === d.insight) continue; // nothing new since last time
       dup.key ??= slugify(d.key, 50);
+      dup.changedDay = day;
       if (revised) {
         // the data now says something different: new wording everywhere, confidence restarts from the new sample
         dup.confidence = d.confidence;

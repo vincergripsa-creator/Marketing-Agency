@@ -2,6 +2,7 @@
 import type { CreatorProfile, Product, WorldState } from '../../shared.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { incident, nameOf, productOf, say } from '../ctx.js';
+import { advancesHold } from '../holds.js';
 import { currentBudget, type Budget } from '../metrics.js';
 import { learning, sim } from '../modules.js';
 import { productNote } from '../notes.js';
@@ -140,7 +141,8 @@ export const partnerHandlers: HandlerMap = {
       }
       const budget = currentBudget(ctx.world);
       const commission = round2(clamp(Math.max(creator.askCommission, 0.2), 0.15, 0.5));
-      const advance = advanceDecision(ctx.world, creator, product, budget, commission);
+      const held = advancesHold(ctx.world);
+      const advance = held ? { pay: false, why: held.reason, expected: null } : advanceDecision(ctx.world, creator, product, budget, commission);
       const upfront = advance.pay ? round2(creator.askUpfront) : 0;
       const finalCommission = creator.askUpfront > 0 && !advance.pay ? round2(Math.min(0.5, commission + ADVANCE_SWAP_COMMISSION)) : commission;
       if (creator.askUpfront > 0) say(ctx, agent.id, `${agent.name} : ${advance.pay ? 'avance acceptée' : 'pas d’avance'} pour @${creator.handle} — ${short(advance.why, 80)}`, 'thought', { productId: product.id });

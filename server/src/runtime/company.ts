@@ -6,7 +6,7 @@
  *   tick 11     evening   retro (lessons → playbooks → brain), weekly HR review, status checks
  */
 import type {
-  AgentId, AgentState, ChatMessage, DailyKpi, DayPhase, Mission, Task, TaskKind, WorldEvent, WorldState,
+  AgentId, AgentState, ChatMessage, CompanyMemory, DailyKpi, DayPhase, Lesson, Mission, Task, TaskKind, WorldEvent, WorldState,
 } from '../shared.js';
 import { TICKS_PER_DAY } from '../shared.js';
 import type {
@@ -23,7 +23,10 @@ import {
   agentById, assignReady, chiefOf, closeMissions, createTask, depState, isFeminine, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, productIdOf, refreshAgentScore, taskById,
 } from './tasks.js';
 import { buildHeuristicPlan, keywordMission, materialize, mergePlans, normalizeItem, prepareFounderItem, reactToOutage } from './strategy.js';
+import { addHold, liftHolds, productHold, REFUSAL_COOLDOWN_DAYS } from './holds.js';
 import { linkProductTasks, productInNiche, routeMission, startNicheChain, tellFounder, type MissionRoute } from './missions.js';
+import { executeOrder } from './orders.js';
+import { shelveProduct, cancelProductTasks } from './pipeline.js';
 import { situationFor } from './situation.js';
 import { AGENTS } from './roster.js';
 import { activeCampaigns, currentBudget } from './metrics.js';
@@ -32,7 +35,7 @@ import { dec, errorText, eur, idNum, round2, short, uniq } from './util.js';
 const MAX_CONCURRENT_CLAUDE = 6;
 
 /** Random streams of a run, keyed by (seed, stream, day, tick): the same seed is the same market, whatever the company decides. */
-const STREAM = { company: 1, tools: 2, market: 3 };
+const STREAM = { company: 1, tools: 2, market: 3, idleBreak: 4 };
 
 export function phaseOf(tick: number): DayPhase {
   if (tick <= 0) return 'morning';
@@ -63,10 +66,8 @@ export class Company implements CompanyApi {
   private tools: MarketTools;
   private readonly ctx: RuntimeCtx;
   private initPromise: Promise<void> | null = null;
-  private readonly minds = new Map<string, MindContext>();
-  private readonly brainRead = new Set<string>();
-  private readonly idleTicks = new Map<AgentId, number>();
-  private readonly recalled = new Map<AgentId, Set<string>>();
+  /** Lives in the world: nothing that decides the next tick is kept only in this object. */
+  private readonly memory: CompanyMemory;
   private stepLock: Promise<unknown> = Promise.resolve();
   /** Usage already persisted in world.mind when this Company was mounted (a resumed run keeps counting from it). */
   private readonly mindBase: Usage;
@@ -82,12 +83,12 @@ export class Company implements CompanyApi {
     this.paths = opts.paths;
     this.rng = streamRng(world.scenario.seed, STREAM.company, world.day, world.tick);
     this.tools = sim.createMarketTools(world, streamRng(world.scenario.seed, STREAM.tools, world.day, world.tick));
-    this.ctx = { world, engine: this.engine, brain: this.brain, tools: this.tools, rng: this.rng, paths: this.paths, incidents: [], lastMarketNotes: [] };
+    this.memory = (world.memory ??= { idleTicks: {}, recalled: {}, minds: {}, incidents: [], lastMarketNotes: [] });
+    this.ctx = { world, engine: this.engine, brain: this.brain, tools: this.tools, rng: this.rng, paths: this.paths, incidents: this.memory.incidents, lastMarketNotes: this.memory.lastMarketNotes };
     const m = (world.mind ?? {}) as Partial<Usage>;
     this.mindBase = { calls: m.calls || 0, inputTokens: m.inputTokens || 0, outputTokens: m.outputTokens || 0, costEur: m.costEur || 0, fallbacks: m.fallbacks || 0 };
     this.engineZero = safeUsage(this.engine) ?? { calls: 0, inputTokens: 0, outputTokens: 0, costEur: 0, fallbacks: 0 };
     world.mind = { mode: this.engine.mode, ...this.mindBase };
-    // Tasks interrupted by a reload start their brain read again; nothing else is kept in memory.
     // A save from an older roster: agents learn the kinds added since, and levels fall under the single scale.
     for (const a of world.company.agents) {
       const def = AGENTS.find((x) => x.id === a.id);
@@ -173,12 +174,17 @@ export class Company implements CompanyApi {
     if (!items.length) items = keywordMission(this.ctx, clean);
     const route = routeMission(this.ctx, clean, items);
     items = route.kind === 'tasks' ? route.items.slice(0, 5).map((it) => prepareFounderItem(this.ctx, it, route.wantsProduct)) : [];
-    const lead = target ? (target.isChief ? target : chiefOf(w, target.dept)) : route.kind === 'tasks' ? chiefOf(w, items[0]?.dept ?? 'direction') : chiefOf(w, 'recherche');
+    const lead = target ? (target.isChief ? target : chiefOf(w, target.dept)) : route.kind === 'tasks' ? chiefOf(w, items[0]?.dept ?? 'direction') : route.kind === 'order' ? ceo : chiefOf(w, 'recherche');
     const owner = lead ?? ceo;
     const mission: Mission = { id: nextId(w, 'mis'), day: w.day, from: 'founder', text: clean, ownerId: owner.id, taskIds: [], status: 'open' };
     w.company.missions.push(mission);
+    // His new request for a product is his latest word on new products.
+    if (route.kind === 'new_product' || (route.kind === 'tasks' && route.wantsProduct)) {
+      for (const h of liftHolds(w, (x) => x.kind === 'launches')) emit(w, { agentId: 'camille', kind: 'founder', text: `Camille : ton ordre du jour ${h.day} de ne plus lancer de guides est levé par cette demande.` });
+    }
     const created = route.kind === 'tasks' || route.kind === 'new_product' ? this.missionTasks(mission, route, items, target) : [];
-    this.answerMission(mission, route, created.length);
+    if (route.kind === 'order') await executeOrder(this.ctx, mission, route.order);
+    else this.answerMission(mission, route, created.length);
     if (created.length) {
       if (owner.id !== ceo.id) emit(w, { agentId: ceo.id, toAgentId: owner.id, kind: 'delegate', text: `Camille confie la mission du fondateur à ${owner.name} (${created.length} tâche(s))` });
       emit(w, { agentId: owner.id, kind: 'thought', text: `${owner.name} : « ${short(created.map((t) => t.title).join(', '), 120)} » — on s'y met en priorité.` });
@@ -207,13 +213,20 @@ export class Company implements CompanyApi {
   private answerMission(mission: Mission, route: MissionRoute, created: number): void {
     const w = this.world;
     switch (route.kind) {
-      case 'tasks':
-        if (!created) {
-          mission.status = 'done';
-          mission.outcome = 'Déjà en cours, aucune nouvelle tâche nécessaire.';
-          emit(w, { agentId: 'camille', kind: 'thought', text: `Camille : c'est déjà en cours, aucune nouvelle tâche nécessaire pour « ${short(mission.text, 60)} »` });
+      case 'tasks': {
+        if (created) return;
+        // « Déjà en cours » is only said of an open task that really does what was asked: the mission follows it.
+        const covering = openTasks(w, (t) => route.items.some((it) => it.kind === t.kind && (!it.input.productId || it.input.productId === t.input.productId) && (!it.input.nicheId || it.input.nicheId === t.input.nicheId)));
+        if (!covering.length) {
+          mission.status = 'failed';
+          tellFounder(this.ctx, 'camille', mission, `Je n'ai rien lancé pour « ${short(mission.text, 80)} » : je n'ai trouvé aucune tâche à confier pour cette demande. Précise-la, ou dis-moi sur quel guide.`);
+          return;
         }
+        for (const t of covering) if (!mission.taskIds.includes(t.id)) mission.taskIds.push(t.id);
+        mission.outcome = `Déjà en cours : « ${short(covering[0]!.title, 70)} ».`;
+        emit(w, { agentId: 'camille', kind: 'thought', text: `Camille : c'est déjà en cours (« ${short(covering[0]!.title, 60)} »), je suis cette tâche pour « ${short(mission.text, 60)} »` });
         return;
+      }
       case 'new_product': {
         const also = route.others.length ? ` (ta demande pourrait aussi viser : ${route.others.join(', ')} ; dis-le-moi si je me trompe)` : '';
         mission.outcome = `Compris : un guide dans la niche « ${route.name} ».`;
@@ -225,6 +238,12 @@ export class Company implements CompanyApi {
         mission.nicheId = route.nicheId;
         mission.productId = product.id;
         mission.wantsProduct = true;
+        const hold = productHold(w, product.id);
+        if (hold) {
+          mission.status = 'failed';
+          tellFounder(this.ctx, 'camille', mission, `« ${product.title} » couvre ce sujet, mais il est de côté depuis le jour ${hold.day} : ${hold.reason}. Dis « remets le guide en ligne » si tu veux le reprendre, je n'ouvre pas de doublon.`);
+          return;
+        }
         if (product.status === 'live') {
           mission.status = 'done';
           tellFounder(this.ctx, 'camille', mission, `« ${product.title} » couvre déjà ce sujet et il est en ligne (${product.stats.sales} ventes). Pas de doublon : je ne lance rien de plus.`);
@@ -241,7 +260,17 @@ export class Company implements CompanyApi {
         return;
       case 'unknown':
         mission.status = 'failed';
-        tellFounder(this.ctx, 'camille', mission, `Je ne lance rien sur « ${route.topic} », aucune niche de notre veille ne correspond et je ne veux pas livrer autre chose à la place.${route.leads.length ? ` Nos meilleures pistes : ${route.leads.join(' ; ')}.` : ''} Dis-moi laquelle tu veux, ou précise le sujet.`);
+        tellFounder(this.ctx, 'camille', mission, `Je ne lance rien sur « ${route.topic} », aucune niche de notre veille ne correspond et je ne veux pas livrer autre chose à la place.${route.near.length ? ` Le plus proche que nous ayons : ${route.near.map((n) => `« ${n} »`).join(' ou ')}.` : ''}${route.leads.length ? ` Nos meilleures pistes : ${route.leads.join(' ; ')}.` : ''} Dis-moi laquelle tu veux, ou précise le sujet.`);
+        return;
+      case 'unclear':
+        mission.status = 'failed';
+        tellFounder(this.ctx, 'camille', mission, `Je ne lance rien sur « ${route.topic} » : je ne vois pas ce que tu attends de nous.${route.niche ? ` Si c'est un guide sur « ${route.niche} », dis-moi « lance un guide sur ${route.topic} ».` : ' Dis-moi quoi faire : un guide, de la pub, une analyse ?'}`);
+        return;
+      case 'held':
+        mission.status = 'failed';
+        tellFounder(this.ctx, 'camille', mission, `Je ne lance pas ça : ${route.reason}. Dis « reprends les pubs » et je m'y remets.`);
+        return;
+      case 'order':
         return;
     }
   }
@@ -298,6 +327,25 @@ export class Company implements CompanyApi {
       emit(w, { agentId: task.assignee, kind: 'founder', text: `Le fondateur refuse « ${short(task.title, 70)} »`, refs: { taskId: task.id, productId: productIdOf(task) } });
       const a = agentById(w, task.assignee);
       if (a && a.currentTaskId === task.id) { a.currentTaskId = null; a.status = 'idle'; a.bubble = null; }
+      this.honourRefusal(task);
+    }
+  }
+
+  /** A refusal is a decision: it stays on the product or the campaign, so that nobody asks the same thing tomorrow. */
+  private honourRefusal(task: Task): void {
+    const w = this.world;
+    const product = productOf(this.ctx, task.input.productId);
+    if (task.kind === 'publish_product' && product && product.status !== 'live') {
+      shelveProduct(this.ctx, product, `le fondateur a refusé sa mise en ligne le jour ${w.day}`);
+      emit(w, { agentId: 'camille', kind: 'founder', text: `Camille : bien noté, « ${short(product.title, 60)} » reste hors ligne et on passe à la suite. Dis « remets le guide en ligne » si tu changes d'avis.`, refs: { productId: product.id } });
+    } else if (task.kind === 'launch_campaign' && product) {
+      const until = w.day + REFUSAL_COOLDOWN_DAYS;
+      addHold(w, { kind: 'ads', productId: product.id, until, reason: `le fondateur a refusé la pub de ce guide le jour ${w.day} (nouvelle demande après le jour ${until})` });
+      cancelProductTasks(this.ctx, product.id, 'pub refusée par le fondateur', ['write_ad_hooks', 'produce_ad', 'launch_campaign']);
+      emit(w, { agentId: 'leo', kind: 'founder', text: `Léo : compris, pas de pub sur « ${short(product.title, 60)} » jusqu'au jour ${until}, sauf si tu dis « reprends les pubs ».`, refs: { productId: product.id } });
+    } else if (task.kind === 'optimize_ads') {
+      const campaign = w.company.campaigns.find((c) => c.id === task.input.campaignId);
+      if (campaign) campaign.raiseRefusedDay = w.day;
     }
   }
 
@@ -305,7 +353,7 @@ export class Company implements CompanyApi {
 
   private async morning(): Promise<void> {
     const w = this.world;
-    this.ctx.incidents = [];
+    this.ctx.incidents = this.memory.incidents = [];
     const chiefs = w.company.agents.filter((a) => a.isChief);
     for (const c of chiefs) {
       if (c.place !== 'direction') {
@@ -377,7 +425,7 @@ export class Company implements CompanyApi {
       if (reviewing.has(agent.id)) continue;
       const task = this.pickTask(agent);
       if (!task) { this.idle(agent); continue; }
-      this.idleTicks.set(agent.id, 0);
+      this.memory.idleTicks[agent.id] = 0;
       if (agent.energy <= 12 && task.workLeft > 0) {
         this.coffee(agent, `${agent.name} est à plat : pause café avant de reprendre « ${short(task.title, 40)} »`);
         continue;
@@ -388,7 +436,7 @@ export class Company implements CompanyApi {
         emit(w, { agentId: agent.id, kind: 'task_start', text: `${agent.name} ${resumed ? 'reprend' : 'commence'} « ${short(task.title, 70)} »`, refs: { taskId: task.id, productId: productIdOf(task) } });
       }
       agent.currentTaskId = task.id;
-      if (!this.brainRead.has(task.id)) await this.consultBrain(agent, task);
+      if (!this.memory.minds[task.id]) await this.consultBrain(agent, task);
       if (agent.place !== agent.dept) {
         agent.place = agent.dept;
         emit(w, { agentId: agent.id, kind: 'walk', place: agent.dept, text: `${agent.name} file à son bureau` });
@@ -412,7 +460,7 @@ export class Company implements CompanyApi {
     }
     const before = w.idCounter;
     const res = sim.tickMarket(w, streamRng(w.scenario.seed, STREAM.market, w.day));
-    this.ctx.lastMarketNotes = Array.isArray(res.notes) ? res.notes.slice(0, 12) : [];
+    this.ctx.lastMarketNotes = this.memory.lastMarketNotes = Array.isArray(res.notes) ? res.notes.slice(0, 12) : [];
     // The market narrates its own events/messages: only add what it did not already say.
     const said = w.activity.filter((a) => idNum(a.id) > before);
     const saidKinds = new Set(said.map((a) => a.kind));
@@ -453,10 +501,10 @@ export class Company implements CompanyApi {
       emit(w, { agentId: 'hugo', kind: 'founder', text: m.status === 'done' ? `Hugo au fondateur : mission « ${short(m.text, 70)} » accomplie${m.outcome ? `. ${short(m.outcome, 90)}` : ''}` : `Hugo au fondateur : mission « ${short(m.text, 70)} » échouée. ${short(m.outcome ?? 'Toutes ses tâches ont été abandonnées.', 90)}` });
     }
     this.checkStatus();
-    // Forget the cached minds of finished tasks (they are rebuilt on demand anyway).
-    for (const id of [...this.minds.keys()]) {
+    // Forget what finished tasks read in the brain.
+    for (const id of Object.keys(this.memory.minds)) {
       const t = taskById(w, id);
-      if (!t || !isOpen(t)) { this.minds.delete(id); this.brainRead.delete(id); }
+      if (!t || !isOpen(t)) delete this.memory.minds[id];
     }
     for (const a of w.company.agents) {
       a.energy = Math.min(100, a.energy + 45);
@@ -493,14 +541,15 @@ export class Company implements CompanyApi {
       return;
     }
     if (agent.energy < 60) { this.coffee(agent, `${agent.name} prend un café (énergie ${Math.round(agent.energy)} %)`); return; }
-    const n = (this.idleTicks.get(agent.id) ?? 0) + 1;
-    this.idleTicks.set(agent.id, n);
+    const n = (this.memory.idleTicks[agent.id] ?? 0) + 1;
+    this.memory.idleTicks[agent.id] = n;
     agent.energy = Math.min(100, agent.energy + 2);
     if (agent.status !== 'idle') agent.status = 'idle';
     agent.bubble = null;
-    if (n >= 6 && this.rng.chance(0.04)) {
+    // On its own stream: a café break never shifts what the company draws next.
+    if (n >= 6 && streamRng(w.scenario.seed, STREAM.idleBreak, w.day, w.tick, w.company.agents.indexOf(agent)).chance(0.04)) {
       this.coffee(agent, `${agent.name} passe à la cafétéria discuter avec l'équipe`);
-      this.idleTicks.set(agent.id, 0);
+      this.memory.idleTicks[agent.id] = 0;
     } else if (agent.place !== agent.dept && agent.place !== 'cafe') {
       agent.place = agent.dept;
       emit(w, { agentId: agent.id, kind: 'walk', place: agent.dept, text: `${agent.name} retourne à son bureau` });
@@ -520,8 +569,7 @@ export class Company implements CompanyApi {
   private async consultBrain(agent: AgentState, task: Task): Promise<void> {
     const w = this.world;
     const mind = await this.mindFor(agent, task.kind, this.taskQuery(task));
-    this.minds.set(task.id, mind);
-    this.brainRead.add(task.id);
+    this.memory.minds[task.id] = { brainNotes: mind.brainNotes, lessonIds: mind.lessons.map((l) => l.id) };
     emit(w, { agentId: agent.id, kind: 'walk', place: 'cerveau', text: `${agent.name} va consulter le Cerveau` });
     const titles = [...new Set(mind.brainNotes.map((n) => n.title).filter(Boolean))].slice(0, 3);
     emit(w, {
@@ -530,12 +578,11 @@ export class Company implements CompanyApi {
       refs: { taskId: task.id, productId: productIdOf(task) },
     });
     // Recall a lesson the agent has not just quoted (rotates through what the brain taught them).
-    const recalled = mind.lessons.find((l) => !this.recalled.get(agent.id)?.has(l.id));
+    const seen = (this.memory.recalled[agent.id] ??= []);
+    const recalled = mind.lessons.find((l) => !seen.includes(l.id));
     if (recalled) {
-      const seen = this.recalled.get(agent.id) ?? new Set<string>();
-      seen.add(recalled.id);
-      if (seen.size > 20) seen.delete(seen.values().next().value!);
-      this.recalled.set(agent.id, seen);
+      seen.push(recalled.id);
+      if (seen.length > 20) seen.shift();
       emit(w, { agentId: agent.id, kind: 'thought', text: `${agent.name} retient : « ${short(recalled.insight, 90)} »`, refs: { taskId: task.id } });
     }
     emit(w, { agentId: agent.id, kind: 'walk', place: agent.dept, text: `${agent.name} retourne à son bureau` });
@@ -564,6 +611,12 @@ export class Company implements CompanyApi {
     return { agent, playbook: [...(w.company.playbooks[agent.id] ?? [])], brainNotes, lessons, day: w.day, brand: w.scenario.companyName || w.company.name };
   }
 
+  /** Lessons as they read today, retired ones included: a task keeps what its agent read before starting. */
+  private lessonsById(ids: readonly string[]): Lesson[] {
+    const { lessons, retiredLessons = [] } = this.world.company;
+    return ids.flatMap((id) => lessons.find((l) => l.id === id) ?? retiredLessons.find((l) => l.id === id) ?? []);
+  }
+
   private async runHandlers(ready: ReadyWork[]): Promise<void> {
     if (!ready.length) return;
     if (this.engine.mode === 'claude') {
@@ -579,9 +632,9 @@ export class Company implements CompanyApi {
     const w = this.world;
     const spec = HANDLERS[task.kind];
     if (!spec) { this.failTask(task, agent, 'aucun savoir-faire pour ce type de tâche'); return; }
-    const cached = this.minds.get(task.id);
-    const mind: MindContext = cached
-      ? { ...cached, agent, playbook: [...(w.company.playbooks[agent.id] ?? [])], day: w.day, brand: w.scenario.companyName || w.company.name }
+    const read = this.memory.minds[task.id];
+    const mind: MindContext = read
+      ? { brainNotes: read.brainNotes, lessons: this.lessonsById(read.lessonIds), agent, playbook: [...(w.company.playbooks[agent.id] ?? [])], day: w.day, brand: w.scenario.companyName || w.company.name }
       : await this.mindFor(agent, task.kind, this.taskQuery(task));
     let outcome: HandlerOutcome;
     try {
@@ -864,9 +917,12 @@ export class Company implements CompanyApi {
       emit(w, { agentId: 'gabriel', kind: 'finance', text: `Gabriel : la trésorerie redevient positive (${eur(fin.cash)})` });
     }
     if (fin.profit >= w.scenario.goal.targetProfit && !w.market.events.some((e) => e.kind === 'goal_reached')) {
-      this.pushEvent('goal_reached', 'Objectif atteint !', `${eur(fin.profit)} de profit cumulé au jour ${w.day} (objectif ${eur(w.scenario.goal.targetProfit)}). L'agence continue de tourner.`, 'good');
+      const { targetProfit, byDay } = w.scenario.goal;
+      const late = w.day > byDay;
+      if (late) this.pushEvent('goal_reached', "Objectif atteint après l'échéance", `${eur(fin.profit)} de profit cumulé au jour ${w.day}, pour ${eur(targetProfit)} visés avant le jour ${byDay}. L'agence continue de tourner.`, 'info');
+      else this.pushEvent('goal_reached', 'Objectif atteint !', `${eur(fin.profit)} de profit cumulé au jour ${w.day} (objectif ${eur(targetProfit)}). L'agence continue de tourner.`, 'good');
       if (w.status === 'running') w.status = 'goal_reached';
-      emit(w, { agentId: 'camille', kind: 'event', text: `Objectif atteint : ${eur(fin.profit)} de profit cumulé ! On ne s'arrête pas là.` });
+      emit(w, { agentId: 'camille', kind: 'event', text: late ? `Objectif atteint, mais après l'échéance du jour ${byDay} : ${eur(fin.profit)} de profit cumulé.` : `Objectif atteint : ${eur(fin.profit)} de profit cumulé ! On ne s'arrête pas là.` });
     }
     const b = currentBudget(w);
     if (b.survival) emit(w, { agentId: 'gabriel', kind: 'finance', text: `Gabriel : trésorerie ${eur(fin.cash)} (${dec(fin.cash / Math.max(1, w.scenario.startingCash) * 100, 0)} % du départ) — on reste en mode survie` });

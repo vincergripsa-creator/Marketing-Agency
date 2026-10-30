@@ -124,7 +124,7 @@ const SEEDS: AgentSeed[] = [
   // ── Studio PDF
   {
     id: 'elise', name: 'Élise', role: 'Rédactrice en chef', dept: 'studio', isChief: true, tier: 'opus',
-    persona: "Élise a l'œil pour la structure qui vend : un problème, des étapes numérotées, des exemples réels. Elle coupe sans pitié tout ce qui ne sert pas le lecteur.",
+    persona: "Élise a l'œil pour la structure qui vend : un problème, des étapes numérotées, des exemples types. Elle coupe sans pitié tout ce qui ne sert pas le lecteur.",
     skills: ['Titres qui vendent', 'Plan qui vend', 'Direction éditoriale', 'Rédaction', 'Relecture'],
     tools: [...BRAIN, 'market.pains', 'team.delegate', 'team.review'],
     taskKinds: ['write_titles', 'write_outline', 'write_pdf'],

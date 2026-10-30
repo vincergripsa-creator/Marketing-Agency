@@ -40,7 +40,7 @@ const ROUTES: { re: RegExp; kinds: TaskKind[] }[] = [
   { re: /fact.?check|verifi(e|er|ez) les (chiffres|sources)/, kinds: ['fact_check'] },
   { re: /couverture|cover|design/, kinds: ['design_cover'] },
   { re: /page de vente|landing|boutique/, kinds: ['write_sales_page'] },
-  { re: /\bprix\b|tarif|baisse(r|z)? (le|les) prix|augmente(r|z)? (le|les) prix|promo/, kinds: ['set_price'] },
+  { re: /\bprix\b|tarif|baisse(r|z)? (le|les) prix|augmente(r|z)? (le|les) prix|promo|\b(mets?|passe|fixe|vends?)\b(?!.*\b(budget|par jour)\b).*\d\s*(€|euros?)(?!\s*\/)/, kinds: ['set_price'] },
   { re: /publie(r|z)? (le|ce) (pdf|guide|produit)|mets? en ligne|mise en ligne/, kinds: ['publish_product'] },
   { re: /hook|accroche/, kinds: ['write_ad_hooks'] },
   { re: /\bpubs?\b|publicite|\bads\b|campagne|creative|creas?\b/, kinds: ['write_ad_hooks', 'produce_ad', 'launch_campaign'] },
@@ -73,7 +73,7 @@ export function heuristicMission(input: { text: string; allowedKinds: TaskKind[]
   const why = `Le fondateur a demandé : « ${fit(text, 140)} »`;
   if (kinds.length === 0) {
     const fb = (['daily_report', 'scan_trends', 'plan_day'] as TaskKind[]).find((k) => allowed.has(k)) ?? input.allowedKinds[0]!;
-    return [{ kind: fb, title: KIND_TITLE[fb], dept: KIND_DEPT[fb], priority: urgent ? 1 : 2, input: { missionText: text }, why: `${why}. Mission floue : on commence par un état des lieux chiffré.` }];
+    return [{ kind: fb, title: KIND_TITLE[fb], dept: KIND_DEPT[fb], priority: urgent ? 1 : 2, input: { missionText: text, vague: true }, why: `${why}. Mission floue : on commence par un état des lieux chiffré.` }];
   }
   return kinds.slice(0, 6).map((k, i) => ({
     kind: k,
@@ -119,10 +119,21 @@ const CAUSE = /^Cause d'hier\s*:/iu;
 const BEST = /^Meilleur produit sur 7 jours\s*:/iu;
 const MISSION = /^Mission du fondateur\b/iu;
 const MY_POST = /^Mon poste\s*:/iu;
+const WEEK = /^Semaine\s*:/iu;
+const TREND = /^Tendance\s*:/iu;
+const DECISION = /^Décision produit\s*:/iu;
+const PRODUCT_FILE = /^Fiche produit\s*:/iu;
+const FOUNDER_ORDER = /^Ordre du fondateur\s*:/iu;
 
 const STATUS_ASK = /\bou en (est|sont|es)\b|\bmission|\bavancement\b|\bstatut\b|\betat d'avancement\b/;
 const WHY_ASK = /\bpourquoi\b|\bcomment ca se fait\b|\braison\b|\bcause\b|\bexplique\b/;
 const BEST_ASK = /\bmeilleur|\bbest.?seller|\brapporte le plus\b|\bmarche le mieux\b|\btop produit\b/;
+const WEEK_ASK = /\bsemaine\b|\b7 (derniers )?jours\b|\bhebdo/;
+const FALLING_ASK = /\b(baisse|chute|recule|s'effondre|diminue|descend)/;
+/** The question is about one product, or about a decision taken on one. */
+const PRODUCT_ASK = /\b(guides?|produits?|pdf|ebook)\b|\b(arrete|tue|coupe|retire|supprime|stoppe|mis en pause)\b/;
+/** What a question about a product says besides its name. */
+const QUESTION_WORD = /^(arrete|arreter|tue|coupe|retire|supprime|stoppe|pause|mauvaise|bonne|mauvais|bon|note|avi|tu|as|ont|avez|vous|bien|mal|marche|vend|vendu|mise|mis|encore|toujours|plus|moins|fait|faut|ete)$/;
 
 /** Words that do not tell one mission from another. */
 const GENERIC_WORD = /^(guide|guides|pdf|produit|produits|mission|missions|lance|lancer|lancez|nouveau|nouvelle|sur|pour|les|des|une|est|sont|quoi|avec|dans|notre|nos|votre|vos|mon|mes|quel|quelle|quels|quelles|qui|que|pourquoi|comment|hier|aujourd|hui|fais|faire|ecris|ecrire)$/;
@@ -142,12 +153,21 @@ function missionsAsked(ask: string, missions: string[]): string[] {
   return status && /mission/.test(ask) ? missions : [];
 }
 
+/** The lines about the product the question names: its decision first. A question that names none we know gets no line. */
+function productsAsked(ask: string, lines: string[]): { lines: string[]; named: string } {
+  const words = topicWords(ask).filter((w) => !QUESTION_WORD.test(w));
+  const about = (l: string) => { const known = new Set(topicWords(l)); return words.some((w) => known.has(w)); };
+  const found = lines.filter(about);
+  return { lines: [...found.filter((l) => DECISION.test(l)), ...found.filter((l) => !DECISION.test(l))].slice(0, 2), named: words.join(' ') };
+}
+
 /** One fact of the situation, in the agent's own voice. */
 function voiced(line: string): string {
   const l = clean(line).replace(/[.;]+$/, '');
   return l
     .replace(/^Mon poste\s*:\s*/iu, '')
     .replace(/^Cause d'hier\s*:\s*/iu, '')
+    .replace(/^(?:Semaine|Tendance|Décision produit|Fiche produit|Ordre du fondateur)\s*:\s*/iu, '')
     .replace(/^Meilleur produit sur 7 jours\s*:\s*aucun, /iu, 'on n’a pas de meilleur produit : ')
     .replace(/^Meilleur produit sur 7 jours\s*:\s*/iu, 'notre meilleur produit sur 7 jours est ')
     .replace(/^Mission du fondateur \(jour (\d+)\)\s*/iu, 'ta mission du jour $1, ')
@@ -175,13 +195,19 @@ export function heuristicChat(input: { history: { from: string; text: string }[]
   const raw = String(input.situation ?? '').split(/\n+|(?<=[.;])\s+(?=\p{Lu})/u).map(clean).filter((l) => l.length > 3);
   const lines = raw.filter((l) => !PERSONA_LINE.test(l) && !/\btu es\s+\p{Lu}/u.test(l) && !/^contexte\s*:/i.test(l));
   const topic = TOPICS.find((t) => t.re.test(ask));
-  const generic = lines.filter((l) => !CAUSE.test(l) && !BEST.test(l) && !MISSION.test(l));
+  const byName = lines.filter((l) => DECISION.test(l) || PRODUCT_FILE.test(l));
+  const generic = lines.filter((l) => !CAUSE.test(l) && !BEST.test(l) && !MISSION.test(l) && !WEEK.test(l) && !TREND.test(l) && !DECISION.test(l) && !PRODUCT_FILE.test(l) && !FOUNDER_ORDER.test(l));
   const relevant = topic ? generic.filter((l) => topic.keys.test(norm(l))) : [];
   // A precise question gets its line: the mission named, the top product, the cause of the day.
   const missions = missionsAsked(ask, lines.filter((l) => MISSION.test(l)));
   const best = BEST_ASK.test(ask) ? lines.filter((l) => BEST.test(l)) : [];
+  const week = WEEK_ASK.test(ask) ? lines.filter((l) => WEEK.test(l)) : [];
+  const falling = WHY_ASK.test(ask) && FALLING_ASK.test(ask) ? lines.filter((l) => TREND.test(l)) : [];
+  const asked = PRODUCT_ASK.test(ask) && (WHY_ASK.test(ask) || STATUS_ASK.test(ask)) ? productsAsked(ask, byName) : null;
+  // Asked about a product we do not know: say so, the cause of yesterday answers another question.
+  const unknown = asked && !asked.lines.length && asked.named ? [`je n’ai rien sur « ${asked.named} » : aucun de nos guides ni aucune de nos décisions n’en parle`] : [];
   const causes = WHY_ASK.test(ask) ? lines.filter((l) => CAUSE.test(l)) : [];
-  const precise = missions.length ? missions.slice(0, 2) : best.length ? best : causes.slice(0, 2);
+  const precise = missions.length ? missions.slice(0, 2) : best.length ? best : week.length ? week : asked?.lines.length ? asked.lines : unknown.length ? unknown : falling.length ? falling : causes.slice(0, 2);
   const facts = (precise.length ? precise : relevant.length ? relevant.slice(0, 2) : generic.slice(0, 2)).map(voiced).filter(Boolean);
   const role = clean(agent?.role) || 'membre de l’équipe';
   const name = clean(agent?.name);

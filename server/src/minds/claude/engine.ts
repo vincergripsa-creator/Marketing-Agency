@@ -390,7 +390,7 @@ Avis heuristique (pour référence) : ${json(fb)}`,
 
   // ───────────────────────────── boutique & growth ─────────────────────────────
 
-  async writeSalesPage(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number }, ctx: MindContext): Promise<SalesPage> {
+  async writeSalesPage(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<SalesPage> {
     const fb = await this.h.writeSalesPage(input, ctx);
     return this.run({
       method: 'writeSalesPage', ctx, schema: SCHEMAS.salesPage, maxTokens: 6000, effort: 'medium', fallback: fb,
@@ -411,7 +411,7 @@ Recherche client : ${json(vocBrief(input.voc))}`,
     });
   }
 
-  async writeAdHooks(input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[] }, ctx: MindContext): Promise<{ hookStyle: HookStyle; hook: string }[]> {
+  async writeAdHooks(input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[]; upsellOf?: UpsellContext | null; usedHooks?: string[] }, ctx: MindContext): Promise<{ hookStyle: HookStyle; hook: string }[]> {
     const fb = await this.h.writeAdHooks(input, ctx);
     return this.run({
       method: 'writeAdHooks', ctx, schema: SCHEMAS.hooks, maxTokens: 2500, effort: 'low', fallback: fb,
@@ -422,7 +422,7 @@ Recherche client : ${json(vocBrief(input.voc))}`,
     });
   }
 
-  async writeAd(input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[] }, ctx: MindContext): Promise<AdDraft> {
+  async writeAd(input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[]; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<AdDraft> {
     const fb = await this.h.writeAd(input, ctx);
     return this.run({
       method: 'writeAd', ctx, schema: SCHEMAS.ad, maxTokens: 4000, effort: 'low', fallback: fb, extraBanned: input.bannedClaims ?? [],

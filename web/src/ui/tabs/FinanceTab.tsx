@@ -4,7 +4,7 @@ import type { WeeklyPnl } from '../../../../shared/types';
 import { BarChart, LineChart, SERIES } from '../charts';
 import { Bar, cx, Empty, Overlay, Pill, SectionTitle, Segmented, Stat } from '../common';
 import { useApp } from '../context';
-import { budgetView, isReserve, ledgerView, type BudgetView } from '../derive';
+import { budgetView, goalLate, isReserve, ledgerView, type BudgetView } from '../derive';
 import { clamp01, fmtEur, fmtEurShort, fmtEurSigned, fmtInt, fmtRoas, safeDiv, sum } from '../format';
 import { Icon } from '../icons';
 import { agentName, LEDGER_LABEL, RESERVE_LABEL } from '../labels';
@@ -44,6 +44,7 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
 
   const goal = sc?.goal;
   const goalPct = goal && goal.targetProfit > 0 ? clamp01(safeDiv(f?.profit ?? 0, goal.targetProfit)) : 0;
+  const late = goalLate(snapshot);
   const entries = [...ledger].reverse().filter((e) => (lf === 'all' ? true : lf === 'in' ? e.amount > 0 : e.amount < 0)).slice(0, ENTRIES_SHOWN);
 
   if (!f) return <Overlay title="Finance" icon="wallet" onClose={onClose}><Empty>Pas encore de données financières.</Empty></Overlay>;
@@ -68,9 +69,11 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
             <Icon name="flag" size={14} />
             <strong>Objectif : {fmtEur(goal.targetProfit, 0)} de profit avant le jour {goal.byDay}</strong>
             <span className="flex1" />
-            <span className={cx('small', goalPct >= 1 ? 'txt-good' : 'muted')}>{Math.round(goalPct * 100)} % · jour {snapshot?.day ?? 1} / {goal.byDay}</span>
+            {late ? <span className="small txt-warn">Atteint au jour {snapshot?.goalReachedDay}, après l’échéance</span> : (
+              <span className={cx('small', goalPct >= 1 ? 'txt-good' : 'muted')}>{Math.round(goalPct * 100)} % · jour {snapshot?.day ?? 1} / {goal.byDay}</span>
+            )}
           </div>
-          <Bar value={goalPct} height={10} color={goalPct >= 1 ? '#16a34a' : (f.profit ?? 0) < 0 ? '#dc2626' : '#2a78d6'} />
+          <Bar value={goalPct} height={10} color={late ? '#d97706' : goalPct >= 1 ? '#16a34a' : (f.profit ?? 0) < 0 ? '#dc2626' : '#2a78d6'} />
           <div className="goal-time"><span style={{ left: `${clamp01(safeDiv(snapshot?.day ?? 1, goal.byDay)) * 100}%` }} title="Temps écoulé" /></div>
         </div>
       ) : null}

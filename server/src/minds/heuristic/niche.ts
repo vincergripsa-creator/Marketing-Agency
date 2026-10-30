@@ -43,6 +43,7 @@ export interface NicheCtx {
   situations: Situation[];
   observe: string[]; keep: string[]; models: string[];
   pains: string[]; phrases: string[]; objections: string[]; outcomes: string[];
+  ownPains: string[];     // the pains this very guide treats: all of them, or only those of a follow-up's sub-problem
   tips: string[]; steps: string[]; mistakes: string[]; examples: string[]; facts: string[];
   priceAnchors: number[]; bannedClaims: string[];
   richness: number;       // 0..1
@@ -126,19 +127,21 @@ export function buildNicheCtx(nicheIn: Partial<NicheBrief> | null | undefined, v
   const mat = topic ? parsed.topics[topic.id] ?? EMPTY_MATERIAL : parsed.core;
   const clear = claimFree(voc.bannedClaims);
   const allPains = voc.pains.filter(clear);
-  // a follow-up guide only quotes the customers who talk about its sub-problem
-  const onTopic = (p: string): boolean => {
-    if (!topic) return true;
-    const about = new Set(norm([topic.pain, topic.goal, ...mat.facts, ...mat.tips].join(' ')).split(/[^a-z0-9]+/).filter((w) => w.length >= 5));
-    return norm(p).split(/[^a-z0-9]+/).some((w) => w.length >= 5 && about.has(w));
-  };
-  const phrases = uniqStrings(voc.phrases.map(speakable)).filter((p) => p.length >= 6 && clear(p) && onTopic(p));
   const pains = topic ? allPains.filter((p) => norm(p) !== norm(topic.pain)) : allPains;
-  const corpus = [niche.audience, niche.problem, niche.name, ...voc.pains, ...voc.phrases, ...k.steps, ...k.facts, ...k.tips, ...voc.desiredOutcomes];
-  const age = extractAgeRange([niche.audience, niche.problem, ...voc.pains, ...voc.phrases, ...k.facts]);
   // An upsell brief may carry a desired outcome as its "problem": the pain then comes from the research.
   const briefIsGoal = isGoal(niche.problem, voc.desiredOutcomes);
   const free = upsellOf && !topic ? freePain(briefIsGoal ? allPains : [niche.problem, ...allPains], upsellOf) : null;
+  // a follow-up guide only quotes the customers who talk about its sub-problem: the parent's words sell the parent
+  const onTopic = (p: string): boolean => {
+    if (topic) return topic.quotes.test(norm(p));
+    if (!free) return true;
+    const about = subjectWords(free);
+    for (const w of subjectWords(niche.audience)) about.delete(w);
+    return [...subjectWords(p)].some((w) => about.has(w));
+  };
+  const phrases = uniqStrings(voc.phrases.map(speakable)).filter((p) => p.length >= 6 && clear(p) && onTopic(p));
+  const corpus = [niche.audience, niche.problem, niche.name, ...voc.pains, ...voc.phrases, ...k.steps, ...k.facts, ...k.tips, ...voc.desiredOutcomes];
+  const age = extractAgeRange([niche.audience, niche.problem, ...voc.pains, ...voc.phrases, ...k.facts]);
   const goal = topic ? topic.goal : (free && freeOutcome(voc.desiredOutcomes, upsellOf!)) || (briefIsGoal ? niche.problem : null);
   const painCands = [...(topic ? [topic.pain] : free ? [free] : []), ...(goal ? [] : [niche.problem]), ...pains].filter((p) => !firstPerson(p));
   const mainPain = painCands.find((p) => p.length <= 90) ?? painCands[0] ?? pains[0] ?? niche.problem;
@@ -150,7 +153,8 @@ export function buildNicheCtx(nicheIn: Partial<NicheBrief> | null | undefined, v
   const diag = steps.find((s) => s.diagnostic) ?? null;
   const ranked = steps.filter((s) => !s.diagnostic);
   const method = ranked.length >= 3 ? ranked : [...ranked, ...FALLBACK.steps.map((s, i) => parseStep(s, i + 1))].filter((s, i, a) => a.findIndex((x) => norm(x.text) === norm(s.text)) === i).slice(0, Math.max(5, ranked.length));
-  const pairs = mat.pairs.length >= 3 ? mat.pairs : [...mat.pairs, ...FALLBACK.pairs.map(parseMistake)].filter((p, i, a) => a.findIndex((x) => norm(x.mistake) === norm(p.mistake)) === i);
+  // a sub-problem keeps its own mistakes, even two: the generic ones are about changing a habit
+  const pairs = mat.pairs.length >= 3 || (topic && mat.pairs.length) ? mat.pairs : [...mat.pairs, ...FALLBACK.pairs.map(parseMistake)].filter((p, i, a) => a.findIndex((x) => norm(x.mistake) === norm(p.mistake)) === i);
   return {
     niche, voc,
     aud: lf(niche.audience),
@@ -181,6 +185,7 @@ export function buildNicheCtx(nicheIn: Partial<NicheBrief> | null | undefined, v
     situations: mat.situations,
     observe: mat.observe, keep: mat.keep, models: mat.models,
     pains, phrases, objections: voc.objections, outcomes: voc.desiredOutcomes,
+    ownPains: uniqStrings([...(topic ? [topic.pain] : free ? [free] : []), ...allPains.filter(onTopic)]),
     tips: mat.tips, steps: steps.map((s) => s.text), mistakes: mat.pairs.map((p) => p.mistake), examples: mat.examples, facts: mat.facts,
     priceAnchors: voc.priceAnchors, bannedClaims: voc.bannedClaims,
     richness: Math.min(1, items / 32),
@@ -288,6 +293,8 @@ export function looksLikeClause(s: string): boolean {
   // a clause starts with a subject: pronoun, determiner + noun, or a bare « bébé »
   if (!/^(il|elle|ils|elles|bebe|le|la|les|l'.*|mon|ma|mes|son|sa|ses|leur|leurs|notre|votre|ce|cet|cette|un|une)$/.test(words[0] ?? '')) return false;
   if (/[:;]/.test(s)) return false;
-  const w = words.slice(1, 5);
+  // « la peur que bébé s’étouffe », « le chiot qui pleure » : the verb of a relative clause does not make a sentence
+  const rel = words.findIndex((x, i) => i > 0 && /^(qui|que|qu'.*|qu’.*|dont)$/.test(x));
+  const w = words.slice(1, rel > 0 ? Math.min(5, rel) : 5);
   return w.some((x) => /^(s'|n')[a-z]/.test(x) || /^(se|ne|est|sont|a|ont|fait|font|va|vont|peut|veut|reste|refuse|pleure|mange|dort|aboie|tire|mord|crie|boude|arrive|oublie|perd|prend|bloque|griffe|detruit|ignore|tombe|ecaille|coule|seche)$/.test(x));
 }

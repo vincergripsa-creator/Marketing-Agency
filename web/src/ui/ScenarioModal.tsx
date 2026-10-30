@@ -2,14 +2,14 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import type { CompanySnapshot, Difficulty } from '../../../shared/types';
 import { api, type RunSummary } from '../api';
-import { cx, Empty } from './common';
+import { cx, Empty, Pill } from './common';
 import { useApp } from './context';
+import { currentRunPill, RUN_STATUS } from './derive';
 import { fmtEur, fmtEurSigned } from './format';
 import { Icon } from './icons';
 import { DIFFICULTY_INFO } from './labels';
 import { budgetError, budgetTooLow, deadlineNote, defaultForm, minCashOf, scenarioConfig, settleField, type NumberField, type ScenarioForm } from './scenarioForm';
 
-const RUN_STATUS: Record<string, string> = { running: 'en cours', paused: 'en pause', bankrupt: 'faillite', goal_reached: 'objectif atteint', finished: 'terminée' };
 
 const randomSeed = () => Math.floor(Math.random() * 100_000);
 
@@ -182,7 +182,7 @@ export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded
                       </span>
                     ) : null}
                   </div>
-                  {r.runId === snapshot?.runId ? <span className="pill tone-green">en cours</span> : (
+                  {r.runId === snapshot?.runId ? <Pill tone={currentRunPill(snapshot.status).tone}>{currentRunPill(snapshot.status).label}</Pill> : (
                     <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void load(r.runId)}>Charger</button>
                   )}
                 </div>

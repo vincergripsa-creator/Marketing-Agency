@@ -492,6 +492,18 @@ describe('ad platform', () => {
   });
 });
 
+describe('ad rows past their retention', () => {
+  it('leave the market but stay in the total of their creative', () => {
+    const { world, rng } = makeWorld(3);
+    const row = (day: number, spend: number) => ({ day, campaignId: 'c', creativeId: 'old', productId: 'p', spend, impressions: 1000, clicks: 20, ctr: 0.02, cpc: 0.5, cpm: 10, landingViews: 15, purchases: 1, revenue: 19, roas: 1.9, frequency: 1.2, comments: [] });
+    world.market.adStats = [row(1, 10), row(2, 15), row(60, 5)];
+    world.day = 100;
+    tickMarket(world, rng);
+    expect(world.market.adStats.map((s) => s.day)).toEqual([60]);
+    expect(world.market.retiredAdTotals).toEqual({ old: { spend: 25, impressions: 2000, clicks: 40, purchases: 2, revenue: 38, lastDay: 2 } });
+  });
+});
+
 // ───────────────────────────── determinism ─────────────────────────────
 
 describe('determinism', () => {

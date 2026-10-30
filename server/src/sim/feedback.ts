@@ -11,7 +11,7 @@ const GOOD = [
   "J'avais tout lu sur internet sans résultat. Ici il y a une vraie méthode et des checklists. Je recommande.",
   'Clair, bien illustré, et pas de blabla. Le chapitre « {chapitre} » vaut à lui seul le prix du guide.',
   "Je craignais un énième PDF générique, mais non : c'est précis et pensé pour notre situation.",
-  "Les exemples de vraies familles m'ont rassurée. On voit déjà la différence au bout d'une semaine.",
+  "Les exemples m'ont parlé : on s'y retrouve tout de suite, et on sait par quoi commencer.",
   'Lu en une soirée, appliqué le lendemain. Le bonus est une vraie bonne surprise.',
   "Guide sérieux, honnête sur ce qu'il promet. Les étapes du chapitre « {chapitre} » marchent chez nous.",
 ];
@@ -64,7 +64,10 @@ export function reviewText(rng: Rng, rating: number, product: Product, niche: Ni
   if (kind === 'support_good') return rng.pick(GOOD_SUPPORT);
   if (kind === 'troll') return rng.pick(TROLL_REVIEWS);
   const pool = rating >= 4 ? GOOD : rating === 3 ? MID : BAD;
-  return fill(rng.pick(pool), vars(rng, product, niche));
+  // two buyers do not write the same sentence: a template already on this product waits for the others
+  const seen = (product.stats?.reviews ?? []).map((r) => r.text);
+  const fresh = pool.filter((t) => !seen.some((text) => text.startsWith(t.split('{')[0]!)));
+  return fill(rng.pick(fresh.length ? fresh : pool), vars(rng, product, niche));
 }
 
 /** Pushes a review on the product and refreshes its average rating. */

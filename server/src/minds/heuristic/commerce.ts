@@ -3,11 +3,11 @@
  * promise level driven by `hype`) and the "try to kill it" review before anything ships.
  */
 import type { NicheBrief, PdfContent, Product, QualityReport, SalesPage, VoiceOfCustomer } from '../../shared.js';
-import type { RedTeamFacts, RedTeamVerdict } from '../../contracts.js';
+import type { RedTeamFacts, RedTeamVerdict, UpsellContext } from '../../contracts.js';
 import { RISK_RULES } from '../lexicon.js';
 import { conflictsWith } from '../playbook.js';
 import { ensurePdf } from '../shapes.js';
-import { bare, bestLabel, cap, clean, fit, fmtEur, lf, lowerFirst, norm, ofAud, q, splitSentences, uniqStrings, type LocalRng } from '../util.js';
+import { bare, bestLabel, cap, clean, fit, fmtEur, lf, lowerFirst, norm, ofAud, plainTitle, q, splitSentences, uniqStrings, type LocalRng } from '../util.js';
 import { buildNicheCtx, FALLBACK } from './niche.js';
 import { inferKind, inline, promiseOutcome } from './studio.js';
 
@@ -27,7 +27,7 @@ function blurbOf(intro: string, title: string): string {
   return fit(splitSentences(intro)[0] ?? intro, 170) || title;
 }
 
-interface AnswerCtx { audArt: string; chapters: number; minutes: number; price: number; dur: string; brand: string }
+interface AnswerCtx { audArt: string; chapters: number; price: number; dur: string; brand: string }
 
 /** Objection → honest answer. Specific patterns first (a « périmé » objection is not a « temps » one). */
 const ANSWERS: { re: RegExp; a: (c: AnswerCtx) => string }[] = [
@@ -41,7 +41,7 @@ const ANSWERS: { re: RegExp; a: (c: AnswerCtx) => string }[] = [
   { re: /tout seul|finira|attendre|passera|avec le temps/, a: () => 'Peut-être, mais chaque semaine d’attente installe un peu plus l’habitude. Le plan ne demande que quelques minutes par jour, et vous voyez vite si la situation bouge.' },
   { re: /tout essaye|rien ne marche|rien n'a marche|deja essaye/, a: () => 'C’est justement pour vous qu’il a été écrit. Un chapitre entier explique pourquoi les méthodes précédentes n’ont pas tenu, et le plan n’ajoute qu’une seule nouveauté à la fois.' },
   { re: /pleur|forcer|strict|brutal|punition|crier/, a: () => 'Aucune étape ne vous demande de forcer. Chaque changement est progressif, expliqué, et vous gardez la main sur le rythme du début à la fin.' },
-  { re: /pas le temps|temps de|pages|trop long|lire|occupe|deborde|complique/, a: (c) => `Le guide se lit en ${c.minutes} minutes environ : ${c.chapters} chapitres courts, une checklist par chapitre. Le plan demande ensuite quelques minutes par jour, pas plus.` },
+  { re: /pas le temps|temps de|pages|trop long|lire|occupe|deborde|complique/, a: (c) => `${c.chapters} chapitres courts, une checklist par chapitre : on avance par petites étapes, sans tout lire d’un coup, et chaque étape dit ce qu’il faut faire ensuite.` },
   { re: /prix|cher|argent|euros|payer|arnaque/, a: (c) => `${fmtEur(c.price)}, c’est moins qu’une seule consultation. Et vous avez 14 jours pour être remboursé si le guide ne vous apporte rien de concret.` },
   { re: /mon cas|pour moi|different|particulier|specifique|marchera|trop (age|vieux|jeune|tard)|\bage\b/, a: (c) => `Le guide est écrit pour un seul profil : ${c.audArt}. Si vous vous reconnaissez dans les phrases ci-dessus, il a été fait pour vous.` },
 ];
@@ -69,23 +69,23 @@ function answerFor(objection: string, ctx: AnswerCtx, used: Set<string>): string
 const DEFAULT_OBJECTIONS = ['C’est encore un PDF écrit par ChatGPT ?', 'Je n’ai pas le temps de lire un long guide', 'J’ai déjà tout essayé'];
 
 export function heuristicSalesPage(
-  input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number },
+  input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number; upsellOf?: UpsellContext | null },
   rng: LocalRng,
   rules: { maxHype: number | null; banned: string[]; brand?: string },
 ): SalesPage {
   const product = input.product;
   const content = ensurePdf(input.content ?? product?.content);
-  const c = buildNicheCtx(nicheFromProduct(product, input.voc), input.voc);
+  // a follow-up guide is sold on its own promise, plan and pains, never on the parent's
+  const c = buildNicheCtx(nicheFromProduct(product, input.voc), input.voc, input.upsellOf ?? null);
   let hype = Number.isFinite(input.hype) ? Math.min(1, Math.max(0, input.hype)) : 0.4;
   if (rules.maxHype !== null) hype = Math.min(hype, rules.maxHype);
   const price = product?.price && product.price > 0 ? product.price : 19;
-  const title = clean(content.title) || clean(product?.title) || 'le guide';
-  const desired = lowerFirst(bestLabel([promiseOutcome(c), ...c.outcomes], 70, 10) ?? FALLBACK.outcomes[0]);
+  const title = plainTitle(clean(content.title) || clean(product?.title) || 'le guide');
+  const desired = lowerFirst(bestLabel([promiseOutcome(c), ...(c.upsellOf ? [] : c.outcomes)], 70, 10) ?? (c.upsellOf ? c.pbClause : FALLBACK.outcomes[0]));
   const brand = clean(rules.brand) || 'notre équipe';
   const durTxt = `${c.dur.n} ${c.dur.unit}`;
   const phrase = c.phrases.slice().sort((a, b) => a.length - b.length).find((p) => p.length <= 60) ?? c.phrases[0];
   const nCh = content.chapters.length || 5;
-  const minutes = Math.max(10, Math.round((content.wordCount || 3000) / 200 / 5) * 5);
   const canRisk = (w: string) => !conflictsWith(w, rules.banned);
 
   // « un chiot propre en quelques semaines » already says how long: no second, contradictory duration
@@ -93,11 +93,11 @@ export function heuristicSalesPage(
   const headline = hype >= 0.7
     ? canRisk('garanti') ? `${cap(desired)}${enDur} : résultat garanti` : `${cap(desired)}${enDur}, avec un plan précis`
     : hype >= 0.35
-      ? `Enfin : ${desired}${enDur ? ` —${enDur}` : ''}, sans tout bouleverser`
+      ? `Enfin : ${desired}${enDur ? ` — un plan de ${durTxt}` : ''}, sans tout bouleverser`
       : phrase ? `${cap(q(phrase))} ? Voici un plan clair, pas à pas` : `${cap(desired)} : le plan clair, pas à pas`;
   const subheadline = `Le guide PDF pour ${c.audArt} : ${nCh} chapitres courts, des étapes numérotées, des exemples types et un bonus offert.${hype >= 0.7 ? ` La méthode la plus complète du marché pour en finir avec le problème.` : ''}`;
 
-  const painBullets = uniqStrings([...c.phrases, ...c.pains]).slice(0, Math.max(3, Math.min(6, c.phrases.length || 4)));
+  const painBullets = uniqStrings([...c.phrases, ...(c.upsellOf ? c.ownPains : c.pains)]).slice(0, Math.max(3, Math.min(6, c.phrases.length || 4)));
   const methodCh = content.chapters.find((ch, i) => inferKind(ch.title, i, content.chapters.length) === 'methode');
   const firstStep = (methodCh ?? content.chapters[0])?.steps[0];
   const solution = `« ${title} » rassemble, en ${nCh} chapitres, ce qui fonctionne vraiment pour ${c.audArt}. Pas de théorie interminable : on commence par ${firstStep ? inline(bare(firstStep)) : 'faire le point pendant trois jours'}, puis on suit un plan de ${durTxt} vers un seul objectif : ${desired}. Chaque chapitre se termine par une checklist, pour savoir exactement où vous en êtes.${hype >= 0.7 && canRisk('100 %') ? ' Une méthode efficace à 100 %, même si vous avez déjà tout essayé.' : ''}`;
@@ -109,7 +109,7 @@ export function heuristicSalesPage(
   const usedAnswers = new Set<string>();
   const objections = (c.objections.length ? c.objections : DEFAULT_OBJECTIONS).slice(0, 4).map((o) => ({
     q: /[?]$/.test(clean(o)) ? clean(o) : q(o),
-    a: answerFor(o, { audArt: c.audArt, chapters: nCh, minutes, price, dur: durTxt, brand }, usedAnswers),
+    a: answerFor(o, { audArt: c.audArt, chapters: nCh, price, dur: durTxt, brand }, usedAnswers),
   }));
 
   const guarantee = hype >= 0.7 && canRisk('garanti')

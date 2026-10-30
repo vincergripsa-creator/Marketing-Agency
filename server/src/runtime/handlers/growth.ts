@@ -8,9 +8,12 @@ import { deliverables, learning, sim } from '../modules.js';
 import { addPlaybookRule, AD_FORMATS, bannedHits, directivesOf, HOOK_STYLES } from '../playbook.js';
 import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, type CampaignMetrics } from '../metrics.js';
 import { adHistory, companyPaidBlock, cooldownDays, launchableCreatives, MIN_CAMPAIGN_BUDGET, NO_TRACTION_ROAS, productHealth, productPaidBlock, promotionBlock, scalingRoom, STOP_LOSS_DAYS, STOP_LOSS_ROAS, STOP_LOSS_SPEND, TEST_CAMPAIGN_BUDGET, versionSince } from '../acquisition.js';
-import { createTask, isOpen } from '../tasks.js';
+import { adsHold, REFUSAL_COOLDOWN_DAYS } from '../holds.js';
+import { dropTask } from '../pipeline.js';
+import { createTask, isOpen, openTasks } from '../tasks.js';
+import { upsellContextOf } from '../upsell.js';
 import { clamp, dec, eur, idNum, keywords, numOf, pct, round2, short, str, uniq } from '../util.js';
-import type { HandlerMap } from './common.js';
+import type { HandlerMap, HandlerOutcome } from './common.js';
 import { NO_PRODUCT, requireProduct, reworkNotes, mindWith } from './common.js';
 import { COMPLIANCE_WORDS, FORMAT_LABELS, HOOK_LABELS } from './phrases.js';
 import { ensureDesign } from './creation.js';
@@ -110,6 +113,12 @@ export function stopLossReason(life: CampaignMetrics, recent: CampaignMetrics): 
   return null;
 }
 
+/** What this product already said in an ad or a post: the writer tries something else first. */
+function usedHooksOf(ctx: RuntimeCtx, product: Product): string[] {
+  const w = ctx.world;
+  return [...w.company.creatives.filter((c) => c.productId === product.id).map((c) => c.hook), ...w.market.organicPosts.filter((p) => p.productId === product.id).map((p) => p.hook)];
+}
+
 /**
  * Organic hook for a product: styles rotate (never the same style twice a day for a product, the least recently
  * used first, the bandit's favourite first when it was not used in the last two posts), fresh hooks from
@@ -150,11 +159,35 @@ async function pickOrganicHook(ctx: RuntimeCtx, product: Product, agentId: strin
   for (const styles of [order, [...order].reverse()]) {
     if (!styles.length) break;
     let fresh: { hookStyle: HookStyle; hook: string }[] = [];
-    try { fresh = await ctx.engine.writeAdHooks({ product, voc, styles }, bannedMind); } catch { fresh = []; }
+    try { fresh = await ctx.engine.writeAdHooks({ product, voc, styles, upsellOf: upsellContextOf(w, product), usedHooks: usedHooksOf(ctx, product) }, bannedMind); } catch { fresh = []; }
     const pick = choose((Array.isArray(fresh) ? fresh : []).filter((h): h is HookItem => !!h && typeof h.hook === 'string' && isHookStyle(h.hookStyle)).filter(usable));
     if (pick) return pick;
   }
   return null;
+}
+
+/** Approval mode: a raise above what the founder agreed to is a request of its own, once at a time. The campaign keeps its budget meanwhile. */
+function askRaise(ctx: RuntimeCtx, task: Task, c: Campaign, raiseTo: number, roas: number): void {
+  const w = ctx.world;
+  if (openTasks(w, (t) => t.kind === 'optimize_ads' && t.input.raiseTo !== undefined && t.input.campaignId === c.id).length) return;
+  if (c.raiseRefusedDay !== undefined && w.day <= c.raiseRefusedDay + REFUSAL_COOLDOWN_DAYS) return;
+  createTask(w, { kind: 'optimize_ads', title: `Hausse de budget — ${short(c.name, 50)}`, input: { campaignId: c.id, productId: c.productId, raiseTo, roas }, createdBy: task.assignee ?? 'leo', missionId: task.missionId, priority: 2 });
+}
+
+/** The founder's answer to a raise: nothing moves before his yes, and the amount he agreed to becomes the campaign's limit. */
+function runRaise(ctx: RuntimeCtx, task: Task): HandlerOutcome {
+  const c = ctx.world.company.campaigns.find((x) => x.id === task.input.campaignId && x.status === 'active');
+  const product = productOf(ctx, c?.productId);
+  // His yes does not widen the CFO's envelope: it may have shrunk since the question.
+  const room = c && product ? Math.max(0, scalingRoom(ctx.world, product, currentBudget(ctx.world).adCap) - committedAdBudget(ctx.world, c.id)) : 0;
+  const raiseTo = round2(Math.min(numOf(task.input.raiseTo) ?? 0, room));
+  if (!c || raiseTo <= c.dailyBudget) return { summary: 'Hausse sans objet : la campagne ou l’enveloppe a changé entre-temps.', skipReview: true, output: { skipped: true } };
+  if (task.input.founderApproved !== true) {
+    return { summary: `Hausse prête (${eur(raiseTo)}/jour) : en attente du fondateur.`, awaitFounder: `Monter « ${short(c.name, 60)} » de ${eur(c.dailyBudget)} à ${eur(raiseTo)}/jour (ROAS récent ${dec(numOf(task.input.roas) ?? 0)})` };
+  }
+  const before = c.dailyBudget;
+  if (ctx.tools.updateCampaign(c.id, { dailyBudget: raiseTo }).ok) { c.dailyBudget = raiseTo; c.founderCap = raiseTo; }
+  return { summary: `${c.name} : ${eur(before)} → ${eur(c.dailyBudget)}/jour, accord du fondateur.`, output: { actions: [`${c.name} : ${eur(before)} → ${eur(c.dailyBudget)}/jour`] } };
 }
 
 function requestCreatives(ctx: RuntimeCtx, product: Product, task: Task, opts: { produce: number; attachTo?: string; launch?: boolean; flags?: Record<string, unknown>; why: string }): boolean {
@@ -178,6 +211,8 @@ export const growthHandlers: HandlerMap = {
     async run(ctx, task, agent, mind) {
       const product = requireProduct(ctx, task);
       if (!product) return NO_PRODUCT;
+      const held = adsHold(ctx.world, product.id);
+      if (held) return { summary: `Pas de hooks : ${held.reason}.`, skipReview: true, output: { skipped: true, reason: 'founder' } };
       const voc = vocOf(ctx, product.nicheId);
       const dim = `hook_style:${product.nicheId}`;
       const d = directivesOf(ctx.world, agent.id, nicheName(ctx, product.nicheId));
@@ -194,7 +229,7 @@ export const growthHandlers: HandlerMap = {
       if (untried.length) styles.push(ctx.rng.pick(untried)); // exploration
       const chosen = uniq(styles).slice(0, 5);
       const banned = bannedFor(ctx, product, agent.id);
-      const raw = await ctx.engine.writeAdHooks({ product, voc, styles: chosen }, mindWith(mind, banned.map((b) => `Ne jamais écrire « ${b} »`)));
+      const raw = await ctx.engine.writeAdHooks({ product, voc, styles: chosen, upsellOf: upsellContextOf(ctx.world, product), usedHooks: usedHooksOf(ctx, product) }, mindWith(mind, banned.map((b) => `Ne jamais écrire « ${b} »`)));
       const hooks = raw.filter((h) => h && typeof h.hook === 'string' && h.hook.trim() && isHookStyle(h.hookStyle) && !bannedHits(h.hook, banned).length);
       const final = hooks.length ? hooks : raw.filter((h) => h && typeof h.hook === 'string' && isHookStyle(h.hookStyle));
       if (!final.length) return { fail: 'Aucun hook exploitable.', summary: 'Aucun hook.' };
@@ -207,7 +242,7 @@ export const growthHandlers: HandlerMap = {
     async onDone(ctx, task) {
       const n = Math.max(0, Math.min(3, Math.round(numOf(task.input.produce) ?? 0)));
       const product = productOf(ctx, task.input.productId);
-      if (!n || !product || product.status === 'killed') return;
+      if (!n || !product || product.status === 'killed' || task.output?.skipped === true) return;
       const used = ctx.world.company.creatives.filter((c) => c.productId === product.id).length;
       const forced = Array.isArray(task.input.experimentVariants) ? (task.input.experimentVariants as string[]) : [];
       const ads = Array.from({ length: n }, (_, i) => createTask(ctx.world, {
@@ -225,6 +260,8 @@ export const growthHandlers: HandlerMap = {
     async run(ctx, task, agent, mind) {
       const product = requireProduct(ctx, task);
       if (!product) return NO_PRODUCT;
+      const held = adsHold(ctx.world, product.id);
+      if (held) return { summary: `Pas de pub : ${held.reason}.`, skipReview: true, output: { skipped: true, dropped: true } };
       const voc = vocOf(ctx, product.nicheId);
       const variant = Math.max(0, Math.round(numOf(task.input.variant) ?? 0));
       const existingId = str(task.output?.creativeId);
@@ -232,7 +269,7 @@ export const growthHandlers: HandlerMap = {
       // Hook: newest unused hook (experiment style first), the rework takes another one.
       let pool = hookPool(ctx, product.id);
       if (!pool.length) {
-        const fresh = await ctx.engine.writeAdHooks({ product, voc, styles: [ctx.rng.pick(HOOK_STYLES)] }, mind);
+        const fresh = await ctx.engine.writeAdHooks({ product, voc, styles: [ctx.rng.pick(HOOK_STYLES)], upsellOf: upsellContextOf(ctx.world, product), usedHooks: usedHooksOf(ctx, product) }, mind);
         pool = fresh.filter((h) => h && typeof h.hook === 'string' && isHookStyle(h.hookStyle));
       }
       if (!pool.length) return { fail: 'Pas de hook disponible pour produire la pub.', summary: 'Pas de hook.' };
@@ -273,7 +310,7 @@ export const growthHandlers: HandlerMap = {
       else { const f = learning.chooseArm(ctx.world, `ad_format:${product.nicheId}`, AD_FORMATS, ctx.rng); format = isFormat(f) ? f : 'text_slideshow'; }
       const bannedClaims = uniq([...bannedFor(ctx, product, agent.id), ...COMPLIANCE_WORDS]);
       const notes = reworkNotes(task).map((n) => `Correction demandée par Léo : ${n}`);
-      const draft = await ctx.engine.writeAd({ product, voc, hook: hook.hook, hookStyle: hook.hookStyle, format, bannedClaims }, mindWith(mind, notes));
+      const draft = await ctx.engine.writeAd({ product, voc, hook: hook.hook, hookStyle: hook.hookStyle, format, bannedClaims, upsellOf: upsellContextOf(ctx.world, product) }, mindWith(mind, notes));
       const creative: AdCreative = existing ?? {
         id: nextId(ctx.world, 'cre'), productId: product.id, hook: '', hookStyle: hook.hookStyle, format, scenes: [], caption: '', hashtags: [], cta: '',
         files: { storyboard: [], preview: null }, quality: null, review: { status: 'pending', reason: null, day: null }, createdDay: ctx.world.day, createdBy: agent.id,
@@ -347,6 +384,9 @@ export const growthHandlers: HandlerMap = {
       if (severe) return skip(`${severe} — on ne pousse pas un guide que les acheteurs n'aiment pas`, 'quality');
       const blocked = companyPaidBlock(ctx.world);
       if (blocked) return skip(blocked, 'company');
+      // The founder's stop beats everything, a launch he asked for earlier included: only his word lifts it.
+      const held = adsHold(ctx.world, product.id);
+      if (held) return skip(held.reason, 'founder');
       // Cooldown / "ads-dead" are the team's own rules: a founder request or the CEO's watchdog overrides them.
       // A product that loses money or a « couper les pubs » lesson only yield to the founder.
       const productBlock = productPaidBlock(ctx.world, product);
@@ -362,10 +402,13 @@ export const growthHandlers: HandlerMap = {
       const remaining = envelope.remaining;
       // The CEO's watchdog test on an "ads-dead" version runs at the minimum budget.
       // When paid ads lose money overall, new campaigns start smaller (the CEO's cautious mode).
-      const daily = task.input.test === true ? Math.min(envelope.budget, TEST_CAMPAIGN_BUDGET)
+      const planned = task.input.test === true ? Math.min(envelope.budget, TEST_CAMPAIGN_BUDGET)
         : task.input.cautious === true ? Math.min(envelope.budget, Math.max(MIN_CAMPAIGN_BUDGET, Math.floor(envelope.budget * 0.6))) : envelope.budget;
+      // The founder agreed to an amount: the envelope may have grown since, his yes has not.
+      const daily = Math.min(planned, numOf(task.input.askedBudget) ?? planned);
       if (daily < MIN_CAMPAIGN_BUDGET) return skip(`enveloppe du CFO insuffisante (${eur(remaining)} restants)`, 'budget', { remaining });
       if (ctx.world.scenario.founderApproval && task.input.founderApproved !== true) {
+        task.input.askedBudget = daily;
         return { summary: `Campagne prête (${eur(daily)}/jour, ${ready.length} créas) : en attente du fondateur.`, awaitFounder: `Lancer une campagne TikTok à ${eur(daily)}/jour pour « ${product.title} »` };
       }
       const creatives = ready.slice(0, 3);
@@ -383,6 +426,7 @@ export const growthHandlers: HandlerMap = {
       // The founder overrode the numbers: only he, or the stop-loss, ends this campaign.
       const launched = ctx.world.company.campaigns.find((c) => c.id === id);
       if (launched && productBlock?.final && task.createdBy === 'founder') launched.founderForced = true;
+      if (launched && ctx.world.scenario.founderApproval) launched.founderCap = daily;
       say(ctx, agent.id, `${agent.name} lance « ${input.name} » : ${eur(daily)}/jour, ${creatives.length} créas, ${input.targeting.ageMin}-${input.targeting.ageMax} ans`, 'ad', { productId: product.id });
       return { summary: `Campagne lancée à ${eur(daily)}/jour avec ${creatives.length} créas.`, output: { campaignId: id, dailyBudget: daily, creativeIds: input.creativeIds } };
     },
@@ -390,6 +434,10 @@ export const growthHandlers: HandlerMap = {
 
   optimize_ads: {
     async run(ctx, task, agent) {
+      if (task.input.raiseTo !== undefined) return runRaise(ctx, task);
+      for (const t of openTasks(ctx.world, (x) => x.kind === 'optimize_ads' && x.input.raiseTo !== undefined && x.status === 'awaiting_founder')) {
+        if (!activeCampaigns(ctx.world).some((c) => c.id === t.input.campaignId)) dropTask(ctx, t, 'la campagne ne tourne plus');
+      }
       const budget = currentBudget(ctx.world);
       const campaigns = activeCampaigns(ctx.world);
       if (!campaigns.length) return { summary: 'Aucune campagne active.', skipReview: true, output: { actions: [] } };
@@ -459,6 +507,9 @@ export const growthHandlers: HandlerMap = {
         else if (recent.spend >= 20 && recent.roas < 1.3 && recent.roas >= STOP_LOSS_ROAS) next = round2(c.dailyBudget * 0.7);
         next = round2(Math.max(5, Math.min(next, room)));
         if (room < 5) { pause(c, `enveloppe CFO épuisée (${eur(budget.adCap)})`); continue; }
+        // Approval mode: reductions and pauses stay free, more than the founder agreed to waits for his yes.
+        const agreed = ctx.world.scenario.founderApproval ? c.founderCap ?? c.dailyBudget : Number.POSITIVE_INFINITY;
+        if (next > agreed) { askRaise(ctx, task, c, next, recent.roas); next = agreed; }
         const before = c.dailyBudget;
         if (Math.abs(next - before) >= 0.5) {
           const r = ctx.tools.updateCampaign(c.id, { dailyBudget: next });

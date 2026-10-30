@@ -5,7 +5,8 @@ import { asSession, brainNotePath, fileUrl } from '../api';
 import { godDataAfter, withSession, withTick } from '../store';
 import { mockSnapshot } from '../world/mockSnapshot';
 import {
-  activityProductId, approvalAsk, budgetView, customerLabel, deptCalendar, doneTasksByDay, doneTasksTotal, hasWaiver, ledgerView, nextStepTitle, redTeamView, sessionView,
+  activityProductId, approvalAsk, budgetView, currentRunPill, customerLabel, deptCalendar, doneTasksByDay, doneTasksTotal, failedTasksTotal, goalLate, goalTitle, hasWaiver, ledgerView,
+  nextStepTitle, redTeamView, sessionView,
 } from './derive';
 import { budgetError, budgetTooLow, deadlineNote, defaultForm, minCashOf, readNumber, scenarioConfig, settleField, type ScenarioForm } from './scenarioForm';
 import { eventToast } from './useEventToasts';
@@ -52,6 +53,24 @@ describe('sessionView — snapshot.session is the source of truth for play/pause
     expect(asSession({ runId: 'r', playing: true, speed: 2 })).toBeTruthy();
     expect(asSession({ runId: 'r', playing: true, speed: 3 })).toBeUndefined();
     expect(asSession('nope')).toBeUndefined();
+  });
+});
+
+describe('run status', () => {
+  it('the pill of the current run says where it stands: a finished run is not « en cours »', () => {
+    expect(currentRunPill('finished')).toEqual({ label: 'terminée', tone: 'neutral' });
+    expect(currentRunPill('running')).toEqual({ label: 'en cours', tone: 'green' });
+    expect(currentRunPill('bankrupt')).toEqual({ label: 'faillite', tone: 'red' });
+  });
+
+  it('a goal reached after the deadline is not the goal of the scenario, on the deadline it is', () => {
+    const goal = { targetProfit: 1000, byDay: 20 };
+    const at = (goalReachedDay: number | null) => snap({ scenario: { ...snap().scenario, goal }, goalReachedDay });
+    expect(goalLate(at(31))).toBe(true);
+    expect(goalTitle(at(31))).toBe('Objectif atteint après l’échéance');
+    expect(goalLate(at(20))).toBe(false);
+    expect(goalTitle(at(20))).toBe('Objectif atteint !');
+    expect(goalLate(at(null))).toBe(false);
   });
 });
 
@@ -130,7 +149,7 @@ describe('task counts — the task list of a snapshot is trimmed, the counts are
   const task = (o: Partial<Task>): Task => ({ ...mockSnapshot().company.tasks[0]!, status: 'done', dayCreated: 5, dayDone: 5, dept: 'finance', ...o });
   const stats: TaskStats = {
     days: [{ day: 3, created: 9, done: 12, failed: 0, cancelled: 0 }, { day: 5, created: 4, done: 4, failed: 1, cancelled: 0 }],
-    depts: { finance: { days: [{ day: 9, created: 3, done: 2, failed: 0, cancelled: 0 }], kinds7d: { budget_review: 2 }, done: 40, avgDelayDays: 1.5 } },
+    depts: { finance: { days: [{ day: 9, created: 3, done: 2, failed: 0, cancelled: 0 }], kinds7d: { budget_review: 2 }, done: 40, failed: 7, avgDelayDays: 1.5 } },
   };
   const base = snap();
   const withTasks = (tasks: Task[], o: Partial<CompanySnapshot> = {}) => ({ ...base, day: 10, company: { ...base.company, tasks }, ...o });
@@ -154,6 +173,14 @@ describe('task counts — the task list of a snapshot is trimmed, the counts are
     expect(doneTasksTotal(s, 'finance')).toBe(40);
     expect(doneTasksTotal(s, 'rh')).toBe(0);
     expect(doneTasksTotal(withTasks([]), 'all')).toBeNull();
+  });
+
+  it('failed and cancelled tasks: whole run, by team', () => {
+    const s = withTasks([], { taskStats: { ...stats, days: [...stats.days, { day: 6, created: 0, done: 0, failed: 2, cancelled: 3 }] } });
+    expect(failedTasksTotal(s, 'all')).toBe(6);
+    expect(failedTasksTotal(s, 'finance')).toBe(7);
+    expect(failedTasksTotal(s, 'rh')).toBe(0);
+    expect(failedTasksTotal(withTasks([]), 'all')).toBeNull();
   });
 
   it('team calendar: 14 days, today first, and it says what the list lacks', () => {

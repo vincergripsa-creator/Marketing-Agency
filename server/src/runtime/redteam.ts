@@ -4,14 +4,16 @@
  *   fix   targeted pass (humanize → render), then a new Red Team on the new file;
  *   kill  structural rewrite (plan → draft → … → render, new sales page), then a new Red Team.
  * A correction that leaves the file as it was changes nothing: the gate stays closed and the next cycle rebuilds the
- * guide from its plan. After MAX_REWORK_CYCLES, Camille decides: ship with a logged waiver, or kill. Nothing waits forever.
+ * guide from its plan, one cycle more if it was the last. After MAX_REWORK_CYCLES, Camille decides on a file that did
+ * change: ship with a logged waiver, or kill. A guide even the rebuild leaves as it was is held for the founder: no
+ * waiver on a correction nobody made. Nothing waits forever.
  */
 import type { PdfContent, Product, Task, VoiceOfCustomer, WorldState } from '../shared.js';
 import type { GuideGaps, RedTeamFacts } from '../contracts.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, nameOf, say } from './ctx.js';
 import { productNote } from './notes.js';
-import { killProduct, productTitleFor, reworkRedTeam } from './pipeline.js';
+import { killProduct, productTitleFor, reworkRedTeam, shelveProduct } from './pipeline.js';
 import { isOpen, logTask, refreshAgentScore } from './tasks.js';
 import { median, mean, numOf, short, str, strArr, uniq } from './util.js';
 
@@ -127,12 +129,20 @@ export async function settleRedTeam(ctx: RuntimeCtx, task: Task, product: Produc
     incident(ctx, `La Red Team relit « ${product.title} » en ligne : ${short(reasons[0] ?? 'à corriger', 100)}`);
     return;
   }
-  if (cycle >= MAX_REWORK_CYCLES) { await decide(ctx, task, product, verdict, reasons); return; }
-  const structural = verdict === 'kill' || out.unchanged === true;
+  const unchanged = out.unchanged === true;
+  if (cycle >= MAX_REWORK_CYCLES && !unchanged) { await decide(ctx, task, product, verdict, reasons); return; }
+  if (cycle > MAX_REWORK_CYCLES) {
+    const why = `la Red Team le bloque et même la reprise depuis le plan n'a rien changé (${short(reasons[1] ?? reasons[0] ?? 'à corriger', 100)})`;
+    shelveProduct(ctx, product, why);
+    say(ctx, 'camille', `Camille au fondateur : je ne signe pas de dérogation pour « ${short(product.title, 50)} », ${why}. Il reste hors ligne : dis « remets le guide en ligne » si tu prends le risque.`, 'founder', { productId: product.id, taskId: task.id });
+    return;
+  }
+  const structural = verdict === 'kill' || unchanged;
   const gaps: GuideGaps | null = out.gaps && typeof out.gaps === 'object' ? out.gaps as GuideGaps : null;
   reworkRedTeam(ctx, product, { structural, fixes, gaps, cycle: cycle + 1, previousPrint: str(out.fingerprint) ?? '', previousVerdict: verdict, missionId: task.missionId });
-  incident(ctx, `La Red Team renvoie « ${product.title} » (${structural ? 'réécriture structurelle' : 'correction ciblée'}, reprise ${cycle + 1}/${MAX_REWORK_CYCLES}) : ${short(reasons[0] ?? 'promesse trop large', 100)}`);
-  say(ctx, 'camille', `Camille bloque la mise en ligne de « ${short(product.title, 40)} » : ${structural ? 'réécriture depuis le plan' : 'corrections'} (reprise ${cycle + 1}/${MAX_REWORK_CYCLES}), puis nouvelle revue de ${nameOf(ctx, 'axel')}.`, 'thought', { productId: product.id, taskId: task.id });
+  const turn = `reprise ${cycle + 1}/${Math.max(cycle + 1, MAX_REWORK_CYCLES)}`;
+  incident(ctx, `La Red Team renvoie « ${product.title} » (${structural ? 'réécriture structurelle' : 'correction ciblée'}, ${turn}) : ${short(reasons[0] ?? 'promesse trop large', 100)}`);
+  say(ctx, 'camille', `Camille bloque la mise en ligne de « ${short(product.title, 40)} » : ${structural ? 'réécriture depuis le plan' : 'corrections'} (${turn}), puis nouvelle revue de ${nameOf(ctx, 'axel')}.`, 'thought', { productId: product.id, taskId: task.id });
 }
 
 /** A gate that closed with no rework left in flight (a step failed): one more Red Team run settles it. */

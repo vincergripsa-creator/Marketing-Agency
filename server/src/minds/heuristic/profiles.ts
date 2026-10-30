@@ -24,6 +24,7 @@ export interface TopicSpec {
   goal: string;        // what the follow-up guide promises
   title: string;
   dur: Duration;
+  quotes: RegExp;      // on normalised text: the customer words about this sub-problem, and no others
   bonus: BonusSpec;
 }
 
@@ -66,6 +67,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'siestes', pain: 'Les siestes de 30 minutes qui cassent toute la journée', goal: 'Des siestes plus longues et une journée qui redevient prévisible',
       title: 'Les siestes de 30 minutes : le plan de 14 jours pour les bébés de 6 à 12 mois', dur: jours(14),
+      quotes: /sieste/,
       bonus: {
         title: 'Bonus : la feuille de route des siestes à imprimer',
         lead: 'Une feuille par semaine, pour voir le rythme apparaître au lieu de le deviner.',
@@ -96,6 +98,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'solitude', pain: 'Le chiot qui pleure et fait des dégâts dès qu’il reste seul', goal: 'Un chiot qui reste seul au calme pendant que vous travaillez',
       title: 'Chiot seul à la maison : le plan de 14 jours pour partir travailler sereinement', dur: jours(14),
+      quotes: /reste seul|seule? a la maison|voisin|quand je pars|je pars/,
       bonus: {
         title: 'Bonus : le planning des absences à imprimer',
         lead: 'Un tableau simple pour allonger les absences sans brûler d’étape.',
@@ -126,6 +129,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'nuits', pain: 'Le chat qui griffe la porte et réveille toute la maison à 3 h', goal: 'Des nuits sans griffes sur la porte ni réveils à l’aube',
       title: 'Chat qui griffe la nuit : le plan de 14 nuits pour dormir à nouveau', dur: nuits(14),
+      quotes: /la nuit|3 ?h|griffe aussi les portes|nous reveille|a l'aube|5 ?h/,
       bonus: {
         title: 'Bonus : le journal des nuits à imprimer',
         lead: 'Un journal de deux semaines pour distinguer les nuits calmes des vraies habitudes.',
@@ -156,6 +160,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'grignotage', pain: 'Le grignotage du soir devant la télé', goal: 'Des soirées sans grignotage automatique',
       title: 'Le grignotage du soir après 40 ans : le plan de 21 jours pour reprendre la main', dur: jours(21),
+      quotes: /grignot|devant la tele/,
       bonus: {
         title: 'Bonus : le journal du soir à imprimer',
         lead: 'Une ligne par soir, pour voir ce qui déclenche vraiment l’envie.',
@@ -199,6 +204,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'reparer', pain: 'Le meuble bancal, écaillé ou abîmé avant même de pouvoir le peindre', goal: 'Un meuble solide, réparé, prêt à être peint',
       title: 'Réparer un meuble ancien avant de le peindre : le pas-à-pas en 3 soirs', dur: { n: 3, unit: 'soirs', unitOne: 'soir' },
+      quotes: /tiroir|bancal|abimer|ecaill|branlant/,
       bonus: {
         title: 'Bonus : la fiche d’état des lieux à imprimer',
         lead: 'Une page pour lister les défauts du meuble et savoir par quoi commencer.',
@@ -241,6 +247,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'nord', pain: 'Le balcon plein nord où rien ne semble pousser', goal: 'Un balcon à l’ombre qui donne des salades et des herbes toute la saison',
       title: 'Potager sur balcon nord : le plan de 8 mois pour récolter sans plein soleil', dur: mois(8),
+      quotes: /\bnord\b|a l'ombre|sans soleil/,
       bonus: {
         title: 'Bonus : la carte de lumière de votre balcon',
         lead: 'Une grille simple pour repérer où chaque plante a sa chance.',
@@ -274,13 +281,31 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'impots', pain: 'L’impôt, l’ACRE et la CFE qui tombent sans prévenir', goal: 'Une première année fiscale préparée, sans surprise sur l’ACRE, l’impôt et la CFE',
       title: 'Impôts, ACRE et CFE en micro-entreprise : le calendrier de votre première année', dur: mois(12),
+      quotes: /\bacre\b|\bcfe\b|versement liberatoire|impot/,
       bonus: {
         title: 'Bonus : le calendrier fiscal de l’année à imprimer',
         lead: 'Une page pour voir d’un coup d’œil ce qui arrive dans l’année.',
-        paragraphs: ['Reportez vos propres dates dans la colonne de droite. Les échéances exactes changent chaque année : vérifiez-les sur les sites officiels au moment de remplir ce calendrier.'],
+        paragraphs: ['Ce sont les échéances habituelles. Si l’une d’elles tombe un week-end ou un jour férié, ou si l’administration la déplace, c’est la date affichée dans votre espace qui compte : reportez-la dans la colonne « Votre date ».'],
         steps: ['Reporter vos échéances', 'Ajouter vos montants prévus', 'Programmer un rappel pour chaque ligne', 'Relire le calendrier en décembre'],
         checklist: ['Calendrier rempli', 'Rappels programmés'],
-        sheet: { title: 'Votre calendrier fiscal', columns: ['Période', 'Ce qui arrive', 'Votre date', 'Montant prévu'], rows: ['Janvier', 'Mai', 'Septembre', 'Décembre'], cells: [['Bilan du chiffre d’affaires, point ACRE', null, null], ['Déclaration de revenus', null, null], ['Date limite pour demander certaines options', null, null], ['CFE à payer', null, null]] },
+        sheet: {
+          title: 'Votre calendrier fiscal', columns: ['Période', 'Ce qui arrive', 'Votre date', 'Montant prévu'],
+          rows: ['Chaque mois', 'Janvier', '31 janvier', '30 avril', 'Avril à juin', 'Juin', '31 juillet', '30 septembre', '31 octobre', 'Novembre', '15 décembre', '31 décembre'],
+          cells: [
+            ['Si vous êtes en mensuel : déclarer et payer avant la fin du mois suivant', null, null],
+            ['Bilan du chiffre d’affaires, point sur l’ACRE', null, null],
+            ['Si vous êtes en trimestriel : déclaration du 4e trimestre', null, null],
+            ['Si vous êtes en trimestriel : déclaration du 1er trimestre', null, null],
+            ['Déclaration de revenus, formulaire 2042-C-PRO : dates sur impots.gouv.fr', null, null],
+            ['Commencer à provisionner la CFE', null, null],
+            ['Si vous êtes en trimestriel : déclaration du 2e trimestre', null, null],
+            ['Dernier jour pour demander le versement libératoire de l’année suivante', null, null],
+            ['Si vous êtes en trimestriel : déclaration du 3e trimestre', null, null],
+            ['Avis de CFE à consulter sur impots.gouv.fr', null, null],
+            ['CFE à payer', null, null],
+            ['Année de création : déclaration initiale de CFE, formulaire 1447-C-SD', null, null],
+          ],
+        },
       },
     }],
   },
@@ -303,6 +328,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'listening', pain: 'Le Listening des parts 3 et 4 qui va beaucoup trop vite', goal: 'Suivre les parts 3 et 4 du Listening sans décrocher',
       title: 'TOEIC Listening : le plan de 14 jours pour ne plus décrocher aux parts 3 et 4', dur: jours(14),
+      quotes: /listening|part 3|parlent trop vite|l'audio/,
       bonus: {
         title: 'Bonus : le carnet d’écoute à imprimer',
         lead: 'Une ligne par séance, pour voir ce que votre oreille rate vraiment.',
@@ -332,6 +358,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'situations', pain: 'Les mises en situation qui font perdre ses moyens devant le jury', goal: 'Savoir répondre calmement à n’importe quelle mise en situation',
       title: 'Oral IFAS : les mises en situation expliquées, avec un plan d’entraînement de 14 jours', dur: jours(14),
+      quotes: /mises? en situation|toilette/,
       bonus: {
         title: 'Bonus : les cartes de mises en situation à imprimer',
         lead: 'Dix cartes à découper pour vous entraîner au hasard, chronomètre en main.',
@@ -361,6 +388,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'grand-oral', pain: 'Le grand oral qui terrorise et fait perdre ses moyens', goal: 'Prendre la parole 20 minutes devant le jury en sachant quoi dire',
       title: 'Grand oral du bac : le plan de 4 semaines pour parler sans réciter', dur: semaines(4),
+      quotes: /grand oral|begaie|devant la classe|devant le jury/,
       bonus: {
         title: 'Bonus : la grille de répétition du grand oral à imprimer',
         lead: 'Faites remplir cette grille à la personne qui vous écoute.',
@@ -390,6 +418,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'negociation', pain: 'Les devis trop chers et les prestataires qu’on n’ose pas négocier', goal: 'Faire baisser ses devis sans renoncer à ce qui compte',
       title: 'Négocier les devis de son mariage : la méthode en 4 semaines, poste par poste', dur: semaines(4),
+      quotes: /devis|prestataire|frais caches|les prix x2|negoci/,
       bonus: {
         title: 'Bonus : le comparateur de devis à imprimer',
         lead: 'Un tableau pour comparer trois devis ligne par ligne.',
@@ -419,6 +448,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'sur-place', pain: 'Le budget qui file une fois sur place, entre repas et transports', goal: 'Tenir son budget au quotidien, une fois sur place',
       title: 'Japon sur place : le plan de 14 jours pour manger et se déplacer sans se ruiner', dur: jours(14),
+      quotes: /on mange|se ruiner|restaurant|\bcash\b|carte passe|konbini|sur place/,
       bonus: {
         title: 'Bonus : le carnet de dépenses du voyage à imprimer',
         lead: 'Une ligne par jour, cinq minutes le soir.',
@@ -448,6 +478,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'enfants', pain: 'Les enfants qui refusent la moitié des plats', goal: 'Des repas de la semaine que les enfants mangent vraiment',
       title: 'Enfants difficiles à table : le plan de 4 semaines pour nourrir toute la famille', dur: semaines(4),
+      quotes: /enfants|gosses|pates au beurre|mange rien/,
       bonus: {
         title: 'Bonus : la feuille des aliments acceptés à imprimer',
         lead: 'Une feuille par enfant, à reprendre chaque mois.',
@@ -477,6 +508,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'litiges', pain: 'Les litiges et les acheteurs de mauvaise foi', goal: 'Vendre sans craindre les litiges ni les acheteurs difficiles',
       title: 'Litiges Vinted : la méthode en 14 jours pour vendre sans vous faire avoir', dur: jours(14),
+      quotes: /litige|abime|mauvaise foi|reclamation/,
       bonus: {
         title: 'Bonus : les réponses prêtes à copier en cas de litige',
         lead: 'Des réponses courtes pour ne jamais écrire sous le coup de la colère.',
@@ -506,6 +538,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'tarif', pain: 'Le TJM qu’on n’ose pas fixer ni défendre face au client', goal: 'Un tarif clair, calculé, et que vous savez défendre',
       title: 'Fixer son TJM de freelance : la méthode en 7 jours pour oser son prix', dur: jours(7),
+      quotes: /\btjm\b|tarif|mon prix|trop cher/,
       bonus: {
         title: 'Bonus : la feuille de calcul du TJM à imprimer',
         lead: 'Un calcul en cinq lignes pour obtenir votre prix plancher.',
@@ -535,6 +568,7 @@ const PROFILES: Record<string, GuideProfile> = {
     topics: [{
       id: 'allergenes', pain: 'La peur d’introduire les allergènes', goal: 'Introduire les allergènes un par un, en sachant quoi surveiller',
       title: 'Allergènes et diversification : le plan de 6 semaines pour les introduire sereinement', dur: semaines(6),
+      quotes: /allergen|l'oeuf|arachide/,
       bonus: {
         title: 'Bonus : le tableau d’introduction des allergènes à imprimer',
         lead: 'Une page pour savoir ce qui a été proposé, quand, et comment ça s’est passé.',

@@ -7,7 +7,7 @@ import type {
   AdCreative, ChapterContent, DesignSpec, InboxMessage, MessageIntent, PdfContent, Product, QualityReport, SalesPage,
   SupportReplyInput, VoiceOfCustomer,
 } from '../shared.js';
-import { countHype, findBannedClaims } from './compliance.js';
+import { countHype, findBannedClaims, findPageClaims } from './compliance.js';
 import { countPhrase, countWords, hasPhrase, keyTokens, norm, overlap, stemSet } from './text.js';
 
 /** French AI clichés: each occurrence costs human tone. */
@@ -420,8 +420,8 @@ export function scorePdf(content: PdfContent, ctx: { audience: string; problem: 
     if (stepShare < 0.6) issues.block('Trop de chapitres sans étapes numérotées (au moins 3 par chapitre).');
     const exShare = chapters.filter((c) => (c.example ?? '').length > 40).length / nCh;
     struct += 35 * (substance.cases / nCh);
-    if (exShare === 0) issues.block('Aucun exemple concret : ajoutez des cas réels (prénom, âge, situation, ce qui a marché).');
-    else if (substance.cases / nCh < 0.4) issues.push('Peu de cas concrets : un exemple propre à chaque chapitre (qui, quelle situation, quel résultat) rend le guide crédible.');
+    if (exShare === 0) issues.block('Aucun exemple concret : ajoutez des exemples types réalistes, annoncés comme tels (prénom, âge, situation, ce qui a été fait).');
+    else if (substance.cases / nCh < 0.4) issues.push('Peu de cas concrets : un exemple type propre à chaque chapitre (qui, quelle situation, quel geste) rend le guide crédible.');
   }
   const bonus = content?.bonus;
   if (bonus && bonus.title && ((bonus.paragraphs?.length ?? 0) + (bonus.steps?.length ?? 0) + (bonus.checklist?.length ?? 0)) > 0) struct += 15;
@@ -606,9 +606,10 @@ export function scoreSalesPage(sp: SalesPage, product: Product, voc?: VoiceOfCus
   for (const u of unbacked.stretches) issues.push(u);
 
   issues.section('compliance');
-  const nonGuarantee = [headline, sp?.subheadline, ...pains, sol, ...blurbs.map((b) => `${b.title} ${b.blurb}`), sp?.bonusBlurb, ...objections.map((o) => `${o.q} ${o.a}`), cta];
-  const banned = [...findBannedClaims(nonGuarantee, voc?.bannedClaims ?? [])];
-  for (const b of findBannedClaims([sp?.guarantee], voc?.bannedClaims ?? [])) if (!banned.includes(b)) banned.push(b);
+  // An objection's question is the customer's sentence, whether the page prints it in quotes or not: only the answer is ours.
+  const nonGuarantee = [headline, sp?.subheadline, ...pains, sol, ...blurbs.map((b) => `${b.title} ${b.blurb}`), sp?.bonusBlurb, ...objections.map((o) => o.a), cta];
+  const banned = [...findPageClaims(nonGuarantee, voc?.bannedClaims ?? [])];
+  for (const b of findPageClaims([sp?.guarantee], voc?.bannedClaims ?? [])) if (!banned.includes(b)) banned.push(b);
   const compliance = 100 - banned.length * 20;
   if (banned.length) issues.block(`Allégations interdites sur la page : ${quote(banned, 4)}.`);
 

@@ -3,6 +3,7 @@ import { useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { Avatar, cx } from './common';
 import { useApp } from './context';
+import { sessionView } from './derive';
 import { Icon } from './icons';
 import { deptColor, deptName, firstName } from './labels';
 
@@ -26,10 +27,11 @@ export function MissionBar() {
   const target = (targetId && lookups.agents.get(targetId)) || ceo;
   const targetName = target ? firstName(target.name) : 'Camille';
   const ceoName = ceo ? firstName(ceo.name) : 'Camille';
+  const ended = sessionView(snapshot, 1).ended;
 
   const send = async () => {
     const t = text.trim();
-    if (!t || sending) return;
+    if (!t || sending || ended) return;
     if (demo) {
       toast({ tone: 'warn', title: 'Mode démo', text: 'Lance le serveur (npm run dev) pour que l’équipe exécute vraiment la mission.' });
       return;
@@ -83,7 +85,8 @@ export function MissionBar() {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}
-          placeholder={`Donne une mission à ${targetName}…`}
+          placeholder={ended ? 'Simulation terminée : lance un nouveau scénario pour confier une mission.' : `Donne une mission à ${targetName}…`}
+          disabled={ended}
           maxLength={500}
           aria-label="Mission"
           list="mission-suggestions"
@@ -91,7 +94,7 @@ export function MissionBar() {
         <datalist id="mission-suggestions">
           {SUGGESTIONS.map((s) => <option key={s} value={s} />)}
         </datalist>
-        <button type="button" className={cx('send-btn', text.trim() && 'send-ready')} onClick={() => void send()} disabled={!text.trim() || sending} title="Envoyer (Entrée)" aria-label="Envoyer la mission">
+        <button type="button" className={cx('send-btn', text.trim() && 'send-ready')} onClick={() => void send()} disabled={!text.trim() || sending || ended} title="Envoyer (Entrée)" aria-label="Envoyer la mission">
           {sending ? <span className="spinner spinner-light" /> : <Icon name="send" size={15} />}
         </button>
       </div>
