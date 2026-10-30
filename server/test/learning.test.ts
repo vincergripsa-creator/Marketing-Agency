@@ -12,7 +12,7 @@ import {
   updateExperiments,
 } from '../src/learning/index.js';
 import { sampleBeta } from '../src/learning/bandits.js';
-import { addRule, agentsForLesson, DEPT_RULES_SECTION, directiveKind, syncDirective } from '../src/learning/playbooks.js';
+import { addRule, agentsForLesson, DEPT_RULES_SECTION, directiveKind, MAX_RULES, syncDirective } from '../src/learning/playbooks.js';
 import { extractBannedTerm, FINANCE_KEY } from '../src/learning/heuristics.js';
 import { applyDailyRewards, conclusionOf, MAX_NEW_LESSONS_PER_RETRO } from '../src/learning/retro.js';
 import { financeView } from '../src/learning/data.js';
@@ -903,7 +903,7 @@ describe('performanceReview', () => {
 // ───────────────────────────── playbooks & robustness ─────────────────────────────
 
 describe('playbook rules', () => {
-  it('replaces same directives, keeps 12 rules max and drops the weakest', () => {
+  it('replaces same directives, keeps MAX_RULES at most and drops the weakest', () => {
     const world = makeWorld();
     world.company.playbooks.clara = ['Niveau de promesse max « 0.6 »', 'Commencer bas pour obtenir les premiers avis.'];
     expect(addRule(world, 'clara', 'Niveau de promesse max « 0.4 » sur les pages de vente : la survente fait rembourser.')).toBe('replaced');
@@ -919,11 +919,24 @@ describe('playbook rules', () => {
     expect(addRule(world, 'clara', 'Prix cible « 24 » sur « A » : faible preuve.')).toBe('skipped'); // weaker rule of the same niche
     expect(world.company.playbooks.clara!.filter((r) => r.startsWith('Prix cible'))).toHaveLength(1);
 
-    for (let i = 0; i < 15; i++) addRule(world, 'clara', `Règle libre numéro ${i}`);
+    for (let i = 0; i < MAX_RULES + 3; i++) addRule(world, 'clara', `Règle libre numéro ${i}`);
     const pb = world.company.playbooks.clara!;
-    expect(pb).toHaveLength(12);
+    expect(pb).toHaveLength(MAX_RULES);
     expect(pb).toContain('Prix cible « 19 » sur « A » : forte preuve.'); // 0.9 survives the 0.55 seed rules
-    expect(pb[pb.length - 1]).toBe('Règle libre numéro 14');
+    expect(pb[pb.length - 1]).toBe(`Règle libre numéro ${MAX_RULES + 2}`);
+  });
+
+  it('an overflow drops prose before a directive, even a better-supported prose', () => {
+    const world = makeWorld();
+    const rules = Array.from({ length: MAX_RULES }, (_, i) => `Privilégier le hook « pov » sur « Niche ${i} »`);
+    world.company.playbooks.leo = [...rules];
+    world.company.lessons.push({ id: 'les_p', day: 1, topic: 'ads', insight: 'Une observation sûre, sans directive.', evidence: '', confidence: 0.7, source: 'nora', appliesTo: ['leo'], notePath: 'lecons/p.md' });
+    world.company.playbooks.leo.unshift('Une observation sûre, sans directive.');
+    addRule(world, 'leo', 'Une autre règle libre.');
+    expect(world.company.playbooks.leo).toHaveLength(MAX_RULES);
+    expect(world.company.playbooks.leo).not.toContain('Une observation sûre, sans directive.');
+    expect(world.company.playbooks.leo.filter((r) => r.startsWith('Privilégier')).length).toBeGreaterThanOrEqual(MAX_RULES - 1);
+    expect(world.company.lessons.at(-1)!.appliesTo).not.toContain('leo'); // evicted: it can come back when confirmed
   });
 
   it('routes process lessons on one task to that team and the CEO', () => {

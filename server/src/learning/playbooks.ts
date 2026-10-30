@@ -1,10 +1,13 @@
-/** Playbooks: learned rules per agent (max 12), routed by lesson topic, mirrored as brain notes. */
+/** Playbooks: learned rules per agent (bounded), routed by lesson topic, mirrored as brain notes. */
 import type { BrainVault } from '../contracts.js';
 import type { AgentState, DeptId, Lesson, WorldState } from '../shared.js';
 import { basenameOf } from './markdown.js';
 import { DEPT_PLAYBOOK_LABELS, fmtPct, fold, safeFileName, shorten, unique } from './text.js';
 
-export const MAX_RULES = 12;
+/** One niche holds up to 4 directives: 24 rules leave room for a real portfolio without growing with the run. */
+export const MAX_RULES = 24;
+/** A directive acts on what the agent does; prose only informs. An overflow drops prose first. */
+const DIRECTIVE_PRIORITY = 0.25;
 export const COACHING_PREFIX = 'Coaching RH :';
 
 /** Which departments receive a lesson of a given topic ('chiefs' = every department chief). */
@@ -84,20 +87,25 @@ function ruleConfidence(world: WorldState, rule: string): number {
   return 0.55; // seed rules written by the runtime
 }
 
-function trimPlaybook(world: WorldState, pb: string[], keep: string): void {
+function trimPlaybook(world: WorldState, agentId: string, pb: string[], keep: string): void {
   while (pb.length > MAX_RULES) {
     let worst = -1;
-    let worstConf = Infinity;
+    let worstRank = Infinity;
     pb.forEach((rule, i) => {
       if (rule === keep) return;
-      const c = ruleConfidence(world, rule);
-      if (c < worstConf) { // strict: on ties the oldest (lowest index) goes first
-        worstConf = c;
+      const rank = ruleConfidence(world, rule) + (hasMachineRule(rule) ? DIRECTIVE_PRIORITY : 0);
+      if (rank < worstRank) { // strict: on ties the oldest (lowest index) goes first
+        worstRank = rank;
         worst = i;
       }
     });
     if (worst < 0) break;
-    pb.splice(worst, 1);
+    const [gone] = pb.splice(worst, 1);
+    // `appliesTo` says who holds the rule: a later confirmation of the lesson can bring it back to this agent
+    const key = ruleKey(gone!);
+    for (const l of world.company.lessons ?? []) {
+      if (ruleKey(l.insight) === key) l.appliesTo = l.appliesTo.filter((id) => id !== agentId);
+    }
   }
 }
 
@@ -135,7 +143,7 @@ export function directiveSlot(rule: string): string | null {
 }
 
 /**
- * Adds a rule to an agent's playbook (max 12; the lowest-confidence, then oldest, rule is dropped).
+ * Adds a rule to an agent's playbook (at most MAX_RULES; prose goes before directives, then lowest confidence, then oldest).
  * A rule carrying the same directive as an existing one (same banned word, or the same singleton pattern)
  * replaces it in place — unless the old singleton is clearly better supported ('skipped').
  * `replacePrefix`: an existing rule starting with it is replaced in place (one coaching rule per agent).
@@ -164,7 +172,7 @@ export function addRule(world: WorldState, agentId: string, rule: string, replac
     }
   }
   pb.push(text);
-  trimPlaybook(world, pb, text);
+  trimPlaybook(world, agentId, pb, text);
   return pb.includes(text) ? 'added' : 'skipped';
 }
 
