@@ -97,11 +97,10 @@ export function clean(s: string | null | undefined): string {
 
 /** Remove surrounding quotes and trailing punctuation. */
 export function bare(s: string | null | undefined): string {
-  return clean(s)
-    .replace(/^[«"“'\s]+/, '')
-    .replace(/[»"”\s]+$/, '')
-    .replace(/[\s.;:,!?…]+$/, '')
-    .trim();
+  const head = clean(s).replace(/^[«"“'\s]+/, '').replace(/[\s.;:,!?…]+$/, '');
+  // a closing guillemet that answers one inside the text stays: « viser « toutes les entreprises » » must not lose it
+  const unmatched = (head.match(/»/g) ?? []).length > (head.match(/«/g) ?? []).length;
+  return head.replace(unmatched ? /[»"”\s]+$/ : /["”\s]+$/, '').replace(/[\s.;:,!?…]+$/, '').trim();
 }
 
 export function cap(s: string): string {
@@ -164,7 +163,8 @@ export function wordCount(text: string): number {
 export function splitSentences(p: string): string[] {
   const t = clean(p);
   if (!t) return [];
-  return t.split(/(?<=[.!?…])\s+(?=[«"\p{Lu}\p{N}—–-])/u).map((x) => x.trim()).filter(Boolean);
+  // a sentence may also end on a closing guillemet: « … ? » Suite.
+  return t.split(/(?<=[.!?…]|[.!?…]\s»)\s+(?=[«"\p{Lu}\p{N}—–-])/u).map((x) => x.trim()).filter(Boolean);
 }
 
 export function uniqBy<T>(arr: readonly T[], key: (t: T) => string): T[] {
@@ -330,15 +330,27 @@ const DANGLING = new Set([
   'il', 'elle', 'ils', 'elles', 'on', 'je', 'j', 'tu', 'dont', 'jusqu', 'pendant', 'depuis', 'c', 'est', 'sont',
   'tout', 'tous', 'toute', 'toutes', 'juste', 'trop', 'encore', 'deja', 'presque', 'plutot', 'assez',
   'fait', 'font', 'met', 'mettent', 'rend', 'rendent', 'donne', 'prend', 'devant', 'derriere', 'pres', 'loin', 'autour',
+  'ni', 'sauf', 'hormis', 'excepte', 'sinon', 'surtout', 'notamment',
 ]);
 
-/** True when the phrase ends on a preposition / article / auxiliary / bare number (an obviously cut fragment). */
+/**
+ * « pas » and « jamais » close a phrase only after their « ne » (« il ne dort pas »). Without it they open
+ * the clause that was cut: « Nettoyer au vinaigre, jamais » reads as if the first half were forbidden.
+ */
+function danglingNegation(s: string, last: string): boolean {
+  if (last !== 'pas' && last !== 'jamais') return false;
+  const clause = norm(s.split(/[,;:]/).pop() ?? '').split(/[\s']+/);
+  return !clause.includes('ne') && !clause.includes('n');
+}
+
+/** True when the phrase ends on a preposition / article / auxiliary / contrast word / bare number (an obviously cut fragment). */
 export function endsDangling(s: string): boolean {
   const words = norm(s).replace(/[^a-z0-9'\s-]/g, ' ').trim().split(/[\s']+/).filter(Boolean);
   const last = words[words.length - 1] ?? '';
   // a capitalised last word is a name / acronym / letter (« Plan B », « TOEIC »), never « à », « le »…
   const rawLast = clean(s).split(/[\s'’]+/).filter(Boolean).pop() ?? '';
   if (words.length > 1 && /^\p{Lu}/u.test(rawLast)) return false;
+  if (danglingNegation(s, last)) return true;
   // adverbial « juste avant », « peu après », « et après » end a phrase legitimately
   if ((last === 'avant' || last === 'apres') && /^(juste|peu|bien|longtemps|et|d|jour|semaine|mois|l)$/.test(words[words.length - 2] ?? '')) return false;
   // locutions that need their complement (« facturé au lieu », « à cause », « en fonction »)
@@ -346,16 +358,17 @@ export function endsDangling(s: string): boolean {
   return !last || DANGLING.has(last) || /^\d+$/.test(last);
 }
 
-/** « ne / n’ » without its second half (« je ne savais ») is a cut negation. */
+/** « ne / n’ » without its second half (« je ne savais ») is a cut negation. « Nettoyer », « neuf » are not one. */
 function brokenNegation(s: string): boolean {
   const n = ` ${norm(s)} `;
-  const i = n.search(/\s(ne|n')\s?/);
+  const i = n.search(/\s(?:ne\s|n')/);
   if (i < 0) return false;
   return !/\b(pas|plus|jamais|rien|personne|aucun|aucune|guere|que|qu'|ni)\b/.test(n.slice(i + 2));
 }
 
 /** Cut points tried, strongest first: punctuation, then subordinate words (the head keeps its meaning). */
-const LABEL_SEPARATORS: RegExp[] = [/\s*[:;]\s+/, /\s+[—–]\s+/, /\s+-\s+/, /,\s+/, /\s+\(/];
+const COLON_SEPARATOR = /\s*[:;]\s+/;
+const LABEL_SEPARATORS: RegExp[] = [COLON_SEPARATOR, /\s+[—–]\s+/, /\s+-\s+/, /,\s+/, /\s+\(/];
 
 /**
  * Tier 1 = clause boundaries (the head is a whole clause: « Il se retient dehors | et se lâche… »).
@@ -371,6 +384,13 @@ const LABEL_CUTWORDS: readonly (readonly string[])[] = [
 
 /** A head before a comma that is only a circumstance (« En micro-entreprise, … », « Après un imprévu, … »). */
 const CIRCUMSTANCE = /^(après|avant|pendant|en|dans|si|quand|chaque|même|dès|pour|le soir|le matin|la nuit|au début|à|avec|sans|entre|une fois|au quotidien|concrètement|sinon|ensuite|enfin|d’abord|d'abord)\b/iu;
+
+/** A head that only announces what follows its colon (« L’erreur de presque tous : … »): the meaning is after it. */
+const LEAD_IN = /^(?:l['’](?:erreur|astuce|idée|objectif)|le (?:secret|conseil|piège|truc|déclic|plus)|la (?:règle|clé|vraie|seule)|ce qui|ce que|voici|voilà|attention|astuce|rappel|résultat|objectif|bonus|pov|exemple|conseil|règle)\b/iu;
+
+/** A negative head keeps its limit: « Ne pas nourrir le chiot | juste avant de sortir » cut there forbids all meals. */
+const NEGATIVE = /(?:^|[\s'])(?:ne|n|jamais|sans|aucun|aucune|eviter|interdit)(?=[\s']|$)/;
+const REASON_CUTS: ReadonlySet<string> = new Set([' et ', ' ou ', ' mais ', ' parce ', ' afin ', ' alors ']);
 
 function labelOk(s: string, min: number, max: number): boolean {
   const t = s.trim();
@@ -403,7 +423,8 @@ export function clauseLabel(s: string | null | undefined, max: number, min: numb
     const head = bare(parts[0] ?? '');
     if (head === t) continue;
     // « En micro-entreprise, on déclare… » : the circumstance alone says nothing, the rest carries the meaning
-    if (CIRCUMSTANCE.test(head) && parts.length > 1 && depth === 0) {
+    const payoffAfter = sep === COLON_SEPARATOR && (LEAD_IN.test(head) || !headOk(head, mn, max));
+    if ((CIRCUMSTANCE.test(head) || payoffAfter) && parts.length > 1 && depth === 0) {
       const tail = clauseLabel(parts.slice(1).join(', '), max, o, 1);
       if (tail) return tail;
       continue;
@@ -421,6 +442,7 @@ export function clauseLabel(s: string | null | undefined, max: number, min: numb
         if (i < 0) break;
         from = i + 1;
         const head = bare(t.slice(0, Math.max(0, i - 1)));
+        if (NEGATIVE.test(norm(head)) && !REASON_CUTS.has(w)) continue;
         if (headOk(head, mn, max) && (!best || head.length > best.length)) best = head;
       }
     }
@@ -438,6 +460,20 @@ export function bestLabel(cands: readonly (string | null | undefined)[], max: nu
   return null;
 }
 
+/** A cut can also stop on a number or a quantifier (« plus de deux »): the end of the sentence is what counted. */
+const CUT_QUANTITY = /(?:^|\s)(?:deux|trois|quatre|cinq|six|sept|huit|dix|quelques|plusieurs|chaque|aucune?|certaine?s)$/;
+
+/** Words are dropped from the end until what remains is a phrase: no dangling word, no open quote, no half negation. */
+function trimCut(s: string): string {
+  let out = s;
+  for (;;) {
+    out = bare(out);
+    const open = (out.match(/«/g) ?? []).length > (out.match(/»/g) ?? []).length;
+    if (!out || !(endsDangling(out) || CUT_QUANTITY.test(norm(out)) || brokenNegation(out) || open)) return out;
+    out = out.split(/\s+/).slice(0, -1).join(' ');
+  }
+}
+
 /** Clean label, else a word-boundary cut WITHOUT ellipsis and without dangling words (last resort). */
 export function labelOf(s: string, max: number): string {
   const l = clauseLabel(s, max);
@@ -449,9 +485,7 @@ export function labelOf(s: string, max: number): string {
     if (next.length > max) break;
     out = next;
   }
-  while (out && endsDangling(out)) out = out.split(/\s+/).slice(0, -1).join(' ');
-  out = bare(out.replace(/[,;:]+$/, ''));
-  return cap(out || bare(s).slice(0, max));
+  return cap(trimCut(out) || bare(s).slice(0, max));
 }
 
 /** First candidate (in order) that is ≤ max chars, has at most one « : », no ellipsis, no dangling end. */

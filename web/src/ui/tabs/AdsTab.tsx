@@ -115,7 +115,12 @@ export function AdsTab({ onClose }: { onClose(): void }) {
                   <tr key={c.id}>
                     <td><strong>{c.name}</strong><div className="muted small">par {agentName(lookups, c.createdBy)}</div></td>
                     <td className="small">{lookups.products.get(c.productId)?.title ?? c.productId}</td>
-                    <td><Pill tone={c.status === 'active' ? 'green' : c.status === 'rejected' ? 'red' : 'neutral'}>{{ active: 'Active', paused: 'En pause', rejected: 'Refusée', ended: 'Terminée' }[c.status]}</Pill></td>
+                    <td>
+                      <Pill tone={c.status === 'active' ? 'green' : c.status === 'rejected' ? 'red' : c.pausedFor === 'outage' ? 'amber' : 'neutral'} title={c.pausedFor === 'outage' ? 'Coupée le temps de la panne annoncée, elle reprend le lendemain matin.' : undefined}>
+                        {c.pausedFor === 'outage' ? 'Pause panne' : { active: 'Active', paused: 'En pause', rejected: 'Refusée', ended: 'Terminée' }[c.status]}
+                      </Pill>
+                      {c.founderForced ? <div className="muted small">Lancée à la demande du fondateur</div> : null}
+                    </td>
                     <td className="num">{fmtEur(c.dailyBudget, 0)}</td>
                     <td className="num">{c.creativeIds.length}</td>
                     <td className="num">{fmtEur(a.spend)}</td>

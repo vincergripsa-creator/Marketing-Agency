@@ -599,6 +599,7 @@ export function mockSnapshot(): CompanySnapshot {
   const finance = buildFinance(kpis);
   const agents = buildAgents(rand);
   const orders = buildOrders();
+  const inbox = buildInbox();
   return {
     runId: 'demo-pixel-agency',
     scenario: {
@@ -635,7 +636,7 @@ export function mockSnapshot(): CompanySnapshot {
       budget: { day: DAY, adCap: 25, survival: false, note: 'Produit rentable (ROAS 4,2) : on garde 25 € de pub, pas plus tant que le test de prix tourne.' },
     },
     market: {
-      inbox: buildInbox(),
+      inbox,
       adStats: buildAdStats(),
       organicPosts: buildOrganic(),
       creators: buildCreators(),
@@ -649,5 +650,6 @@ export function mockSnapshot(): CompanySnapshot {
     ledger: buildLedger(),
     activity: buildActivity(now),
     session: { runId: 'demo-pixel-agency', playing: true, speed: 1, intervalMs: 2000, busy: false, mindMode: 'heuristic', status: 'running', day: DAY, tick: TICK, lastError: null },
+    godMode: { niches: [], intents: Object.fromEntries(inbox.map((m) => [m.id, m.intent])) },
   };
 }

@@ -1,15 +1,17 @@
 // Finance: cash, profit, runway, ROAS, cash curve, daily profit, P&L, ledger, compute, goal.
 import { useMemo, useState } from 'react';
-import type { LedgerType } from '../../../../shared/types';
+import type { WeeklyPnl } from '../../../../shared/types';
 import { BarChart, LineChart, SERIES } from '../charts';
 import { Bar, cx, Empty, Overlay, Pill, SectionTitle, Segmented, Stat } from '../common';
 import { useApp } from '../context';
-import { budgetView, type BudgetView } from '../derive';
+import { budgetView, isReserve, ledgerView, type BudgetView } from '../derive';
 import { clamp01, fmtEur, fmtEurShort, fmtEurSigned, fmtInt, fmtRoas, safeDiv, sum } from '../format';
 import { Icon } from '../icons';
-import { agentName, LEDGER_LABEL } from '../labels';
+import { agentName, LEDGER_LABEL, RESERVE_LABEL } from '../labels';
 
 type LedgerFilter = 'all' | 'in' | 'out';
+
+const ENTRIES_SHOWN = 150;
 
 export function FinanceTab({ onClose }: { onClose(): void }) {
   const { snapshot, lookups } = useApp();
@@ -23,12 +25,12 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
   const sc = snapshot?.scenario;
   const mind = snapshot?.mind;
 
-  const byType = useMemo(() => {
-    const m = new Map<LedgerType, number>();
-    for (const e of ledger) if (e.type !== 'capital') m.set(e.type, (m.get(e.type) ?? 0) + e.amount);
-    return [...m].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
-  }, [ledger]);
-  const maxType = Math.max(1, ...byType.map(([, v]) => Math.abs(v)));
+  const view = useMemo(() => ledgerView(ledger), [ledger]);
+  const { byType, reserve } = view;
+  const maxType = Math.max(1, reserve, ...byType.map(([, v]) => Math.abs(v)));
+  // snapshot.ledger only keeps the latest entries: every label says how many it really holds
+  const scope = view.complete ? 'toutes les écritures' : `${fmtInt(ledger.length)} dernières écritures`;
+  const pnlReport = (snapshot?.company?.pnl ?? []).at(-1);
 
   const pnl = f ? [
     { label: 'Chiffre d’affaires', value: f.revenue, sign: 1 },
@@ -42,19 +44,19 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
 
   const goal = sc?.goal;
   const goalPct = goal && goal.targetProfit > 0 ? clamp01(safeDiv(f?.profit ?? 0, goal.targetProfit)) : 0;
-  const entries = [...ledger].reverse().filter((e) => (lf === 'all' ? true : lf === 'in' ? e.amount > 0 : e.amount < 0)).slice(0, 150);
+  const entries = [...ledger].reverse().filter((e) => (lf === 'all' ? true : lf === 'in' ? e.amount > 0 : e.amount < 0)).slice(0, ENTRIES_SHOWN);
 
   if (!f) return <Overlay title="Finance" icon="wallet" onClose={onClose}><Empty>Pas encore de données financières.</Empty></Overlay>;
 
   return (
     <Overlay title="Finance" subtitle={`Grand livre de l’agence · budget de départ ${fmtEur(sc?.startingCash ?? 0, 0)}`} icon="wallet" onClose={onClose}>
-      {f.bankrupt ? <div className="banner-inline banner-bad"><Icon name="alert" size={14} /> Faillite : la trésorerie ne couvre plus les engagements.</div> : null}
+      {f.bankrupt ? <div className="banner-inline banner-bad"><Icon name="alert" size={14} /> Faillite : la trésorerie est négative. L’agence continue en mode survie, sans aucune dépense payante.</div> : null}
       <div className="stats-row stats-row-6">
         <Stat big label="Trésorerie" value={fmtEur(f.cash)} sub={`départ ${fmtEur(sc?.startingCash ?? 0, 0)}`} tone={sc && f.cash < sc.startingCash * 0.3 ? 'bad' : null} icon="wallet" />
         <Stat label="Profit cumulé" value={fmtEurSigned(f.profit)} tone={f.profit >= 0 ? 'good' : 'bad'} icon="trendUp" />
         <Stat label="Profit 7 j" value={fmtEurSigned(f.profit7d)} tone={f.profit7d >= 0 ? 'good' : 'bad'} icon="calendar" />
         <Stat label="Burn moyen / j" value={f.burn7d > 0 ? fmtEur(f.burn7d) : 'aucun'} sub={f.burn7d > 0 ? 'sortie nette moyenne' : 'l’agence encaisse plus qu’elle ne dépense'} tone={f.burn7d > 0 ? 'warn' : 'good'} icon="trendDown" />
-        <Stat label="Runway" value={f.runwayDays === null ? 'rentable' : `${fmtInt(f.runwayDays)} j`} sub={f.runwayDays !== null && f.runwayDays < 14 ? 'sous le seuil de 14 jours' : undefined} tone={f.runwayDays === null ? 'good' : f.runwayDays < 14 ? 'bad' : null} icon="clock" />
+        <Stat label="Runway" value={f.runwayDays === null ? 'illimitée' : `${fmtInt(f.runwayDays)} j`} sub={f.runwayDays === null ? 'dernière semaine sans perte' : f.runwayDays < 14 ? 'sous le seuil de 14 jours' : undefined} tone={f.runwayDays === null ? 'good' : f.runwayDays < 14 ? 'bad' : null} icon="clock" />
         <Stat label="ROAS 7 j" value={fmtRoas(f.roas7d)} sub="seuil de rentabilité ≈ 1,5×" tone={f.roas7d >= 1.5 ? 'good' : f.roas7d > 0 ? 'bad' : null} icon="target" />
       </div>
 
@@ -103,8 +105,8 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
               <strong className={f.profit >= 0 ? 'txt-good' : 'txt-bad'}>{fmtEurSigned(f.profit)}</strong>
             </div>
           </div>
-          <SectionTitle>Par type d’écriture <span className="muted small">· 150 dernières</span></SectionTitle>
-          {byType.length === 0 ? <div className="muted small">Aucune écriture hors capital.</div> : (
+          <SectionTitle>Par type d’écriture <span className="muted small">· {scope}</span></SectionTitle>
+          {byType.length === 0 && reserve === 0 ? <div className="muted small">Aucune écriture hors capital.</div> : (
             <div className="pnl">
               {byType.map(([t, v]) => (
                 <div key={t} className="pnl-row">
@@ -113,6 +115,13 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
                   <strong className={v >= 0 ? 'txt-good' : 'txt-bad'}>{fmtEurSigned(v)}</strong>
                 </div>
               ))}
+              {reserve > 0 ? (
+                <div className="pnl-row" title="Argent bloqué par le prestataire de paiement, puis rendu : ni un coût, ni un revenu.">
+                  <span>{RESERVE_LABEL}</span>
+                  <span className="pnl-bar"><span style={{ width: `${(reserve / maxType) * 100}%`, background: '#94a3b8' }} /></span>
+                  <strong className="muted">{fmtEur(reserve)}</strong>
+                </div>
+              ) : null}
             </div>
           )}
         </div>
@@ -147,8 +156,10 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
         </div>
       </div>
 
+      {pnlReport ? <WeeklyPnlCard report={pnlReport} /> : null}
+
       <div className="filters-row">
-        <SectionTitle>Grand livre · {fmtInt(ledger.length)} écritures</SectionTitle>
+        <SectionTitle>Grand livre · {view.complete ? `${fmtInt(ledger.length)} écritures` : scope}</SectionTitle>
         <Segmented<LedgerFilter> size="sm" value={lf} onChange={setLf} options={[
           { id: 'all', label: 'Tout' },
           { id: 'in', label: 'Entrées', count: ledger.filter((e) => e.amount > 0).length },
@@ -160,21 +171,57 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
           <table className="table">
             <thead><tr><th>Jour</th><th>Type</th><th>Libellé</th><th className="num">Montant</th><th>Réf.</th></tr></thead>
             <tbody>
-              {entries.map((e) => (
-                <tr key={e.id}>
-                  <td className="small">J{e.day}</td>
-                  <td><span className={cx('ledger-type', e.amount >= 0 ? 'lt-in' : 'lt-out')}>{LEDGER_LABEL[e.type] ?? e.type}</span></td>
-                  <td className="small">{e.memo}</td>
-                  <td className={cx('num', e.amount >= 0 ? 'txt-good' : 'txt-bad')}>{fmtEurSigned(e.amount)}</td>
-                  <td className="small muted mono">{e.ref ?? ''}</td>
+              {entries.map((e) => {
+                const held = isReserve(e);
+                return (
+                  <tr key={e.id}>
+                    <td className="small">J{e.day}</td>
+                    <td><span className={cx('ledger-type', held ? 'lt-hold' : e.amount >= 0 ? 'lt-in' : 'lt-out')}>{held ? RESERVE_LABEL : LEDGER_LABEL[e.type] ?? e.type}</span></td>
+                    <td className="small">{e.memo}</td>
+                    <td className={cx('num', held ? 'muted' : e.amount >= 0 ? 'txt-good' : 'txt-bad')}>{fmtEurSigned(e.amount)}</td>
+                    <td className="small muted mono">{e.ref ?? ''}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="muted small">Total, {scope} hors capital et réserves : {fmtEurSigned(view.total)}</div>
+    </Overlay>
+  );
+}
+
+/** Latest weekly P&L per product (the accountant's report the kill and budget decisions read). */
+function WeeklyPnlCard({ report }: { report: WeeklyPnl }) {
+  const { openProduct } = useApp();
+  return (
+    <div className="card">
+      <SectionTitle right={<span className="muted small">jours {report.fromDay} à {report.toDay}</span>}>Résultat par produit · semaine {report.week}</SectionTitle>
+      {report.products.length === 0 ? <div className="muted small">Aucun produit n’a tourné sur la période.</div> : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead><tr><th>Produit</th><th className="num">Ventes</th><th className="num">CA</th><th className="num">Remboursé</th><th className="num">Pub</th><th className="num">Frais</th><th className="num">Créateurs</th><th className="num">Profit</th><th className="num">ROAS</th></tr></thead>
+            <tbody>
+              {report.products.map((p) => (
+                <tr key={p.productId}>
+                  <td><button type="button" className="link-btn" onClick={() => openProduct(p.productId)} title="Voir le produit">{p.title}</button></td>
+                  <td className="num">{fmtInt(p.sales)}</td>
+                  <td className="num">{fmtEur(p.revenue)}</td>
+                  <td className="num">{fmtEur(p.refunds)}</td>
+                  <td className="num">{fmtEur(p.adSpend)}</td>
+                  <td className="num">{fmtEur(p.fees)}</td>
+                  <td className="num">{fmtEur(p.creators)}</td>
+                  <td className={cx('num', p.profit >= 0 ? 'txt-good' : 'txt-bad')}>{fmtEurSigned(p.profit)}</td>
+                  <td className="num">{p.roas === null ? '—' : fmtRoas(p.roas)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      <div className="muted small">Total des 150 dernières écritures : {fmtEurSigned(sum(ledger, (e) => (e.type === 'capital' ? 0 : e.amount)))}</div>
-    </Overlay>
+      <div className="muted small">Résultat de la période : {fmtEurSigned(report.total)}, dont {fmtEurSigned(report.unallocated)} de coûts communs (boutique, outils, calcul).</div>
+    </div>
   );
 }
 

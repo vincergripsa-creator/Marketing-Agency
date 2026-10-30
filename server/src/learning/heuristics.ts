@@ -2,9 +2,10 @@
 import type { BrainNote, LessonDraft } from '../contracts.js';
 import type { AdCreative, AdFormat, DailyKpi, DeptId, Experiment, HookStyle, Lesson, Product, TaskKind, WorldState } from '../shared.js';
 import { clamp } from '../core/index.js';
+import { isScamFlag } from '../sim/market.js';
 import { empiricalMean, nearestArm, PRICE_ARMS } from './bandits.js';
 import {
-  addRow, adRows, ctrOf, cvrOf, emptyAgg, financeView, findNoteLink, nicheName, priceOnDay, productOfRow, roasOf,
+  addRow, adRows, ctrOf, cvrOf, emptyAgg, financeView, findNoteLink, nicheName, priceOnDay, productOfRow, roasOf, windowLabel,
   type FunnelAgg, type WorldIndex,
 } from './data.js';
 import { experimentNiche, experimentThreshold, experimentValueKind, lowerIsBetter } from './experiments.js';
@@ -104,7 +105,7 @@ function compareCreatives(inp: RetroInput, dim: 'hookStyle' | 'format'): Heurist
     const word = dim === 'hookStyle' ? 'hook' : 'format';
     const evidence = `${list
       .map(([k, a]) => `« ${k} » : CTR ${fmtPct(ctrOf(a), 2)} sur ${fmtNum(a.impressions)} impressions (${plural(a.creatives.size, 'pub', 'pubs')})`)
-      .join(' · ')} — jours ${from} à ${day}.`;
+      .join(' · ')} — ${windowLabel(world, from, day)}.`;
     out.push(draft({
       key: `pub-${word}-${slugify(nicheId, 40)}`,
       topic: 'ads',
@@ -131,7 +132,7 @@ function lowCtr(inp: RetroInput): HeuristicDraft[] {
     topic: 'ads',
     title: 'Hooks trop faibles',
     insight: `Retravailler les 2 premières secondes des pubs : le CTR moyen plafonne à ${fmtPct(ctr, 2)}, loin du 1,5 % visé.`,
-    evidence: `${plural(agg.clicks, 'clic', 'clics')} pour ${fmtNum(agg.impressions)} impressions sur les jours ${from} à ${inp.day} (${fmtEur(agg.spend)} dépensés).`,
+    evidence: `${plural(agg.clicks, 'clic', 'clics')} pour ${fmtNum(agg.impressions)} impressions sur les ${windowLabel(inp.world, from, inp.day)} (${fmtEur(agg.spend)} dépensés).`,
     confidence: sampleConfidence(agg.impressions, 15000),
     links: ["Canaux d'acquisition"],
     tags: ['hook', 'ctr'],
@@ -393,7 +394,7 @@ function prices(inp: RetroInput): HeuristicDraft[] {
           ...base,
           title: `Prix cible ${bk} € sur ${name}`,
           insight: `Prix cible « ${bk} » sur « ${name} » : ${fmtEur(ppv(bv))} de profit par visiteur contre ${fmtEur(ppv(wv))} à ${wk} €.`,
-          evidence: list.map(([k, v]) => `${k} € : ${fmtEur(ppv(v))}/visiteur, conversion ${fmtPct(safeDiv(v.purchases, v.lv))} sur ${fmtNum(v.lv)} visites`).join(' · ') + ` — jours ${from} à ${day}.`,
+          evidence: list.map(([k, v]) => `${k} € : ${fmtEur(ppv(v))}/visiteur, conversion ${fmtPct(safeDiv(v.purchases, v.lv))} sur ${fmtNum(v.lv)} visites`).join(' · ') + ` — ${windowLabel(world, from, day)}.`,
           confidence: sampleConfidence(Math.min(bv.lv, wv.lv), 150, gap / 0.3),
         }));
       }
@@ -408,8 +409,8 @@ function prices(inp: RetroInput): HeuristicDraft[] {
         out.push(draft({
           ...base,
           title: `Monter le prix sur ${name}`,
-          insight: `Prix cible « ${next} » à tester sur « ${name} » : ${fmtPct(cvr)} des visiteurs achètent déjà à ${k} €, la demande supporte plus.`,
-          evidence: `${plural(v.purchases, 'vente', 'ventes')} pour ${fmtNum(v.lv)} visites à ${k} € (jours ${from} à ${day}), ${fmtEur(ppv(v))} de profit par visiteur.`,
+          insight: `Prix cible « ${next} » sur « ${name} » à tester : ${fmtPct(cvr)} des visiteurs achètent déjà à ${k} €, la demande supporte plus.`,
+          evidence: `${plural(v.purchases, 'vente', 'ventes')} pour ${fmtNum(v.lv)} visites à ${k} € (${windowLabel(world, from, day)}), ${fmtEur(ppv(v))} de profit par visiteur.`,
           confidence: sampleConfidence(v.lv, 300, 0.6),
         }));
       } else if (v.lv >= 150 && cvr < 0.01 && idx > 0 && Number(k) >= 24) {
@@ -418,7 +419,7 @@ function prices(inp: RetroInput): HeuristicDraft[] {
           ...base,
           title: `Baisser le prix sur ${name}`,
           insight: `Prix cible « ${prev} » sur « ${name} » : à ${k} €, ${v.purchases > 0 ? `seulement ${fmtPct(cvr)} des visiteurs achètent` : `aucun des ${fmtNum(v.lv)} visiteurs n'a acheté`}.`,
-          evidence: `${plural(v.purchases, 'vente', 'ventes')} pour ${fmtNum(v.lv)} visites à ${k} € (jours ${from} à ${day}).`,
+          evidence: `${plural(v.purchases, 'vente', 'ventes')} pour ${fmtNum(v.lv)} visites à ${k} € (${windowLabel(world, from, day)}).`,
           confidence: sampleConfidence(v.lv, 300, 0.5),
         }));
       }
@@ -441,11 +442,11 @@ function salesPageConversion(inp: RetroInput): HeuristicDraft[] {
     const cvr = cvrOf(a);
     if (a.landingViews < 150 || cvr >= 0.01) continue;
     out.push(draft({
-      key: `page-conversion-${slugify(productId, 30)}`,
+      key: LESSON_KEYS.page(productId),
       topic: 'pricing',
       title: `Page de vente à retravailler : ${shorten(p.title, 50)}`,
       insight: `Réécrire la page de vente de « ${shorten(p.title, 70)} » avec les mots exacts des clients et les objections traitées : seulement ${fmtPct(cvr)} des visiteurs achètent.`,
-      evidence: `${plural(a.purchases, 'vente', 'ventes')} pour ${fmtNum(a.landingViews)} visites sur les jours ${from} à ${day} (prix ${fmtEur(p.price, 0)}, promesse ${p.salesPage ? fmtRatio(p.salesPage.hypeLevel) : 'n/c'}).`,
+      evidence: `${plural(a.purchases, 'vente', 'ventes')} pour ${fmtNum(a.landingViews)} visites sur les ${windowLabel(world, from, day)} (prix ${fmtEur(p.price, 0)}, promesse ${p.salesPage ? fmtRatio(p.salesPage.hypeLevel) : 'n/c'}).`,
       confidence: sampleConfidence(a.landingViews, 400),
       links: ['Page de vente', ...productLink(inp, p)],
       tags: ['page-de-vente', 'conversion'],
@@ -504,7 +505,7 @@ function hypeAndQuality(inp: RetroInput): HeuristicDraft[] {
     if (!lowRating && !soberRefunds) continue;
     const worstReview = [...reviews].sort((a, b) => a.rating - b.rating)[0];
     out.push(draft({
-      key: `produit-qualite-${slugify(p.id, 30)}`,
+      key: LESSON_KEYS.quality(p.id),
       topic: 'product',
       title: `Guide v${(p.version ?? 1) + 1} : ${shorten(p.title, 50)}`,
       insight: `Retravailler « ${shorten(p.title, 70)} » en v${(p.version ?? 1) + 1} à partir des plaintes clients : ${soberRefunds ? `${fmtPct(x.rate)} de remboursements malgré une promesse sobre` : `note moyenne de ${fmtRatio(p.stats.rating)}/5`}.`,
@@ -539,13 +540,13 @@ function support(inp: RetroInput): HeuristicDraft[] {
   const out: HeuristicDraft[] = [];
   const escalated = (world.market?.inbox ?? []).filter((m) => m.status === 'escalated' && m.deadlineDay >= day - 1 && m.deadlineDay <= day);
   if (escalated.length) {
-    const intents = unique(escalated.map((m) => m.intent)).join(', ');
+    const subjects = unique(escalated.map((m) => shorten(m.subject, 40))).slice(0, 3).join(', '); // what we can read, not the hidden intent
     out.push(draft({
       key: 'support-delai',
       topic: 'support',
       title: 'Répondre sous 24 h',
       insight: `Répondre à chaque message client sous 24 h : les messages ignorés tournent en mauvais avis ou en chargeback.`,
-      evidence: `${plural(escalated.length, 'message escaladé', 'messages escaladés')} faute de réponse (jours ${day - 1} à ${day}, intentions : ${intents}) — ${plural(kpi.openTickets, 'ticket encore ouvert', 'tickets encore ouverts')}.`,
+      evidence: `${plural(escalated.length, 'message escaladé', 'messages escaladés')} faute de réponse (jours ${day - 1} à ${day}, sujets : ${subjects}) — ${plural(kpi.openTickets, 'ticket encore ouvert', 'tickets encore ouverts')}.`,
       confidence: 0.5 + Math.min(0.4, escalated.length * 0.1),
       links: ['Support client'],
       tags: ['delai', 'escalade'],
@@ -568,7 +569,25 @@ function support(inp: RetroInput): HeuristicDraft[] {
       critical: true,
     }));
   }
-  const scams = ledgerToday.filter((e) => e.type === 'scam_loss');
+  const stolen = ledgerToday.filter((e) => e.type === 'scam_loss');
+  // a scam_loss on an order id = a false claim paid to a real buyer; the rest went to strangers
+  const claims = stolen.filter((e) => e.ref && inp.ix.orders.has(e.ref));
+  if (claims.length) {
+    const lost = claims.reduce((s, e) => s + Math.abs(e.amount), 0);
+    out.push(draft({
+      key: 'support-fausse-reclamation',
+      topic: 'support',
+      title: 'Vérifier la commande avant de rembourser',
+      insight: 'Vérifier la commande avant de rembourser une réclamation (double débit, PDF jamais reçu, paiement non reconnu) : le nombre de débits, les téléchargements et les échanges passés disent si elle est vraie.',
+      evidence: `${plural(claims.length, 'fausse réclamation payée', 'fausses réclamations payées')} le jour ${day}, ${fmtEur(lost)} perdus : ${shorten(claims.map((e) => e.memo).filter(Boolean).join(' ; '), 140)}.`,
+      confidence: 0.7 + Math.min(0.2, claims.length * 0.08),
+      links: ['Support client', 'Budget et garde-fous'],
+      tags: ['arnaque', 'remboursement'],
+      extraDepts: ['finance'],
+      critical: true,
+    }));
+  }
+  const scams = stolen.filter((e) => !claims.includes(e));
   if (scams.length) {
     const lost = scams.reduce((s, e) => s + Math.abs(e.amount), 0);
     out.push(draft({
@@ -626,16 +645,22 @@ function creators(inp: RetroInput): HeuristicDraft[] {
   const profiles = new Map((world.market?.creators ?? []).map((c) => [c.id, c]));
   const scams = partnerships.filter((p) => p.status === 'scam');
   if (scams.length) {
-    const flags = unique(scams.flatMap((p) => profiles.get(p.creatorId)?.redFlags ?? [])).slice(0, 4);
+    const flags = unique(scams.flatMap((p) => profiles.get(p.creatorId)?.redFlags.filter(isScamFlag) ?? [])).slice(0, 4);
     const lost = scams.reduce((s, p) => s + Math.abs(p.upfront), 0);
+    // what the public profile of a scammer looked like: the numbers to watch when no red flag was showing
+    const profile = (id: string): string => {
+      const c = profiles.get(id);
+      if (!c) return id;
+      return `@${c.handle} : ${fmtPct(safeDiv(c.avgViews, c.followers), 0)} de vues par abonné, engagement ${fmtPct(c.engagement, 1)}, ${fmtEur(safeDiv(c.askUpfront * 1000, c.avgViews), 0)} pour 1 000 vues`;
+    };
     out.push(draft({
       key: 'partenariat-arnaque',
       topic: 'partnership',
       title: 'Créateurs : signaux d\'alerte',
       insight: flags.length
         ? `Refuser tout créateur qui présente ces signaux : ${flags.map((f) => `« ${shorten(f, 50)} »`).join(', ')} — et jamais d'avance sans preuve de résultats.`
-        : "Ne jamais verser d'avance à un créateur sans preuve de résultats (statistiques réelles, anciens partenariats).",
-      evidence: `${plural(scams.length, 'arnaque', 'arnaques')} de créateurs, ${fmtEur(lost)} d'avances perdues : ${scams.slice(0, 3).map((p) => `${profiles.get(p.creatorId)?.handle ?? p.creatorId} (${fmtEur(p.upfront)})`).join(', ')}.`,
+        : "Ne jamais verser d'avance à un créateur sans preuve de résultats (statistiques réelles, anciens partenariats) : comparer ses vues à ses abonnés, son engagement et son prix pour 1 000 vues.",
+      evidence: `${plural(scams.length, 'arnaque', 'arnaques')} de créateurs, ${fmtEur(lost)} d'avances perdues : ${scams.slice(0, 3).map((p) => `${profile(p.creatorId)} (${fmtEur(p.upfront)})`).join(' ; ')}.`,
       confidence: 0.7 + Math.min(0.25, scams.length * 0.08),
       links: ["Canaux d'acquisition", 'Budget et garde-fous'],
       tags: ['createurs', 'arnaque'],
@@ -664,7 +689,7 @@ function creators(inp: RetroInput): HeuristicDraft[] {
   const paidRev = paid.reduce((s, p) => s + p.revenue, 0);
   if (paid.length >= 1 && paidRev < paidUp) {
     out.push(draft({
-      key: 'partenariat-avance',
+      key: LESSON_KEYS.advance,
       topic: 'partnership',
       title: 'Avances aux créateurs non rentables',
       insight: "Limiter les avances aux créateurs et basculer sur un modèle à la commission : les avances ne sont pas remboursées par les ventes.",
@@ -680,6 +705,9 @@ function creators(inp: RetroInput): HeuristicDraft[] {
 
 // ───────────────────────────── Niches & finance ─────────────────────────────
 
+/** « Couper les pubs » stops a niche's paid ads (runtime/acquisition.ts): it takes a real sample, not one campaign's bad days. */
+export const NICHE_CUT_MIN_SPEND = 100;
+
 function niches(inp: RetroInput): HeuristicDraft[] {
   const { world, day, ix } = inp;
   const from = Math.max(1, day - 6);
@@ -693,16 +721,16 @@ function niches(inp: RetroInput): HeuristicDraft[] {
     const roas = roasOf(a);
     const name = nicheName(world, nicheId);
     const base = {
-      key: `niche-${slugify(nicheId, 40)}`,
+      key: LESSON_KEYS.niche(nicheId),
       topic: 'niche' as const,
       links: ['Règle du un', 'Objectifs', ...nicheLink(inp, nicheId)],
       tags: ['roas'],
-      evidence: `${fmtEur(a.spend)} dépensés, ${fmtEur(a.revenue)} de CA publicitaire, ${plural(a.purchases, 'vente', 'ventes')} sur les jours ${from} à ${day}.`,
+      evidence: `${fmtEur(a.spend)} dépensés, ${fmtEur(a.revenue)} de CA publicitaire, ${plural(a.purchases, 'vente', 'ventes')} sur les ${windowLabel(world, from, day)}.`,
       confidence: sampleConfidence(a.spend, 150),
     };
     if (a.spend >= 30 && roas >= 1.5) {
       out.push(draft({ ...base, title: `Garder la niche ${name}`, insight: `Garder et intensifier la niche « ${name} » : ROAS de ${fmtRatio(roas)} sur ${plural(a.days.size, 'jour', 'jours')}.` }));
-    } else if (a.spend >= 40 && roas < 0.8) {
+    } else if (a.spend >= NICHE_CUT_MIN_SPEND && roas < 0.8) {
       out.push(draft({ ...base, title: `Niche ${name} non rentable`, insight: `Couper les pubs de la niche « ${name} » ou retravailler l'offre : ROAS de ${fmtRatio(roas)} sur ${plural(a.days.size, 'jour', 'jours')}.` }));
     }
   }
@@ -807,6 +835,17 @@ function processIssues(inp: RetroInput): HeuristicDraft[] {
 
 // ───────────────────────────── Experiments ─────────────────────────────
 
+/** Stable keys of the lessons the company turns into work (runtime/strategy.ts, handlers/partners.ts). */
+export const LESSON_KEYS = {
+  page: (productId: string): string => `page-conversion-${slugify(productId, 30)}`,
+  quality: (productId: string): string => `produit-qualite-${slugify(productId, 30)}`,
+  niche: (nicheId: string): string => `niche-${slugify(nicheId, 40)}`,
+  advance: 'partenariat-avance',
+} as const;
+
+/** Key prefix of the lessons concluded by an A/B experiment. */
+export const EXPERIMENT_KEY_PREFIX = 'experience-';
+
 const EXP_TOPIC: Record<Experiment['dimension'], Lesson['topic']> = {
   hook_style: 'ads', ad_format: 'ads', price: 'pricing', sales_hype: 'product', support_tone: 'support', niche: 'niche',
 };
@@ -843,7 +882,7 @@ function experiments(inp: RetroInput): HeuristicDraft[] {
     }
     const minN = Math.min(...Object.values(e.results).map((r) => r.n));
     out.push(draft({
-      key: `experience-${slugify(e.dimension, 20)}${nicheId ? `-${slugify(nicheId, 28)}` : ''}`,
+      key: `${EXPERIMENT_KEY_PREFIX}${slugify(e.dimension, 20)}${nicheId ? `-${slugify(nicheId, 28)}` : ''}`,
       topic: EXP_TOPIC[e.dimension] ?? 'process',
       title: `Expérience ${DIMENSION_LABELS[e.dimension] ?? e.dimension} : « ${w} »`,
       insight,

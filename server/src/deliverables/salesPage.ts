@@ -5,7 +5,7 @@
 import type { DesignSpec, Product, Review, SalesPage } from '../shared.js';
 import { darken, ensureContrast, isDark, lighten, mix, readableOn, rgba } from './color.js';
 import { cssFontStack, normalizeDesign } from './design.js';
-import { escapeHtml as esc, formatPrice, frenchNbsp, hashString, truncate } from './text.js';
+import { escapeHtml as esc, formatPrice, frenchNbsp, hashString, truncate, wholeClause } from './text.js';
 
 /** Escaped prose with French no-break spaces ("6 h", "mot :") so lines never break badly. */
 const h = (v: unknown): string => esc(frenchNbsp(String(v ?? '')));
@@ -188,10 +188,28 @@ footer p{margin:4px 0}
 `;
 }
 
+/**
+ * The copy is written once and the price moves: what it says of the price follows, in everything but the customers'
+ * own words. Only the amount the copy was written at changes (« moins de 10 000 € » stays).
+ */
+function atPriceOfTheDay(sp: SalesPage, price: number): SalesPage {
+  const was = sp?.priceWritten;
+  if (!was || was === price) return sp;
+  const amount = Number.isInteger(was) ? `${was}(?:[.,]0+)?` : `${String(was).replace('.', '[.,]')}0*`;
+  const stale = new RegExp(`(?<![\\d.,]|\\d[\\s\\u00a0\\u202f])${amount}[\\s\\u00a0\\u202f]*€`, 'g');
+  const fix = (text: string): string => String(text ?? '').replace(stale, formatPrice(price));
+  return {
+    ...sp, headline: fix(sp.headline), subheadline: fix(sp.subheadline), solution: fix(sp.solution), bonusBlurb: fix(sp.bonusBlurb),
+    guarantee: fix(sp.guarantee), cta: fix(sp.cta),
+    chapterBlurbs: (sp.chapterBlurbs ?? []).map((b) => ({ ...b, blurb: fix(b.blurb) })),
+    objections: (sp.objections ?? []).map((o) => ({ q: fix(o.q), a: fix(o.a) })),
+  };
+}
+
 /** Self-contained HTML store page for one product. */
 export function renderSalesPageHtml(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string }): string {
   const { product } = input;
-  const sp: SalesPage = input.salesPage ?? (product.salesPage as SalesPage);
+  const sp = atPriceOfTheDay(input.salesPage ?? (product.salesPage as SalesPage), product.price);
   const d = normalizeDesign(input.design ?? product.design);
   const brand = (input.brand || 'Pixel Agency').trim();
   const price = formatPrice(product.price);
@@ -201,7 +219,8 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
   const minutes = words > 0 ? Math.max(5, Math.round(words / 200)) : null;
   const headline = sp?.headline || product.title;
   const sub = sp?.subheadline || product.subtitle;
-  const cta = sp?.cta || 'Je télécharge le guide';
+  // the button is written once, the price moves: it always shows the price of the day
+  const cta = (sp?.cta || 'Je télécharge le guide').replace(/\d+(?:[.,]\d+)?\s*€/g, price);
   const pains = (sp?.painBullets ?? []).filter(Boolean);
   const blurbs = (sp?.chapterBlurbs ?? []).filter((b) => b && (b.title || b.blurb));
   const chapterList = blurbs.length ? blurbs : (content?.chapters ?? []).map((c) => ({ title: c.title, blurb: c.intro }));
@@ -261,7 +280,7 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
   <div class="wrap hero-grid">
     <div class="hero-cover"><div class="book">${cover}</div></div>
     <div class="hero-copy">
-      <span class="eyebrow">${ICON.book.replace('<svg', '<svg width="16" height="16"')} Guide PDF${audience ? ` · ${h(truncate(audience.replace(/\s*\([^)]*\)/g, ''), 48))}` : ''}</span>
+      <span class="eyebrow">${ICON.book.replace('<svg', '<svg width="16" height="16"')} Guide PDF${audience ? ` · ${h(wholeClause(audience.replace(/\s*\([^)]*\)/g, ''), (s) => s.length <= 48))}` : ''}</span>
       <h1>${h(headline)}</h1>
       ${sub ? `<p class="sub">${h(sub)}</p>` : ''}
       ${ratingLine}

@@ -1,7 +1,7 @@
 // Live agency state: initial GET /api/state, then SSE updates; demo fallback when the server is down.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Activity, CompanySnapshot, SessionInfo } from '../../shared/types';
-import { api, openStream, type Speed } from './api';
+import { api, openStream, type Speed, type TickInfo } from './api';
 import { mockSnapshot } from './world/mockSnapshot';
 
 export type Connection = 'connecting' | 'live' | 'reconnecting' | 'demo';
@@ -71,6 +71,19 @@ export function withSession(s: CompanySnapshot | null, info: SessionInfo | null 
   return { ...s, session: { ...s.session, ...info }, status };
 }
 
+/** A tick event on top of the last snapshot: clock, finance and whatever moved for the agents, matched by id. */
+export function withTick(s: CompanySnapshot, t: TickInfo): CompanySnapshot {
+  const next = { ...s, day: t.day, tick: t.tick, phase: t.phase ?? s.phase, finance: t.finance ?? s.finance };
+  if (!t.agents?.length) return next;
+  const live = new Map(t.agents.map((a) => [a.id, a] as const));
+  return { ...next, company: { ...s.company, agents: s.company.agents.map((a) => { const m = live.get(a.id); return m ? { ...a, ...m } : a; }) } };
+}
+
+/** Hidden truth to keep after a snapshot: a new run never inherits the niches and intents of the previous one. */
+export function godDataAfter(prev: CompanySnapshot['godMode'] | null, s: CompanySnapshot, sameRun: boolean): CompanySnapshot['godMode'] | null {
+  return s.godMode ?? (sameRun ? prev : null);
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : 'Serveur injoignable';
 }
@@ -95,7 +108,7 @@ export function useAgency(): Agency {
     runIdRef.current = s.runId;
     setSnapshot(s);
     setActivity((prev) => mergeActivity(sameRun ? prev : [], s.activity ?? []));
-    if (s.godMode) setGodData(s.godMode);
+    setGodData((prev) => godDataAfter(prev, s, sameRun));
   }, []);
 
   // Connection lifecycle: GET state (2 tries) → SSE; else demo mode with a background probe.
@@ -113,7 +126,7 @@ export function useAgency(): Agency {
         onActivity: (batch) => { if (!cancelled) setActivity((prev) => mergeActivity(prev, batch)); },
         onTick: (t) => {
           if (cancelled) return;
-          setSnapshot((prev) => (prev ? { ...prev, day: t.day, tick: t.tick, phase: t.phase ?? prev.phase, finance: t.finance ?? prev.finance } : prev));
+          setSnapshot((prev) => (prev ? withTick(prev, t) : prev));
         },
         onStatus: (status, reconnected) => {
           if (cancelled) return;
@@ -201,8 +214,10 @@ export function useAgency(): Agency {
   }, [applySnapshot]);
 
   const replaceSnapshot = useCallback((s: CompanySnapshot) => {
-    runIdRef.current = null; // new run → fresh activity feed
+    runIdRef.current = null; // new run → fresh activity feed, no hidden truth of the previous run
     applySnapshot(s);
+    // /api/scenario and /api/load answer without god data: don't wait for the next poll
+    if (godRef.current) api.state(true).then(applySnapshot).catch(() => undefined);
   }, [applySnapshot]);
 
   const applySession = useCallback((info: SessionInfo) => {

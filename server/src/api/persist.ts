@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { repoRoot } from '../core/index.js';
-import type { LedgerType, RunInfo, WorldState } from '../shared.js';
+import { repoRoot, summarizeLedger } from '../core/index.js';
+import type { RunInfo, WorldState } from '../shared.js';
 
 /** Saved run summary (shared with the UI: GET /api/runs). */
 export type { RunInfo };
@@ -10,9 +10,14 @@ export type { RunInfo };
 export interface SaveOptions {
   /** Runs root (default <repo>/runs). */
   dir?: string;
-  /** Accurate cash/profit from the sim's financeSnapshot; falls back to a ledger estimate. */
-  finance?: { cash: number; profit: number };
+  /**
+   * Cash/profit from the sim's financeSnapshot; falls back to the shared ledger summary. A function is read when
+   * the save serialises the world, so a debounced save never pairs a newer world with older figures.
+   */
+  finance?: SavedFinance | (() => SavedFinance);
 }
+
+export interface SavedFinance { cash: number; profit: number }
 
 const WORLD_FILE = 'world.json';
 const META_FILE = 'meta.json';
@@ -42,27 +47,14 @@ export function newRunId(dir = runsDir(), date = new Date()): string {
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
-const INFLOWS: ReadonlySet<LedgerType> = new Set<LedgerType>(['capital', 'revenue']);
 
-/**
- * Cash/profit from the ledger alone (no sim dependency). Handles both conventions:
- * signed amounts (costs negative) or magnitudes (costs positive, sign given by type).
- */
-export function estimateCashProfit(world: Pick<WorldState, 'ledger'>): { cash: number; profit: number; capital: number } {
-  const ledger = Array.isArray(world.ledger) ? world.ledger : [];
-  const signed = ledger.some((e) => e.amount < 0);
-  let cash = 0;
-  let capital = 0;
-  for (const e of ledger) {
-    const amount = Number.isFinite(e.amount) ? e.amount : 0;
-    const v = signed ? amount : INFLOWS.has(e.type) ? amount : -Math.abs(amount);
-    cash += v;
-    if (e.type === 'capital') capital += v;
-  }
-  return { cash: r2(cash), profit: r2(cash - capital), capital: r2(capital) };
+/** Cash/profit from the ledger alone: the same summary as the sim (holds move cash, never profit). */
+export function estimateCashProfit(world: Pick<WorldState, 'ledger'> & { day?: number }): { cash: number; profit: number; capital: number } {
+  const { cash, profit, capital } = summarizeLedger(Array.isArray(world.ledger) ? world.ledger : [], world.day ?? 0);
+  return { cash, profit, capital };
 }
 
-export function runInfoOf(world: WorldState, mtime: string, finance?: { cash: number; profit: number }): RunInfo {
+export function runInfoOf(world: WorldState, mtime: string, finance?: SavedFinance): RunInfo {
   const f = finance ?? estimateCashProfit(world);
   return {
     runId: world.runId,
@@ -125,7 +117,8 @@ export function saveWorld(world: WorldState, opts: SaveOptions = {}): Promise<st
   const file = join(root, WORLD_FILE);
   // Serialise synchronously so the saved state is the one at call time.
   const json = JSON.stringify(world);
-  const meta = JSON.stringify(runInfoOf(world, new Date().toISOString(), opts.finance), null, 2);
+  const finance = typeof opts.finance === 'function' ? opts.finance() : opts.finance;
+  const meta = JSON.stringify(runInfoOf(world, new Date().toISOString(), finance), null, 2);
   const prev = chains.get(world.runId) ?? Promise.resolve();
   const job = prev.catch(() => undefined).then(async () => {
     await mkdir(root, { recursive: true });

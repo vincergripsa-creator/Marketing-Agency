@@ -93,7 +93,7 @@ const SEEDS: AgentSeed[] = [
     persona: "Hugo transforme les décisions de Camille en plan d'action minuté ; il connaît l'état de chaque tâche et relance sans relâche, toujours avec le sourire.",
     skills: ['Planification', 'Suivi des tâches', 'Synthèse', 'Coordination inter-équipes'],
     tools: [...BRAIN, 'team.delegate', 'store.stats', 'ads.stats'],
-    taskKinds: ['plan_day', 'pick_opportunity', 'daily_report'],
+    taskKinds: ['follow_missions', 'plan_day', 'pick_opportunity', 'daily_report'],
     look: { skin: '#f5d0b0', hair: '#a0522d', hairStyle: 0, accessory: 'tie', shirt: '#e9d8a6' },
   },
   // ── Recherche
@@ -301,7 +301,7 @@ const SEEDS: AgentSeed[] = [
     persona: "Alice rapproche chaque ligne du grand livre ; elle repère un frais oublié ou un remboursement en double avant tout le monde.",
     skills: ['Comptabilité', 'Grand livre', 'Rapprochement', 'Frais et commissions'],
     tools: [...BRAIN, 'finance.ledger', 'store.stats'],
-    taskKinds: ['budget_review'],
+    taskKinds: ['reconcile_ledger', 'weekly_pnl', 'budget_review'],
     look: { skin: '#f5d0b0', hair: '#5a3a22', hairStyle: 2, accessory: 'glasses', shirt: '#a7c957' },
   },
   // ── RH & Apprentissage
@@ -350,7 +350,7 @@ export const SEED_PLAYBOOKS: Record<DeptId, string[]> = {
   direction: [
     'Un seul problème pour un seul type de personne : refuser tout sujet trop large.',
     'Rien ne sort sans revue : fact-check, Red Team, puis validation du CEO.',
-    'Tuer un produit en ligne depuis 7 jours avec moins de 3 ventes et un ROAS < 0,7.',
+    'Juger la version en cours sur 14 jours : moins de 3 ventes et un ROAS < 0,7, ou de l’argent perdu sur 2 campagnes, et on arrête.',
     "Lancer un 2e PDF pour le même public dès qu'un produit est rentable (ROAS ≥ 1,5 et 10 ventes).",
   ],
   recherche: [
@@ -373,7 +373,7 @@ export const SEED_PLAYBOOKS: Record<DeptId, string[]> = {
     'Ne jamais écrire « garanti »',
     'Ne jamais écrire « sans effort »',
     'Le hook tient dans les 2 premières secondes : la douleur avec les mots du client.',
-    'Stop-loss sur échantillon : pause si ROAS < 0,4 après 25 €, ou ROAS < 0,8 après 2 jours et 40 € ; +30 % de budget par jour au maximum.',
+    'Stop-loss : ROAS < 0,8 après 25 € dépensés sur au moins 2 jours → pause (ROAS < 0,4 : pause sans attendre le 2e jour) ; +30 % de budget par jour au maximum.',
   ],
   boutique: [
     'Niveau de promesse max « 0.6 »',

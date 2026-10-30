@@ -2,10 +2,12 @@
 import type { Product, TaskKind, TrendSignal, VoiceOfCustomer } from '../../shared.js';
 import { nextId } from '../../core/index.js';
 import type { RuntimeCtx } from '../ctx.js';
-import { addDeliverable, incident, nameOf, nicheBriefOf, nicheName, productOf, say, vocOf, writeNote } from '../ctx.js';
+import { addDeliverable, nicheBriefOf, nicheName, productOf, say, vocOf, writeNote } from '../ctx.js';
 import { learning } from '../modules.js';
-import { createTask, isOpen, logTask } from '../tasks.js';
+import { createTask, isOpen } from '../tasks.js';
 import { createProductPipeline, excludedNiches, killProduct } from '../pipeline.js';
+import { guideGaps, pdfFingerprint, redTeamFacts, settleRedTeam } from '../redteam.js';
+import { productInNiche } from '../missions.js';
 import { nicheSlug, productNote, writeNicheNote } from '../notes.js';
 import { dec, eur, mean, median, round2, short, str, strArr, uniq } from '../util.js';
 import type { HandlerMap } from './common.js';
@@ -105,11 +107,15 @@ export const researchHandlers: HandlerMap = {
         deps.push(t.id);
       });
       const missingComps = top.filter((id) => !research.competitors[id]);
-      if (missingComps.length) {
-        const t = createTask(ctx.world, { kind: 'scan_competitors', input: { nicheIds: missingComps }, createdBy: 'nadia', missionId: task.missionId, priority: task.priority });
+      // The weekly watch also rereads the competitors of what we sell: prices and clones move.
+      const watched = task.input.refresh === true ? uniq(ctx.world.company.products.filter((p) => p.status === 'live').map((p) => p.nicheId)) : [];
+      const toScan = uniq([...missingComps, ...watched]);
+      if (toScan.length && !hasOpen(ctx, 'scan_competitors', () => true)) {
+        const t = createTask(ctx.world, { kind: 'scan_competitors', input: { nicheIds: toScan }, createdBy: 'nadia', missionId: task.missionId, priority: task.priority });
         deps.push(t.id);
       }
-      if (task.input.chain === 'opportunity' && !hasOpen(ctx, 'pick_opportunity', () => true)) {
+      // A pick forced on a founder's niche settles nothing for this scan.
+      if (task.input.chain === 'opportunity' && !hasOpen(ctx, 'pick_opportunity', (inp) => !inp.nicheId)) {
         createTask(ctx.world, { kind: 'pick_opportunity', dependsOn: deps, createdBy: 'nadia', missionId: task.missionId, priority: task.priority });
       }
     },
@@ -160,27 +166,30 @@ export const researchHandlers: HandlerMap = {
   pick_opportunity: {
     async run(ctx, task, agent, mind) {
       const { research } = ctx.world.company;
-      const excluded = uniq([...excludedNiches(ctx, { includeActive: true }), ...strArr(task.input.excludeNicheIds)]);
+      // A niche the founder asked for by name beats the team's own exclusions (killed before, already rejected…).
+      const forced = str(task.input.nicheId);
+      const already = forced ? productInNiche(ctx, forced) : undefined;
+      if (already) return { summary: `« ${short(already.title, 60)} » existe déjà dans cette niche : pas de doublon.`, skipReview: true, output: { productId: already.id, nicheId: forced, existing: true } };
+      const excluded = uniq([...excludedNiches(ctx, { includeActive: true }), ...strArr(task.input.excludeNicheIds)]).filter((id) => id !== forced);
       if (!research.trends.length) return { summary: 'Aucune tendance connue : il faut d’abord scanner le marché.', skipReview: true, output: { rescan: true } };
       const ranking = await ctx.engine.rankOpportunities({ signals: research.trends, competitors: research.competitors, voc: research.voc, excludeNicheIds: excluded }, mind);
       const ranked = (ranking.ranked ?? []).filter((r) => r && r.nicheId && !excluded.includes(r.nicheId));
-      if (!ranked.length) {
+      if (!ranked.length && !forced) {
         say(ctx, agent.id, `${agent.name} : toutes les niches connues sont prises ou écartées, on relance un scan.`);
         return { summary: 'Aucune opportunité restante : nouveau scan demandé.', skipReview: true, output: { rescan: true } };
       }
-      research.shortlist = ranked.map((r) => r.nicheId);
+      if (ranked.length) research.shortlist = ranked.map((r) => r.nicheId);
       const top = ranked.slice(0, 3);
       const stats = learning.armStats(ctx.world, 'niche');
       const tried = top.some((r) => stats.some((s) => s.key === r.nicheId && s.pulls > 0));
-      const forced = str(task.input.nicheId);
-      const chosenId = forced && ranked.some((r) => r.nicheId === forced)
-        ? forced
-        : tried ? learning.chooseArm(ctx.world, 'niche', top.map((r) => r.nicheId), ctx.rng) : top[0]!.nicheId;
-      const pick = ranked.find((r) => r.nicheId === chosenId) ?? top[0]!;
-      const brief = nicheBriefOf(ctx, pick.nicheId);
+      const chosenId = forced ?? (tried ? learning.chooseArm(ctx.world, 'niche', top.map((r) => r.nicheId), ctx.rng) : top[0]!.nicheId);
+      const brief = nicheBriefOf(ctx, chosenId);
+      // The ranking may leave out a requested niche it has no signal for: the founder's brief stands in for it.
+      const pick = ranked.find((r) => r.nicheId === chosenId) ?? { nicheId: chosenId, score: 0, why: 'Demandé par le fondateur.', angle: '', audience: brief.audience, problem: brief.problem, suggestedPrice: 0 };
       const product: Product = {
         id: nextId(ctx.world, 'prd'), nicheId: pick.nicheId,
-        title: `${brief.name}`, subtitle: pick.angle || '',
+        title: `${brief.name}`, subtitle: '',
+        ...(pick.angle ? { brief: { angle: pick.angle } } : {}), // internal note: the customer-facing subtitle comes with the guide
         audience: pick.audience || brief.audience, problem: pick.problem || brief.problem,
         price: Math.max(0, round2(pick.suggestedPrice || 0)),
         status: 'research', version: 1, content: null, design: null, salesPage: null,
@@ -190,6 +199,8 @@ export const researchHandlers: HandlerMap = {
         priceHistory: [],
       };
       ctx.world.company.products.push(product);
+      const mission = ctx.world.company.missions.find((m) => m.id === task.missionId);
+      if (mission?.wantsProduct && (!mission.nicheId || mission.nicheId === product.nicheId)) mission.productId = product.id;
       vocOf(ctx, product.nicheId);
       const others = ranked.filter((r) => r.nicheId !== pick.nicheId).slice(0, 3).map((r) => `${nicheName(ctx, r.nicheId)} (${Math.round(r.score)})`);
       await productNote(ctx, product, agent.id, 'Pourquoi cette niche', [
@@ -212,6 +223,7 @@ export const researchHandlers: HandlerMap = {
         }
         return;
       }
+      if (out.existing === true) return;
       const product = productOf(ctx, out.productId);
       if (product && product.status !== 'killed') createProductPipeline(ctx, product, { createdBy: 'camille', missionId: task.missionId, priority: task.priority });
     },
@@ -226,12 +238,21 @@ export const researchHandlers: HandlerMap = {
         ? ideaSummary(ctx, product)
         : `Guide « ${product.title} » (${product.content?.wordCount ?? 0} mots, ${product.content?.chapters.length ?? 0} chapitres) pour ${product.audience}. Promesse : ${product.content?.promise ?? '—'}. Qualité mesurée : ${product.quality?.overall ?? '—'}/100.`;
       const quality = subject === 'idea' ? null : subject === 'sales_page' ? product.salesQuality : product.quality;
-      const v = await ctx.engine.redTeam({ subject, summary, quality }, mind);
-      const verdictFr = v.verdict === 'go' ? 'GO' : v.verdict === 'fix' ? 'À CORRIGER' : 'À TUER';
-      say(ctx, agent.id, `${agent.name} attaque ${subject === 'idea' ? "l'idée" : 'le guide'} « ${short(product.title, 40)} » : ${verdictFr} — ${short(v.reasons[0] ?? 'rien à signaler', 80)}`, 'thought', { productId: product.id, taskId: task.id });
+      const v = await ctx.engine.redTeam({ subject, summary, quality, facts: redTeamFacts(ctx, product, subject) }, mind);
+      // A re-review of a file nobody changed cannot pass: the correction was not made, whatever the engine says.
+      const previous = str(task.input.previousPrint);
+      const fingerprint = subject === 'pdf' ? pdfFingerprint(product) : '';
+      const unchanged = !!previous && previous === fingerprint;
+      const verdict = unchanged ? (task.input.previousVerdict === 'kill' ? 'kill' : 'fix') : v.verdict;
+      const reasons = unchanged ? ['Le fichier n’a pas changé depuis la revue précédente : la correction n’a pas été faite.', ...v.reasons] : v.reasons;
+      const verdictFr = verdict === 'go' ? 'GO' : verdict === 'fix' ? 'À CORRIGER' : 'À TUER';
+      say(ctx, agent.id, `${agent.name} attaque ${subject === 'idea' ? "l'idée" : 'le guide'} « ${short(product.title, 40)} » : ${verdictFr} — ${short(reasons[0] ?? 'rien à signaler', 80)}`, 'thought', { productId: product.id, taskId: task.id });
       return {
-        summary: `Verdict Red Team : ${verdictFr}. ${v.reasons.slice(0, 2).join(' ; ')}`,
-        output: { subject, verdict: v.verdict, reasons: v.reasons, fixes: v.fixes, finalVerdict: v.verdict },
+        summary: `Verdict Red Team : ${verdictFr}. ${reasons.slice(0, 2).join(' ; ')}`,
+        output: {
+          subject, verdict, reasons, fixes: v.fixes, finalVerdict: verdict,
+          ...(subject === 'pdf' ? { fingerprint, unchanged, version: product.version, onLive: product.status === 'live', gaps: product.content ? guideGaps(product.content, ctx.world.company.research.voc[product.nicheId]) : null } : {}),
+        },
       };
     },
     async onDone(ctx, task) {
@@ -251,20 +272,7 @@ export const researchHandlers: HandlerMap = {
         if (verdict === 'fix') say(ctx, 'elise', `Élise intègre les correctifs de la Red Team : ${short(strArr(out.fixes).join(' ; ') || 'resserrer la promesse', 90)}`, 'thought', { productId: product.id });
         return;
       }
-      if (verdict === 'fix' && product.status !== 'live') {
-        // The finished guide needs another pass before it can ship: humanize + re-render, publish waits for it.
-        const fixes = strArr(out.fixes).slice(0, 3);
-        const human = createTask(ctx.world, { kind: 'humanize_pdf', title: `Corriger le guide après la Red Team — « ${short(product.title, 40)} »`, input: { productId: product.id, nicheId: product.nicheId, fixes }, createdBy: 'axel', missionId: task.missionId, priority: 1 });
-        const render = createTask(ctx.world, { kind: 'render_pdf', title: `Remettre en page après corrections — « ${short(product.title, 40)} »`, input: { productId: product.id, nicheId: product.nicheId }, dependsOn: [human.id], createdBy: 'axel', missionId: task.missionId, priority: 1 });
-        for (const t of ctx.world.company.tasks) {
-          if (t.kind === 'publish_product' && t.input.productId === product.id && t.status === 'pending') {
-            t.dependsOn.push(render.id);
-            logTask(t, `Jour ${ctx.world.day} : attend les corrections de la Red Team.`);
-          }
-        }
-        incident(ctx, `La Red Team a renvoyé le guide « ${product.title} » en correction : ${fixes.join(' ; ') || 'promesse trop large'}`);
-        say(ctx, 'camille', `Camille bloque la mise en ligne de « ${short(product.title, 40)} » le temps des corrections (${nameOf(ctx, 'lina')} s'y colle).`, 'thought', { productId: product.id });
-      }
+      await settleRedTeam(ctx, task, product);
     },
   },
 };

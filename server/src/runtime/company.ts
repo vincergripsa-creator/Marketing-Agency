@@ -12,21 +12,27 @@ import { TICKS_PER_DAY } from '../shared.js';
 import type {
   BrainVault, CompanyApi, CompanyOptions, ContentEngine, DayPlan, DayPlanItem, MarketTools, MindContext, RunPaths, Rng, StepResult,
 } from '../contracts.js';
-import { createRng, emit, nextId } from '../core/index.js';
+import { emit, nextId, streamRng } from '../core/index.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, productOf } from './ctx.js';
 import { learning, sim } from './modules.js';
 import { HANDLERS, type HandlerOutcome } from './handlers/index.js';
-import { reviewTask, MAX_ATTEMPTS } from './review.js';
+import { syncSalesPages } from './handlers/boutique.js';
+import { closeLoop, reviewTask, MAX_ATTEMPTS } from './review.js';
 import {
-  agentById, assignReady, chiefOf, closeMissions, createTask, depState, isFeminine, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, productIdOf, taskById,
+  agentById, assignReady, chiefOf, closeMissions, createTask, depState, isFeminine, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, productIdOf, refreshAgentScore, taskById,
 } from './tasks.js';
-import { buildHeuristicPlan, keywordMission, materialize, mergePlans, normalizeItem, prepareFounderItem } from './strategy.js';
+import { buildHeuristicPlan, keywordMission, materialize, mergePlans, normalizeItem, prepareFounderItem, reactToOutage } from './strategy.js';
+import { linkProductTasks, productInNiche, routeMission, startNicheChain, tellFounder, type MissionRoute } from './missions.js';
+import { situationFor } from './situation.js';
+import { AGENTS } from './roster.js';
 import { activeCampaigns, currentBudget } from './metrics.js';
-import { dec, errorText, eur, idNum, round2, short } from './util.js';
-import { FORMAT_LABELS as FORMAT_NAMES, HOOK_LABELS as HOOK_NAMES } from './handlers/phrases.js';
+import { dec, errorText, eur, idNum, round2, short, uniq } from './util.js';
 
 const MAX_CONCURRENT_CLAUDE = 6;
+
+/** Random streams of a run, keyed by (seed, stream, day, tick): the same seed is the same market, whatever the company decides. */
+const STREAM = { company: 1, tools: 2, market: 3 };
 
 export function phaseOf(tick: number): DayPhase {
   if (tick <= 0) return 'morning';
@@ -53,8 +59,8 @@ export class Company implements CompanyApi {
   private readonly engine: ContentEngine;
   private readonly brain: BrainVault;
   private readonly paths: RunPaths;
-  private readonly rng: Rng;
-  private readonly tools: MarketTools;
+  private rng: Rng;
+  private tools: MarketTools;
   private readonly ctx: RuntimeCtx;
   private initPromise: Promise<void> | null = null;
   private readonly minds = new Map<string, MindContext>();
@@ -74,14 +80,20 @@ export class Company implements CompanyApi {
     this.engine = opts.engine;
     this.brain = opts.brain;
     this.paths = opts.paths;
-    this.rng = createRng(world.rngState);
-    this.tools = sim.createMarketTools(world, this.rng);
+    this.rng = streamRng(world.scenario.seed, STREAM.company, world.day, world.tick);
+    this.tools = sim.createMarketTools(world, streamRng(world.scenario.seed, STREAM.tools, world.day, world.tick));
     this.ctx = { world, engine: this.engine, brain: this.brain, tools: this.tools, rng: this.rng, paths: this.paths, incidents: [], lastMarketNotes: [] };
     const m = (world.mind ?? {}) as Partial<Usage>;
     this.mindBase = { calls: m.calls || 0, inputTokens: m.inputTokens || 0, outputTokens: m.outputTokens || 0, costEur: m.costEur || 0, fallbacks: m.fallbacks || 0 };
     this.engineZero = safeUsage(this.engine) ?? { calls: 0, inputTokens: 0, outputTokens: 0, costEur: 0, fallbacks: 0 };
     world.mind = { mode: this.engine.mode, ...this.mindBase };
     // Tasks interrupted by a reload start their brain read again; nothing else is kept in memory.
+    // A save from an older roster: agents learn the kinds added since, and levels fall under the single scale.
+    for (const a of world.company.agents) {
+      const def = AGENTS.find((x) => x.id === a.id);
+      if (def) a.taskKinds = uniq([...def.taskKinds, ...a.taskKinds]);
+      a.level = Math.min(a.level, learning.MAX_LEVEL);
+    }
   }
 
   // ───────────────────────────── public API ─────────────────────────────
@@ -102,19 +114,29 @@ export class Company implements CompanyApi {
     const phase = phaseOf(tick);
     if (w.status === 'finished') return { day, tick, phase, status: w.status, activities: 0 };
     w.phase = phase;
+    this.drawTick(day, tick);
     try {
       if (tick === 0) await this.morning();
       else if (tick <= 9) await this.workTick();
       else if (tick === 10) await this.marketClose();
       else await this.evening();
       this.rehomeMissions(counterBefore);
+      await syncSalesPages(this.ctx);
     } finally {
       this.syncMind();
-      w.rngState = this.rng.state();
     }
     const activities = w.activity.filter((a) => idNum(a.id) > counterBefore).length;
     this.advance();
     return { day, tick, phase, status: w.status, activities };
+  }
+
+  /** The company and the research tools start this tick on their own streams: what they drew before weighs nothing. */
+  private drawTick(day: number, tick: number): void {
+    const { world } = this;
+    this.rng = streamRng(world.scenario.seed, STREAM.company, day, tick);
+    this.tools = sim.createMarketTools(world, streamRng(world.scenario.seed, STREAM.tools, day, tick));
+    this.ctx.rng = this.rng;
+    this.ctx.tools = this.tools;
   }
 
   async runDays(days: number, onDay?: (kpi: DailyKpi) => void): Promise<void> {
@@ -149,23 +171,79 @@ export class Company implements CompanyApi {
       items = [];
     }
     if (!items.length) items = keywordMission(this.ctx, clean);
-    items = items.slice(0, 5).map((it) => prepareFounderItem(this.ctx, it));
-    const owner = target ? (target.isChief ? target : chiefOf(w, target.dept) ?? ceo) : chiefOf(w, items[0]?.dept ?? 'direction') ?? ceo;
+    const route = routeMission(this.ctx, clean, items);
+    items = route.kind === 'tasks' ? route.items.slice(0, 5).map((it) => prepareFounderItem(this.ctx, it, route.wantsProduct)) : [];
+    const lead = target ? (target.isChief ? target : chiefOf(w, target.dept)) : route.kind === 'tasks' ? chiefOf(w, items[0]?.dept ?? 'direction') : chiefOf(w, 'recherche');
+    const owner = lead ?? ceo;
     const mission: Mission = { id: nextId(w, 'mis'), day: w.day, from: 'founder', text: clean, ownerId: owner.id, taskIds: [], status: 'open' };
     w.company.missions.push(mission);
-    const assignee = target && items.every((it) => target.taskKinds.includes(it.kind)) ? target.id : null;
-    const created = materialize(this.ctx, items, { createdBy: 'founder', missionId: mission.id, priority: 1, assignee });
-    for (const t of created) if (t.missionId !== mission.id) { t.missionId = mission.id; if (!mission.taskIds.includes(t.id)) mission.taskIds.push(t.id); }
-    if (!created.length) {
-      mission.status = 'done';
-      emit(w, { agentId: ceo.id, kind: 'thought', text: `Camille : c'est déjà en cours, aucune nouvelle tâche nécessaire pour « ${short(clean, 60)} »` });
-    } else {
+    const created = route.kind === 'tasks' || route.kind === 'new_product' ? this.missionTasks(mission, route, items, target) : [];
+    this.answerMission(mission, route, created.length);
+    if (created.length) {
       if (owner.id !== ceo.id) emit(w, { agentId: ceo.id, toAgentId: owner.id, kind: 'delegate', text: `Camille confie la mission du fondateur à ${owner.name} (${created.length} tâche(s))` });
       emit(w, { agentId: owner.id, kind: 'thought', text: `${owner.name} : « ${short(created.map((t) => t.title).join(', '), 120)} » — on s'y met en priorité.` });
       assignReady(w);
     }
     this.syncMind();
     return mission.id;
+  }
+
+  /** The tasks of a mission: the plan items, or the research and pick of the niche the founder named. */
+  private missionTasks(mission: Mission, route: Extract<MissionRoute, { kind: 'tasks' | 'new_product' }>, items: DayPlanItem[], target: AgentState | undefined): Task[] {
+    if (route.kind === 'new_product') {
+      mission.nicheId = route.nicheId;
+      mission.wantsProduct = true;
+      return startNicheChain(this.ctx, route.nicheId, mission.id, 'founder');
+    }
+    mission.nicheId = route.nicheId;
+    mission.wantsProduct = route.wantsProduct;
+    const assignee = target && items.every((it) => target.taskKinds.includes(it.kind)) ? target.id : null;
+    const created = materialize(this.ctx, items, { createdBy: 'founder', missionId: mission.id, priority: 1, assignee });
+    for (const t of created) if (t.missionId !== mission.id) { t.missionId = mission.id; if (!mission.taskIds.includes(t.id)) mission.taskIds.push(t.id); }
+    return created;
+  }
+
+  /** What Camille tells the founder when the mission cannot simply be handed to the team. */
+  private answerMission(mission: Mission, route: MissionRoute, created: number): void {
+    const w = this.world;
+    switch (route.kind) {
+      case 'tasks':
+        if (!created) {
+          mission.status = 'done';
+          mission.outcome = 'Déjà en cours, aucune nouvelle tâche nécessaire.';
+          emit(w, { agentId: 'camille', kind: 'thought', text: `Camille : c'est déjà en cours, aucune nouvelle tâche nécessaire pour « ${short(mission.text, 60)} »` });
+        }
+        return;
+      case 'new_product': {
+        const also = route.others.length ? ` (ta demande pourrait aussi viser : ${route.others.join(', ')} ; dis-le-moi si je me trompe)` : '';
+        mission.outcome = `Compris : un guide dans la niche « ${route.name} ».`;
+        emit(w, { agentId: 'camille', kind: 'founder', text: `Camille : compris, on lance un guide dans la niche « ${short(route.name, 70)} »${also}. La mission se ferme quand il sera en ligne.` });
+        return;
+      }
+      case 'existing': {
+        const { product } = route;
+        mission.nicheId = route.nicheId;
+        mission.productId = product.id;
+        mission.wantsProduct = true;
+        if (product.status === 'live') {
+          mission.status = 'done';
+          tellFounder(this.ctx, 'camille', mission, `« ${product.title} » couvre déjà ce sujet et il est en ligne (${product.stats.sales} ventes). Pas de doublon : je ne lance rien de plus.`);
+          return;
+        }
+        linkProductTasks(this.ctx, mission, product.id);
+        tellFounder(this.ctx, 'camille', mission, `« ${product.title} » est déjà en cours sur ce sujet. Je suis ce dossier plutôt que d'en ouvrir un deuxième : la mission se ferme quand il sera en ligne.`);
+        return;
+      }
+      case 'no_product':
+        mission.status = 'failed';
+        mission.nicheId = route.nicheId;
+        tellFounder(this.ctx, 'camille', mission, `Nous n'avons aucun guide dans la niche « ${route.name} », donc rien à faire sur ce sujet. Je ne travaille pas sur un autre produit à la place : demande-moi « Lance un guide sur … » si tu veux qu'on le crée.`);
+        return;
+      case 'unknown':
+        mission.status = 'failed';
+        tellFounder(this.ctx, 'camille', mission, `Je ne lance rien sur « ${route.topic} », aucune niche de notre veille ne correspond et je ne veux pas livrer autre chose à la place.${route.leads.length ? ` Nos meilleures pistes : ${route.leads.join(' ; ')}.` : ''} Dis-moi laquelle tu veux, ou précise le sujet.`);
+        return;
+    }
   }
 
   async chat(agentId: AgentId, text: string): Promise<string> {
@@ -175,7 +253,7 @@ export class Company implements CompanyApi {
     if (!agent) throw Object.assign(new Error(`Agent inconnu : ${agentId}`), { status: 404 });
     const clean = String(text ?? '').trim();
     const history = (w.company.chats[agentId] ??= []);
-    const situation = this.situationFor(agent);
+    const situation = situationFor(this.ctx, agent);
     let reply = '';
     try {
       const mind = await this.mindFor(agent, agent.taskKinds[0] ?? 'plan_day', clean);
@@ -241,6 +319,7 @@ export class Company implements CompanyApi {
 
     // CFO first: the envelope frames every paid decision of the day.
     await this.runImmediate('budget_review', 'gabriel', 'Revue budgétaire du matin');
+    const outage = reactToOutage(this.ctx);
 
     const ceo = agentById(w, 'camille')!;
     const heuristic = await buildHeuristicPlan(this.ctx);
@@ -260,7 +339,7 @@ export class Company implements CompanyApi {
       plan = null;
     }
     const items = mergePlans(this.ctx, heuristic, plan);
-    const focus = plan?.focus?.trim() || heuristic.focus;
+    const focus = (!outage && plan?.focus?.trim()) || heuristic.focus;
     const memo = plan?.memo?.trim() || heuristic.memo;
     const planTask = createTask(w, { kind: 'plan_day', title: `Plan du jour ${w.day}`, assignee: ceo.id, createdBy: ceo.id, workLeft: 0, reviewer: null });
     planTask.status = 'done';
@@ -332,7 +411,7 @@ export class Company implements CompanyApi {
       if (a.status === 'working' || a.status === 'reviewing') { a.status = 'idle'; a.bubble = null; }
     }
     const before = w.idCounter;
-    const res = sim.tickMarket(w, this.rng);
+    const res = sim.tickMarket(w, streamRng(w.scenario.seed, STREAM.market, w.day));
     this.ctx.lastMarketNotes = Array.isArray(res.notes) ? res.notes.slice(0, 12) : [];
     // The market narrates its own events/messages: only add what it did not already say.
     const said = w.activity.filter((a) => idNum(a.id) > before);
@@ -369,6 +448,10 @@ export class Company implements CompanyApi {
     if (w.day % 7 === 0) await this.runImmediate('performance_review', 'nora', `Revue RH de la semaine ${Math.ceil(w.day / 7)}`);
     const closed = closeMissions(w);
     if (closed.length) emit(w, { agentId: 'hugo', kind: 'thought', text: `Hugo : ${closed.length} mission(s) bouclée(s) aujourd'hui` });
+    for (const m of closed) {
+      if (m.from !== 'founder') continue;
+      emit(w, { agentId: 'hugo', kind: 'founder', text: m.status === 'done' ? `Hugo au fondateur : mission « ${short(m.text, 70)} » accomplie${m.outcome ? `. ${short(m.outcome, 90)}` : ''}` : `Hugo au fondateur : mission « ${short(m.text, 70)} » échouée. ${short(m.outcome ?? 'Toutes ses tâches ont été abandonnées.', 90)}` });
+    }
     this.checkStatus();
     // Forget the cached minds of finished tasks (they are rebuilt on demand anyway).
     for (const id of [...this.minds.keys()]) {
@@ -538,7 +621,11 @@ export class Company implements CompanyApi {
     this.release(agent);
     agent.xp += 6;
     const founderGate = task.kind === 'publish_product' && w.scenario.founderApproval && task.input.founderApproved !== true;
-    if (founderGate) { this.awaitFounder(task, agent, `Mettre en ligne « ${task.title} »`, 'after'); return; }
+    if (founderGate) {
+      const product = productOf(this.ctx, task.input.productId);
+      this.awaitFounder(task, agent, product ? `Mettre en ligne « ${product.title} » à ${eur(product.price)}` : task.title, 'after');
+      return;
+    }
     const reviewer = !outcome.skipReview && !(task.kind === 'publish_product' && task.input.founderApproved === true) ? agentById(w, task.reviewer) : undefined;
     if (reviewer && reviewer.id !== agent.id) {
       task.status = 'review';
@@ -567,19 +654,17 @@ export class Company implements CompanyApi {
       } catch (e) {
         res = { verdict: 'approve' as const, notes: [`Relecture impossible (${short(errorText(e), 60)}) : validé par défaut.`], score: null };
       }
-      if (res.verdict === 'changes' && task.attempts + 1 >= MAX_ATTEMPTS) {
-        res = { verdict: 'approve' as const, notes: [...res.notes, `Validé après ${MAX_ATTEMPTS} tentatives : les défauts restants iront dans la prochaine version.`], score: res.score };
-        incident(this.ctx, `« ${task.title} » validé après ${MAX_ATTEMPTS} tentatives sans atteindre le niveau attendu${res.score !== null ? ` (${res.score}/100)` : ''} : ${res.notes[0] ?? ''}`);
-      }
+      // Two rework cycles, then a decision: a logged waiver, or the end of the deliverable.
+      if (res.verdict === 'changes' && task.attempts + 1 >= MAX_ATTEMPTS) res = await closeLoop(this.ctx, task, res);
       task.reviews.push({ by: reviewer.id, day: w.day, verdict: res.verdict, notes: res.notes });
       const assignee = agentById(w, task.assignee);
       const score = res.score !== null ? ` (${Math.round(res.score)}/100)` : '';
       if (res.verdict === 'approve') {
-        if (assignee) { assignee.perf.approved += 1; if (task.attempts === 0) assignee.xp += 5; this.refreshScore(assignee); }
+        if (assignee) { assignee.perf.approved += 1; if (task.attempts === 0) assignee.xp += 5; refreshAgentScore(assignee); }
         emit(w, { agentId: reviewer.id, toAgentId: task.assignee ?? undefined, kind: 'review', text: `${reviewer.name} valide « ${short(task.title, 60)} »${score}`, refs: { taskId: task.id, productId: productIdOf(task) } });
         await this.finishTask(task);
       } else if (res.verdict === 'changes') {
-        if (assignee) { assignee.perf.rejected += 1; this.refreshScore(assignee); }
+        if (assignee) { assignee.perf.rejected += 1; refreshAgentScore(assignee); }
         task.attempts += 1;
         task.status = 'pending';
         task.workLeft = Math.max(1, Math.ceil(KIND_META[task.kind].work / 2));
@@ -616,12 +701,8 @@ export class Company implements CompanyApi {
     if (agent) {
       agent.perf.done += 1;
       agent.xp += 10;
-      this.refreshScore(agent);
-      const level = Math.max(agent.level, 1 + Math.floor(agent.xp / 150));
-      if (level > agent.level) {
-        agent.level = level;
-        emit(w, { agentId: agent.id, kind: 'thought', text: `${agent.name} passe niveau ${level} !` });
-      }
+      refreshAgentScore(agent);
+      this.syncLevel(agent);
       if (agent.currentTaskId === task.id) this.release(agent);
     }
     if (task.kind !== 'plan_day') {
@@ -643,7 +724,7 @@ export class Company implements CompanyApi {
     task.status = 'failed';
     task.dayDone = w.day;
     logTask(task, `Jour ${w.day} : échec — ${reason}`);
-    if (agent) { agent.perf.failed += 1; this.refreshScore(agent); this.release(agent); }
+    if (agent) { agent.perf.failed += 1; refreshAgentScore(agent); this.release(agent); }
     incident(this.ctx, `Échec de « ${task.title} » : ${reason}`);
     emit(w, { agentId: agent?.id ?? null, kind: 'task_failed', text: `${agent?.name ?? 'L’équipe'} échoue sur « ${short(task.title, 60)} » : ${short(reason, 80)}`, refs: { taskId: task.id, productId: productIdOf(task) } });
   }
@@ -651,7 +732,7 @@ export class Company implements CompanyApi {
   private awaitFounder(task: Task, agent: AgentState, what: string, phase: 'before' | 'after'): void {
     const w = this.world;
     task.status = 'awaiting_founder';
-    task.input = { ...task.input, founderPhase: phase };
+    task.input = { ...task.input, founderPhase: phase, founderAsk: what };
     if (!w.company.pendingApprovals.includes(task.id)) w.company.pendingApprovals.push(task.id);
     logTask(task, `Jour ${w.day} : en attente de l'accord du fondateur.`);
     this.release(agent);
@@ -664,10 +745,12 @@ export class Company implements CompanyApi {
     agent.bubble = null;
   }
 
-  private refreshScore(a: AgentState): void {
-    const q = (a.perf.approved + 1) / (a.perf.approved + a.perf.rejected + 2);
-    const r = (a.perf.done + 1) / (a.perf.done + a.perf.failed + 1);
-    a.perf.score = Math.round(100 * (0.6 * q + 0.4 * r));
+  /** Levels follow the single XP scale of the HR review: never down, never past its top. */
+  private syncLevel(agent: AgentState): void {
+    const level = learning.levelForXp(agent.xp);
+    if (level <= agent.level) return;
+    agent.level = level;
+    emit(this.world, { agentId: agent.id, kind: 'thought', text: `${agent.name} passe niveau ${level} !` });
   }
 
   /** Dependents of failed/cancelled tasks can never run: cancel them (the CEO's watchdog rebuilds chains). */
@@ -707,7 +790,7 @@ export class Company implements CompanyApi {
     }
     task.dayDone = w.day;
     task.progress = 1;
-    if (task.status === 'done') { agent.perf.done += 1; agent.xp += 4; }
+    if (task.status === 'done') { agent.perf.done += 1; agent.xp += 4; this.syncLevel(agent); }
   }
 
   // ───────────────────────────── missions, status, compute ─────────────────────────────
@@ -839,84 +922,6 @@ export class Company implements CompanyApi {
 
   private finished(): boolean {
     return this.world.status === 'finished';
-  }
-
-  private situationFor(agent: AgentState): string {
-    const w = this.world;
-    const fin = sim.financeSnapshot(w);
-    const task = taskById(w, agent.currentTaskId ?? '') ?? [...w.company.tasks].reverse().find((t) => t.assignee === agent.id && isOpen(t));
-    const kpi = w.company.kpis[w.company.kpis.length - 1];
-    const lessons = w.company.lessons.slice(-2).map((l) => l.insight);
-    const liveProducts = w.company.products.filter((p) => p.status === 'live');
-    const live = liveProducts.map((p) => `« ${short(p.title, 50)} » à ${eur(p.price)}`);
-    const dept = w.company.departments.find((d) => d.id === agent.dept)?.name ?? agent.dept;
-    // One fact per line: the heuristic mind picks the lines relevant to the question, Claude reads them all.
-    const lines = [
-      task ? `Ma tâche en cours : « ${task.title} » (${task.status === 'in_progress' ? 'en cours' : task.status === 'review' ? 'en relecture' : 'à faire'}).` : `Pas de tâche en cours pour moi ce jour ${w.day}.`,
-      kpi ? `Hier : ${kpi.sales} ventes, ${eur(kpi.revenue)} de CA, ${eur(kpi.adSpend)} de pub, ROAS ${dec(kpi.roas)}.` : 'Pas encore de chiffres de vente.',
-      `Trésorerie ${eur(fin.cash)}, profit cumulé ${eur(fin.profit)}${fin.runwayDays !== null ? `, runway ${fin.runwayDays} jours` : ''}.`,
-      live.length ? `En boutique : ${live.join(', ')}.` : 'Aucun produit en ligne pour l’instant.',
-      ...this.deptFacts(agent),
-      ...lessons.map((l) => `Leçon récente : ${short(l, 140)}`),
-      `Contexte : ${agent.name}, ${agent.role} (${dept}) chez ${w.company.name}, jour ${w.day}.`,
-    ];
-    return lines.join('\n');
-  }
-
-  /** Facts a member of each department would know by heart. */
-  private deptFacts(agent: AgentState): string[] {
-    const w = this.world;
-    const live = w.company.products.filter((p) => p.status === 'live');
-    const out: string[] = [];
-    switch (agent.dept) {
-      case 'growth': {
-        const camps = activeCampaigns(w);
-        out.push(camps.length ? `Pub : ${camps.length} campagne(s) active(s), ${eur(camps.reduce((s, c) => s + c.dailyBudget, 0))} par jour.` : 'Pub : aucune campagne active.');
-        for (const p of live.slice(0, 2)) {
-          const hook = learning.armStats(w, `hook_style:${p.nicheId}`).find((a) => a.pulls > 0);
-          const fmt = learning.armStats(w, `ad_format:${p.nicheId}`).find((a) => a.pulls > 0);
-          if (hook) out.push(`Meilleur hook pub sur « ${short(p.title, 40)} » : ${HOOK_NAMES[hook.key] ?? hook.key} (score ${Math.round(hook.mean * 100)}/100, ${hook.pulls} essais)${fmt ? `, meilleur format ${FORMAT_NAMES[fmt.key] ?? fmt.key}` : ''}.`);
-        }
-        break;
-      }
-      case 'support': {
-        const open = w.market.inbox.filter((m) => m.status === 'open').length;
-        const tone = learning.armStats(w, 'support_tone').find((a) => a.pulls > 0);
-        out.push(`Support : ${open} message(s) client en attente${tone ? `, le ton « ${tone.key} » marche le mieux (${Math.round(tone.mean * 100)}/100)` : ''}.`);
-        break;
-      }
-      case 'finance': {
-        const b = currentBudget(w);
-        out.push(`Budget : enveloppe pub du jour ${eur(b.adCap)}${b.survival ? ', mode survie actif' : ''}.`);
-        break;
-      }
-      case 'boutique':
-        for (const p of live.slice(0, 3)) out.push(`Produit « ${short(p.title, 40)} » : ${p.stats.sales} ventes, note ${p.stats.rating ? dec(p.stats.rating, 1) : '—'}/5, prix ${eur(p.price)}.`);
-        break;
-      case 'recherche':
-        out.push(`Niche : shortlist actuelle ${w.company.research.shortlist.slice(0, 3).map((id) => w.company.research.trends.find((t) => t.nicheId === id)?.name ?? id).join(', ') || 'vide'}.`);
-        break;
-      case 'studio':
-      case 'creation':
-        for (const p of w.company.products.filter((x) => x.status !== 'killed').slice(-2)) out.push(`Guide « ${short(p.title, 40)} » (v${p.version}) : qualité ${p.quality?.overall ?? '—'}/100.`);
-        break;
-      case 'analyse': {
-        const running = w.company.experiments.filter((e) => e.status === 'running');
-        out.push(running.length ? `Test A/B en cours : ${running.map((e) => e.hypothesis).join(' ; ')}.` : 'Aucun test A/B en cours.');
-        break;
-      }
-      case 'partenariats':
-        out.push(`Partenariats créateurs : ${w.market.partnerships.length} proposition(s), ${w.market.partnerships.filter((p) => p.status === 'accepted' || p.status === 'delivered').length} active(s).`);
-        break;
-      case 'rh':
-        out.push(`Leçons apprises : ${w.company.lessons.length} au total.`);
-        break;
-      default: {
-        const pending = w.company.pendingApprovals.length;
-        out.push(`Direction : ${openTasks(w).length} tâche(s) ouvertes${pending ? `, ${pending} décision(s) en attente du fondateur` : ''}.`);
-      }
-    }
-    return out;
   }
 
   private ready(): Promise<void> {

@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Activity, AgentState, ChatMessage, DeptId, Task } from '../../../shared/types';
 import { api } from '../api';
-import { Avatar, Bar, ChiefBadge, cx, Empty, FileLink, Pill, SectionTitle, Segmented } from './common';
+import { Avatar, Bar, ChiefBadge, cx, DeliverableLink, Empty, Pill, SectionTitle, Segmented } from './common';
 import { useApp } from './context';
 import { clamp01, fmtClock, fmtInt, fmtPct, hash, safeDiv } from './format';
 import { Icon } from './icons';
@@ -191,7 +191,7 @@ function recentTasks(tasks: Task[], agentId: string): Task[] {
 }
 
 function FicheTab({ agent }: { agent: AgentState }) {
-  const { snapshot, lookups, demo, runId } = useApp();
+  const { snapshot, lookups } = useApp();
   const color = deptColor(lookups, agent.dept);
   const tasks = recentTasks(snapshot?.company?.tasks ?? [], agent.id);
   const deliverables = (snapshot?.company?.deliverables ?? []).filter((d) => d.createdBy === agent.id).slice(-8).reverse();
@@ -258,10 +258,10 @@ function FicheTab({ agent }: { agent: AgentState }) {
       {deliverables.length === 0 ? <div className="muted small center-text">Aucun livrable pour l’instant.</div> : (
         <div className="deliv-list">
           {deliverables.map((d) => (
-            <FileLink key={d.id} runId={runId} path={d.path} demo={demo} icon={DELIVERABLE_ICON[d.kind] ?? 'file'} className="deliv-link" title={`${DELIVERABLE_LABEL[d.kind] ?? d.kind} · jour ${d.day}`}>
+            <DeliverableLink key={d.id} path={d.path} icon={DELIVERABLE_ICON[d.kind] ?? 'file'} className="deliv-link" title={`${DELIVERABLE_LABEL[d.kind] ?? d.kind} · jour ${d.day}`}>
               <span className="deliv-title">{d.title}</span>
               <span className="muted small">J{d.day}</span>
-            </FileLink>
+            </DeliverableLink>
           ))}
         </div>
       )}

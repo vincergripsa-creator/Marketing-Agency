@@ -1,12 +1,13 @@
 /**
- * Pure snapshot builder (no sim/runtime dependency, unit-tested).
+ * Pure snapshot builder (no runtime dependency, unit-tested).
  * Turns the full WorldState into the UI-safe, size-bounded CompanySnapshot.
  */
+import { summarizeLedger } from '../core/index.js';
 import type {
-  AdCreative, ChapterContent, CompanySnapshot, CompanyState, DailyAdStats, FinanceSnapshot, InboxMessage, LedgerType,
-  Mission, PdfContent, Product, Task, WorldState,
+  AdCreative, ChapterContent, CompanySnapshot, CompanyState, DailyAdStats, DayTaskCounts, DeptId, DeptTaskCounts, FinanceSnapshot, InboxMessage,
+  MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, Task, TaskKind, TaskStats, WorldState,
 } from '../shared.js';
-import { estimateCashProfit } from './persist.js';
+import { announcedOutageDays } from '../sim/outage.js';
 
 export interface SnapshotLimits {
   doneTasks: number;          // finished tasks kept (most recent)
@@ -33,13 +34,14 @@ export interface SnapshotLimits {
   activity: number;
   vocKnowledge: boolean;      // keep the raw VoC knowledge arrays
   stringMax: number;          // max length of free strings inside task input/output
+  live: boolean;              // live view: finished tasks without their payload, products and ads without what only their files show
 }
 
 export const DEFAULT_LIMITS: SnapshotLimits = {
   doneTasks: 200, openTasks: 400, taskLog: 10, deliverables: 250, lessons: 150, chatsPerAgent: 30, missions: 80,
   creatives: 120, experiments: 60, kpis: 400, reviewsPerProduct: 25, inbox: 80, threadPerMessage: 12, adStatsDays: 14,
   commentsPerStat: 6, organicPosts: 30, creators: 80, partnerships: 120, events: 40, orders: 100, ledger: 150, activity: 200,
-  vocKnowledge: true, stringMax: 400,
+  vocKnowledge: true, stringMax: 400, live: false,
 };
 
 /** Fallback when the default snapshot would exceed the size budget. */
@@ -47,8 +49,14 @@ export const TIGHT_LIMITS: SnapshotLimits = {
   doneTasks: 80, openTasks: 150, taskLog: 4, deliverables: 120, lessons: 60, chatsPerAgent: 12, missions: 30,
   creatives: 60, experiments: 25, kpis: 120, reviewsPerProduct: 8, inbox: 50, threadPerMessage: 6, adStatsDays: 7,
   commentsPerStat: 2, organicPosts: 20, creators: 40, partnerships: 50, events: 25, orders: 60, ledger: 100, activity: 120,
-  vocKnowledge: false, stringMax: 200,
+  vocKnowledge: false, stringMax: 200, live: false,
 };
+
+/**
+ * What the SSE stream carries during play, about once per second: the UI's panels read neither the text of a guide
+ * or an ad nor the payload of a finished task (GET /api/state still has them).
+ */
+export const LIVE_LIMITS: SnapshotLimits = { ...TIGHT_LIMITS, activity: 60, reviewsPerProduct: 5, live: true };
 
 export const SNAPSHOT_BUDGET_BYTES = 700_000;
 
@@ -77,6 +85,15 @@ export function shrinkValue(value: unknown, stringMax: number, depth = 0): unkno
   return out;
 }
 
+/** Scalars of a task's input or output: they say what it was about, without its payload. */
+function scalarsOf(record: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(record)) {
+    if (typeof v === 'number' || typeof v === 'boolean' || (typeof v === 'string' && v.length <= 60)) out[k] = v;
+  }
+  return out;
+}
+
 /** Keeps every unfinished task (capped) + the most recent finished ones, in original order. */
 export function trimTasks(tasks: Task[], limits: SnapshotLimits = DEFAULT_LIMITS): Task[] {
   const all = arr(tasks);
@@ -89,12 +106,13 @@ export function trimTasks(tasks: Task[], limits: SnapshotLimits = DEFAULT_LIMITS
   const out: Task[] = [];
   all.forEach((t, i) => {
     if (!keep.has(i)) return;
+    const light = limits.live && FINISHED.has(t.status);
     out.push({
       ...t,
       log: lastN(t.log, limits.taskLog),
-      reviews: lastN(t.reviews, 6),
-      input: (shrinkValue(t.input ?? {}, limits.stringMax) ?? {}) as Record<string, unknown>,
-      output: t.output == null ? null : (shrinkValue(t.output, limits.stringMax) as Record<string, unknown>),
+      reviews: lastN(t.reviews, light ? 1 : 6),
+      input: light ? scalarsOf(t.input ?? {}) : (shrinkValue(t.input ?? {}, limits.stringMax) ?? {}) as Record<string, unknown>,
+      output: t.output == null ? null : light ? scalarsOf(t.output) : (shrinkValue(t.output, limits.stringMax) as Record<string, unknown>),
     });
   });
   return out;
@@ -113,17 +131,17 @@ function trimChapter(ch: ChapterContent | null | undefined, full: boolean): Chap
   };
 }
 
-/** Content light enough for the UI: titles + intros, full text only for the first chapter. */
-export function trimContent(content: PdfContent | null | undefined): PdfContent | null {
+/** Content light enough for the UI: titles + intros, full text only for the first chapter (live view: none of the text). */
+export function trimContent(content: PdfContent | null | undefined, live = false): PdfContent | null {
   if (!content) return null;
   return {
     title: content.title ?? '',
     subtitle: content.subtitle ?? '',
     audience: content.audience ?? '',
     promise: content.promise ?? '',
-    introduction: arr(content.introduction).slice(0, 3),
-    chapters: arr(content.chapters).map((ch, i) => trimChapter(ch, i === 0)),
-    bonus: trimChapter(content.bonus, false),
+    introduction: live ? [] : arr(content.introduction).slice(0, 3),
+    chapters: live ? [] : arr(content.chapters).map((ch, i) => trimChapter(ch, i === 0)),
+    bonus: trimChapter(live ? null : content.bonus, false),
     nextStep: content.nextStep ?? { title: '', text: '', upsellProductId: null },
     wordCount: content.wordCount ?? 0,
   };
@@ -133,16 +151,27 @@ export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS)
   const stats = p.stats ?? { views: 0, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, rating: 0, reviews: [], upsellSales: 0 };
   return {
     ...p,
-    content: trimContent(p.content),
+    content: trimContent(p.content, limits.live),
+    salesPage: limits.live ? null : p.salesPage,
     stats: { ...stats, reviews: lastN(stats.reviews, limits.reviewsPerProduct) },
     priceHistory: lastN(p.priceHistory, 60),
   };
 }
 
-function trimCreatives(creatives: AdCreative[], keepIds: Set<string>, limit: number): AdCreative[] {
+/** An ad of the live view: its figures and preview, without the script they hold. */
+function lightCreative(c: AdCreative): AdCreative {
+  return {
+    ...c, caption: '', hashtags: [],
+    scenes: arr(c.scenes).map((s) => ({ visual: '', onScreenText: '', voiceover: '', durationSec: s.durationSec })),
+    files: { storyboard: (c.files?.storyboard ?? []).slice(0, 1), preview: c.files?.preview ?? null },
+  };
+}
+
+function trimCreatives(creatives: AdCreative[], keepIds: Set<string>, limits: SnapshotLimits): AdCreative[] {
   const all = arr(creatives);
-  const start = Math.max(0, all.length - limit);
-  return all.filter((c, i) => i >= start || keepIds.has(c.id));
+  const start = Math.max(0, all.length - limits.creatives);
+  const kept = all.filter((c, i) => i >= start || keepIds.has(c.id));
+  return limits.live ? kept.map(lightCreative) : kept;
 }
 
 function trimMissions(missions: Mission[], limit: number): Mission[] {
@@ -160,7 +189,7 @@ export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LI
   const expStart = Math.max(0, experiments.length - limits.experiments);
   const research = c.research ?? { trends: [], voc: {}, competitors: {}, shortlist: [] };
   const voc: CompanyState['research']['voc'] = {};
-  for (const [nicheId, v] of Object.entries(research.voc ?? {})) {
+  for (const [nicheId, v] of Object.entries(limits.live ? {} : research.voc ?? {})) {
     voc[nicheId] = limits.vocKnowledge || !v ? v : { ...v, knowledge: { tips: [], steps: [], mistakes: [], examples: [], facts: [] } };
   }
   return {
@@ -170,10 +199,10 @@ export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LI
     tasks: trimTasks(c.tasks, limits),
     missions: trimMissions(c.missions, limits.missions),
     products: arr(c.products).map((p) => trimProduct(p, limits)),
-    creatives: trimCreatives(c.creatives, liveCreativeIds, limits.creatives),
+    creatives: trimCreatives(c.creatives, liveCreativeIds, limits),
     campaigns,
     deliverables: lastN(c.deliverables, limits.deliverables),
-    research: { trends: arr(research.trends), voc, competitors: research.competitors ?? {}, shortlist: arr(research.shortlist) },
+    research: { trends: arr(research.trends), voc, competitors: limits.live ? {} : research.competitors ?? {}, shortlist: arr(research.shortlist) },
     lessons: lastN(c.lessons, limits.lessons),
     experiments: experiments.filter((e, i) => i >= expStart || e.status === 'running'),
     bandits: c.bandits ?? {},
@@ -181,11 +210,13 @@ export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LI
     kpis: lastN(c.kpis, limits.kpis),
     chats,
     pendingApprovals: arr(c.pendingApprovals),
+    budget: c.budget ?? null,
+    pnl: lastN(c.pnl, 8),
   };
 }
 
 /** Most recent `limit` messages, but unanswered ones are never dropped in favour of closed ones. */
-export function trimInbox(inbox: InboxMessage[], limits: SnapshotLimits = DEFAULT_LIMITS): InboxMessage[] {
+function keptMessages(inbox: InboxMessage[], limits: SnapshotLimits): InboxMessage[] {
   const all = arr(inbox);
   const keep = new Set<number>();
   for (let i = all.length - 1; i >= 0 && keep.size < limits.inbox; i--) {
@@ -193,9 +224,12 @@ export function trimInbox(inbox: InboxMessage[], limits: SnapshotLimits = DEFAUL
     if (s === 'open' || s === 'escalated') keep.add(i);
   }
   for (let i = all.length - 1; i >= 0 && keep.size < limits.inbox; i--) keep.add(i);
-  return all
-    .filter((_, i) => keep.has(i))
-    .map((m) => ({ ...m, thread: lastN(m.thread, limits.threadPerMessage) }));
+  return all.filter((_, i) => keep.has(i));
+}
+
+/** What the company can see of its inbox: the true intent of a message is never part of it. */
+export function trimInbox(inbox: InboxMessage[], limits: SnapshotLimits = DEFAULT_LIMITS): PublicInboxMessage[] {
+  return keptMessages(inbox, limits).map(({ intent: _truth, ...m }) => ({ ...m, thread: lastN(m.thread, limits.threadPerMessage) }));
 }
 
 export function trimAdStats(stats: DailyAdStats[], day: number, limits: SnapshotLimits = DEFAULT_LIMITS): DailyAdStats[] {
@@ -205,43 +239,57 @@ export function trimAdStats(stats: DailyAdStats[], day: number, limits: Snapshot
     .map((s) => ({ ...s, comments: arr(s.comments).slice(0, limits.commentsPerStat) }));
 }
 
-const OTHER_COSTS: ReadonlySet<LedgerType> = new Set<LedgerType>(['tool_subscription', 'creator_payout', 'scam_loss', 'discount']);
-
-/** Finance computed from the ledger only — used when the sim's financeSnapshot is unavailable or throws. */
+/** Finance from the ledger only, used when the sim's financeSnapshot is unavailable or throws: the same summary. */
 export function estimateFinance(world: WorldState): FinanceSnapshot {
-  const ledger = arr(world.ledger);
-  const { cash, profit } = estimateCashProfit(world);
-  const sum = (types: LedgerType[]) => r2(ledger.filter((e) => types.includes(e.type)).reduce((s, e) => s + Math.abs(e.amount || 0), 0));
-  const kpis = lastN(world.company?.kpis, 7);
-  const profit7d = r2(kpis.reduce((s, k) => s + (k.profit || 0), 0));
-  const burn7d = kpis.length ? r2(Math.max(0, -profit7d / kpis.length)) : 0;
-  const ads7 = arr(world.market?.adStats).filter((s) => s.day > world.day - 7);
-  const spend7 = ads7.reduce((s, a) => s + (a.spend || 0), 0);
-  const rev7 = ads7.reduce((s, a) => s + (a.revenue || 0), 0);
-  return {
-    cash,
-    revenue: sum(['revenue']),
-    refunds: sum(['refund', 'chargeback']),
-    adSpend: sum(['ad_spend']),
-    fees: sum(['payment_fee', 'platform_fee']),
-    compute: sum(['compute']),
-    otherCosts: r2(ledger.filter((e) => OTHER_COSTS.has(e.type)).reduce((s, e) => s + Math.abs(e.amount || 0), 0)),
-    profit,
-    profit7d,
-    burn7d,
-    runwayDays: burn7d > 0 ? Math.max(0, Math.floor(cash / burn7d)) : null,
-    roas7d: spend7 > 0 ? r2(rev7 / spend7) : 0,
-    bankrupt: world.status === 'bankrupt' || cash < 0,
-  };
+  const { capital: _capital, ...finance } = summarizeLedger(arr(world.ledger), world.day ?? 0, announcedOutageDays(world));
+  return finance;
 }
 
-export function godModeOf(world: WorldState): NonNullable<CompanySnapshot['godMode']> {
+/** Hidden truth served to god mode only. `intents` covers the messages of the same snapshot. */
+export function godModeOf(world: WorldState, limits: SnapshotLimits = DEFAULT_LIMITS): NonNullable<CompanySnapshot['godMode']> {
+  const intents: Record<string, MessageIntent> = {};
+  for (const m of keptMessages(world.market?.inbox ?? [], limits)) intents[m.id] = m.intent;
   return {
     niches: arr(world.market?.niches).map((n) => ({
       id: n.id, name: n.name, demand: n.demand, wtp: n.wtp, competition: n.competition,
       tiktokAffinity: n.tiktokAffinity, hookAffinity: n.hookAffinity,
     })),
+    intents,
   };
+}
+
+const DEPT_HISTORY_DAYS = 14;
+const KIND_WINDOW_DAYS = 7;
+
+function dayRow(rows: Map<number, DayTaskCounts>, day: number): DayTaskCounts {
+  let row = rows.get(day);
+  if (!row) rows.set(day, row = { day, created: 0, done: 0, failed: 0, cancelled: 0 });
+  return row;
+}
+
+const oldestFirst = (rows: Map<number, DayTaskCounts>): DayTaskCounts[] => [...rows.values()].sort((a, b) => a.day - b.day);
+
+/** Counts of the WHOLE task list: the task list of a snapshot is trimmed, these numbers never are. */
+export function taskStatsOf(tasks: Task[] | null | undefined, day: number): TaskStats {
+  const days = new Map<number, DayTaskCounts>();
+  const depts = new Map<DeptId, { rows: Map<number, DayTaskCounts>; kinds7d: Partial<Record<TaskKind, number>>; done: number; delay: number }>();
+  const recent = day - DEPT_HISTORY_DAYS;
+  const kindsFrom = day - KIND_WINDOW_DAYS;
+  for (const t of arr(tasks)) {
+    let d = depts.get(t.dept);
+    if (!d) depts.set(t.dept, d = { rows: new Map(), kinds7d: {}, done: 0, delay: 0 });
+    dayRow(days, t.dayCreated).created += 1;
+    if (t.dayCreated > recent) dayRow(d.rows, t.dayCreated).created += 1;
+    if ((t.dayDone ?? t.dayCreated) > kindsFrom) d.kinds7d[t.kind] = (d.kinds7d[t.kind] ?? 0) + 1;
+    if (t.dayDone === null || t.dayDone === undefined) continue;
+    if (t.status === 'done') { d.done += 1; d.delay += t.dayDone - t.dayCreated; }
+    if (t.status !== 'done' && t.status !== 'failed' && t.status !== 'cancelled') continue;
+    dayRow(days, t.dayDone)[t.status] += 1;
+    if (t.dayDone > recent) dayRow(d.rows, t.dayDone)[t.status] += 1;
+  }
+  const out: Partial<Record<DeptId, DeptTaskCounts>> = {};
+  for (const [id, d] of depts) out[id] = { days: oldestFirst(d.rows), kinds7d: d.kinds7d, done: d.done, avgDelayDays: d.done ? r2(d.delay / d.done) : null };
+  return { days: oldestFirst(days), depts: out };
 }
 
 /** Builds the UI-safe snapshot. `market.niches` (hidden truth) never leaves the server unless `god`. */
@@ -257,7 +305,8 @@ export function buildSnapshot(world: WorldState, finance: FinanceSnapshot, god =
     mind: world.mind,
     company: trimCompany(world.company, limits),
     market: {
-      inbox: trimInbox(m?.inbox ?? [], limits),
+      // still typed InboxMessage for the UI code that reads it: the field itself is gone from the payload
+      inbox: trimInbox(m?.inbox ?? [], limits) as InboxMessage[],
       adStats: trimAdStats(m?.adStats ?? [], world.day, limits),
       organicPosts: lastN(m?.organicPosts, limits.organicPosts),
       creators: lastN(m?.creators, limits.creators),
@@ -270,8 +319,9 @@ export function buildSnapshot(world: WorldState, finance: FinanceSnapshot, god =
     finance,
     ledger: lastN(world.ledger, limits.ledger),
     activity: lastN(world.activity, limits.activity),
+    taskStats: taskStatsOf(world.company?.tasks, world.day),
   };
-  if (god) snap.godMode = godModeOf(world);
+  if (god) snap.godMode = godModeOf(world, limits);
   return snap;
 }
 
@@ -282,7 +332,15 @@ export function buildSnapshot(world: WorldState, finance: FinanceSnapshot, god =
 export function serializeSnapshot(
   world: WorldState, finance: FinanceSnapshot, god = false, extra: Record<string, unknown> = {}, budget = SNAPSHOT_BUDGET_BYTES,
 ): string {
-  const json = JSON.stringify({ ...buildSnapshot(world, finance, god, DEFAULT_LIMITS), ...extra });
-  if (json.length <= budget) return json;
-  return JSON.stringify({ ...buildSnapshot(world, finance, god, TIGHT_LIMITS), ...extra });
+  let json = '';
+  for (const limits of [DEFAULT_LIMITS, TIGHT_LIMITS, LIVE_LIMITS]) {
+    json = JSON.stringify({ ...buildSnapshot(world, finance, god, limits), ...extra });
+    if (json.length <= budget) break;
+  }
+  return json;
+}
+
+/** The light snapshot of the live stream. */
+export function serializeLiveSnapshot(world: WorldState, finance: FinanceSnapshot, god = false, extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({ ...buildSnapshot(world, finance, god, LIVE_LIMITS), ...extra });
 }

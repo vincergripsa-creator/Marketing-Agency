@@ -2,10 +2,12 @@
  * Claude JSON → contract types. Whatever is missing, malformed or out of range is taken from the
  * heuristic result computed for the same call, so the output is always complete and typed.
  */
-import type { AdFormat, AdScene, HookStyle, MessageIntent, PdfContent, SalesPage, SupportReplyInput, TaskKind } from '../../shared.js';
-import type { AdDraft, DayPlan, DayPlanItem, LessonDraft, OpportunityRanking, Outline, RedTeamVerdict } from '../../contracts.js';
+import type { AdFormat, AdScene, HookStyle, MessageIntent, PdfContent, Product, SalesPage, SupportReplyInput, TaskKind } from '../../shared.js';
+import type { AdDraft, DayPlan, DayPlanItem, LessonDraft, OpportunityRanking, Outline, RedTeamVerdict, UpsellContext } from '../../contracts.js';
+import { noPrice, screenText } from '../heuristic/ads.js';
 import { KIND_DEPT, KIND_TITLE } from '../heuristic/direction.js';
 import { pdfWordCount } from '../heuristic/studio.js';
+import { NAMED_CASE } from '../lexicon.js';
 import { AD_FORMATS, HOOK_STYLES } from '../playbook.js';
 import { arr, ensurePdf, forEachText, str } from '../shapes.js';
 import { bare, clampNum, clean, composeTitle, fit, isStr, norm, splitSentences, strArr, uniqStrings } from '../util.js';
@@ -41,32 +43,44 @@ export function nRanking(raw: unknown, fb: OpportunityRanking): OpportunityRanki
   return { ranked: out };
 }
 
-export function nTitles(raw: unknown, fb: string[], count: number): string[] {
+export function nTitles(raw: unknown, fb: string[], count: number, upsellOf: UpsellContext | null = null): string[] {
   const n = count > 0 ? Math.floor(count) : fb.length;
+  const parent = norm(upsellOf?.parentTitle ?? '');
   // a title is whole (≤ 95 chars, one « : » at most, no ellipsis): anything else is dropped, not truncated
-  const t = uniqStrings([...strArr(asObj(raw).titles).filter((x) => composeTitle([x], 95) !== null), ...fb]);
+  const t = uniqStrings([...strArr(asObj(raw).titles).filter((x) => composeTitle([x], 95) !== null && norm(x) !== parent), ...fb]);
   return t.slice(0, n);
 }
 
-export function nOutline(raw: unknown, fb: Outline): Outline {
+export function nOutline(raw: unknown, fb: Outline, upsellOf: UpsellContext | null = null): Outline {
   const o = asObj(raw);
   const chapters = asArr(o.chapters).map((c, i) => {
     const co = asObj(c);
     const base = fb.chapters[i] ?? fb.chapters[fb.chapters.length - 1]!;
     return { title: str(co.title, base.title), points: arr(co.points, base.points, 2, 6) };
   }).filter((c) => c.title);
+  // a follow-up guide never reuses a section of its parent
+  const parent = new Set((upsellOf?.parentChapterTitles ?? []).map(norm));
+  const fresh = chapters.every((c) => !parent.has(norm(c.title)));
   return {
     title: str(o.title, fb.title),
-    chapters: chapters.length >= 5 && chapters.length <= 7 ? chapters : fb.chapters,
+    chapters: fresh && chapters.length >= 5 && chapters.length <= 7 ? chapters : fb.chapters,
     bonusTitle: str(o.bonusTitle, fb.bonusTitle),
     nextStepTitle: str(o.nextStepTitle, fb.nextStepTitle),
   };
 }
 
-export function nPdf(raw: unknown, fb: PdfContent): PdfContent {
+export function nPdf(raw: unknown, fb: PdfContent, upsellOf: UpsellContext | null = null): PdfContent {
   const p = ensurePdf(raw, fb);
   p.nextStep.upsellProductId = fb.nextStep.upsellProductId;
   p.audience = fb.audience || p.audience;
+  // the printable the bonus promises must exist, whatever the answer drew
+  if (fb.bonus.visual?.type === 'grid' && p.bonus.visual?.type !== 'grid') p.bonus.visual = fb.bonus.visual;
+  if (upsellOf) {
+    if (norm(p.title) === norm(upsellOf.parentTitle)) p.title = fb.title;
+    if (norm(p.promise) === norm(upsellOf.parentPromise)) p.promise = fb.promise;
+    const parent = new Set(upsellOf.parentChapterTitles.map(norm));
+    if (p.chapters.some((c) => parent.has(norm(c.title)))) p.chapters = fb.chapters;
+  }
   p.wordCount = pdfWordCount(p);
   // a much shorter answer than the target is a truncated / lazy one: keep the full heuristic draft
   return p.wordCount < 1200 && fb.wordCount > p.wordCount ? fb : p;
@@ -136,15 +150,20 @@ export function nHooks(raw: unknown, fb: { hookStyle: HookStyle; hook: string }[
   return fb.map((f) => ({ hookStyle: f.hookStyle, hook: got.get(f.hookStyle) ?? f.hook }));
 }
 
-export function nAd(raw: unknown, fb: AdDraft, input: { hookStyle: HookStyle; format: AdFormat }): AdDraft {
+export function nAd(raw: unknown, fb: AdDraft, input: { hookStyle: HookStyle; format: AdFormat; product?: Product | null }): AdDraft {
   const o = asObj(raw);
+  // an ad outlives the price of the day, and a named person with a result is never a proof
+  const clear = (s: string): string => noPrice(s, input.product?.price);
+  const usable = (s: string): boolean => !NAMED_CASE.test(s);
   let scenes: AdScene[] = asArr(o.scenes).map((s, i) => {
     const so = asObj(s);
     const base = fb.scenes[Math.min(i, fb.scenes.length - 1)]!;
+    const onScreen = clear(str(so.onScreenText, base.onScreenText));
+    const voiceover = clear(str(so.voiceover, base.voiceover));
     return {
       visual: str(so.visual, base.visual),
-      onScreenText: fit(str(so.onScreenText, base.onScreenText), 50),
-      voiceover: str(so.voiceover, base.voiceover),
+      onScreenText: screenText(usable(onScreen) ? onScreen : base.onScreenText),
+      voiceover: usable(voiceover) ? voiceover : base.voiceover,
       durationSec: Math.round(clampNum(so.durationSec, 1, 10, base.durationSec)),
     };
   });
@@ -153,14 +172,16 @@ export function nAd(raw: unknown, fb: AdDraft, input: { hookStyle: HookStyle; fo
   while (total > 30) { const l = scenes.reduce((a, b) => (b.durationSec > a.durationSec ? b : a)); l.durationSec -= 1; total -= 1; }
   while (total < 12) { scenes[Math.min(2, scenes.length - 1)]!.durationSec += 1; total += 1; }
   const tags = uniqStrings(strArr(o.hashtags).map((h) => `#${norm(h).replace(/[^a-z0-9]/g, '')}`).filter((h) => h.length > 2));
+  const hook = clear(str(o.hook, fb.hook));
+  const caption = clear(str(o.caption, fb.caption));
   return {
-    hook: fit(str(o.hook, fb.hook), 90),
+    hook: fit(usable(hook) ? hook : fb.hook, 90),
     hookStyle: HOOK_STYLES.includes(input.hookStyle) ? input.hookStyle : fb.hookStyle,
     format: AD_FORMATS.includes(input.format) ? input.format : fb.format,
     scenes,
-    caption: fit(str(o.caption, fb.caption), 300),
+    caption: fit(usable(caption) ? caption : fb.caption, 300),
     hashtags: tags.length >= 4 ? tags.slice(0, 6) : fb.hashtags,
-    cta: str(o.cta, fb.cta),
+    cta: clear(str(o.cta, fb.cta)),
   };
 }
 

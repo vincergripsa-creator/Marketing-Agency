@@ -6,13 +6,15 @@
  *   - why paid acquisition is blocked today (ad ban, negative cash, survival, CFO envelope);
  *   - the ranking of the candidates, so ads and posts always go to the best products first.
  */
-import type { AdCreative, Product, Review, WorldState } from '../shared.js';
+import type { AdCreative, Lesson, Product, Review, WorldState } from '../shared.js';
+import { productPnls } from './accounting.js';
 import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, isUpsellProduct, productMetrics } from './metrics.js';
+import { learning, sim } from './modules.js';
 import { isOpen } from './tasks.js';
-import { clamp, dec, eur, pct } from './util.js';
+import { clamp, dec, eur, pct, sum } from './util.js';
 
 /** Below this many reviews of the current version, the rating is not judged. */
-export const MIN_REVIEWS_FOR_RATING = 3;
+export const MIN_REVIEWS_FOR_RATING = 5;
 /** A version rated below this (with enough reviews) is never promoted: paused, reworked or killed. */
 export const MIN_RATING = 3;
 /** A version refunded more than this (with enough sales) is never promoted: paused, reworked or killed. */
@@ -28,8 +30,15 @@ export const FRESH_VERSION_DAYS = 10;
 export const MIN_CAMPAIGN_BUDGET = 5;
 /** Daily budget of the watchdog's small test campaign on an "ads-dead" version. */
 export const TEST_CAMPAIGN_BUDGET = 8;
-/** Stop-loss threshold (Budget et garde-fous): a campaign below this ROAS on a sufficient sample is paused. */
+/**
+ * The one stop-loss rule (Budget et garde-fous, Playbook Growth): ROAS under STOP_LOSS_ROAS after STOP_LOSS_SPEND €
+ * spent over at least STOP_LOSS_DAYS days → pause, not a smaller budget; under NO_TRACTION_ROAS, without waiting for
+ * the second day.
+ */
 export const STOP_LOSS_ROAS = 0.8;
+export const STOP_LOSS_SPEND = 25;
+export const STOP_LOSS_DAYS = 2;
+export const NO_TRACTION_ROAS = 0.4;
 /** For relaunch decisions, a stopped campaign that did not pay back its spend counts as a loser. */
 export const LOSER_ROAS = 1;
 /** After this many losing campaigns in a row with a weak ROAS over the streak, paid ads stop for this version. */
@@ -37,6 +46,8 @@ export const ADS_DEAD_LOSERS = 4;
 export const ADS_DEAD_ROAS = 0.7;
 /** An "ads-dead" version gets one fresh test this many days after its last campaign. */
 export const ADS_DEAD_RETRY_DAYS = 7;
+/** Share of the CFO's envelope one product leaves free while another promotable product waits for its first test. */
+export const EXPLORATION_SHARE = 0.25;
 /** Max days without paid acquisition while a promotable product and cash exist (the CEO's watchdog). */
 export const MAX_IDLE_DAYS = 2;
 
@@ -99,6 +110,66 @@ export function productHealth(world: WorldState, p: Product): ProductHealth {
   return { since, reviews, rating, sales: m.sales, refundRate: m.refundRate, severe };
 }
 
+/** Mild quality signal: a rewrite is only worth its cost when refunds are significantly high, not a few refund hunters. */
+export const MILD_REFUND_RATE = 0.1;
+export const MIN_SALES_FOR_REWORK = 12;
+export function refundsWorthRework(refunds: number, sales: number): boolean {
+  return sales >= MIN_SALES_FOR_REWORK && refunds >= 3 && wilsonLower(refunds, sales) > MILD_REFUND_RATE;
+}
+
+// ───────────────────────────── is it making money? ─────────────────────────────
+
+/** A version is judged on money over its last LOSS_WINDOW_DAYS closed days, never on what it sold in the past… */
+export const LOSS_WINDOW_DAYS = 14;
+/** …across at least 2 campaigns (one is a bad angle, two are a bad offer) and a real spend, with ads that do not pay back. */
+export const LOSS_MIN_CAMPAIGNS = 2;
+export const LOSS_MIN_SPEND = 100;
+export const LOSS_MAX_ROAS = 0.9;
+/** The last days pay back their ads again: the turnaround is left alone. */
+const RECOVERY_DAYS = 4;
+const RECOVERY_ROAS = 1.3;
+const RECOVERY_MIN_SPEND = 20;
+
+export interface RecentLoss { fromDay: number; toDay: number; profit: number; roas: number; adSpend: number; campaigns: number; sales: number }
+
+/**
+ * The current version loses money over the last 14 closed days, whatever it sold before: profit from the accountant's
+ * books (refunds, fees and creators included) with outage days left out. Upsells live off their parent: not judged here.
+ */
+export function recentLoss(world: WorldState, p: Product): RecentLoss | null {
+  if (p.status !== 'live' || isUpsellProduct(world, p.id)) return null;
+  const toDay = sim.lastClosedDay(world);
+  if (toDay - versionSince(world, p) + 1 < LOSS_WINDOW_DAYS) return null;
+  const fromDay = toDay - LOSS_WINDOW_DAYS + 1;
+  const outage = sim.announcedOutageDays(world);
+  const ads = world.market.adStats.filter((s) => s.productId === p.id && s.day >= fromDay && s.day <= toDay && s.spend > 0 && !outage.includes(s.day));
+  const campaigns = new Set(ads.map((s) => s.campaignId)).size;
+  const adSpend = sum(ads.map((s) => s.spend));
+  if (campaigns < LOSS_MIN_CAMPAIGNS || adSpend < LOSS_MIN_SPEND) return null;
+  const row = productPnls(world, fromDay, toDay, outage).products.find((r) => r.productId === p.id);
+  if (!row || row.profit >= 0 || (row.roas ?? 0) >= LOSS_MAX_ROAS) return null;
+  const last = ads.filter((s) => s.day > toDay - RECOVERY_DAYS);
+  const lastSpend = sum(last.map((s) => s.spend));
+  if (lastSpend >= RECOVERY_MIN_SPEND && sum(last.map((s) => s.revenue)) / lastSpend >= RECOVERY_ROAS) return null;
+  return { fromDay, toDay, profit: row.profit, roas: row.roas ?? 0, adSpend, campaigns, sales: row.sales };
+}
+
+/** Profit of each product over the last `days` closed days, from the books (outage days left out). */
+export function recentProfits(world: WorldState, days: number): Map<string, number> {
+  const toDay = sim.lastClosedDay(world);
+  const rows = productPnls(world, Math.max(1, toDay - days + 1), toDay, sim.announcedOutageDays(world)).products;
+  return new Map(rows.map((r) => [r.productId, r.profit]));
+}
+
+const CUT_LESSON = /^\s*(couper|arr[êe]ter|stopper)\b.*\bpubs?\b/i;
+
+/** The retro's « Couper les pubs de la niche … » about this version: the team does not spend against its own lesson. */
+export function cutLesson(world: WorldState, p: Product): Lesson | null {
+  const key = learning.LESSON_KEYS.niche(p.nicheId);
+  const since = versionSince(world, p);
+  return world.company.lessons.find((l) => l.key === key && l.day >= since && CUT_LESSON.test(l.insight)) ?? null;
+}
+
 /** A rework (rewrite → republish) of the product is in progress. */
 export function isReworking(world: WorldState, productId: string): boolean {
   return world.company.tasks.some((t) => isOpen(t) && t.input.productId === productId
@@ -111,6 +182,8 @@ export function promotionBlock(world: WorldState, p: Product): string | null {
   if (p.status !== 'live') return p.status === 'paused' ? 'produit en pause' : 'produit pas en ligne';
   const h = productHealth(world, p);
   if (h.severe) return h.severe;
+  const loss = recentLoss(world, p);
+  if (loss) return `perd ${eur(-loss.profit)} en ${LOSS_WINDOW_DAYS} jours sur ${loss.campaigns} campagnes (ROAS ${dec(loss.roas)})`;
   return null;
 }
 
@@ -139,7 +212,7 @@ export function adHistory(world: WorldState, productId: string, sinceDay = 1): A
   }
   for (let i = camps.length - 1; i >= 0 && counting; i--) {
     const c = camps[i]!;
-    if (c.status === 'active') continue;
+    if (c.status === 'active' || c.pausedFor) continue; // a day off for an outage ends nothing
     const m = campaignMetrics(stats, c.id);
     const last = m.rows.reduce((d, r) => Math.max(d, r.day), c.startDay);
     if (lastEndDay === null) lastEndDay = last;
@@ -157,13 +230,16 @@ export function cooldownDays(losers: number): number {
   return Math.max(0, Math.min(MAX_IDLE_DAYS, losers - 1));
 }
 
-export interface PaidBlock { reason: string; hard: boolean }
+/** hard = until a new version; soft = cooldown; final = not even the CEO's watchdog test: the numbers already decided. */
+export interface PaidBlock { reason: string; hard: boolean; final?: boolean }
 
-/** Product-level reason not to start a new paid campaign today (hard = until a new version; soft = cooldown). */
+/** Product-level reason not to start a new paid campaign today. */
 export function productPaidBlock(world: WorldState, p: Product): PaidBlock | null {
   const promo = promotionBlock(world, p);
-  if (promo) return { reason: promo, hard: true };
+  if (promo) return { reason: promo, hard: true, final: true };
   if (isUpsellProduct(world, p.id)) return { reason: 'upsell vendu via « La suite est ici », pas en pub froide', hard: true };
+  const cut = cutLesson(world, p);
+  if (cut) return { reason: `leçon du jour ${cut.day} : ${cut.insight.split(' : ')[0]}`, hard: true, final: true };
   const h = adHistory(world, p.id, versionSince(world, p));
   // "Ads-dead": stop paying for this version; one fresh test is allowed a week after the last campaign.
   if (h.losers >= ADS_DEAD_LOSERS && (h.streakRoas ?? 0) < ADS_DEAD_ROAS && (h.lastEndDay === null || world.day <= h.lastEndDay + ADS_DEAD_RETRY_DAYS)) {
@@ -184,6 +260,7 @@ export function adBanActive(world: WorldState): boolean {
 
 /** Company-level reason why no paid campaign can start today, or null. */
 export function companyPaidBlock(world: WorldState): string | null {
+  if (currentBudget(world).outage) return `panne de paiement annoncée aujourd'hui : aucune vente possible, aucune dépense pub`;
   if (adBanActive(world)) return `compte publicitaire TikTok suspendu jusqu'au jour ${world.market.adAccount.bannedUntilDay}`;
   const b = currentBudget(world);
   if (b.bankrupt || world.status === 'bankrupt') return 'trésorerie négative : aucune dépense pub';
@@ -254,6 +331,15 @@ export function acquisitionCandidates(world: WorldState, opts: { includeUpsells?
     out.push({ product: p, score: Math.round(score * 1000) / 1000, block: productPaidBlock(world, p), history, health });
   }
   return out.sort((a, b) => b.score - a.score || a.product.id.localeCompare(b.product.id));
+}
+
+/**
+ * The envelope a campaign of this product may grow into. A winner does not eat the whole of it while another guide
+ * waits for a test: the budget would go to a saturating audience and the other guide would die untested.
+ */
+export function scalingRoom(world: WorldState, p: Product, adCap: number): number {
+  const waiting = acquisitionCandidates(world).some((c) => c.product.id !== p.id && !c.block && !activeCampaigns(world, c.product.id).length);
+  return waiting ? adCap * (1 - EXPLORATION_SHARE) : adCap;
 }
 
 /** The best product to promote right now (paid candidates first), for vague instructions. */

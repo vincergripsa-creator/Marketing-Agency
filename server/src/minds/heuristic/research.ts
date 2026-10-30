@@ -6,6 +6,7 @@ import type { CompetitorProduct, TrendSignal, VoiceOfCustomer } from '../../shar
 import type { OpportunityRanking } from '../../contracts.js';
 import { cap, clampNum, clauseLabel, clean, extractAgeRange, fit, fmtEur, lf, norm, uniqStrings } from '../util.js';
 import { firstPerson, safeVoc } from './niche.js';
+import { knownProfile } from './profiles.js';
 
 export const PRICE_LADDER = [9, 14, 19, 24, 29, 39, 49] as const;
 
@@ -63,7 +64,8 @@ export function heuristicRanking(
     const age = extractAgeRange([s.audience, s.name, ...(voc?.pains ?? []), ...(voc?.phrases ?? []), ...(voc?.knowledge.facts ?? [])]);
     const audience = age && !extractAgeRange([s.audience]) ? `${audienceBase} (${age})` : audienceBase;
     const mainPain = voc?.pains.find((p) => !firstPerson(p) && p.length >= 15 && p.length <= 110) ?? voc?.pains[0] ?? s.name;
-    const problem = cap(clauseLabel(mainPain, 110) ?? clean(mainPain));
+    // the guide treats the niche's main problem: the first pain of a research sample may be a side issue
+    const problem = knownProfile(s.nicheId)?.pain ?? cap(clauseLabel(mainPain, 110) ?? clean(mainPain));
     const price = suggestPrice(voc?.priceAnchors ?? [], comps.map((c) => c.price), priceRule(s));
     const phrase = voc?.phrases[0];
     const phraseQ = phrase ? clauseLabel(phrase, 60) : null;

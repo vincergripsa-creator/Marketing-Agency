@@ -26,11 +26,13 @@ export interface SessionLike {
   info(): SessionInfoLike;
   status(): WorldState['status'];
   snapshotJson(god: boolean): string;
+  liveSnapshotJson?(god: boolean): string;
   tickJson(): string;
   control(action: ControlAction, speed?: Speed): Promise<SessionInfoLike>;
   newRun(partial: Partial<ScenarioConfig>): Promise<unknown>;
   loadRun(runId: string): Promise<unknown>;
   mission(text: string, agentId?: string): Promise<string>;
+  missionState?(id: string): Pick<MissionResponse, 'status' | 'message'>;
   chat(agentId: string, text: string): Promise<string>;
   approve(taskId: string, approved: boolean): Promise<void>;
   brainList(): Promise<unknown[]>;
@@ -149,7 +151,7 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           if (!isPost) break;
           const { action, speed } = parseControl(await readJsonBody(req));
           const info = await session.control(action, speed);
-          hub.snapshotSoon();
+          hub.snapshotSoon(true);
           const body: ControlResponse = { ok: true, status: session.status(), speed: info.speed, playing: info.playing, message: controlMessage(action, info), session: info };
           return sendJson(res, 200, body);
         }
@@ -167,8 +169,8 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           const text = requireText(body.text, 'text', 2000);
           const agentId = typeof body.agentId === 'string' && body.agentId.trim() ? body.agentId.trim() : undefined;
           const missionId = await session.mission(text, agentId);
-          hub.snapshotSoon();
-          const out: MissionResponse = { ok: true, missionId };
+          hub.snapshotSoon(true);
+          const out: MissionResponse = { ok: true, missionId, ...session.missionState?.(missionId) };
           return sendJson(res, 200, out);
         }
         case '/api/chat': {
@@ -177,7 +179,7 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           const agentId = requireText(body.agentId, 'agentId', 80);
           const text = requireText(body.text, 'text', 2000);
           const reply = await session.chat(agentId, text);
-          hub.snapshotSoon();
+          hub.snapshotSoon(true);
           const out: ChatResponse = { reply };
           return sendJson(res, 200, out);
         }
@@ -187,7 +189,7 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           const taskId = requireText(body.taskId, 'taskId', 80);
           if (typeof body.approved !== 'boolean') throw new HttpError(400, 'Le champ « approved » doit être true ou false.');
           await session.approve(taskId, body.approved);
-          hub.snapshotSoon();
+          hub.snapshotSoon(true);
           const answer: ApproveResponse = { ok: true, message: body.approved ? 'Validé : la tâche reprend.' : 'Refusé : la tâche est annulée.' };
           return sendJson(res, 200, answer);
         }
@@ -355,11 +357,13 @@ export async function startServer(port = config.port): Promise<AgencyServer> {
       info: () => live.info(),
       status: () => live.world.status,
       snapshotJson: (god) => live.snapshotJson(god),
+      liveSnapshotJson: (god) => live.liveSnapshotJson(god),
       tickJson: () => live.tickJson(),
       control: (a, s) => live.control(a, s),
       newRun: (p) => live.newRun(p),
       loadRun: (id) => live.loadRun(id),
       mission: (t, a) => live.mission(t, a),
+      missionState: (id) => live.missionState(id),
       chat: (a, t) => live.chat(a, t),
       approve: (t, ok) => live.approve(t, ok),
       brainList: () => live.brainList(),

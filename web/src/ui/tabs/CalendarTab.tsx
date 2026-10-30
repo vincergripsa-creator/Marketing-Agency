@@ -4,6 +4,7 @@ import type { DailyKpi } from '../../../../shared/types';
 import { api, type BrainNote } from '../../api';
 import { cx, Empty, Overlay, Pill, SectionTitle } from '../common';
 import { useApp } from '../context';
+import { doneTasksByDay } from '../derive';
 import { fmtEur, fmtEurSigned, fmtInt, fmtPct, fmtRoas, pad3 } from '../format';
 import { Icon } from '../icons';
 import { Markdown } from '../markdown';
@@ -24,11 +25,7 @@ export function CalendarTab({ onClose }: { onClose(): void }) {
   const horizon = Math.max(snapshot?.scenario?.horizonDays ?? 30, today);
   const goalDay = snapshot?.scenario?.goal?.byDay ?? null;
   const kpiByDay = useMemo(() => new Map((snapshot?.company?.kpis ?? []).map((k) => [k.day, k] as const)), [snapshot]);
-  const doneByDay = useMemo(() => {
-    const m = new Map<number, number>();
-    for (const t of snapshot?.company?.tasks ?? []) if (t.status === 'done' && t.dayDone) m.set(t.dayDone, (m.get(t.dayDone) ?? 0) + 1);
-    return m;
-  }, [snapshot]);
+  const doneByDay = useMemo(() => doneTasksByDay(snapshot), [snapshot]);
   const eventsByDay = useMemo(() => {
     const m = new Map<number, number>();
     for (const e of snapshot?.market?.events ?? []) m.set(e.day, (m.get(e.day) ?? 0) + 1);
@@ -80,18 +77,24 @@ export function CalendarTab({ onClose }: { onClose(): void }) {
             <span><Icon name="cart" size={10} /> ventes</span>
           </div>
         </div>
-        <DayDetail day={selected} kpi={kpiByDay.get(selected)} />
+        <DayDetail day={selected} kpi={kpiByDay.get(selected)} doneCount={doneByDay.get(selected) ?? 0} />
       </div>
     </Overlay>
   );
 }
 
-function DayDetail({ day, kpi }: { day: number; kpi: DailyKpi | undefined }) {
+const DAY_TASKS_SHOWN = 30;
+
+function DayDetail({ day, kpi, doneCount }: { day: number; kpi: DailyKpi | undefined; doneCount: number }) {
   const { snapshot, lookups, activity, demo, openAgent, openBrainNote, openProduct } = useApp();
   const [note, setNote] = useState<BrainNote | null>(null);
   const [noteState, setNoteState] = useState<'idle' | 'loading' | 'missing'>('idle');
   const tasksDone = (snapshot?.company?.tasks ?? []).filter((t) => t.status === 'done' && t.dayDone === day);
-  const events = (snapshot?.market?.events ?? []).filter((e) => e.day === day);
+  // the snapshot only keeps the latest finished tasks: the count stays the real one, the list says what it lacks
+  const total = Math.max(doneCount, tasksDone.length);
+  const listed = tasksDone.slice(0, DAY_TASKS_SHOWN);
+  const lost = total - tasksDone.length;
+  const events =(snapshot?.market?.events ?? []).filter((e) => e.day === day);
   const dayActs = activity.filter((a) => a.day === day && (a.kind === 'lesson' || a.kind === 'event' || a.kind === 'deliverable' || a.kind === 'finance')).slice(-8);
   const journalPath = `journal/jour-${pad3(day)}.md`;
 
@@ -142,10 +145,11 @@ function DayDetail({ day, kpi }: { day: number; kpi: DailyKpi | undefined }) {
         </>
       ) : null}
 
-      <SectionTitle>Tâches terminées · {tasksDone.length}</SectionTitle>
-      {tasksDone.length === 0 ? <div className="muted small">Aucune tâche terminée ce jour-là.</div> : (
+      <SectionTitle>Tâches terminées · {fmtInt(total)}</SectionTitle>
+      {total === 0 ? <div className="muted small">Aucune tâche terminée ce jour-là.</div> : null}
+      {listed.length ? (
         <ul className="day-tasks">
-          {tasksDone.slice(0, 30).map((t) => (
+          {listed.map((t) => (
             <li key={t.id}>
               <span className="eyebrow-dot" style={{ background: deptColor(lookups, t.dept) }} />
               <span>{t.title}</span>
@@ -153,11 +157,13 @@ function DayDetail({ day, kpi }: { day: number; kpi: DailyKpi | undefined }) {
             </li>
           ))}
         </ul>
-      )}
+      ) : null}
+      {tasksDone.length > listed.length ? <div className="muted small">… et {fmtInt(tasksDone.length - listed.length)} autres.</div> : null}
+      {lost > 0 ? <div className="muted small">Détail indisponible pour {fmtInt(lost)} tâche{lost > 1 ? 's' : ''} : seules les plus récentes sont conservées.</div> : null}
 
       <SectionTitle right={note ? <button type="button" className="link-btn small" onClick={() => openBrainNote(note.path)}>Ouvrir dans le cerveau</button> : null}>Journal du jour</SectionTitle>
       {noteState === 'loading' ? <div className="muted small"><span className="spinner" /> Lecture du cerveau…</div> : null}
-      {note ? <div className="journal-note"><Markdown text={note.body} onWikiLink={() => openBrainNote(journalPath)} /></div> : null}
+      {note ? <div className="journal-note"><Markdown text={note.body} onWikiLink={openBrainNote} /></div> : null}
       {noteState === 'missing' ? (
         dayActs.length ? (
           <ul className="day-acts">

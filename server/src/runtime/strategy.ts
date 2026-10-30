@@ -5,37 +5,56 @@
  * Then the ContentEngine (Claude mode) may adjust it; the runtime materializes the plan into tasks.
  */
 import type { DayPlanItem, DayPlan } from '../contracts.js';
-import type { Product, Task, TaskKind } from '../shared.js';
+import type { Lesson, Product, Task, TaskKind } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
-import { nameOf, productOf, say } from './ctx.js';
-import { sim } from './modules.js';
-import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, isUpsellProduct, productMetrics } from './metrics.js';
+import { incident, latestOutput, nameOf, productOf, say, vocOf } from './ctx.js';
+import { learning, sim } from './modules.js';
+import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, fromBuyer, isProductFeedback, isUpsellProduct, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO } from './metrics.js';
 import { createProductPipeline, createUpsellPipeline, createV2Pipeline, excludedNiches, killProduct, openTasksForProduct, pauseProduct, resumePipeline } from './pipeline.js';
+import { guideGaps } from './redteam.js';
 import { createTask, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, PRODUCT_KINDS } from './tasks.js';
 import { openMessages, urgency } from './handlers/support.js';
 import { experimentCandidate } from './handlers/ops.js';
 import {
-  ACQUISITION_KINDS, acquisitionCandidates, bestCandidate, companyPaidBlock, daysWithoutAds, isReworking, launchableCreatives,
-  MAX_IDLE_DAYS, MIN_CAMPAIGN_BUDGET, productHealth, promotionBlock, versionSince as versionSinceOf,
+  ACQUISITION_KINDS, acquisitionCandidates, adBanActive, bestCandidate, companyPaidBlock, daysWithoutAds, isReworking, launchableCreatives,
+  LOSS_WINDOW_DAYS, MAX_IDLE_DAYS, MIN_CAMPAIGN_BUDGET, productHealth, productPaidBlock, promotionBlock, recentLoss, recentProfits, refundsTooHigh, refundsWorthRework, versionSince as versionSinceOf,
 } from './acquisition.js';
 
 /**
- * Kill rule of a main product (after at least 7 days online): fewer than KILL_MAX_SALES sales and ROAS < KILL_MAX_ROAS,
- * on a real sample — KILL_MIN_VIEWS paid landing views, or KILL_NO_TRACTION_DAYS days online.
+ * Kill rule of a main product, on the current version's last KILL_WINDOW_DAYS days (after at least 7 days online):
+ * fewer than KILL_MAX_SALES sales and ROAS < KILL_MAX_ROAS, on a real sample — KILL_MIN_VIEWS paid landing views, or
+ * KILL_NO_TRACTION_DAYS days online. What a guide sold months ago says nothing about what it earns now.
  */
+export const KILL_WINDOW_DAYS = 14;
 export const KILL_MAX_SALES = 3;
 export const KILL_MAX_ROAS = 0.7;
 export const KILL_MIN_VIEWS = 450;
 export const KILL_NO_TRACTION_DAYS = 14;
+export const KILL_MIN_POSTS = 5;
 /** Cautious mode of paid acquisition: company-wide ad ROAS over 10 days below this (with enough spend). */
 const CAUTIOUS_ROAS = 0.9;
 const CAUTIOUS_MIN_SPEND = 150;
-import { clamp, dec, eur, includesCI, pct, short, str, strArr, uniq } from './util.js';
+import { clamp, dec, eur, includesCI, numOf, pct, short, str, strArr, uniq } from './util.js';
 
 /** Organic TikTok posts per day across all products (the platform throttles reach above 5). */
 export const ORGANIC_POSTS_PER_DAY = 4;
 /** Organic posts per product and per day (the rest of the slots go to the other products). */
 export const ORGANIC_POSTS_PER_PRODUCT = 2;
+
+/** A main product needs room in the CFO's daily envelope: one per this many euros of adCap. */
+export const AD_ROOM_PER_MAIN = 30;
+/** Portfolio size the team can run (ads, support, organic slots). */
+export const MAX_MAINS = 8;
+/** While cash is comfortable, a new niche every this many days, whatever the others do. */
+export const GROWTH_NICHE_DAYS = 7;
+/** With a main losing money and cash to spare, a new niche does not wait for the plateau rule. */
+export const REPLACE_NICHE_DAYS = 4;
+/** Weekly market watch while the company can afford to look ahead. */
+export const RESEARCH_REFRESH_DAYS = 7;
+/** Runway under which the company does not start anything new. */
+export const COMFORTABLE_RUNWAY_DAYS = 30;
+/** Days between two rewrites of a sales page: a page needs traffic before it is judged again. */
+export const PAGE_REWORK_GAP_DAYS = 7;
 
 function planItem(kind: TaskKind, input: Record<string, unknown>, why: string, priority: 1 | 2 | 3 = 2, title?: string): DayPlanItem {
   return { kind, title: title ?? KIND_META[kind].label, dept: KIND_META[kind].dept, priority, input, why };
@@ -54,15 +73,25 @@ function reworkItem(ctx: RuntimeCtx, p: Product, why: string, priority: 1 | 2 | 
   return planItem('write_pdf', { productId: p.id, pipeline: 'v2', feedback: customerFeedback(ctx, p, versionSince(ctx, p)) }, why, priority, `Réécrire le guide (v${p.version + 1}) — « ${short(p.title, 40)} »`);
 }
 
-function customerFeedback(ctx: RuntimeCtx, p: Product, since: number): string[] {
+/** What buyers said about the current version: a v2 brief never quotes someone who did not buy, nor an insult. */
+export function customerFeedback(ctx: RuntimeCtx, p: Product, since: number): string[] {
   const out: string[] = [];
   for (const t of ctx.world.company.tasks) {
     if (t.kind !== 'reply_inbox' || t.status !== 'done' || (t.dayDone ?? 0) < since) continue;
     const replies = Array.isArray(t.output?.replies) ? (t.output!.replies as Record<string, unknown>[]) : [];
-    for (const r of replies) if (r.productId === p.id && typeof r.complaint === 'string') out.push(r.complaint);
+    for (const r of replies) {
+      if (r.productId === p.id && typeof r.complaint === 'string' && fromBuyer(ctx.world, r.messageId, p.id) && isProductFeedback(r.complaint)) out.push(r.complaint);
+    }
   }
-  for (const r of p.stats.reviews) if (r.day >= since && r.rating <= 2) out.push(`Avis ${r.rating}/5 : ${r.text}`);
+  for (const r of p.stats.reviews) if (r.day >= since && r.rating <= 2 && isProductFeedback(r.text)) out.push(`Avis ${r.rating}/5 : ${r.text}`);
   return uniq(out).slice(0, 6);
+}
+
+/** Buyers themselves say something is wrong: a rewrite can help. Otherwise the problem is the market, not the text. */
+function buyersUnhappy(ctx: RuntimeCtx, p: Product): boolean {
+  const h = productHealth(ctx.world, p);
+  const m = productMetrics(ctx.world, p.id, h.since);
+  return (h.reviews.length >= 3 && h.rating > 0 && h.rating < 4) || detectedComplaints(ctx.world, p.id, h.since) >= 2 || refundsTooHigh(m.refunds, m.sales);
 }
 
 /**
@@ -97,41 +126,61 @@ async function ceoDecisions(ctx: RuntimeCtx, notes: string[], items: DayPlanItem
     items.push(reworkItem(ctx, p, 'Produit en pause sans réécriture en cours : on relance la nouvelle version.'));
     notes.push(`« ${p.title} » : la réécriture reprend (v${p.version + 1}).`);
   }
+  const budget = currentBudget(w);
+  const adsOff = budget.survival || budget.outage || adBanActive(w);
   for (const p of w.company.products.filter((x) => x.status === 'live')) {
-    if (!p.launchedDay || w.day - p.launchedDay < 7) continue;
-    const m = productMetrics(w, p.id);
+    if (handled.has(p.id)) continue;
+    const h = productHealth(w, p);
+    const online = w.day - h.since;
+    if (!p.launchedDay || online < 7) continue;
+    const m = productMetrics(w, p.id, Math.max(h.since, w.day - KILL_WINDOW_DAYS));
+    const upsell = isUpsellProduct(w, p.id);
     // Upsells live off their parent's buyers: they are not judged on their own acquisition.
     // "Failing" needs a real sample: either enough paid visitors to see that nobody buys, or two weeks without
     // traction. (Before: < 3 sales after 7 days, i.e. ~100 € of ads and 200 visitors — at a 2 % conversion that
     // is bad luck one time in five, and it killed the first niche, often the best one, in a third of the runs.)
-    const live = w.day - p.launchedDay;
-    const failing = !isUpsellProduct(w, p.id) && m.sales < KILL_MAX_SALES && (m.spend > 0 ? m.roas < KILL_MAX_ROAS : true)
-      && (m.landingViews >= KILL_MIN_VIEWS || live >= KILL_NO_TRACTION_DAYS);
+    // Without ads, "no traction" only counts for a guide that was really shown (organic posts): one the budget went
+    // past has proved nothing, it costs nothing to keep and its turn may come.
+    const posts = w.market.organicPosts.filter((x) => x.productId === p.id && x.day >= w.day - KILL_WINDOW_DAYS).length;
+    const failing = !upsell && !isReworking(w, p.id) && m.sales < KILL_MAX_SALES && (m.spend > 0 ? m.roas < KILL_MAX_ROAS : !adsOff && posts >= KILL_MIN_POSTS)
+      && (m.landingViews >= KILL_MIN_VIEWS || online >= KILL_NO_TRACTION_DAYS);
     // Quality dead-end: even the v3 is rated badly by its own buyers → stop selling it, it hurts the brand.
-    const h = productHealth(w, p);
-    const hopeless = p.version >= 3 && w.day - h.since >= 5 && h.reviews.length >= 5 && h.rating > 0 && h.rating < 3.2;
-    if (!failing && !hopeless) continue;
-    const roas = Number.isFinite(m.roas) ? dec(m.roas) : '—';
-    const reason = hopeless
-      ? `même la v${p.version} reste notée ${dec(h.rating, 1)}/5 par ses acheteurs (${h.reviews.length} avis)`
-      : `en ligne depuis ${w.day - p.launchedDay} jours : ${m.sales} vente(s), ROAS ${roas} pour ${eur(m.spend)} de pub`;
-    await killProduct(ctx, p, reason, 'camille');
-    notes.push(`« ${p.title} » arrêté (${hopeless ? 'qualité perçue trop basse' : `${m.sales} ventes en ${w.day - p.launchedDay} jours`}).`);
+    const hopeless = p.version >= 3 && online >= 5 && h.reviews.length >= 5 && h.rating > 0 && h.rating < 3.2;
+    if (failing || hopeless) {
+      const roas = Number.isFinite(m.roas) ? dec(m.roas) : '—';
+      const reason = hopeless
+        ? `même la v${p.version} reste notée ${dec(h.rating, 1)}/5 par ses acheteurs (${h.reviews.length} avis)`
+        : `${Math.min(online, KILL_WINDOW_DAYS)} derniers jours de la v${p.version} : ${m.sales} vente(s), ROAS ${roas} pour ${eur(m.spend)} de pub`;
+      await killProduct(ctx, p, reason, 'camille');
+      notes.push(`« ${p.title} » arrêté (${hopeless ? 'qualité perçue trop basse' : `${m.sales} ventes en ${Math.min(online, KILL_WINDOW_DAYS)} jours`}).`);
+      continue;
+    }
+    // Sold a lot once, loses money now: no more budget. Unhappy buyers can be answered by a rewrite; a guide its
+    // readers like but that never pays back its ads cannot, the market is the problem.
+    const loss = isReworking(w, p.id) ? null : recentLoss(w, p);
+    if (!loss) continue;
+    const verdict = `perd ${eur(-loss.profit)} sur ${LOSS_WINDOW_DAYS} jours malgré ${loss.campaigns} campagnes (ROAS ${dec(loss.roas)})`;
+    if (p.version < 3 && buyersUnhappy(ctx, p)) {
+      items.push(reworkItem(ctx, p, `« ${short(p.title, 40)} » ${verdict} et ses acheteurs se plaignent : plus de budget avant la v${p.version + 1}.`));
+      notes.push(`« ${p.title} » ${verdict} → v${p.version + 1}, sans budget d'ici là.`);
+      continue;
+    }
+    await killProduct(ctx, p, verdict, 'camille');
+    notes.push(`« ${p.title} » arrêté : ${verdict}.`);
   }
 }
 
 // ───────────────────────────── pricing ─────────────────────────────
 
-/** Paid landing views needed on each side of a price change before judging it (revenue per visitor). */
-export const PRICE_EVIDENCE_VIEWS = 150;
-/** A raise is rolled back when revenue per paid visitor falls below this share of what it was before the raise. */
-export const PRICE_ROLLBACK_RATIO = 0.85;
+export { PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO };
 /** Days at a price before it may be raised again (with PRICE_RAISE_SALES sales since the change). */
-export const PRICE_RAISE_DAYS = 5;
-export const PRICE_RAISE_SALES = 10;
+export const PRICE_RAISE_DAYS = 4;
+export const PRICE_RAISE_SALES = 6;
 /** Below this paid conversion on PRICE_DOWN_VIEWS visitors since the last change, the price goes one tier down. */
 export const PRICE_DOWN_CVR = 0.008;
 export const PRICE_DOWN_VIEWS = 300;
+/** Under this price a guide cannot pay for its ads however well it sells: a paid visitor costs about 0,30 € and 2 % of them buy. */
+export const PAID_PRICE_FLOOR = 14;
 const PRICE_TIERS = [9, 14, 19, 24, 29, 39, 49];
 
 /** Ad revenue per paid landing view of a product over [from, to] (what one more visitor is worth at that price). */
@@ -146,8 +195,8 @@ export function revenuePerVisitor(w: RuntimeCtx['world'], productId: string, fro
 
 /**
  * The price decision of the day for a live product (observable data only), or null:
- *   1. a concluded A/B price test whose winner is not applied → apply it (before, the price stayed on whatever
- *      variant was set last, e.g. 39 € after a test that said 29 €);
+ *   1. a finished A/B price test whose winner is not applied → apply it (before, the price stayed on whatever
+ *      variant was set last, e.g. 39 € after a test that said 29 €); no winner → back to the control price;
  *   2. the last raise lowered the revenue per paid visitor (≥ 150 views each side) → back to the previous price;
  *   3. otherwise the usual raise (10 sales and 5 days at this price, good reviews, few refunds), never back to a
  *      tier that was already tried and abandoned.
@@ -160,18 +209,19 @@ export function priceMove(ctx: RuntimeCtx, p: Product): { input: Record<string, 
   const lastChange = last ? last.day : (p.launchedDay ?? day);
   const key = p.title.slice(0, 30);
   const tests = w.company.experiments.filter((e) => e.dimension === 'price' && e.hypothesis.includes(key));
-  const done = [...tests].reverse().find((e) => e.status === 'concluded');
+  const done = [...tests].reverse().find((e) => e.status !== 'running');
   if (done && (done.endDay ?? done.day) >= lastChange) {
     const winner = Number(done.winner);
+    const won = done.winner !== null && Number.isFinite(winner) && winner > 0;
     // Inconclusive test → back to the price before the test (its control), not to whichever variant ran last.
     const control = [...hist].reverse().find((h) => h.day < done.day)?.price ?? Number(done.variants[0]);
-    const target = done.winner !== null && Number.isFinite(winner) && winner > 0 ? winner : control;
+    const target = won ? winner : control;
     if (Number.isFinite(target) && target > 0 && target !== p.price) {
       return {
-        input: { productId: p.id, reason: 'winner', price: target },
-        why: done.winner !== null
+        input: { productId: p.id, reason: won ? 'winner' : 'controle', price: target },
+        why: won
           ? `Le test A/B de prix a conclu : ${eur(target)} rapporte le plus par visiteur (on était resté à ${eur(p.price)}).`
-          : `Test de prix non concluant : retour au prix d'avant le test (${eur(target)}).`,
+          : `Test de prix ${done.status === 'cancelled' ? 'annulé' : 'non concluant'} : retour au prix de contrôle (${eur(target)}).`,
       };
     }
   }
@@ -190,7 +240,7 @@ export function priceMove(ctx: RuntimeCtx, p: Product): { input: Record<string, 
   }
   // Almost nobody buys at this price (hundreds of paid visitors since the change) → one tier down.
   const atPrice = revenuePerVisitor(w, p.id, lastChange, day - 1);
-  const lower = [...PRICE_TIERS].reverse().find((t) => t < p.price);
+  const lower = [...PRICE_TIERS].reverse().find((t) => t < p.price && t >= PAID_PRICE_FLOOR);
   if (lower !== undefined && atPrice.views >= PRICE_DOWN_VIEWS && atPrice.rpv < p.price * PRICE_DOWN_CVR) {
     return {
       input: { productId: p.id, reason: 'baisse', price: lower },
@@ -201,13 +251,53 @@ export function priceMove(ctx: RuntimeCtx, p: Product): { input: Record<string, 
   if (up === undefined) return null;
   // A tier we already left for a lower price (rolled back, or lost an A/B test) is not tried again.
   const abandoned = hist.some((h, i) => h.price === up && i < hist.length - 1 && hist[i + 1]!.price < up);
-  if (abandoned) return null;
+  if (abandoned || up > priceCeiling(w, p).ceiling) return null;
+  if (p.price < PAID_PRICE_FLOOR && !isUpsellProduct(w, p.id)) return { input: { productId: p.id, reason: 'hausse' }, why: `À ${eur(p.price)}, un guide ne rembourse jamais sa pub : on passe au palier suivant sans attendre.` };
   const sinceChange = productMetrics(w, p.id, lastChange);
   const goodRating = p.stats.reviews.length < 3 || p.stats.rating >= 4.2;
   if (sinceChange.sales >= PRICE_RAISE_SALES && goodRating && sinceChange.refundRate < 0.08 && day - lastChange >= PRICE_RAISE_DAYS) {
     return { input: { productId: p.id, reason: 'hausse' }, why: `${sinceChange.sales} ventes depuis le dernier prix, avis bons : on monte d'un palier.` };
   }
   return null;
+}
+
+/**
+ * Announced payment outage: nothing can sell today, so nothing is spent. The CFO's envelope is at 0 (no launch, no
+ * scale); every running campaign is paused for the day and resumed the next morning, inside the new envelope.
+ * Read from the public announcement only, as a real company would.
+ */
+export function reactToOutage(ctx: RuntimeCtx): boolean {
+  const w = ctx.world;
+  if (sim.isAnnouncedOutage(w, w.day)) {
+    const running = activeCampaigns(w);
+    for (const c of running) {
+      if (ctx.tools.updateCampaign(c.id, { status: 'paused' }).ok) c.status = 'paused';
+      c.pausedFor = 'outage';
+    }
+    const paused = w.company.campaigns.filter((c) => c.pausedFor === 'outage').length;
+    say(ctx, 'camille', `Camille : panne de paiement annoncée aujourd'hui, aucune vente possible. ${paused ? `${paused} campagne(s) en pause` : 'Aucune campagne à couper'}, enveloppe pub à 0, ni lancement ni hausse de budget. On reprend demain matin.`, 'meeting');
+    incident(ctx, `Panne de paiement du jour ${w.day} : pubs en pause, aucune vente possible`);
+    return true;
+  }
+  const held = w.company.campaigns.filter((c) => c.pausedFor === 'outage');
+  if (!held.length) return false;
+  let room = currentBudget(w).adCap - committedAdBudget(w);
+  const resumed: string[] = [];
+  const left: string[] = [];
+  for (const c of held) {
+    delete c.pausedFor;
+    const p = productOf(ctx, c.productId);
+    const daily = Math.min(c.dailyBudget, Math.floor(room));
+    if (!p || p.status !== 'live' || productPaidBlock(w, p)?.final || daily < MIN_CAMPAIGN_BUDGET) { left.push(c.name); continue; }
+    if (daily < c.dailyBudget && ctx.tools.updateCampaign(c.id, { dailyBudget: daily }).ok) c.dailyBudget = daily;
+    if (!ctx.tools.updateCampaign(c.id, { status: 'active' }).ok) { left.push(c.name); continue; }
+    c.status = 'active';
+    room -= c.dailyBudget;
+    resumed.push(c.name);
+  }
+  if (resumed.length) say(ctx, 'leo', `Léo : la panne est passée, ${resumed.length} campagne(s) reprennent ce matin`, 'ad');
+  if (left.length) say(ctx, 'leo', `Léo : ${left.length} campagne(s) restent en pause après la panne (produit, budget ou compte) : ${short(left.join(', '), 90)}`, 'ad');
+  return false;
 }
 
 interface AcquisitionPlan { launchedFor: Product | null; blocked: string | null }
@@ -282,7 +372,7 @@ function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
   // Watchdog, last resort: every promotable product is "ads-dead" and nothing has run for MAX_IDLE_DAYS days →
   // one small test campaign on the best of them (fresh angle, minimum budget) instead of staying idle.
   if (!launchedFor && !running && !companyBlock && idle >= MAX_IDLE_DAYS && room >= MIN_CAMPAIGN_BUDGET) {
-    const test = waiting.find((c) => c.block?.hard && !openTasks(w, (t) => t.input.productId === c.product.id && ['launch_campaign', 'write_ad_hooks', 'produce_ad'].includes(t.kind)).length);
+    const test = waiting.find((c) => c.block?.hard && !c.block.final && !openTasks(w, (t) => t.input.productId === c.product.id && ['launch_campaign', 'write_ad_hooks', 'produce_ad'].includes(t.kind)).length);
     if (test) {
       const p = test.product;
       const input = { productId: p.id, force: true, test: true, ...(cautious ? { cautious: true } : {}) };
@@ -303,6 +393,11 @@ function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
   return { launchedFor, blocked };
 }
 
+/** The active lesson with this key, if it was learned on the current version. */
+function lessonOf(ctx: RuntimeCtx, key: string, since: number): Lesson | null {
+  return ctx.world.company.lessons.find((l) => l.key === key && l.day >= since) ?? null;
+}
+
 export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   const w = ctx.world;
   const day = w.day;
@@ -311,6 +406,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   await ceoDecisions(ctx, notes, items);
 
   const budget = currentBudget(w);
+  if (budget.outage) notes.push(`Panne de paiement annoncée aujourd'hui : pubs en pause, reprise demain matin.`);
   const products = w.company.products;
   const live = products.filter((p) => p.status === 'live');
   const building = products.filter((p) => !['live', 'killed', 'paused'].includes(p.status));
@@ -324,26 +420,45 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
     else items.push(planItem('scan_trends', { chain: 'opportunity' }, day === 1 ? 'Jour 1 : trouver un problème précis pour lequel les gens paient déjà.' : 'Plus aucune piste exploitable : nouveau scan du marché.', 1));
   }
 
-  // 1b. Diversify: the portfolio has an upsell, is plateauing, or has nothing left to push in paid ads
-  //     → open a new niche (one product in production at a time).
+  // 1b. Diversify on capacity and evidence: mains that lose money do not fill the portfolio, the envelope says how many
+  //     products the company can feed, and a comfortable cash position keeps the production going.
   const mains = live.filter((p) => !isUpsellProduct(w, p.id));
-  if ((live.length || products.some((p) => p.status === 'paused')) && !building.length && mains.length < 3 && !open('scan_trends') && !open('pick_opportunity') && !budget.survival && w.status !== 'bankrupt') {
-    const lastCreated = Math.max(0, ...products.map((p) => p.createdDay));
-    const settled = mains.every((p) => {
+  const profits14 = recentProfits(w, LOSS_WINDOW_DAYS);
+  const profits7 = recentProfits(w, 7);
+  const launchedLately = (p: Product) => (p.launchedDay ?? day) > day - 7;
+  const earning = mains.filter((p) => launchedLately(p) || (profits14.get(p.id) ?? 0) > 0);
+  const capacity = clamp(Math.floor(budget.adCap / AD_ROOM_PER_MAIN), 1, MAX_MAINS);
+  const comfortable = !budget.survival && !budget.bankrupt && budget.cash >= w.scenario.startingCash && (budget.runwayDays === null || budget.runwayDays >= COMFORTABLE_RUNWAY_DAYS);
+  const inProduction = building.some((p) => !isUpsellProduct(w, p.id));
+  if ((live.length || products.some((p) => p.status === 'paused')) && !inProduction && earning.length < capacity && !open('scan_trends') && !open('pick_opportunity') && !budget.survival && w.status !== 'bankrupt') {
+    const lastCreated = Math.max(0, ...products.filter((p) => !isUpsellProduct(w, p.id)).map((p) => p.createdDay));
+    const sinceLast = day - lastCreated;
+    const settled = earning.every((p) => {
       const m7 = productMetrics(w, p.id, Math.max(1, day - 6));
       const mature = (p.launchedDay ?? day) <= day - 7;
       return p.upsellProductId !== null || (mature && (m7.spend > 0 ? m7.roas < 1.2 : m7.sales < 5));
     });
     // Nothing can take paid ads now or soon (all paused, disliked or "ads-dead"): do not wait 8 days.
     const nothingToPush = !acquisitionCandidates(w).some((c) => !c.block || !c.block.hard);
-    if ((day - lastCreated >= 8 && settled) || (nothingToPush && day - lastCreated >= 4)) {
-      const excluded = excludedNiches(ctx, { includeActive: true });
+    const losing = mains.find((p) => !launchedLately(p) && (profits7.get(p.id) ?? 0) < 0);
+    const why = nothingToPush && sinceLast >= REPLACE_NICHE_DAYS ? 'Plus rien à pousser en pub : on ouvre une nouvelle niche.'
+      : sinceLast >= 8 && settled ? 'Le portefeuille plafonne : on ouvre une nouvelle niche pour ne pas dépendre d’un seul produit.'
+        : comfortable && losing && sinceLast >= REPLACE_NICHE_DAYS ? `« ${short(losing.title, 40)} » perd de l'argent depuis une semaine et la trésorerie suit : on prépare la relève.`
+          : comfortable && sinceLast >= GROWTH_NICHE_DAYS ? `Trésorerie confortable (${eur(budget.cash)}), ${earning.length} produit(s) rentable(s) pour ${capacity} possibles : on lance le suivant.` : null;
+    const excluded = excludedNiches(ctx, { includeActive: true });
+    const untested = w.company.research.trends.filter((t) => !excluded.includes(t.nicheId)).length > 0 || !w.company.research.trends.length;
+    if (why && untested) {
       const shortlist = w.company.research.shortlist.filter((id) => !excluded.includes(id));
-      const why = 'Le portefeuille plafonne : on ouvre une nouvelle niche pour ne pas dépendre d’un seul produit.';
       if (shortlist.length) items.push(planItem('pick_opportunity', {}, why, 2, 'Choisir une nouvelle niche (diversification)'));
       else items.push(planItem('scan_trends', { chain: 'opportunity' }, why, 2, 'Scanner les tendances (diversification)'));
       notes.push('Diversification : nouvelle niche à l’étude.');
     }
+  }
+
+  // 1c. The market moves: a weekly watch (trends, competitors of what we sell) while the company can look ahead.
+  const lastScan = Math.max(0, ...w.company.tasks.filter((t) => t.kind === 'scan_trends' && t.status !== 'cancelled' && t.status !== 'failed').map((t) => t.dayDone ?? t.dayCreated));
+  if (live.length && day - lastScan >= RESEARCH_REFRESH_DAYS && !open('scan_trends') && !budget.survival && w.status !== 'bankrupt') {
+    items.push(planItem('scan_trends', { refresh: true }, 'Veille hebdomadaire : nouvelles tendances, prix et concurrents.', 3, 'Rafraîchir la veille du marché'));
   }
 
   // 2. Production chains stuck without any open task → resume them.
@@ -352,20 +467,18 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   }
 
   // 3. Live products: acquisition, quality loop, pricing, upsell.
-  // Organic first: TikTok throttles reach beyond ~5 posts a day, so Tom gets 4 slots shared by priority
-  // (products without paid ads first, then the best sellers of the week), at most 2 per product. A product
-  // that fails the quality gate (bad rating, refunds) is never promoted.
+  // Organic first: TikTok throttles reach beyond ~5 posts a day, so Tom gets 4 slots: a guide just launched first (it
+  // has no numbers yet), then by what each product earned over two weeks, at most 2 per product. A product that fails
+  // the quality gate (bad rating, refunds) or loses money is never promoted.
   const promotable = live.filter((p) => !promotionBlock(w, p));
-  const postOrder = [...promotable].sort((a, b) => {
-    const ca = activeCampaigns(w, a.id).length ? 1 : 0, cb = activeCampaigns(w, b.id).length ? 1 : 0;
-    return ca - cb || productMetrics(w, b.id, Math.max(1, day - 6)).sales - productMetrics(w, a.id, Math.max(1, day - 6)).sales;
-  });
+  const justLaunched = (p: Product) => !isUpsellProduct(w, p.id) && launchedLately(p);
+  const postOrder = [...promotable].sort((a, b) => Number(justLaunched(b)) - Number(justLaunched(a)) || (profits14.get(b.id) ?? 0) - (profits14.get(a.id) ?? 0) || a.id.localeCompare(b.id));
   let postSlots = ORGANIC_POSTS_PER_DAY;
   for (let round = 0; round < ORGANIC_POSTS_PER_PRODUCT; round++) {
     for (const p of postOrder) {
       if (postSlots <= 0) break;
       const upsell = isUpsellProduct(w, p.id);
-      const wants = upsell ? 1 : budget.survival || !activeCampaigns(w, p.id).length ? ORGANIC_POSTS_PER_PRODUCT : 1;
+      const wants = upsell ? 1 : ORGANIC_POSTS_PER_PRODUCT;
       if (round >= wants) continue;
       items.push(planItem('post_organic', { productId: p.id, slot: round }, upsell ? 'Faire connaître la suite au même public.' : 'Parler du point de douleur gratuitement, tous les jours.', 3, titled('post_organic', p)));
       postSlots--;
@@ -393,11 +506,20 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
     const v = productMetrics(w, pid, since);
     const complaints = detectedComplaints(w, pid, since);
     const ratingBad = health.reviews.length >= 5 && health.rating > 0 && health.rating < 3.8;
-    const refundBad = v.sales >= 8 && v.refundRate > 0.1;
+    const refundBad = refundsWorthRework(v.refunds, v.sales);
     const reworking = isReworking(w, pid);
-    if ((complaints >= 3 || ratingBad || refundBad) && p.version < 3 && !reworking && day - since >= 2) {
-      const why = complaints >= 3 ? `${complaints} plaintes qualité remontées par le support` : ratingBad ? `note moyenne ${dec(health.rating, 1)}/5` : `taux de remboursement ${pct(v.refundRate)}`;
+    // A quality lesson of the retro is an order, as long as the numbers of the current version still back it.
+    const qualityLesson = lessonOf(ctx, learning.LESSON_KEYS.quality(pid), since);
+    const lessonBacked = !!qualityLesson && (refundBad || (health.reviews.length >= 3 && health.rating > 0 && health.rating < 3.8));
+    if ((complaints >= 3 || ratingBad || refundBad || lessonBacked) && p.version < 3 && !reworking && day - since >= 2) {
+      const why = complaints >= 3 ? `${complaints} plaintes qualité remontées par le support` : ratingBad ? `note moyenne ${dec(health.rating, 1)}/5` : lessonBacked ? `leçon du jour ${qualityLesson!.day}` : `taux de remboursement ${pct(v.refundRate)}`;
       items.push(reworkItem(ctx, p, `Boucle qualité : ${why} → v${p.version + 1}.`));
+    }
+    // A conversion lesson of the retro rewrites the page; it does not stay a sentence in a playbook.
+    const pageLesson = lessonOf(ctx, learning.LESSON_KEYS.page(pid), since);
+    const lastPage = Math.max(p.launchedDay ?? 0, ...w.company.tasks.filter((t) => t.kind === 'write_sales_page' && t.status === 'done' && t.input.productId === pid).map((t) => t.dayDone ?? 0));
+    if (pageLesson && pageLesson.day >= lastPage && day - lastPage >= PAGE_REWORK_GAP_DAYS && !reworking && !open('write_sales_page', pid)) {
+      items.push(planItem('write_sales_page', { productId: pid, reason: 'lesson', fixes: ['Reprendre les mots exacts des clients et traiter leurs objections avant qu’ils les posent.'] }, `Leçon du jour ${pageLesson.day} : ${short(pageLesson.insight, 110)}`, 2, titled('write_sales_page', p, ' (leçon de conversion)')));
     }
 
     const priceExp = w.company.experiments.find((e) => e.status === 'running' && e.dimension === 'price' && e.hypothesis.includes(p.title.slice(0, 30)));
@@ -410,7 +532,8 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
 
     const liked = p.stats.reviews.length < 3 || p.stats.rating >= 3.8;
     const profitable = all.sales >= 10 && liked && (m7.spend > 0 ? m7.roas >= 1.5 : m7.sales >= 5);
-    if (!upsell && !p.upsellProductId && profitable && !open('design_upsell', pid)) {
+    const noSubject = latestOutput(w, 'design_upsell', pid)?.noSubject === true; // already looked: nothing distinct to sell them
+    if (!upsell && !p.upsellProductId && profitable && !noSubject && !open('design_upsell', pid)) {
       items.push(planItem('design_upsell', { productId: pid }, `Produit rentable (ROAS 7 j ${Number.isFinite(m7.roas) ? dec(m7.roas) : '∞'}, ${all.sales} ventes) : la suite pour le même public.`, 2, titled('design_upsell', p)));
     }
   }
@@ -433,12 +556,16 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
     if (!order || order.refunded || order.chargeback) continue;
     if (!['rembours', 'chargeback', 'banque', 'litige'].some((k) => includesCI(`${m.subject} ${m.body}`, k))) continue;
     if (openTasks(w, (t) => t.kind === 'handle_refund' && t.input.orderId === order.id).length) continue;
-    items.push(planItem('handle_refund', { orderId: order.id, messageId: m.id, productId: order.productId, reason: 'Client escaladé : on rembourse avant le chargeback' }, 'Un chargeback coûte le montant + 15 € : on rembourse de bonne foi.', 1, `Rembourser ${eur(order.price)} avant chargeback`));
+    items.push(planItem('handle_refund', { orderId: order.id, messageId: m.id, productId: order.productId, reason: 'Client escaladé : on rembourse avant le chargeback' }, 'Un chargeback coûte le montant + 15 € : on rembourse de bonne foi.', 1, `Rembourser ${eur(sim.repayableLeft(order))} avant chargeback`));
     refunds++;
   }
 
   // 6. Analysis.
   if (day >= 2) items.push(planItem('daily_report', { day: day - 1 }, 'Raconter la veille en chiffres.', 3, `Rapport du jour ${day - 1}`));
+  // Rituals of the back office: the books of yesterday, the week's P&L, the follow-up of what is open.
+  if (day >= 2) items.push(planItem('reconcile_ledger', { day: day - 1 }, 'Chaque ligne de la veille doit coller aux ventes, à TikTok et aux remboursements.', 2, `Rapprocher le grand livre du jour ${day - 1}`));
+  if (day >= 8 && (day - 1) % 7 === 0) items.push(planItem('weekly_pnl', {}, 'Savoir ce que chaque produit rapporte vraiment, frais et remboursements compris.', 2, `P&L de la semaine ${Math.ceil((day - 1) / 7)} par produit`));
+  if (day >= 2) items.push(planItem('follow_missions', {}, 'Rien ne doit dormir : les missions du fondateur avancent, les tâches bloquées repartent.', 2));
   if (day >= 3 && !open('run_experiment') && (experimentCandidate(ctx) || w.company.experiments.some((e) => e.status === 'running'))) {
     items.push(planItem('run_experiment', {}, 'Transformer les intuitions en tests A/B mesurés.', 3));
   }
@@ -448,6 +575,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   const lead = live[0] ?? building[0];
   let focus: string;
   if (w.status === 'bankrupt') focus = 'Trésorerie négative : zéro dépense, support et organique uniquement';
+  else if (budget.outage) focus = 'Panne de paiement annoncée : pubs en pause, on avance sur le support et la production';
   else if (budget.survival) focus = 'Mode survie : organique, créateurs à la commission, aucune pub non rentable';
   else if (!live.length && !building.length) focus = 'Trouver une niche rentable (règle du un)';
   else if (!live.length && lead) focus = `Sortir « ${short(lead.title, 50)} » : la chaîne de production tourne`;
@@ -467,7 +595,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
 // ───────────────────────────── Plan merge & materialization ─────────────────────────────
 
 function itemKey(kind: TaskKind, input: Record<string, unknown>): string {
-  return [kind, input.productId, input.nicheId, input.campaignId, input.creatorId, input.orderId, strArr(input.messageIds).join(','), input.slot, input.reason, input.pipeline]
+  return [kind, input.productId, input.nicheId, input.campaignId, input.creatorId, input.orderId, strArr(input.messageIds).join(','), input.slot, input.reason, input.pipeline, input.day]
     .map((x) => (x === undefined || x === null ? '' : String(x))).join('|');
 }
 
@@ -520,6 +648,15 @@ export function mergePlans(ctx: RuntimeCtx, heuristic: DayPlan, engine: DayPlan 
 
 export interface MaterializeOpts { createdBy: Task['createdBy']; missionId: string | null; priority?: 1 | 2 | 3; assignee?: string | null }
 
+/** A rewrite waits for fresh research and is told what this version leaves out, or it would print the same guide again. */
+function planRewrite(ctx: RuntimeCtx, product: Product, v2: Task[], research: Task): Task[] {
+  const first = v2[0];
+  if (first) first.dependsOn.push(research.id);
+  const human = v2.find((t) => t.kind === 'humanize_pdf');
+  if (human && product.content) human.input.gaps = guideGaps(product.content, vocOf(ctx, product.nicheId));
+  return v2;
+}
+
 /** Turns plan items into tasks (dedup against open tasks; pipeline items expand into task graphs). */
 export function materialize(ctx: RuntimeCtx, items: DayPlanItem[], opts: MaterializeOpts): Task[] {
   const w = ctx.world;
@@ -531,8 +668,11 @@ export function materialize(ctx: RuntimeCtx, items: DayPlanItem[], opts: Materia
     const pOpts = { createdBy: opts.createdBy, missionId: opts.missionId, priority };
     const pipeline = str(input.pipeline);
     if (pipeline && product && product.status !== 'killed') {
-      if (pipeline === 'v2') created.push(...createV2Pipeline(ctx, product, strArr(input.feedback), pOpts));
-      else if (pipeline === 'resume') created.push(...resumePipeline(ctx, product, pOpts));
+      if (pipeline === 'v2') {
+        const v2 = createV2Pipeline(ctx, product, strArr(input.feedback), pOpts);
+        const listen = createTask(w, { kind: 'mine_pains', title: `Réécouter les clients avant la v${product.version} — ${short(product.audience, 40)}`, input: { nicheId: product.nicheId, depth: 'deep' }, createdBy: opts.createdBy, missionId: opts.missionId, priority });
+        created.push(listen, ...planRewrite(ctx, product, v2, listen));
+      } else if (pipeline === 'resume') created.push(...resumePipeline(ctx, product, pOpts));
       else if (pipeline === 'full' && !openTasksForProduct(ctx, product.id).length) created.push(...createProductPipeline(ctx, product, pOpts));
       else if (pipeline === 'upsell' && !openTasksForProduct(ctx, product.id).length) created.push(...createUpsellPipeline(ctx, product, pOpts));
       continue;
@@ -574,6 +714,9 @@ const MISSION_RULES: [RegExp, TaskKind][] = [
   [/mail|support|message|client/i, 'reply_inbox'],
   [/cr[ée]ateur|influenc|partenari|affili/i, 'find_creators'],
   [/rapport|kpi|chiffres|bilan/i, 'daily_report'],
+  [/compta|grand livre|rapprochement/i, 'reconcile_ledger'],
+  [/p&l|pnl|compte de r[ée]sultat|marge|tr[ée]sorerie/i, 'weekly_pnl'],
+  [/suivi|relance|en retard|bloqu/i, 'follow_missions'],
   [/test|exp[ée]rience|a\/b/i, 'run_experiment'],
   [/red team|critique|tuer|risque/i, 'red_team'],
 ];
@@ -595,10 +738,25 @@ export function keywordMission(ctx: RuntimeCtx, text: string): DayPlanItem[] {
   return out;
 }
 
-/** Fills the inputs a founder item needs (e.g. a launch needs creatives, a scan feeds a pick). */
-export function prepareFounderItem(ctx: RuntimeCtx, it: DayPlanItem): DayPlanItem {
+/**
+ * The founder's price decision: a stated amount, else one tier up or down when the text says so.
+ * The other price tasks follow the company's own rules (tests, playbook, bandit).
+ */
+function founderPrice(ctx: RuntimeCtx, input: Record<string, unknown>): void {
+  const stated = numOf(input.price);
+  const text = str(input.missionText) ?? '';
+  const current = productOf(ctx, input.productId)?.price ?? 0;
+  const tier = /baiss|diminu|r[ée]dui|moins cher/i.test(text) ? [...PRICE_TIERS].reverse().find((t) => t < current)
+    : /augment|hausse|monte|plus cher/i.test(text) ? PRICE_TIERS.find((t) => t > current) : undefined;
+  const price = stated && stated > 0 ? stated : tier;
+  if (price) { input.price = price; input.reason = 'fondateur'; }
+}
+
+/** Fills the inputs a founder item needs (e.g. a launch needs creatives, a scan feeds a pick only if a product is wanted). */
+export function prepareFounderItem(ctx: RuntimeCtx, it: DayPlanItem, wantsProduct = false): DayPlanItem {
   const input = { ...it.input };
-  if (it.kind === 'scan_trends' && input.chain === undefined) input.chain = 'opportunity';
+  if (it.kind === 'scan_trends') { if (wantsProduct) input.chain = 'opportunity'; else delete input.chain; }
+  if (it.kind === 'set_price') founderPrice(ctx, input);
   if (it.kind === 'write_ad_hooks' && input.produce === undefined) input.produce = 2;
   if (it.kind === 'red_team' && input.subject === undefined) input.subject = productOf(ctx, input.productId)?.content ? 'pdf' : 'idea';
   return { ...it, input, priority: 1, title: it.title.includes('fondateur') ? it.title : `${it.title} (mission du fondateur)` };

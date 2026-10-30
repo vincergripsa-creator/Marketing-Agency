@@ -2,8 +2,9 @@
 import { useMemo, useState } from 'react';
 import type { DeptId, Mission, Task, TaskStatus } from '../../../../shared/types';
 import { api } from '../../api';
-import { Avatar, Bar, cx, Empty, FileLink, Overlay, Pill, SectionTitle, Segmented } from '../common';
+import { Avatar, Bar, cx, DeliverableLink, Empty, Overlay, Pill, SectionTitle, Segmented } from '../common';
 import { useApp } from '../context';
+import { approvalAsk, doneTasksTotal, hasWaiver, redTeamView } from '../derive';
 import { fmtInt } from '../format';
 import { Icon } from '../icons';
 import {
@@ -46,6 +47,10 @@ export function TasksTab({ onClose }: { onClose(): void }) {
   }, [scoped, filter]);
 
   const deptIds = DEPT_ORDER.filter((d) => lookups.depts.size === 0 || lookups.depts.has(d));
+  // the snapshot keeps the latest finished tasks only: the count is the run's, the list says what it shows
+  const doneTotal = Math.max(doneTasksTotal(snapshot, dept) ?? 0, counts.done);
+  const doneHidden = doneTotal - counts.done;
+  const listShort = doneHidden > 0 && (filter === 'all' || filter === 'done');
 
   return (
     <Overlay title="État des tâches" subtitle={`Toute l’entreprise · jour ${snapshot?.day ?? 1}`} icon="list" onClose={onClose} size="md">
@@ -58,7 +63,7 @@ export function TasksTab({ onClose }: { onClose(): void }) {
           { id: 'running', label: 'En cours', count: counts.running },
           { id: 'review', label: 'En revue', count: counts.review },
           { id: 'waiting', label: 'En attente', count: counts.waiting },
-          { id: 'done', label: 'Terminées', count: counts.done },
+          { id: 'done', label: 'Terminées', count: doneTotal },
           { id: 'failed', label: 'Échouées', count: counts.failed },
         ]} />
         <select className="select" value={dept} onChange={(e) => { setDept(e.target.value as DeptId | 'all'); setLimit(PAGE); }} aria-label="Département">
@@ -67,8 +72,10 @@ export function TasksTab({ onClose }: { onClose(): void }) {
         </select>
       </div>
 
-      <SectionTitle>{TASK_SECTION[filter]} · {fmtInt(visible.length)}</SectionTitle>
-      {visible.length === 0 ? <Empty icon="list">{filter === 'running' ? 'Personne ne travaille en ce moment.' : 'Aucune tâche dans cette catégorie.'}</Empty> : null}
+      <SectionTitle right={listShort ? <span className="muted small">{fmtInt(counts.done)} terminées les plus récentes affichées sur {fmtInt(doneTotal)}</span> : null}>
+        {TASK_SECTION[filter]} · {fmtInt(filter === 'done' ? doneTotal : visible.length)}
+      </SectionTitle>
+      {visible.length === 0 ?<Empty icon="list">{filter === 'running' ? 'Personne ne travaille en ce moment.' : 'Aucune tâche dans cette catégorie.'}</Empty> : null}
       <div className="task-cards">
         {visible.slice(0, limit).map((t) => <TaskCard key={t.id} task={t} />)}
       </div>
@@ -84,7 +91,7 @@ const TASK_SECTION: Record<Filter, string> = {
 };
 
 function Approvals({ ids }: { ids: string[] }) {
-  const { lookups, demo, toast, refresh } = useApp();
+  const { lookups, activity, demo, toast, refresh } = useApp();
   const [busy, setBusy] = useState<string | null>(null);
   const decide = async (taskId: string, approved: boolean) => {
     if (demo) { toast({ tone: 'warn', title: 'Mode démo', text: 'La validation fondateur nécessite le serveur.' }); return; }
@@ -92,7 +99,7 @@ function Approvals({ ids }: { ids: string[] }) {
     try {
       const r = await api.approve(taskId, approved);
       if (!r.ok) throw new Error(r.message ?? 'Refus du serveur');
-      toast({ tone: approved ? 'good' : 'info', icon: approved ? 'check' : 'ban', title: approved ? 'Approuvé' : 'Refusé', text: lookups.tasks.get(taskId)?.title });
+      toast({ tone: approved ? 'good' : 'info', icon: approved ? 'check' : 'ban', title: approved ? 'Approuvé' : 'Refusé', text: approvalAsk(lookups.tasks.get(taskId), activity) ?? undefined });
       refresh();
     } catch (e) {
       toast({ tone: 'bad', title: 'Décision non enregistrée', text: e instanceof Error ? e.message : undefined });
@@ -105,15 +112,15 @@ function Approvals({ ids }: { ids: string[] }) {
       <SectionTitle right={<span className="pill tone-amber">{ids.length} en attente</span>}>Validation du fondateur</SectionTitle>
       {ids.map((id) => {
         const t = lookups.tasks.get(id);
-        const summary = t ? Object.entries(t.input ?? {}).filter(([, v]) => typeof v === 'string' || typeof v === 'number').slice(0, 4) : [];
+        const ask = approvalAsk(t, activity);
         return (
           <div key={id} className="approval-card">
             <div className="approval-main">
-              <strong>{t?.title ?? id}</strong>
+              <strong>{ask ?? id}</strong>
+              {t && t.title !== ask ? <span className="small">{t.title}</span> : null}
               <span className="muted small">
                 {t ? `${TASK_KIND_LABEL[t.kind] ?? t.kind} · ${deptName(lookups, t.dept)} · demandé par ${agentName(lookups, t.assignee ?? t.createdBy)}` : 'Tâche inconnue'}
               </span>
-              {summary.length ? <span className="approval-input">{summary.map(([k, v]) => `${k} : ${String(v)}`).join(' · ')}</span> : null}
             </div>
             <div className="approval-actions">
               <button type="button" className="btn btn-sm btn-good" disabled={busy === id} onClick={() => void decide(id, true)}><Icon name="check" size={13} /> Approuver</button>
@@ -127,7 +134,7 @@ function Approvals({ ids }: { ids: string[] }) {
 }
 
 function MissionsList({ missions }: { missions: Mission[] }) {
-  const { lookups, openAgent } = useApp();
+  const { lookups, openAgent, openProduct } = useApp();
   const [all, setAll] = useState(false);
   if (missions.length === 0) return null;
   const sorted = [...missions].sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || b.day - a.day);
@@ -141,6 +148,7 @@ function MissionsList({ missions }: { missions: Mission[] }) {
         const ts = m.taskIds.map((id) => lookups.tasks.get(id)).filter((t): t is Task => !!t);
         const done = ts.filter((t) => t.status === 'done').length;
         const owner = lookups.agents.get(m.ownerId);
+        const product = m.productId ? lookups.products.get(m.productId) : undefined;
         return (
           <div key={m.id} className={cx('mission-card', `mission-${m.status}`)}>
             <div className="mission-card-top">
@@ -152,6 +160,8 @@ function MissionsList({ missions }: { missions: Mission[] }) {
               J{m.day} · {m.from === 'founder' ? 'du fondateur' : `de ${agentName(lookups, m.from)}`} · pilote :{' '}
               {owner ? <button type="button" className="link-btn" onClick={() => openAgent(owner.id)}>{owner.name}</button> : '—'} · {done}/{ts.length} tâches
             </div>
+            {m.outcome ? <div className="mission-outcome small">{m.outcome}</div> : null}
+            {product ? <button type="button" className="link-btn small" onClick={() => openProduct(product.id)} title="Voir le produit"><Icon name="package" size={11} /> {product.title}</button> : null}
             {ts.length ? <Bar value={done / ts.length} height={4} color={m.status === 'failed' ? '#dc2626' : '#16a34a'} /> : null}
           </div>
         );
@@ -161,19 +171,23 @@ function MissionsList({ missions }: { missions: Mission[] }) {
 }
 
 export function TaskCard({ task }: { task: Task }) {
-  const { lookups, openAgent, runId, demo } = useApp();
+  const { lookups, openAgent } = useApp();
   const [expanded, setExpanded] = useState(false);
   const color = deptColor(lookups, task.dept);
   const who = task.assignee ? lookups.agents.get(task.assignee) : undefined;
   const reviewer = task.reviewer ? lookups.agents.get(task.reviewer) : undefined;
   const lastReview = task.reviews?.[task.reviews.length - 1];
   const deliverables = (task.deliverableIds ?? []).map((id) => lookups.deliverables.get(id)).filter((d) => !!d);
+  const redTeam = redTeamView(task);
   return (
     <article className="task-card" style={{ borderLeftColor: color }}>
       <div className="task-card-top">
         <span className="task-dept" style={{ color }}><span className="eyebrow-dot" style={{ background: color }} />{deptName(lookups, task.dept)}</span>
         <span className="muted small">{TASK_KIND_LABEL[task.kind] ?? task.kind}</span>
         {task.priority === 1 ? <Pill tone="red">Urgent</Pill> : null}
+        {redTeam?.verdict ? <Pill tone={redTeam.verdict === 'Go' ? 'green' : 'amber'}>{redTeam.verdict}</Pill> : null}
+        {redTeam?.cycle ? <Pill tone="violet" title="Passage de la Red Team sur une version retravaillée">Reprise {redTeam.cycle}</Pill> : null}
+        {hasWaiver(task) ? <Pill tone="amber" icon="alert" title="Validée après les reprises prévues : la réserve est notée pour la prochaine version">Dérogation</Pill> : null}
         <span className="flex1" />
         <Pill tone={TASK_STATUS_TONE[task.status]}>{TASK_STATUS_LABEL[task.status]}</Pill>
       </div>
@@ -198,7 +212,7 @@ export function TaskCard({ task }: { task: Task }) {
       {deliverables.length ? (
         <div className="chip-row">
           {deliverables.map((d) => (
-            <FileLink key={d!.id} runId={runId} path={d!.path} demo={demo} icon={DELIVERABLE_ICON[d!.kind] ?? 'file'}>{DELIVERABLE_LABEL[d!.kind] ?? d!.kind}</FileLink>
+            <DeliverableLink key={d!.id} path={d!.path} icon={DELIVERABLE_ICON[d!.kind] ?? 'file'}>{DELIVERABLE_LABEL[d!.kind] ?? d!.kind}</DeliverableLink>
           ))}
         </div>
       ) : null}

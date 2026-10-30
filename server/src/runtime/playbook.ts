@@ -96,7 +96,11 @@ export function addPlaybookRule(world: WorldState, agentId: AgentId, rule: strin
     if (idx >= 0) { list[idx] = rule; return true; }
   }
   list.push(rule);
-  while (list.length > MAX_PLAYBOOK_RULES) list.shift();
+  // A full playbook sheds its oldest advice first: a banned word stays banned.
+  while (list.length > MAX_PLAYBOOK_RULES) {
+    const advice = list.findIndex((r) => !RX.banned.test(r));
+    list.splice(advice >= 0 ? advice : 0, 1);
+  }
   return true;
 }
 

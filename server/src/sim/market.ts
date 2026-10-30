@@ -52,7 +52,7 @@ const HANDLE_PREFIX: Record<string, string[]> = {
   'Voyage': ['voyage', 'travel', 'baroudeuse', 'japon', 'sac.a.dos'],
 };
 
-/** Visible clues of a scammer. A creator showing one of these never delivers. */
+/** Explicit clues of a scammer. A creator showing one of these never delivers; a stealth scammer shows none. */
 const SCAM_FLAG_TEMPLATES: readonly ((rng: Rng, upfront: number) => string)[] = [
   (rng) => `abonnés achetés (pic de +${rng.int(25, 60)} 000 en ${rng.int(2, 4)} jours)`,
   (_, up) => `demande ${up} € d'avance avant toute discussion`,
@@ -77,9 +77,9 @@ export function isScamFlag(flag: string): boolean {
   return SCAM_FLAG_RE.some((re) => re.test(f));
 }
 
-/** Hidden truth of a creator, derived from its (visible) red flags. */
-export function isScammer(c: CreatorProfile): boolean {
-  return c.redFlags.some(isScamFlag);
+/** Hidden truth of a creator: an explicit red flag, or the niche's hidden list (stealth scammers show no flag). */
+export function isScammer(world: WorldState, c: CreatorProfile): boolean {
+  return c.redFlags.some(isScamFlag) || !!findNiche(world, c.nicheId)?.scamCreatorIds?.includes(c.id);
 }
 
 function handleFor(rng: Rng, niche: NicheTruth, used: Set<string>): string {
@@ -98,9 +98,25 @@ function handleFor(rng: Rng, niche: NicheTruth, used: Set<string>): string {
   return fallback;
 }
 
-export function makeCreator(rng: Rng, niche: NicheTruth, index: number, scam: boolean, used: Set<string>): CreatorProfile {
+/** Scammer without a red flag: only his public numbers give him away, and each of them alone stays ambiguous. */
+function makeStealthScammer(rng: Rng, id: string, handle: string, niche: NicheTruth): CreatorProfile {
+  const s = CREATORS.stealth;
+  const followers = Math.round(Math.min(400000, Math.max(8000, lognormal(rng, s.followersMedian, 0.7))) / 100) * 100;
+  const avgViews = Math.round(followers * uniform(rng, s.viewRate.min, s.viewRate.max));
+  const perK = uniform(rng, s.upfrontPerKViews.min, s.upfrontPerKViews.max);
+  return {
+    id, handle, nicheId: niche.id, followers, avgViews,
+    engagement: round2(uniform(rng, s.engagement.min, s.engagement.max) * 100) / 100,
+    askUpfront: Math.max(s.minUpfront, Math.round(((avgViews / 1000) * perK) / 10) * 10),
+    askCommission: rng.pick(s.commissions),
+    redFlags: rng.chance(CREATORS.softFlagShare) ? [rng.pick(SOFT_FLAGS)(rng)] : [],
+  };
+}
+
+export function makeCreator(rng: Rng, niche: NicheTruth, index: number, scam: boolean, used: Set<string>, stealth = false): CreatorProfile {
   const id = `crt_${niche.id}_${index}`;
   const handle = handleFor(rng, niche, used);
+  if (scam && stealth) return makeStealthScammer(rng, id, handle, niche);
   if (scam) {
     const followers = Math.round(Math.min(900000, Math.max(20000, lognormal(rng, 85000, 0.6))) / 100) * 100;
     const upfront = rng.int(15, 60) * 10;
@@ -130,14 +146,25 @@ export function makeCreator(rng: Rng, niche: NicheTruth, index: number, scam: bo
   };
 }
 
+/** Draws one creator of the niche at the difficulty's scam rates. Its id is the caller's to change before marking it. */
+export function rollCreator(rng: Rng, niche: NicheTruth, index: number, difficulty: Difficulty, used: Set<string>): { creator: CreatorProfile; scam: boolean } {
+  const scam = rng.chance(CREATORS.scamShare[difficulty] ?? 0.25);
+  const stealth = scam && rng.chance(CREATORS.stealthScamShare[difficulty] ?? 0.35);
+  return { creator: makeCreator(rng, niche, index, scam, used, stealth), scam };
+}
+
+/** Records the hidden truth of a scammer on its niche (never on the public profile). */
+export function markScammer(niche: NicheTruth, creatorId: string): void {
+  (niche.scamCreatorIds ??= []).push(creatorId);
+}
+
 function makeCreators(niche: NicheTruth, rng: Rng, difficulty: Difficulty, used: Set<string>): CreatorProfile[] {
   const n = rng.int(CREATORS.perNicheMin, CREATORS.perNicheMax);
-  const share = CREATORS.scamShare[difficulty] ?? 0.25;
-  const out: CreatorProfile[] = [];
-  for (let i = 1; i <= n; i++) out.push(makeCreator(rng, niche, i, rng.chance(share), used));
+  const rolls = Array.from({ length: n }, (_, i) => rollCreator(rng, niche, i + 1, difficulty, used));
   // at least one honest creator per niche, so commission deals are always possible
-  if (out.every(isScammer)) out[0] = makeCreator(rng, niche, 1, false, used);
-  return out;
+  if (rolls.every((r) => r.scam)) rolls[0] = { creator: makeCreator(rng, niche, 1, false, used), scam: false };
+  for (const r of rolls) if (r.scam) markScammer(niche, r.creator.id);
+  return rolls.map((r) => r.creator);
 }
 
 export function createMarketState(scenario: ScenarioConfig, rng: Rng): MarketState {

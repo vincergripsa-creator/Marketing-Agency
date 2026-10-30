@@ -1,9 +1,11 @@
-/** Server-sent events hub: snapshots after each tick, throttled activity batches, heartbeats. */
+/** Server-sent events hub: a light event per tick, throttled full snapshots and activity batches, heartbeats. */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Activity } from '../shared.js';
 
 export interface SnapshotSource {
   snapshotJson(god: boolean): string;
+  /** The stream's snapshot, when it is lighter than the one of GET /api/state. */
+  liveSnapshotJson?(god: boolean): string;
   tickJson(): string;
 }
 
@@ -27,13 +29,14 @@ export class SseHub {
   private activityTimer: NodeJS.Timeout | null = null;
   private snapshotTimer: NodeJS.Timeout | null = null;
   private lastSnapshotAt = 0;
+  private lastDay: number | null = null;
   private readonly heartbeat: NodeJS.Timeout;
   private readonly opts: Required<SseOptions>;
   private readonly source: SnapshotSource;
 
   constructor(source: SnapshotSource, opts: SseOptions = {}) {
     this.source = source;
-    this.opts = { activityThrottleMs: 250, heartbeatMs: 15_000, snapshotMinIntervalMs: 200, maxBufferedActivity: 300, ...opts };
+    this.opts = { activityThrottleMs: 250, heartbeatMs: 15_000, snapshotMinIntervalMs: 1000, maxBufferedActivity: 300, ...opts };
     this.heartbeat = setInterval(() => this.broadcastRaw(': ping\n\n', true), this.opts.heartbeatMs);
     this.heartbeat.unref?.();
   }
@@ -91,15 +94,20 @@ export class SseHub {
     this.broadcastRaw(sseFrame(JSON.stringify({ type: 'activity', activity: batch })));
   }
 
-  /** After each tick: a light 'tick' event right away, then a (coalesced) full snapshot. */
+  /** After each tick: a light 'tick' event right away, then a (coalesced) full snapshot, at once on a new day. */
   tick(): void {
     if (!this.clients.size) return;
+    let newDay = false;
     try {
-      this.broadcastRaw(sseFrame(this.source.tickJson()));
+      const json = this.source.tickJson();
+      this.broadcastRaw(sseFrame(json));
+      const { day } = JSON.parse(json) as { day?: number };
+      newDay = typeof day === 'number' && this.lastDay !== null && day !== this.lastDay;
+      if (typeof day === 'number') this.lastDay = day;
     } catch (err) {
       console.error('[sse] tick :', (err as Error).message);
     }
-    this.snapshotSoon();
+    this.snapshotSoon(newDay);
   }
 
   /** Coalesces snapshot broadcasts to at most one per `snapshotMinIntervalMs`. */
@@ -129,7 +137,7 @@ export class SseHub {
       let frame = cache.get(c.god);
       if (frame === undefined) {
         try {
-          frame = sseFrame(`{"type":"snapshot","snapshot":${this.source.snapshotJson(c.god)}}`);
+          frame = this.snapshotFrame(c.god);
         } catch (err) {
           console.error('[sse] snapshot :', (err as Error).message);
           return;
@@ -150,9 +158,14 @@ export class SseHub {
     this.clients.clear();
   }
 
+  private snapshotFrame(god: boolean): string {
+    const json = this.source.liveSnapshotJson ? this.source.liveSnapshotJson(god) : this.source.snapshotJson(god);
+    return sseFrame(`{"type":"snapshot","snapshot":${json}}`);
+  }
+
   private sendSnapshotTo(client: Client): void {
     try {
-      this.write(client, sseFrame(`{"type":"snapshot","snapshot":${this.source.snapshotJson(client.god)}}`));
+      this.write(client, this.snapshotFrame(client.god));
     } catch (err) {
       // No run mounted yet (startup): the next tick will deliver it.
       this.write(client, `: ${String((err as Error).message).replace(/\n/g, ' ')}\n\n`);

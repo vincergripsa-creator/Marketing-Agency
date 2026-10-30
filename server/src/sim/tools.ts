@@ -8,7 +8,7 @@ import type {
   AdFormat, Campaign, CampaignInputShape, CompetitorProduct, CreatorProfile, HookStyle, InboxMessage, NicheBrief, Partnership, ReplyOutcome,
   SupportReplyInput, TrendSignal, VoiceOfCustomer, WorldState,
 } from '../shared.js';
-import { ADS, ORGANIC, SCAM } from './balance.js';
+import { ADS, ORGANIC, RESEARCH, SCAM } from './balance.js';
 import { findBannedClaims } from './compliance.js';
 import { customerById, displayName } from './customers.js';
 import { cashOf, recordLedger } from './finance.js';
@@ -22,6 +22,9 @@ import { fmtEur, fmtPct, keyTokens, norm, short, subset, uniform } from './text.
 
 const fail = (message: string, id?: string): ToolResult => ({ ok: false, message, ...(id ? { id } : {}) });
 const ok = (message: string, id?: string): ToolResult => ({ ok: true, message, ...(id ? { id } : {}) });
+
+/** Share of the price given back by a goodwill gesture. */
+const GOODWILL_SHARE = 0.4;
 
 export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
   const m = () => world.market;
@@ -60,7 +63,7 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
       knowledge: { tips: [], steps: [], mistakes: [], examples: [], facts: [] }, priceAnchors: [], bannedClaims: [],
     };
     if (!n) return empty;
-    const r = depth === 'deep' ? 0.85 : 0.4;
+    const r = RESEARCH[depth];
     const v = n.voc;
     return {
       nicheId, depth,
@@ -282,7 +285,7 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
       if (upfront > 0) recordLedger(world, { type: 'creator_payout', amount: -upfront, memo: `Avance versée à @${creator.handle}`, ref: pt.id });
     };
 
-    if (isScammer(creator)) {
+    if (isScammer(world, creator)) {
       if (upfront >= 50) {
         pt.status = 'accepted';
         pay();
@@ -356,6 +359,20 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     switch (msg.intent) {
       case 'arnaque': {
         resolved = true;
+        if (order) {
+          // friendly fraud: a real buyer, a real payment. Paying costs real money; a refusal backed by the order's
+          // logs is cheap, and the better the reply the less likely the dispute at his bank.
+          if (r.action === 'refund' || r.action === 'discount_code') {
+            const memo = `Fausse réclamation payée : ${short(msg.subject, 50)}`;
+            const paid = r.action === 'refund' ? refundOrder(world, order, memo, 'scam_loss') : partialRefund(world, order, GOODWILL_SHARE, memo, 'scam_loss');
+            if (paid > 0) { consequence = 'scam_loss'; cost += paid; }
+            key = paid > 0 ? 'fraud_paid' : 'fraud_refused';
+          } else {
+            key = 'fraud_refused';
+            tryChargeback(SCAM.friendlyDisputeRefused * (1 - score / 100));
+          }
+          break;
+        }
         if (r.action === 'refund' || r.action === 'discount_code') {
           const loss = r.action === 'refund' ? scamAmount(msg, SCAM.defaultAmount) : round2((product?.price ?? 19) * SCAM.discountLossMultiplier);
           recordLedger(world, { type: 'scam_loss', amount: -loss, memo: `Arnaque au support : ${short(msg.subject, 50)}`, ref: msg.id });
@@ -372,7 +389,7 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
           if (r.action === 'refund') refund('Remboursement accordé à un troll');
           // Only verified buyers can rate the guide in the store: a fed troll who never bought it cannot
           // leave a store review, he comes back for more instead (the thread stays open, more support noise).
-          if (product && order && consequence === 'none' && reviewProduct(world, rng, product, customer, 1, 'troll')) consequence = 'bad_review';
+          if (consequence === 'none' && reviewProduct(world, rng, product, customer, 1, 'troll')) consequence = 'bad_review';
           else if (!order) resolved = false;
         }
         break;
@@ -380,12 +397,16 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
       case 'partenariat': resolved = true; key = 'partner_declined'; break;
       case 'compliment': {
         resolved = true; key = 'compliment_ok';
-        if (score >= 70 && product && rng.chance(0.35)) { reviewProduct(world, rng, product, customer, 5, 'product'); consequence = 'good_review'; }
+        if (score >= 70 && rng.chance(0.35) && reviewProduct(world, rng, product, customer, 5, 'product')) consequence = 'good_review';
         break;
       }
       case 'non_recu': {
         if (r.action === 'refund') { refund('Remboursement : PDF non reçu'); resolved = true; key = 'refund_ok'; }
-        else if (r.action === 'resend_link') { resolved = score >= 45; key = resolved ? 'link_ok' : 'unresolved'; }
+        else if (r.action === 'resend_link') {
+          resolved = score >= 45;
+          key = resolved ? 'link_ok' : 'unresolved';
+          if (resolved && order) order.downloads = (order.downloads ?? 0) + 1;
+        }
         else key = arch === 'karen' ? 'karen_rage' : 'unresolved';
         break;
       }
@@ -393,7 +414,8 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
         if (r.action === 'refund') { refund('Remboursement accordé par le support'); resolved = true; key = 'refund_ok'; }
         else if (r.action === 'discount_code') {
           const accept = rng.chance(arch === 'chasseur_de_remboursement' ? 0.1 : arch === 'karen' ? 0.2 : 0.5);
-          if (accept && order) { const c = partialRefund(world, order, 0.4, 'Geste commercial (remboursement partiel)'); cost += c; resolved = true; key = 'discount_ok'; }
+          const gesture = accept ? partialRefund(world, order, GOODWILL_SHARE, 'Geste commercial (remboursement partiel)') : 0; // one per order
+          if (gesture > 0) { cost += gesture; resolved = true; key = 'discount_ok'; }
           else { key = 'refund_refused'; tryChargeback(arch === 'menace_chargeback' || arch === 'chasseur_de_remboursement' ? 0.35 : 0.1); }
         } else {
           key = arch === 'karen' ? 'karen_rage' : 'refund_refused';
@@ -409,8 +431,8 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
       case 'plainte_qualite': {
         if (r.action === 'refund') { refund('Remboursement suite à une plainte qualité'); resolved = true; key = 'refund_ok'; }
         else if (r.action === 'discount_code') {
-          const c = partialRefund(world, order, 0.4, 'Geste commercial suite à une plainte qualité'); cost += c;
-          resolved = score >= 55; key = resolved ? 'discount_ok' : 'unresolved';
+          const c = partialRefund(world, order, GOODWILL_SHARE, 'Geste commercial suite à une plainte qualité'); cost += c;
+          resolved = (c > 0 || !order) && score >= 55; key = resolved ? 'discount_ok' : 'unresolved'; // no second gesture on an order
         } else { resolved = r.action === 'none' && score >= 70; key = resolved ? 'answer_ok' : arch === 'karen' ? 'karen_rage' : 'angry'; }
         break;
       }
@@ -427,12 +449,12 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
       }
     }
 
-    if (consequence === 'none' && arch === 'karen' && score < 50 && product) {
-      if (reviewProduct(world, rng, product, customer, rng.chance(0.7) ? 1 : 2, 'support_bad')) { consequence = 'bad_review'; key = 'karen_rage'; }
+    if (consequence === 'none' && arch === 'karen' && score < 50 && reviewProduct(world, rng, product, customer, rng.chance(0.7) ? 1 : 2, 'support_bad')) {
+      consequence = 'bad_review';
+      key = 'karen_rage';
     }
-    if (resolved && score >= 80 && msg.mood < -0.3 && product && rng.chance(0.25)) {
-      reviewProduct(world, rng, product, customer, rng.chance(0.6) ? 5 : 4, 'support_good');
-      if (consequence === 'none') consequence = 'good_review';
+    if (resolved && score >= 80 && msg.mood < -0.3 && rng.chance(0.25) && reviewProduct(world, rng, product, customer, rng.chance(0.6) ? 5 : 4, 'support_good') && consequence === 'none') {
+      consequence = 'good_review';
     }
 
     const final = consequence as ReplyOutcome['consequence']; // also set inside refund()/tryChargeback()
@@ -456,9 +478,10 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     if (!order) return fail('Commande introuvable.');
     if (order.chargeback) return fail('Cette commande fait déjà l\'objet d\'un litige bancaire.', order.id);
     if (order.refunded) return fail('Commande déjà remboursée.', order.id);
-    const amount = refundOrder(world, order, `Remboursement : ${short(reason || 'demande client', 60)}`);
+    const falseClaim = m().inbox.some((x) => x.orderId === order.id && x.intent === 'arnaque');
+    const amount = refundOrder(world, order, `Remboursement : ${short(reason || 'demande client', 60)}`, falseClaim ? 'scam_loss' : 'refund');
     for (const msg of m().inbox) {
-      if (msg.orderId === order.id && (msg.status === 'open' || msg.status === 'replied') && ['remboursement', 'menace_chargeback', 'plainte_qualite', 'non_recu', 'bug_paiement'].includes(msg.intent)) {
+      if (msg.orderId === order.id && (msg.status === 'open' || msg.status === 'replied') && ['remboursement', 'menace_chargeback', 'plainte_qualite', 'non_recu', 'bug_paiement', 'arnaque'].includes(msg.intent)) {
         msg.status = 'resolved';
         msg.resolution = `Remboursement effectué (${fmtEur(amount)}).`;
       }

@@ -2,7 +2,7 @@
   "name": "marketing-agency",
   "private": true,
   "version": "0.1.0",
-  "description": "Agence marketing autonome en pixel art : 30 agents IA qui créent, vendent et font la pub de PDF à forte valeur ajoutée, entraînés dans un marché virtuel avant le passage au réel.",
+  "description": "Agence marketing autonome en pixel art : 31 agents IA qui créent, vendent et font la pub de PDF à forte valeur ajoutée, entraînés dans un marché virtuel avant le passage au réel.",
   "type": "module",
   "workspaces": [
     "server",

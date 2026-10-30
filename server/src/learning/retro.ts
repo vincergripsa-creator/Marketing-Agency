@@ -1,19 +1,20 @@
 /** Evening retro: KPI → bandit rewards → experiments → lessons (dedup) → playbooks → brain notes → activity feed. */
 import type { BrainNote, BrainVault, ContentEngine, LessonDraft, MindContext } from '../contracts.js';
-import type { AgentState, DailyKpi, Experiment, Lesson, WorldState } from '../shared.js';
+import type { AgentState, DailyKpi, Experiment, Lesson, WorldEvent, WorldState } from '../shared.js';
 import { clamp, emit, nextId } from '../core/index.js';
+import { isAnnouncedOutage } from '../sim/outage.js';
 import { armStats, HYPE_ARMS, nearestArm, PRICE_ARMS, rewardArm } from './bandits.js';
 import {
   addRow, adRows, ctrOf, cvrOf, emptyAgg, indexWorld, nicheName, priceOnDay, productOfRow, refundsOnDay, retroAgent, roasOf,
   type FunnelAgg,
 } from './data.js';
 import { updateExperiments, experimentValueKind } from './experiments.js';
-import { detectLessons, type HeuristicDraft } from './heuristics.js';
+import { detectLessons, EXPERIMENT_KEY_PREFIX, type HeuristicDraft } from './heuristics.js';
 import { computeDailyKpi, upsertKpi } from './kpi.js';
 import { basenameOf } from './markdown.js';
 import {
-  addRule, agentNoteName, agentNotePath, agentsForLesson, hasMachineRule, lessonLink, lessonTitle, quotedTerms, replaceRuleEverywhere,
-  TOPIC_DEPTS, writePlaybookNotes,
+  addRule, agentNoteName, agentNotePath, agentsForLesson, directiveSlot, hasMachineRule, lessonLink, lessonTitle, quotedTerms, replaceRuleEverywhere,
+  syncDirective, TOPIC_DEPTS, writePlaybookNotes,
 } from './playbooks.js';
 import {
   DIMENSION_LABELS, fmtEur, fmtNum, fmtPct, fmtRatio, fold, jaccard, pad3, plural, round, safeDiv, shorten, slugify,
@@ -40,6 +41,7 @@ export const WORN_CREATIVE_WEIGHT = 0.25;
  * Applies the shared-convention rewards for one day (hook_style, ad_format, price, hype, niche).
  * Idempotent per day through CompanyState.lastRetroDay (survives save/reload): a second retro the
  * same evening, or a retro replayed after loading a save, never double-counts the rewards.
+ * An announced outage day rewards nothing: adRows leaves it out, it says nothing about a hook, a price or a niche.
  */
 export function applyDailyRewards(world: WorldState, day: number): number {
   const last = Number(world.company.lastRetroDay);
@@ -213,12 +215,51 @@ export function conclusionOf(insight: string): string {
   return `${comparable(head)}|${quotedTerms(head).join('|')}`;
 }
 
+function isExperimentKey(key: string): boolean {
+  return key.startsWith(EXPERIMENT_KEY_PREFIX);
+}
+
+function isExperimentLesson(l: Lesson): boolean {
+  return isExperimentKey(lessonKeyOf(l));
+}
+
 export function findDuplicateLesson(lessons: readonly Lesson[], d: Pick<HeuristicDraft, 'key' | 'topic' | 'insight'>): Lesson | undefined {
   const key = slugify(d.key, 50);
   return (
     lessons.find((l) => l.topic === d.topic && lessonKeyOf(l) === key) ??
-    lessons.find((l) => l.topic === d.topic && sameQuoted(l.insight, d.insight) && jaccard(tokenSet(l.insight), tokenSet(d.insight)) >= 0.6)
+    // an observation and an experiment stay two lessons, even in almost the same words: see settleDirectiveSlots
+    lessons.find((l) => l.topic === d.topic && isExperimentLesson(l) === isExperimentKey(key) && sameQuoted(l.insight, d.insight) && jaccard(tokenSet(l.insight), tokenSet(d.insight)) >= 0.6)
   );
+}
+
+/**
+ * One active lesson per directive slot (same directive, same niche), so contradictory rules never coexist: a concluded
+ * experiment outranks an observation, then comes the lesson touched tonight, then the strongest. The others leave
+ * world.company.lessons for retiredLessons, marked with what replaced them.
+ */
+function settleDirectiveSlots(world: WorldState, day: number, touched: ReadonlySet<Lesson>): { lesson: Lesson; by: Lesson }[] {
+  const bySlot = new Map<string, Lesson[]>();
+  for (const l of world.company.lessons) {
+    const slot = directiveSlot(l.insight);
+    if (slot) bySlot.set(slot, [...(bySlot.get(slot) ?? []), l]);
+  }
+  const retired: { lesson: Lesson; by: Lesson }[] = [];
+  for (const group of bySlot.values()) {
+    if (group.length < 2) continue;
+    const [by, ...losers] = [...group].sort((a, b) =>
+      Number(isExperimentLesson(b)) - Number(isExperimentLesson(a)) || Number(touched.has(b)) - Number(touched.has(a)) || b.confidence - a.confidence || b.day - a.day);
+    for (const lesson of losers) {
+      lesson.supersededBy = by!.id;
+      lesson.retiredDay = day;
+      retired.push({ lesson, by: by! });
+    }
+  }
+  if (retired.length) {
+    const out = new Set(retired.map((r) => r.lesson));
+    world.company.lessons = world.company.lessons.filter((l) => !out.has(l));
+    (world.company.retiredLessons ??= []).push(...out);
+  }
+  return retired;
 }
 
 // ───────────────────────────── helpers ─────────────────────────────
@@ -302,9 +343,12 @@ function lessonNoteBody(world: WorldState, l: Lesson, links: string[], history: 
   const agents = (world.company.agents ?? []).filter((a) => l.appliesTo.includes(a.id));
   const source = (world.company.agents ?? []).find((a) => a.id === l.source)?.name ?? l.source;
   const hist = history.length ? ['', LESSON_HISTORY_SECTION, ...history.slice(-LESSON_HISTORY_MAX)] : [];
+  const by = l.supersededBy ? (world.company.lessons ?? []).find((x) => x.id === l.supersededBy) : undefined;
+  const retired = l.supersededBy ? [`**Leçon retirée le jour ${l.retiredDay ?? '?'}**${by ? ` : remplacée par ${lessonLink(by)}` : ''}. Elle ne s'applique plus.`, ''] : [];
   return [
     `> ${l.insight}`,
     '',
+    ...retired,
     '## Preuves',
     l.evidence || '_Pas de chiffre associé._',
     '',
@@ -341,11 +385,62 @@ function historyLine(world: WorldState, l: Lesson, day: number, revised: boolean
   return `- **${revised ? 'Révision' : 'Confirmation'} — jour ${day}** ([[jour-${pad3(day)}]]) : ${shorten(l.evidence || 'sans chiffre', 220)} · confiance ${fmtPct(l.confidence, 0)}${who}`;
 }
 
+// ───────────────────────────── external incidents ─────────────────────────────
+
+const incidentNoteName = (day: number): string => `incident-externe-jour-${pad3(day)}`;
+
+function outageEvent(world: WorldState, day: number): WorldEvent | undefined {
+  return (world.market?.events ?? []).find((e) => e.kind === 'platform_outage' && (e.refs?.day ?? e.day + 1) === day);
+}
+
+function outageLine(world: WorldState, day: number): string {
+  const ev = outageEvent(world, day);
+  return `Incident externe : panne de paiement du jour ${day}${ev ? `, annoncée le jour ${ev.day}` : ''}. Aucune vente n'était possible, ce jour ne dit rien de nos pubs, de nos prix ni de nos guides.`;
+}
+
+/** Memo of an outage day: what happened, never a reading of the day's numbers as a performance. */
+function outageMemo(world: WorldState, k: DailyKpi): string {
+  return `${outageLine(world, k.day)} ${k.adSpend > 0 ? `${fmtEur(k.adSpend)} de pub dépensés sans vente possible` : 'Pubs en pause, aucune dépense pub'}, trésorerie ${fmtEur(k.cash)}.`;
+}
+
+/** An announced outage leaves an « incident externe » note instead of a performance lesson. */
+async function writeOutageNote(world: WorldState, brain: BrainVault, day: number): Promise<void> {
+  const rows = (world.market?.adStats ?? []).filter((r) => r.day === day);
+  const agg = rows.reduce((a, r) => addRow(a, r), emptyAgg());
+  const ev = outageEvent(world, day);
+  await brain.write({
+    path: `journal/${incidentNoteName(day)}.md`,
+    title: `Incident externe — panne de paiement du jour ${day}`,
+    tags: ['incident', 'incident-externe'],
+    day,
+    body: [
+      `> ${outageLine(world, day)}`,
+      '',
+      "## Ce qui s'est passé",
+      ev?.description ?? 'Le prestataire de la boutique a annoncé une panne du paiement.',
+      '',
+      '## Impact mesuré',
+      `- Pub dépensée pendant la panne : ${fmtEur(agg.spend)}`,
+      `- Visiteurs arrivés sur une boutique sans paiement : ${fmtNum(agg.landingViews)}`,
+      '- Ventes possibles : aucune',
+      '',
+      "## Ce qu'on en fait",
+      '- Ce jour est exclu des fenêtres de conversion, de ROAS et de niche, des expériences et des bandits.',
+      "- Aucune leçon de performance n'en est tirée : une panne ne juge ni nos pubs, ni nos prix, ni nos guides.",
+      ...(agg.spend > 0 ? [`- Les ${fmtEur(agg.spend)} de pub étaient évitables : la panne était annoncée, les campagnes devaient être en pause ce jour-là.`] : []),
+      '',
+      `Liens : [[jour-${pad3(day)}]] · [[Budget et garde-fous]]`,
+    ].join('\n'),
+  });
+}
+
 // ───────────────────────────── runRetro ─────────────────────────────
 
 export async function runRetro(world: WorldState, engine: ContentEngine, brain: BrainVault, incidents: string[]): Promise<Lesson[]> {
   const day = world.day;
   const incidentLines = (Array.isArray(incidents) ? incidents : []).map((s) => String(s ?? '').trim()).filter(Boolean);
+  const outage = isAnnouncedOutage(world, day);
+  if (outage) incidentLines.unshift(outageLine(world, day));
   world.company.lessons ??= [];
   world.company.playbooks ??= {};
 
@@ -376,7 +471,7 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
   try {
     engineDrafts = await engine.extractLessons(
       {
-        kpis: (world.company.kpis ?? []).slice(-14),
+        kpis: (world.company.kpis ?? []).slice(-14).filter((k) => !isAnnouncedOutage(world, k.day)),
         experiments: [...concluded, ...(world.company.experiments ?? []).filter((e) => e.status === 'running')],
         incidents: incidentLines,
         heuristicLessons: heuristics.map(toLessonDraft),
@@ -386,14 +481,16 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
   } catch {
     engineDrafts = null; // engine failure → heuristic lessons only
   }
+  // a concluded experiment only speaks once: it comes right after the critical lessons, before the evening's cap
   const finalDrafts = reconcileDrafts(heuristics, engineDrafts).sort(
-    (a, b) => Number(b.critical) - Number(a.critical) || b.confidence - a.confidence,
+    (a, b) => Number(b.critical) - Number(a.critical) || Number(isExperimentKey(b.key)) - Number(isExperimentKey(a.key)) || b.confidence - a.confidence,
   );
 
   // (f) persist lessons (dedup: same key → confidence update) + (g) playbooks
   const created: { lesson: Lesson; draft: HeuristicDraft }[] = [];
   const updated: { lesson: Lesson; draft: HeuristicDraft; revised: boolean; reached: string[] }[] = [];
   const changedAgents = new Set<string>();
+  const touched = new Set<Lesson>();
   /** `onlyNewAgents`: a confirmed lesson only reaches agents it never reached (no ping-pong between singleton rules). */
   const applyToPlaybooks = (lesson: Lesson, d: HeuristicDraft, onlyNewAgents = false): void => {
     const targets = agentsForLesson(world, lesson.topic, d.extraDepts, d.appliesToRoles, d.routeOnly);
@@ -406,9 +503,13 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
   };
 
   for (const d of finalDrafts) {
+    // what an experiment concluded on a directive and a niche stays concluded: an observation does not reopen it
+    const slot = directiveSlot(d.insight);
+    if (slot && !isExperimentKey(slugify(d.key, 50)) && world.company.lessons.some((l) => isExperimentLesson(l) && directiveSlot(l.insight) === slot)) continue;
     const dup = findDuplicateLesson(world.company.lessons, d);
     if (dup) {
       const revised = conclusionOf(dup.insight) !== conclusionOf(d.insight);
+      touched.add(dup);
       if (!revised && dup.evidence === d.evidence && dup.insight === d.insight) continue; // nothing new since last time
       dup.key ??= slugify(d.key, 50);
       if (revised) {
@@ -444,8 +545,26 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
       notePath: `lecons/jour-${pad3(day)}-${slugify(d.key, 50)}.md`,
     };
     world.company.lessons.push(lesson);
+    touched.add(lesson);
     applyToPlaybooks(lesson, d);
     created.push({ lesson, draft: d });
+  }
+
+  // directives: one lesson per slot, and its rule is the only value left in any playbook
+  const retired = settleDirectiveSlots(world, day, touched);
+  for (const { lesson, by } of retired) {
+    for (const id of replaceRuleEverywhere(world, lesson.insight, by.insight)) {
+      changedAgents.add(id);
+      by.appliesTo = unique([...by.appliesTo, id]);
+    }
+    touched.add(by);
+  }
+  for (const l of touched) {
+    if (!world.company.lessons.includes(l)) continue; // retired just above: its value must not come back
+    for (const id of syncDirective(world, l.insight)) {
+      changedAgents.add(id);
+      l.appliesTo = unique([...l.appliesTo, id]);
+    }
   }
 
   // brain notes — a failing disk write is reported in the feed but never aborts the retro
@@ -457,7 +576,7 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
       failures.push(`${what} (${err instanceof Error ? err.message : String(err)})`);
     }
   };
-  const writeLessonNote = (lesson: Lesson, draft: HeuristicDraft, history: readonly string[] = [], tags: readonly string[] = []) =>
+  const writeLessonNote = (lesson: Lesson, draft: Pick<HeuristicDraft, 'tags' | 'links'>, history: readonly string[] = [], tags: readonly string[] = []) =>
     brain.write({
       path: lesson.notePath,
       title: lessonTitle(lesson),
@@ -466,10 +585,11 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
       day,
     });
 
-  for (const { lesson, draft } of created) await safely(lesson.notePath, () => writeLessonNote(lesson, draft));
+  const stillActive = (x: { lesson: Lesson }): boolean => world.company.lessons.includes(x.lesson);
+  for (const { lesson, draft } of created.filter(stillActive)) await safely(lesson.notePath, () => writeLessonNote(lesson, draft));
   // a confirmed / revised lesson note is rewritten with the current insight and numbers on top and a short,
   // capped history below (instead of an endless stack of appended blocks)
-  for (const { lesson, draft, revised, reached } of updated) {
+  for (const { lesson, draft, revised, reached } of updated.filter(stillActive)) {
     await safely(lesson.notePath, async () => {
       const existing = await brain.read(lesson.notePath);
       const own = existing && existing.path === lesson.notePath ? existing : null;
@@ -477,6 +597,15 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
       return writeLessonNote(lesson, draft, history, own?.tags ?? []);
     });
   }
+  for (const { lesson, by } of retired) {
+    await safely(lesson.notePath, async () => {
+      const existing = await brain.read(lesson.notePath);
+      const own = existing && existing.path === lesson.notePath ? existing : null;
+      const line = `- **Retirée — jour ${day}** ([[jour-${pad3(day)}]]) : remplacée par ${lessonLink(by)}`;
+      return writeLessonNote(lesson, { tags: ['retiree'], links: [] }, [...lessonHistory(own?.body), line], own?.tags ?? []);
+    });
+  }
+  if (outage) await safely(`journal/${incidentNoteName(day)}.md`, () => writeOutageNote(world, brain, day));
   if (created.length) {
     await safely('lecons/_index.md', () =>
       brain.append('lecons/_index.md', created.map(({ lesson }) => `- ${lessonLink(lesson)} — jour ${day}, confiance ${fmtPct(lesson.confidence, 0)}`).join('\n'), day),
@@ -495,12 +624,14 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
   upsertKpi(world, kpi);
 
   // (h) journal of the day
-  const newLessons = created.map((c) => c.lesson);
-  let memo = '';
+  const newLessons = created.filter(stillActive).map((c) => c.lesson);
+  let memo = outage ? outageMemo(world, kpi) : '';
   try {
-    memo = String(
-      (await engine.dailyMemo({ day, kpi, notes: [...incidentLines, ...newLessons.map((l) => `Leçon : ${l.insight}`), ...concluded.map((e) => `Expérience conclue : ${e.hypothesis} → ${e.winner ?? 'sans gagnant'}`)] }, ctx)) ?? '',
-    ).trim();
+    if (!outage) {
+      memo = String(
+        (await engine.dailyMemo({ day, kpi, notes: [...incidentLines, ...newLessons.map((l) => `Leçon : ${l.insight}`), ...concluded.map((e) => `Expérience conclue : ${e.hypothesis} → ${e.winner ?? 'sans gagnant'}`)] }, ctx)) ?? '',
+      ).trim();
+    }
   } catch {
     memo = '';
   }
@@ -508,11 +639,16 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
   const journalPath = `journal/jour-${pad3(day)}.md`;
   const section: string[] = [JOURNAL_SECTION, '', ...memo.split('\n').map((l) => `> ${l}`), '', '### Chiffres du jour', '', kpiTable(kpi), '', '### Incidents'];
   section.push(...(incidentLines.length ? incidentLines.map((i) => `- ${i}`) : ['- Aucun incident notable.']));
+  if (outage) section.push(`- Note d'incident : [[${incidentNoteName(day)}]]`);
   section.push('', '### Leçons du jour');
   section.push(...(newLessons.length ? newLessons.map((l) => `- ${lessonLink(l)} — ${l.evidence ? shorten(l.evidence, 160) : 'sans chiffre'} _(confiance ${fmtPct(l.confidence, 0)})_`) : ['- Pas de nouvelle leçon aujourd’hui.']));
   if (updated.length) {
     section.push('', '### Leçons confirmées ou révisées');
     section.push(...updated.map(({ lesson, revised }) => `- ${lessonLink(lesson)} — ${revised ? 'révisée' : 'confirmée'}, confiance ${fmtPct(lesson.confidence, 0)}`));
+  }
+  if (retired.length) {
+    section.push('', '### Leçons retirées');
+    section.push(...retired.map(({ lesson, by }) => `- ${lessonLink(lesson)} — remplacée par ${lessonLink(by)}`));
   }
   const running = (world.company.experiments ?? []).filter((e) => e.status === 'running');
   if (concluded.length || running.length) {
@@ -560,7 +696,9 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
   if (failures.length) {
     emit(world, { agentId: nora.id, kind: 'thought', text: shorten(`${nora.name} n'arrive pas à écrire dans le cerveau : ${failures.join(' ; ')}`, 160) });
   }
+  if (outage) emit(world, { agentId: nora.id, kind: 'brain_write', text: `${nora.name} classe le jour ${day} en incident externe : la panne ne compte pas dans les chiffres de performance.` });
   for (const l of newLessons) emit(world, { agentId: nora.id, kind: 'lesson', text: `Nouvelle leçon : ${shorten(l.insight, 110)}` });
+  for (const { lesson } of retired) emit(world, { agentId: nora.id, kind: 'lesson', text: `Leçon retirée, une expérience ou un chiffre plus récent la remplace : ${shorten(lesson.insight, 90)}` });
   for (const e of concluded) {
     emit(world, {
       agentId: nora.id,

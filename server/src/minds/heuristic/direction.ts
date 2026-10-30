@@ -14,6 +14,7 @@ export const KIND_DEPT: Record<TaskKind, DeptId> = {
   write_ad_hooks: 'growth', produce_ad: 'growth', launch_campaign: 'growth', optimize_ads: 'growth', post_organic: 'growth',
   reply_inbox: 'support', handle_refund: 'support', find_creators: 'partenariats', negotiate_deal: 'partenariats',
   daily_report: 'analyse', run_experiment: 'analyse', budget_review: 'finance', retro: 'rh', performance_review: 'rh',
+  reconcile_ledger: 'finance', weekly_pnl: 'finance', follow_missions: 'direction',
 };
 
 export const KIND_TITLE: Record<TaskKind, string> = {
@@ -26,6 +27,7 @@ export const KIND_TITLE: Record<TaskKind, string> = {
   post_organic: 'Publier un TikTok organique', reply_inbox: 'Répondre à la boîte mail', handle_refund: 'Traiter les remboursements',
   find_creators: 'Trouver des créateurs', negotiate_deal: 'Négocier avec un créateur', daily_report: 'Rapport chiffré', run_experiment: 'Lancer une expérience A/B',
   budget_review: 'Revue du budget', retro: 'Rétro : leçons du jour', performance_review: 'Revue RH des agents',
+  reconcile_ledger: 'Rapprocher le grand livre', weekly_pnl: 'Sortir le P&L par produit', follow_missions: 'Suivre les missions et relancer',
 };
 
 const ROUTES: { re: RegExp; kinds: TaskKind[] }[] = [
@@ -50,6 +52,9 @@ const ROUTES: { re: RegExp; kinds: TaskKind[] }[] = [
   { re: /rapport|bilan|kpi|chiffres|stats|tableau de bord/, kinds: ['daily_report'] },
   { re: /experience|test a\/?b|\bteste(r|z)?\b|a\/b/, kinds: ['run_experiment'] },
   { re: /budget|depense|tresorerie|finance|cash|runway/, kinds: ['budget_review'] },
+  { re: /compta|grand livre|rapprochement|ecart/, kinds: ['reconcile_ledger'] },
+  { re: /p&l|pnl|compte de resultat|marge|rentabilite|tresorerie|finance/, kinds: ['weekly_pnl'] },
+  { re: /suivi|relance|bloque|en retard|ou en sont les missions/, kinds: ['follow_missions'] },
   { re: /lecon|retro|retrospective|post.?mortem/, kinds: ['retro'] },
   { re: /evaluation|\brh\b|performance des agents|revue des agents/, kinds: ['performance_review'] },
   { re: /tue(r|z)? (le|ce|l')|kill|arrete(r|z)? (le|ce) produit|red team/, kinds: ['red_team'] },
@@ -94,10 +99,59 @@ const TOPICS: { re: RegExp; keys: RegExp }[] = [
 /** System-prompt material that must never be read back to the founder (« Tu es Camille, CEO… »). */
 const PERSONA_LINE = /^\s*(?:#+\s|tu es\b|you are\b|personnalit[ée]|comp[ée]tences\s*:|outils connect|ton r[ôo]le|r[ôo]le\s*:|ton playbook|format de r[ée]ponse|garde-fous|style d'[ée]criture)/iu;
 
+/** How each department looks at a problem: answers to the same question differ by who is asked. */
+const ROLE_LENS: Record<DeptId, string> = {
+  direction: 'Je tranche ce qu’on en fait au prochain stand-up.',
+  recherche: 'De mon côté, je vérifie si la demande tient toujours dans nos signaux de marché.',
+  studio: 'De mon côté, je regarde si le contenu du guide y est pour quelque chose.',
+  creation: 'De mon côté, je regarde si la couverture et la mise en page jouent un rôle.',
+  growth: 'De mon côté, je regarde d’abord les campagnes : ce qu’on coupe et ce qu’on pousse.',
+  boutique: 'De mon côté, je regarde la page de vente et le prix.',
+  support: 'De mon côté, je regarde ce que les clients écrivent dans la boîte mail.',
+  analyse: 'De mon côté, je recoupe avec les chiffres avant de conclure.',
+  finance: 'De mon côté, je cale l’enveloppe et la trésorerie de demain sur ces chiffres.',
+  rh: 'De mon côté, j’en fais une leçon à la rétro du soir.',
+  partenariats: 'De mon côté, je regarde si les créateurs peuvent compenser.',
+};
+
+/** Line prefixes of the situation built by the runtime: the answer to a precise question is a line, not a summary. */
+const CAUSE = /^Cause d'hier\s*:/iu;
+const BEST = /^Meilleur produit sur 7 jours\s*:/iu;
+const MISSION = /^Mission du fondateur\b/iu;
+const MY_POST = /^Mon poste\s*:/iu;
+
+const STATUS_ASK = /\bou en (est|sont|es)\b|\bmission|\bavancement\b|\bstatut\b|\betat d'avancement\b/;
+const WHY_ASK = /\bpourquoi\b|\bcomment ca se fait\b|\braison\b|\bcause\b|\bexplique\b/;
+const BEST_ASK = /\bmeilleur|\bbest.?seller|\brapporte le plus\b|\bmarche le mieux\b|\btop produit\b/;
+
+/** Words that do not tell one mission from another. */
+const GENERIC_WORD = /^(guide|guides|pdf|produit|produits|mission|missions|lance|lancer|lancez|nouveau|nouvelle|sur|pour|les|des|une|est|sont|quoi|avec|dans|notre|nos|votre|vos|mon|mes|quel|quelle|quels|quelles|qui|que|pourquoi|comment|hier|aujourd|hui|fais|faire|ecris|ecrire)$/;
+const topicWords = (s: string): string[] => norm(s).split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !GENERIC_WORD.test(w)).map((w) => w.replace(/s$/, ''));
+
+/**
+ * Founder missions the question is about: one word in common for « où en est X », two otherwise (one shared word
+ * in a question about something else proves nothing). A plain « où en sont les missions » gets all of them.
+ */
+function missionsAsked(ask: string, missions: string[]): string[] {
+  const words = new Set(topicWords(ask));
+  const inner = (l: string) => /«\s*(.+?)\s*»/u.exec(l)?.[1] ?? l;
+  const status = STATUS_ASK.test(ask);
+  const shared = (m: string) => topicWords(inner(m)).filter((w) => words.has(w)).length;
+  const top = Math.max(0, ...missions.map(shared));
+  if (top >= (status ? 1 : 2)) return missions.filter((m) => shared(m) === top);
+  return status && /mission/.test(ask) ? missions : [];
+}
+
 /** One fact of the situation, in the agent's own voice. */
 function voiced(line: string): string {
   const l = clean(line).replace(/[.;]+$/, '');
   return l
+    .replace(/^Mon poste\s*:\s*/iu, '')
+    .replace(/^Cause d'hier\s*:\s*/iu, '')
+    .replace(/^Meilleur produit sur 7 jours\s*:\s*aucun, /iu, 'on n’a pas de meilleur produit : ')
+    .replace(/^Meilleur produit sur 7 jours\s*:\s*/iu, 'notre meilleur produit sur 7 jours est ')
+    .replace(/^Mission du fondateur \(jour (\d+)\)\s*/iu, 'ta mission du jour $1, ')
+    .replace(/^Marché d'hier\s*:\s*/iu, 'côté marché, ')
     .replace(/^Ma tâche en cours\s*:\s*(.+?)\s*\((en cours|en relecture|à faire)\)$/iu, (_m, t: string, s: string) => `je suis sur ${t}${s === 'en cours' ? '' : ` (${s})`}`)
     .replace(/^Pas de tâche en cours pour moi ce jour (\d+)$/iu, 'je n’ai pas de tâche en cours aujourd’hui')
     .replace(/^Hier\s*:\s*/iu, 'hier, on a fait ')
@@ -121,8 +175,14 @@ export function heuristicChat(input: { history: { from: string; text: string }[]
   const raw = String(input.situation ?? '').split(/\n+|(?<=[.;])\s+(?=\p{Lu})/u).map(clean).filter((l) => l.length > 3);
   const lines = raw.filter((l) => !PERSONA_LINE.test(l) && !/\btu es\s+\p{Lu}/u.test(l) && !/^contexte\s*:/i.test(l));
   const topic = TOPICS.find((t) => t.re.test(ask));
-  const relevant = topic ? lines.filter((l) => topic.keys.test(norm(l))) : [];
-  const facts = (relevant.length ? relevant : lines).slice(0, 2).map(voiced).filter(Boolean);
+  const generic = lines.filter((l) => !CAUSE.test(l) && !BEST.test(l) && !MISSION.test(l));
+  const relevant = topic ? generic.filter((l) => topic.keys.test(norm(l))) : [];
+  // A precise question gets its line: the mission named, the top product, the cause of the day.
+  const missions = missionsAsked(ask, lines.filter((l) => MISSION.test(l)));
+  const best = BEST_ASK.test(ask) ? lines.filter((l) => BEST.test(l)) : [];
+  const causes = WHY_ASK.test(ask) ? lines.filter((l) => CAUSE.test(l)) : [];
+  const precise = missions.length ? missions.slice(0, 2) : best.length ? best : causes.slice(0, 2);
+  const facts = (precise.length ? precise : relevant.length ? relevant.slice(0, 2) : generic.slice(0, 2)).map(voiced).filter(Boolean);
   const role = clean(agent?.role) || 'membre de l’équipe';
   const name = clean(agent?.name);
   const direct = /direct|franc|cash|sec|concis|tranche/.test(norm(agent?.persona ?? ''));
@@ -131,8 +191,11 @@ export function heuristicChat(input: { history: { from: string; text: string }[]
     ? `${open}${cap(facts.join(' ; '))}.`
     : `${open}Je n’ai pas encore de chiffres solides sur ce point dans mes notes du jour.`;
   const skills = (agent?.skills ?? []).slice(0, 2).map((s) => lf(s)).filter(Boolean);
-  const s2 = /\?/.test(input.text ?? '') && /pourquoi|comment/.test(ask)
-    ? `Mon analyse, en tant que ${lf(role)} : on avance par petits tests, on garde ce qui marche et on coupe vite le reste.`
+  const analysis = precise.length > 0 || WHY_ASK.test(ask) || /\bcomment\b/.test(ask);
+  const myPost = lines.find((l) => MY_POST.test(l));
+  const lens = (agent?.dept && ROLE_LENS[agent.dept]) || `En tant que ${lf(role)}, je reprends ces chiffres avec l’équipe.`;
+  const s2 = analysis
+    ? `${myPost && !facts.includes(voiced(myPost)) ? `${cap(voiced(myPost))}. ` : ''}${lens}`
     : `${name ? `Ici ${name}, ` : 'De mon côté, '}${lf(role)} chez ${brand} : je m’occupe surtout ${skills.length ? skills.map(deOf).join(' et ') : 'de ma partie'}.`;
   const s3 = /\b(peux|pourrais|pouvez|veux|voudrais)\b.*\?|\b(fais|lance|change|ajoute|arrete|coupe)\b/.test(ask)
     ? 'Si tu veux que ça devienne une priorité, confie la mission au CEO et je m’y mets dès le prochain créneau.'

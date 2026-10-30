@@ -6,13 +6,17 @@
  *           sales page → hooks → produce_ad ×3 ; publish + ads → launch_campaign
  *   upsell  same without idea red team and ads (sold through « La suite est ici »)
  *   v2      pdf (with feedback) → humanize → fact_check → render → sales page (lower hype) → publish
+ *   Red Team on the guide (see redteam.ts): a « fix » adds humanize → render → red_team before the publish, a « kill »
+ *   adds outline → pdf → humanize → fact_check → render → sales page + red_team.
  */
 import type { AgentId, Product, Task, TaskKind } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, latestOutput, nameOf, runFileExists, say } from './ctx.js';
+import type { GuideGaps } from '../contracts.js';
 import { createTask, isOpen, KIND_META, logTask, type TaskSpec } from './tasks.js';
 import { activeCampaigns } from './metrics.js';
 import { productNote, writePostMortem } from './notes.js';
+import { unlinkUpsell } from './upsell.js';
 import { short } from './util.js';
 
 export interface PipelineOpts { createdBy: Task['createdBy']; missionId: string | null; priority?: 1 | 2 | 3 }
@@ -53,7 +57,7 @@ export function createProductPipeline(ctx: RuntimeCtx, product: Product, opts: P
   const cover = T('design_cover', [titles]);
   const price = T('set_price', [titles], { reason: 'initial' });
   const render = T('render_pdf', [fact, cover]);
-  const redPdf = T('red_team', [render], { subject: 'pdf' }, { title: `Red Team : attaquer le guide « ${short(product.title, 40)} »` });
+  const redPdf = T('red_team', [render], { subject: 'pdf', version: product.version, cycle: 0 }, { title: `Red Team : attaquer le guide « ${short(product.title, 40)} »` });
   const sales = T('write_sales_page', [render, price]);
   const publish = T('publish_product', [sales, redPdf]);
   const hooks = T('write_ad_hooks', [sales]);
@@ -77,6 +81,46 @@ export function createUpsellPipeline(ctx: RuntimeCtx, product: Product, opts: Pi
   const sales = T('write_sales_page', [render, price]);
   const publish = T('publish_product', [sales]);
   return [titles, outline, pdf, human, fact, cover, price, render, sales, publish];
+}
+
+export interface RedTeamRework {
+  structural?: boolean;           // rebuild from the plan (a « kill », or a correction that changed nothing)
+  review?: boolean;               // no rework left to do: the Red Team only reads the file again
+  fixes?: string[];
+  gaps?: GuideGaps | null;
+  cycle: number;
+  previousPrint: string;
+  previousVerdict: string;
+  missionId: string | null;
+  title?: string;
+}
+
+/** The rework ordered by the Red Team, ending with its new review; the publish waits for that review. */
+export function reworkRedTeam(ctx: RuntimeCtx, product: Product, r: RedTeamRework): Task {
+  const T = maker(ctx, product, { createdBy: 'axel', missionId: r.missionId, priority: 1 });
+  const fixes = r.fixes ?? [];
+  const tag = ` (reprise ${r.cycle})`;
+  let last: Task[] = [];
+  const extra: Task[] = [];
+  if (r.structural) {
+    const outline = T('write_outline', [], { rework: true, fixes, revision: r.cycle }, { title: productTitleFor('write_outline', product, tag) });
+    const pdf = T('write_pdf', [outline], { rework: true, fixes, revision: r.cycle }, { title: productTitleFor('write_pdf', product, tag) });
+    const human = T('humanize_pdf', [pdf], { fixes, ...(r.gaps ? { gaps: r.gaps } : {}) }, { title: productTitleFor('humanize_pdf', product, tag) });
+    const fact = T('fact_check', [human], {}, { title: productTitleFor('fact_check', product, tag) });
+    const render = T('render_pdf', [fact], {}, { title: productTitleFor('render_pdf', product, tag) });
+    extra.push(T('write_sales_page', [render], {}, { title: productTitleFor('write_sales_page', product, tag) }));
+    last = [render];
+  } else if (!r.review) {
+    const human = T('humanize_pdf', [], { fixes, ...(r.gaps ? { gaps: r.gaps } : {}) }, { title: `Corriger le guide après la Red Team${tag} — « ${short(product.title, 40)} »` });
+    last = [T('render_pdf', [human], {}, { title: `Remettre en page après corrections${tag} — « ${short(product.title, 40)} »` })];
+  }
+  const again = T('red_team', last, { subject: 'pdf', version: product.version, cycle: r.cycle, previousPrint: r.previousPrint, previousVerdict: r.previousVerdict }, { title: r.title ?? `Red Team : relire le guide${tag} — « ${short(product.title, 40)} »` });
+  for (const t of ctx.world.company.tasks) {
+    if (t.kind !== 'publish_product' || t.input.productId !== product.id || t.status !== 'pending') continue;
+    t.dependsOn.push(again.id, ...extra.map((e) => e.id));
+    logTask(t, `Jour ${ctx.world.day} : attend la nouvelle revue de la Red Team.`);
+  }
+  return again;
 }
 
 /** Rework after customer feedback: version++, rewrite with the feedback, lower the promise, re-publish. */
@@ -190,6 +234,7 @@ export async function killProduct(ctx: RuntimeCtx, product: Product, reason: str
     c.status = 'paused';
   }
   const cancelled = cancelProductTasks(ctx, product.id, 'produit arrêté');
+  if (wasPublished) unlinkUpsell(ctx, product);
   say(ctx, by, `${nameOf(ctx, by)} arrête « ${short(product.title, 50)} » : ${reason}${cancelled ? ` (${cancelled} tâches annulées)` : ''}`, 'thought', { productId: product.id });
   incident(ctx, `Produit « ${product.title} » arrêté : ${reason}`);
   await writePostMortem(ctx, product, reason, by);

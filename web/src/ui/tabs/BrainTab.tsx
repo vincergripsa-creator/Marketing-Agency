@@ -61,14 +61,13 @@ export function BrainTab({ onClose, initialPath }: { onClose(): void; initialPat
   const { demo, snapshot } = useApp();
   const [vault, setVault] = useState<Vault | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [path, setPath] = useState<string | null>(initialPath);
+  const [path, setPath] = useState<string | null>(null);
+  const opened = useRef<string | null>(null); // last note another panel asked for, already honoured
   const [note, setNote] = useState<BrainNote | null>(null);
   const [noteState, setNoteState] = useState<'idle' | 'loading' | 'missing'>('idle');
   const [missingTitle, setMissingTitle] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [reload, setReload] = useState(0);
-
-  useEffect(() => { if (initialPath) setPath(initialPath); }, [initialPath]);
 
   // Load list + graph (live) or the bundled seed vault (demo).
   useEffect(() => {
@@ -96,12 +95,27 @@ export function BrainTab({ onClose, initialPath }: { onClose(): void; initialPat
     return (target: string): string | null => byName.get(norm(target)) ?? byName.get(norm(basename(target))) ?? null;
   }, [vault]);
 
-  // Default note: home page.
+  const openTarget = (target: string) => {
+    const p = resolve(target);
+    if (p) { setPath(p); return; }
+    setNote(null);
+    setNoteState('missing');
+    setMissingTitle(target);
+  };
+
+  // The note another panel asked for (a path, or a [[wikilink]] title), else the home page.
   useEffect(() => {
-    if (path || !vault) return;
+    if (!vault) return;
+    if (initialPath && initialPath !== opened.current) {
+      opened.current = initialPath;
+      if (initialPath.includes('/') && !vault.bodies) setPath(resolve(initialPath) ?? initialPath); // an exact path may be newer than the list
+      else openTarget(initialPath);
+      return;
+    }
+    if (path || missingTitle) return;
     const home = vault.notes.find((n) => /accueil/i.test(n.path)) ?? vault.notes[0];
     if (home) setPath(home.path);
-  }, [vault, path]);
+  }, [vault, initialPath, path, missingTitle]);
 
   // Load the selected note.
   useEffect(() => {
@@ -123,14 +137,6 @@ export function BrainTab({ onClose, initialPath }: { onClose(): void; initialPat
       .catch(() => { if (!cancelled) { setNote(null); setNoteState('missing'); } });
     return () => { cancelled = true; };
   }, [path, vault, demo]);
-
-  const openTarget = (target: string) => {
-    const p = resolve(target);
-    if (p) { setPath(p); return; }
-    setNote(null);
-    setNoteState('missing');
-    setMissingTitle(target);
-  };
 
   const results = useMemo(() => {
     const nq = norm(q);

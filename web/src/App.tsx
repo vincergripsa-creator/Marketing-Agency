@@ -72,6 +72,10 @@ export default function App() {
     setTab('produits');
   }, []);
 
+  // A note of the previous run means nothing in this one, however the run changed (form, load, another window).
+  const currentRun = snapshot?.runId;
+  useEffect(() => { setBrainPath(null); }, [currentRun]);
+
   useEventToasts(snapshot, push, connection === 'live' || connection === 'reconnecting', openProduct);
 
   // Connection transitions → one toast each.
@@ -234,7 +238,7 @@ export default function App() {
             {tab === 'pub' ? <AdsTab onClose={closeTab} /> : null}
             {tab === 'mail' ? <InboxTab onClose={closeTab} /> : null}
             {tab === 'finance' ? <FinanceTab onClose={closeTab} /> : null}
-            {tab === 'cerveau' ? <BrainTab onClose={closeTab} initialPath={brainPath} /> : null}
+            {tab === 'cerveau' ? <BrainTab key={currentRun} onClose={closeTab} initialPath={brainPath} /> : null}
             {tab === 'apprentissage' ? <LearningTab onClose={closeTab} /> : null}
             {tab === 'galerie' ? <GalleryTab onClose={closeTab} /> : null}
           </ErrorBoundary>

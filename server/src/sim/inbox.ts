@@ -3,6 +3,7 @@ import { nextId } from '../core/index.js';
 import type { Rng } from '../contracts.js';
 import type { Customer, CustomerArchetype, InboxMessage, MessageIntent, NicheTruth, Order, Product, WorldState } from '../shared.js';
 import { displayName } from './customers.js';
+import { DOUBLE_CHARGE_RE } from './quality.js';
 import { fill, fmtEur, norm } from './text.js';
 
 interface Tpl { subject: string; body: string }
@@ -124,6 +125,19 @@ const T: Record<MessageIntent, Tpl[]> = {
   ],
 };
 
+/**
+ * False claims sent by real buyers (ground truth 'arnaque', with a real order). They read like honest requests:
+ * only the order's logs give them away (one debit, the PDF already downloaded, no trace of the promised refund).
+ */
+const FRIENDLY_FRAUD: Tpl[] = [
+  { subject: 'Débité deux fois', body: "Bonjour, j'ai été débité deux fois de {prix} pour « {produit} ». Merci de me rembourser dès aujourd'hui." },
+  { subject: 'Double prélèvement', body: "Ma banque affiche deux prélèvements de {prix} pour « {produit} ». Je n'ai acheté qu'une fois : remboursez-moi sans attendre." },
+  { subject: 'PDF jamais reçu', body: "Bonjour, j'ai payé {prix} et je n'ai jamais rien reçu. Je ne veux pas d'un nouveau lien : je veux être remboursé(e)." },
+  { subject: 'Impossible à ouvrir', body: "Bonjour, je n'ai jamais pu ouvrir « {produit} » et je demande le remboursement de mes {prix}. Merci de faire vite." },
+  { subject: 'Paiement non autorisé', body: "Ce paiement de {prix} n'a pas été fait par moi. Remboursez-moi aujourd'hui, sinon je fais opposition auprès de ma banque." },
+  { subject: 'Remboursement promis', body: "Bonjour, votre collègue m'a promis le remboursement de mes {prix} au téléphone. Je l'attends toujours, merci de le faire aujourd'hui." },
+];
+
 const IMPATIENT_TAILS = ['???', 'Toujours rien ???', "Je l'ai payé, je veux une réponse MAINTENANT.", 'Ça fait 2 heures ???', 'Vous répondez quand ???'];
 const KAREN_TAILS = [
   "Si ce n'est pas réglé AUJOURD'HUI, je laisse un avis 1 étoile partout.",
@@ -206,20 +220,30 @@ function defaultChannel(rng: Rng, intent: MessageIntent): InboxMessage['channel'
   }
 }
 
+/** The store's logs back an honest claim and contradict a false one. */
+function recordClaimTraces(rng: Rng, order: Order, intent: MessageIntent, body: string): void {
+  const text = norm(body);
+  if (intent === 'arnaque') order.downloads = Math.max(order.downloads ?? 1, rng.int(2, 4));
+  else if (intent === 'bug_paiement' && DOUBLE_CHARGE_RE.test(text)) order.charges = 2;
+  else if (intent === 'non_recu' || (intent === 'menace_chargeback' && /ne reconnais pas/.test(text))) order.downloads = 0;
+}
+
 /** Creates (and stores) an inbox message in the customer's voice. */
 export function createMessage(world: WorldState, rng: Rng, input: {
   intent: MessageIntent; customer: Customer; product: Product | null; order: Order | null; niche?: NicheTruth;
   channel?: InboxMessage['channel']; templateIndex?: number;
 }): InboxMessage {
   const { intent, customer, product, order, niche } = input;
-  const list = T[intent] ?? T.question;
+  const fraud = intent === 'arnaque' && !!order; // a real buyer's false claim, written like any other buyer's message
+  const list = fraud ? FRIENDLY_FRAUD : T[intent] ?? T.question;
   const tpl = input.templateIndex !== undefined ? list[input.templateIndex % list.length]! : rng.pick(list);
   const vars = messageVars(rng, product, niche, order?.price);
   const raw = fill(tpl.body, vars);
-  const body = intent === 'arnaque' || intent === 'partenariat' || intent === 'troll' ? raw : applyTone(rng, customer.archetype, raw);
+  const body = (intent === 'arnaque' && !fraud) || intent === 'partenariat' || intent === 'troll' ? raw : applyTone(rng, customer.archetype, raw);
   const subject = customer.archetype === 'karen' ? fill(tpl.subject, vars).toUpperCase() : fill(tpl.subject, vars);
   const day = world.day;
-  const mood = Math.max(-1, Math.min(1, BASE_MOOD[intent] + (MOOD_SHIFT[customer.archetype] ?? 0)));
+  const mood = Math.max(-1, Math.min(1, BASE_MOOD[fraud ? 'remboursement' : intent] + (MOOD_SHIFT[customer.archetype] ?? 0)));
+  if (order) recordClaimTraces(rng, order, intent, raw);
   const msg: InboxMessage = {
     id: nextId(world, 'msg'),
     day,
@@ -271,7 +295,7 @@ export function followUpText(rng: Rng, msg: InboxMessage, archetype: CustomerArc
 
 export type ReactionKey =
   | 'link_ok' | 'refund_ok' | 'discount_ok' | 'answer_ok' | 'custom_ok' | 'compliment_ok' | 'unresolved' | 'angry'
-  | 'karen_rage' | 'scam_blocked' | 'scam_paid' | 'scam_link' | 'troll_quiet' | 'troll_fed' | 'partner_declined' | 'chargeback_avoided'
+  | 'karen_rage' | 'scam_blocked' | 'scam_paid' | 'scam_link' | 'fraud_refused' | 'fraud_paid' | 'troll_quiet' | 'troll_fed' | 'partner_declined' | 'chargeback_avoided'
   | 'refund_refused' | 'already_done';
 
 const REACTIONS: Record<ReactionKey, string[]> = {
@@ -287,6 +311,8 @@ const REACTIONS: Record<ReactionKey, string[]> = {
   scam_blocked: ['(Le compte suspect a été bloqué, aucune suite.)', '(Message signalé et expéditeur bloqué.)', '(Le faux support disparaît après le blocage.)'],
   scam_paid: ["Merci ! (le compte disparaît aussitôt avec l'argent)", '(Paiement encaissé, puis plus aucune nouvelle.)', '(Le profil est supprimé dans l\'heure : l\'argent est perdu.)'],
   scam_link: ['(Le guide a été envoyé gratuitement à un compte frauduleux.)', '(Le fichier circule maintenant sur un canal de piratage.)'],
+  fraud_refused: ["Bon, tant pis, je n'insiste pas.", "Ah, j'ai dû confondre avec un autre prélèvement.", '(Le client ne répond plus après la vérification de sa commande.)'],
+  fraud_paid: ['(Remboursement encaissé, puis plus aucune nouvelle : le guide avait pourtant bien été téléchargé.)', "Merci, bien reçu. (Le client garde le guide et disparaît.)"],
   troll_quiet: ['(Le troll n\'a plus rien trouvé à dire.)', '(Aucune réponse : le troll passe à autre chose.)', 'ok.'],
   troll_fed: ["Le troll fait des captures d'écran de votre réponse et les partage en se moquant.", "MDR vous répondez vraiment ? Encore une preuve que c'est une arnaque.", '(Le fil de commentaires s\'enflamme sous votre pub.)'],
   partner_declined: ["Pas de souci, bonne continuation.", "D'accord, merci pour la réponse.", '(Pas de réponse.)'],

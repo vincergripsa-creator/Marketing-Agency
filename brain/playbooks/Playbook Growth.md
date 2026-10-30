@@ -12,12 +12,13 @@ Acheter de l'attention rentable sur TikTok et nourrir l'organique, sans jamais m
 1. Ne jamais écrire « garanti »
 2. Ne jamais écrire « sans effort »
 3. Le hook tient dans les 2 premières secondes : la douleur avec les mots du client.
-4. Stop-loss sur échantillon : pause si ROAS < 0,4 après 25 €, ou ROAS < 0,8 après 2 jours et 40 € ; +30 % de budget par jour au maximum.
+4. Stop-loss : ROAS < 0,8 après 25 € dépensés sur au moins 2 jours → pause (ROAS < 0,4 : pause sans attendre le 2e jour) ; +30 % de budget par jour au maximum.
 
 ## Stop-loss : quand couper une campagne
-La règle « ROAS < 0,8 après 25 € » de [[Budget et garde-fous]] se lit sur un **échantillon suffisant** : une seule journée à 0,65 de ROAS, c'est du bruit.
+C'est la règle de [[Budget et garde-fous]], sans autre seuil : une seule journée à 0,65 de ROAS, c'est du bruit, deux jours et 25 € non.
 - **Aucune traction** : ROAS < 0,4 après 25 € dépensés → pause immédiate.
-- **Perdante** : ROAS < 0,8 après **au moins 2 jours ET 40 €** (sur toute la vie de la campagne, ou sur ses 3 derniers jours) → pause.
+- **Perdante** : ROAS < 0,8 après 25 € **sur au moins 2 jours** (sur toute la vie de la campagne, ou sur ses 3 derniers jours) → pause.
+- **Pas de demi-mesure** : une campagne sous 0,8 n'est jamais réduite à 5 €/jour en attendant : l'échantillon de demain décide, puis on coupe.
 - **Frein** : une grosse campagne qui s'effondre la veille (≥ 30 € dépensés, ROAS < 0,5) voit son budget divisé par deux, sans attendre.
 - **Scale** : +30 % par jour au maximum, seulement si le ROAS récent tient (≥ 1,8 sur 3 jours, ≥ 1,4 la veille).
 
@@ -28,6 +29,7 @@ La règle « ROAS < 0,8 après 25 € » de [[Budget et garde-fous]] se lit sur 
 - 4 perdantes d'affilée (ROAS < 0,7 sur la série) → plus de pub payante sur **cette version** pendant 7 jours (puis un seul nouvel essai) : on pousse les autres produits, on retravaille l'offre ou on ouvre une nouvelle niche.
 - Si la pub perd de l'argent globalement (ROAS < 0,9 sur 10 jours pour au moins 150 €) : **un seul nouveau test par jour**, budget réduit de 40 %.
 - Si tous les produits sont dans ce cas et que rien n'a tourné depuis 2 jours : un petit test à 8 €/jour avec un angle neuf plutôt que l'arrêt complet.
+- **Exception, les chiffres ont tranché** : une version qui perd de l'argent sur 14 jours et au moins 2 campagnes (voir [[Playbook Direction]]), ou une leçon « Couper les pubs » de sa niche, ne reçoit plus aucun budget, même en test : seule une nouvelle version rouvre la pub.
 - Une relance utilise des créas **fraîches** (jamais diffusées) ou éprouvées (CTR ≥ 0,8 %, pas fatiguées, pas perdantes), jamais les créas fatiguées de la campagne coupée.
 
 ## Qui pousser en pub
@@ -45,6 +47,7 @@ La règle « ROAS < 0,8 après 25 € » de [[Budget et garde-fous]] se lit sur 
 
 ## Organique (Tom)
 - **2 posts maximum par produit et par jour**, 4 au total (au-delà, TikTok étouffe la portée).
+- **Qui passe en premier** : un guide lancé cette semaine (il n'a pas encore de chiffres), puis les produits les plus rentables sur 14 jours. Un produit qui perd de l'argent ne reçoit pas de post.
 - Styles en rotation : jamais deux fois le même style le même jour pour un produit, le style le moins utilisé récemment d'abord.
 - **Jamais le même texte deux fois en 7 jours**, tous produits confondus : hooks neufs de Sarah ou des créas validées. Sans hook neuf, pas de post plutôt qu'une redite.
 

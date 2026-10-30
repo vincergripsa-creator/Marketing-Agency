@@ -54,6 +54,10 @@ export function createContentEngine(opts: EngineOptions): ContentEngine {
 }
 
 export type { ClaudeClientLike };
+export { firstPerson } from './heuristic/niche.js';
+export { nextStepFor } from './heuristic/studio.js';
+export { upsellTopics } from './heuristic/profiles.js';
+export { bare, norm, withArticle } from './util.js';
 
 // compile-time check: this module satisfies the MindsModule contract
 const _contract: MindsModule = { createContentEngine };

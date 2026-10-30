@@ -5,14 +5,15 @@ import type { RuntimeCtx } from '../ctx.js';
 import { addDeliverable, incident, latestOutput, nicheName, productOf, runFileExists, say, versionDir, vocOf, writeRunFile } from '../ctx.js';
 import { deliverables, learning, sim } from '../modules.js';
 import { directivesOf, HYPE_ARMS, PRICE_ARMS } from '../playbook.js';
-import { createUpsellPipeline } from '../pipeline.js';
+import { createUpsellPipeline, killProduct } from '../pipeline.js';
+import { redTeamGate, reopenGate } from '../redteam.js';
 import { productNote } from '../notes.js';
-import { parentOf } from '../metrics.js';
-import { createTask } from '../tasks.js';
+import { parentOf, priceCeiling } from '../metrics.js';
+import { linkUpsell, nicheCollision, pickUpsellSubject } from '../upsell.js';
 import { eur, median, numOf, round2, short, str } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { NO_PRODUCT, requireProduct, studioMind } from './common.js';
-import { ensureCoverFile, ensureDesign } from './creation.js';
+import { coverSvgFor, ensureCoverFile, ensureDesign } from './creation.js';
 
 const HYPES = HYPE_ARMS.map(Number).sort((a, b) => a - b);
 const PRICES = PRICE_ARMS.map(Number).sort((a, b) => a - b);
@@ -33,6 +34,36 @@ function stepArm(arms: readonly number[], value: number, delta: number): number 
 
 function runningExperiment(ctx: RuntimeCtx, dimension: string) {
   return ctx.world.company.experiments.find((e) => e.status === 'running' && e.dimension === dimension) ?? null;
+}
+
+/** What the page prints of the live shop: when this changes, the file on disk is out of date. */
+function pagePrintOf(product: Product): string {
+  const { reviews, rating } = product.stats;
+  return [product.price, reviews.length, rating, reviews[reviews.length - 1]?.id ?? ''].join('|');
+}
+
+async function renderSalesPage(ctx: RuntimeCtx, product: Product, rel: string, coverSvg: string): Promise<void> {
+  const html = deliverables.renderSalesPageHtml({ product, salesPage: product.salesPage!, coverSvg, design: ensureDesign(ctx, product), brand: ctx.world.company.name });
+  await writeRunFile(ctx, rel, html);
+  product.files.salesPage = rel;
+  product.pagePrint = pagePrintOf(product);
+}
+
+/** Puts the page back in line with the price and the reviews of the moment (in place: a v2 in progress has its own). */
+export async function refreshSalesPage(ctx: RuntimeCtx, product: Product): Promise<void> {
+  if (!product.salesPage || !product.files.salesPage || product.status === 'killed' || product.pagePrint === pagePrintOf(product)) return;
+  await renderSalesPage(ctx, product, product.files.salesPage, coverSvgFor(ctx, product));
+}
+
+/** Prices move on set_price, reviews at any tick (market close, support, events): every page follows, at the end of the tick. */
+export async function syncSalesPages(ctx: RuntimeCtx): Promise<void> {
+  for (const product of ctx.world.company.products) {
+    try {
+      await refreshSalesPage(ctx, product);
+    } catch (e) {
+      incident(ctx, `Page de vente de « ${short(product.title, 40)} » non mise à jour : ${short(String(e), 80)}`);
+    }
+  }
 }
 
 export const boutiqueHandlers: HandlerMap = {
@@ -59,19 +90,19 @@ export const boutiqueHandlers: HandlerMap = {
       }
       if (!Number.isFinite(hype)) hype = 0.4;
       if (cap !== null && hype > cap) { hype = floorArm(HYPES, cap); source += ` (plafonné à ${cap})`; }
+      const before = task.input.reason === 'lesson' && product.salesPage ? { page: product.salesPage, quality: sim.scoreSalesPage(product.salesPage, product, voc) } : null;
       const sp = await ctx.engine.writeSalesPage({ product, content: product.content, voc, hype }, studioMind(ctx, task, mind));
       sp.hypeLevel = hype;
+      sp.priceWritten = product.price;
       product.salesPage = sp;
-      const sq = sim.scoreSalesPage(sp, product, voc);
+      let sq = sim.scoreSalesPage(sp, product, voc);
+      // A rewrite that reads worse than the page it replaces does not go online.
+      if (before && sq.overall < before.quality.overall) { product.salesPage = before.page; sq = before.quality; }
       product.salesQuality = sq;
-      const design = ensureDesign(ctx, product);
-      const coverSvg = await ensureCoverFile(ctx, product);
-      const html = deliverables.renderSalesPageHtml({ product, salesPage: sp, coverSvg, design, brand: ctx.world.company.name });
       const rel = `${versionDir(product)}/sales-page.html`;
-      await writeRunFile(ctx, rel, html);
-      product.files.salesPage = rel;
+      await renderSalesPage(ctx, product, rel, await ensureCoverFile(ctx, product));
       addDeliverable(ctx, { kind: 'sales_page', title: `Page de vente « ${short(product.title, 50)} » (v${product.version})`, productId: product.id, creativeId: null, path: rel, createdBy: agent.id, quality: sq.overall }, task);
-      say(ctx, agent.id, `${agent.name} : accroche « ${short(sp.headline, 70)} » — promesse ${hype} (${source})`, 'thought', { productId: product.id });
+      say(ctx, agent.id, `${agent.name} : accroche « ${short(product.salesPage.headline, 70)} » — promesse ${product.salesPage.hypeLevel} (${source})`, 'thought', { productId: product.id });
       return { summary: `Page de vente écrite (promesse ${hype}, qualité ${sq.overall}/100).`, output: { path: rel, hype, hypeSource: source, score: sq.overall } };
     },
   },
@@ -93,10 +124,13 @@ export const boutiqueHandlers: HandlerMap = {
       let why: string;
       if (reason === 'experiment' && exp && exp.variants.length) {
         price = Number(exp.variants[ctx.world.day % exp.variants.length]); why = `test A/B en cours (${exp.variants.join(' € vs ')} €)`;
-      } else if ((reason === 'winner' || reason === 'baisse') && (numOf(task.input.price) ?? 0) > 0) {
-        // Measured decisions of the CEO (strategy.priceMove): they beat the playbook's older target price.
+      } else if ((reason === 'winner' || reason === 'controle' || reason === 'baisse' || reason === 'fondateur') && (numOf(task.input.price) ?? 0) > 0) {
+        // Measured decisions of the CEO (strategy.priceMove) and the founder's: they beat the playbook's older target price.
         price = numOf(task.input.price)!;
-        why = reason === 'winner' ? 'gagnant du test A/B de prix (revenu par visiteur)' : 'la hausse faisait baisser le revenu par visiteur : retour au prix précédent';
+        why = reason === 'fondateur' ? 'décision du fondateur'
+          : reason === 'winner' ? 'gagnant du test A/B de prix (revenu par visiteur)'
+            : reason === 'controle' ? 'test de prix sans gagnant : retour au prix de contrôle'
+              : 'la hausse faisait baisser le revenu par visiteur : retour au prix précédent';
       } else if (target !== null) {
         price = nearestArm(PRICES, target); why = `prix cible du playbook (${target} €)`;
       } else if (reason === 'initial' || !product.launchedDay) {
@@ -107,9 +141,10 @@ export const boutiqueHandlers: HandlerMap = {
           price = Math.max(9, floorArm(PRICES, Math.min(sweet, median(anchors) ?? sweet))); why = `on commence bas (suggestion ${eur(sweet)}${anchors.length ? `, ancres clients ${eur(Math.min(...anchors))}–${eur(Math.max(...anchors))}` : ''})`;
         }
       } else if (reason === 'hausse') {
-        const ceiling = anchors.length ? Math.max(...anchors) * 1.4 : 49;
+        // The ceiling is what buyers have shown they pay (priceCeiling), not the highest anchor anyone quoted.
+        const { ceiling, why: limit } = priceCeiling(ctx.world, product);
         const up = stepArm(PRICES, previous, +1);
-        price = up <= ceiling ? up : previous; why = up <= ceiling ? 'les avis sont bons : on monte d’un palier' : 'plafond des ancres clients atteint, on garde le prix';
+        price = up <= ceiling ? up : previous; why = up <= ceiling ? 'les avis sont bons : on monte d’un palier' : `plafond atteint (${limit}), on garde le prix`;
       } else {
         const lo = anchors.length ? Math.min(...anchors) * 0.5 : 0;
         const hi = anchors.length ? Math.max(...anchors) * 1.5 : 99;
@@ -126,6 +161,7 @@ export const boutiqueHandlers: HandlerMap = {
       const last = product.priceHistory[product.priceHistory.length - 1];
       if (!last || last.day !== ctx.world.day || last.price !== price) product.priceHistory.push({ day: ctx.world.day, price });
       if (product.status === 'qa' && product.salesPage) product.status = 'ready';
+      await refreshSalesPage(ctx, product);
       if (price !== previous && product.launchedDay) await productNote(ctx, product, agent.id, 'Prix', `- ${eur(previous)} → **${eur(price)}** : ${why}`);
       say(ctx, agent.id, `${agent.name} fixe « ${short(product.title, 40)} » à ${eur(price)} : ${why}`, 'thought', { productId: product.id });
       return { summary: `Prix : ${eur(price)} (${why}).`, output: { price, previous, reason, why } };
@@ -142,6 +178,19 @@ export const boutiqueHandlers: HandlerMap = {
       if (!product.salesPage || !runFileExists(ctx, product.files.salesPage)) missing.push('page de vente');
       if (!(product.price > 0)) missing.push('prix');
       if (missing.length) return { fail: `Mise en ligne impossible, il manque : ${missing.join(', ')}.`, summary: `Il manque : ${missing.join(', ')}` };
+      // Never the same guide twice in a niche: a double is stopped here, whatever got it this far.
+      const clash = nicheCollision(ctx.world, product);
+      if (clash) {
+        const reason = `Mise en ligne refusée : ${clash}`;
+        if (product.status !== 'live') await killProduct(ctx, product, reason, task.assignee ?? 'clara');
+        return { fail: reason, summary: reason };
+      }
+      // The Red Team's verdict is a gate: no « go » (or signed waiver) on this version, no publication.
+      const gate = redTeamGate(ctx.world, product);
+      if (gate.state !== 'clear') {
+        const waitFor = gate.state === 'waiting' ? gate.taskId : reopenGate(ctx, product, gate, task.missionId)?.id ?? null;
+        return { summary: `Mise en ligne bloquée : ${gate.reason}.`, retryLater: gate.reason ?? 'revue de la Red Team', dependsOn: waitFor ? [waitFor] : [] };
+      }
       if (product.status !== 'live') product.status = 'ready';
       return {
         summary: `Dossier complet : PDF ${product.quality?.overall ?? '—'}/100, page ${product.salesQuality?.overall ?? '—'}/100, prix ${eur(product.price)}.`,
@@ -171,10 +220,7 @@ export const boutiqueHandlers: HandlerMap = {
       ].join('\n'));
       // An upsell going live: the parent guide's last page now points to it.
       const parent = parentOf(ctx.world, product.id);
-      if (parent && parent.status !== 'killed' && !wasLive && !republish) {
-        if (parent.content?.nextStep) parent.content.nextStep = { ...parent.content.nextStep, title: parent.content.nextStep.title || 'La suite est ici', upsellProductId: product.id };
-        createTask(ctx.world, { kind: 'render_pdf', title: `Ajouter « La suite est ici » au guide « ${short(parent.title, 40)} »`, input: { productId: parent.id, nicheId: parent.nicheId, reason: 'upsell_link' }, createdBy: 'paul', missionId: task.missionId, priority: 2 });
-      }
+      if (parent && parent.status !== 'killed' && !wasLive) linkUpsell(ctx, parent, product, task.missionId);
     },
   },
 
@@ -184,12 +230,16 @@ export const boutiqueHandlers: HandlerMap = {
       if (!parent) return NO_PRODUCT;
       const existing = productOf(ctx, parent.upsellProductId);
       if (existing && existing.status !== 'killed') return { summary: `L'upsell « ${short(existing.title, 50)} » existe déjà.`, skipReview: true, output: { upsellProductId: existing.id, existing: true } };
-      const voc = vocOf(ctx, parent.nicheId);
-      const candidates = [...voc.desiredOutcomes, ...voc.pains].filter((p) => p && p.toLowerCase() !== parent.problem.toLowerCase());
-      const problem = candidates[0] ?? `aller plus loin après « ${parent.title} »`;
+      const subject = pickUpsellSubject(ctx.world, parent, vocOf(ctx, parent.nicheId));
+      if (!subject) {
+        const why = `aucun sous-problème de la recherche n'est distinct de ce que la niche vend déjà`;
+        await productNote(ctx, parent, agent.id, 'Upsell', `- Pas d'upsell : ${why}.`);
+        return { summary: `Pas d'upsell pour « ${short(parent.title, 50)} » : ${why}.`, skipReview: true, output: { noSubject: true } };
+      }
+      const { problem, title } = subject;
       const upsell: Product = {
         id: nextId(ctx.world, 'prd'), nicheId: parent.nicheId,
-        title: `${nicheName(ctx, parent.nicheId)} — la suite`, subtitle: `Pour aller plus loin après « ${short(parent.title, 60)} »`,
+        title, subtitle: `Pour aller plus loin après « ${short(parent.title, 60)} »`,
         audience: parent.audience, problem, price: 0, status: 'writing', version: 1,
         content: null, design: null, salesPage: null, files: { pdf: null, cover: null, salesPage: null },
         quality: null, salesQuality: null, upsellProductId: null, createdDay: ctx.world.day, launchedDay: null,
@@ -197,13 +247,12 @@ export const boutiqueHandlers: HandlerMap = {
       };
       ctx.world.company.products.push(upsell);
       parent.upsellProductId = upsell.id;
-      if (parent.content?.nextStep) parent.content.nextStep = { ...parent.content.nextStep, upsellProductId: upsell.id };
       await productNote(ctx, parent, agent.id, 'Upsell', `- PDF suivant pour le même public : **${upsell.title}** — problème : ${problem}`);
       say(ctx, agent.id, `${agent.name} : les acheteurs de « ${short(parent.title, 40)} » veulent la suite → « ${short(problem, 60)} »`, 'thought', { productId: parent.id });
       return { summary: `Upsell conçu : ${short(problem, 80)}.`, output: { upsellProductId: upsell.id, problem } };
     },
     async onDone(ctx, task) {
-      if (task.output?.existing === true) return;
+      if (task.output?.existing === true || task.output?.noSubject === true) return;
       const upsell = productOf(ctx, task.output?.upsellProductId);
       if (upsell && upsell.status !== 'killed') createUpsellPipeline(ctx, upsell, { createdBy: 'clara', missionId: task.missionId, priority: 2 });
     },

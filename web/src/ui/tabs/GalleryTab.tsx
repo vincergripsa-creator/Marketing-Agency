@@ -1,7 +1,7 @@
 // Galerie: every deliverable the agency produced (covers as images, files as cards).
 import { useMemo, useState } from 'react';
 import type { Deliverable } from '../../../../shared/types';
-import { fileUrl } from '../../api';
+import { brainNotePath, fileUrl } from '../../api';
 import { cx, Empty, NEW_TAB, Overlay, Segmented } from '../common';
 import { useApp } from '../context';
 import { fmtInt } from '../format';
@@ -37,7 +37,7 @@ export function GalleryTab({ onClose }: { onClose(): void }) {
 }
 
 function Tile({ d }: { d: Deliverable }) {
-  const { runId, demo, lookups } = useApp();
+  const { runId, demo, lookups, openBrainNote } = useApp();
   const [broken, setBroken] = useState(false);
   const url = fileUrl(runId, d.path);
   const isImage = IMAGE_KINDS.has(d.kind) || /\.(svg|png|jpe?g|webp)$/i.test(d.path);
@@ -62,5 +62,7 @@ function Tile({ d }: { d: Deliverable }) {
     </>
   );
   if (demo) return <div className="tile is-disabled" title="Fichier indisponible en mode démo">{body}</div>;
+  const note = brainNotePath(runId, d.path);
+  if (note) return <button type="button" className="tile" onClick={() => openBrainNote(note)} title="Ouvrir dans le cerveau">{body}</button>;
   return <a className="tile" href={url} {...NEW_TAB} title={`Ouvrir ${d.path}`}>{body}</a>;
 }

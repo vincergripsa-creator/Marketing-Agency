@@ -1,6 +1,6 @@
 // Typed client for the agency server (see server/src/contracts.ts, "api/" section).
 import type {
-  Activity, AgentId, CompanySnapshot, DayPhase, FinanceSnapshot, ScenarioConfig, SessionInfo, StreamEvent,
+  Activity, AgentId, CompanySnapshot, DayPhase, FinanceSnapshot, LiveAgent, Mission, ScenarioConfig, SessionInfo, StreamEvent,
 } from '../../shared/types';
 
 // ───────────────────────────── Response shapes ─────────────────────────────
@@ -16,7 +16,8 @@ export interface ControlRequest { action: ControlAction; speed?: Speed }
 /** session = live loop state after the command (ControlResponse.session), the source of truth for the HUD. */
 export interface ControlResult { ok: boolean; status?: string; speed?: Speed; playing?: boolean; message?: string; session?: SessionInfo }
 
-export interface MissionResult { ok: boolean; missionId: string | null; message?: string }
+/** status + message = where the mission stands right after the company read it (message: Mission.outcome). */
+export interface MissionResult { ok: boolean; missionId: string | null; status?: Mission['status']; message?: string }
 export interface ApproveResult { ok: boolean; message?: string }
 
 /** GET /api/runs — the server decides the exact fields; everything but runId is optional. */
@@ -33,7 +34,8 @@ export interface RunSummary {
   updatedAt?: string;
 }
 
-export interface TickInfo { day: number; tick: number; phase: DayPhase; finance: FinanceSnapshot }
+/** agents = what moved during the tick: the full snapshot only comes about once per second. */
+export interface TickInfo { day: number; tick: number; phase: DayPhase; finance: FinanceSnapshot; agents?: LiveAgent[] }
 
 export class ApiError extends Error {
   readonly status: number;
@@ -140,7 +142,8 @@ export const api = {
     const data = await post<unknown>('/api/mission', agentId ? { text, agentId } : { text }, 30_000);
     const o = isObj(data) ? data : {};
     const id = typeof o.missionId === 'string' ? o.missionId : typeof o.id === 'string' ? o.id : typeof data === 'string' ? data : null;
-    return { ok: okFlag(data), missionId: id, message: typeof o.message === 'string' ? o.message : undefined };
+    const status = o.status === 'open' || o.status === 'done' || o.status === 'failed' ? o.status : undefined;
+    return { ok: okFlag(data), missionId: id, status, message: typeof o.message === 'string' ? o.message : undefined };
   },
 
   /** POST /api/chat → the agent's answer (French). Claude answers can be slow. */
@@ -215,14 +218,24 @@ export const api = {
   },
 };
 
+function runRelative(runId: string, path: string): string {
+  const p = path.replace(/\\/g, '/').replace(/^\/+/, '');
+  const prefix = `runs/${runId}/`;
+  return p.startsWith(prefix) ? p.slice(prefix.length) : p;
+}
+
 /** Generated file of a run, served by the API at /runs/<runId>/<path>. */
 export function fileUrl(runId: string, path: string | null | undefined): string {
   if (!path) return '';
   if (/^https?:\/\//.test(path)) return path;
-  let p = path.replace(/\\/g, '/').replace(/^\/+/, '');
-  const prefix = `runs/${runId}/`;
-  if (p.startsWith(prefix)) p = p.slice(prefix.length);
-  return `/runs/${encodeURIComponent(runId)}/${p.split('/').map(encodeURIComponent).join('/')}`;
+  return `/runs/${encodeURIComponent(runId)}/${runRelative(runId, path).split('/').map(encodeURIComponent).join('/')}`;
+}
+
+/** Vault path of a run file that is a brain note (« brain/journal/jour-001.md » → « journal/jour-001.md »), else null. */
+export function brainNotePath(runId: string, path: string | null | undefined): string | null {
+  if (!path) return null;
+  const m = /^brain\/(.+\.md)$/i.exec(runRelative(runId, path));
+  return m ? m[1]! : null;
 }
 
 export function basename(path: string): string {
@@ -262,7 +275,7 @@ export function openStream(handlers: StreamHandlers): () => void {
       if (valid.length) handlers.onActivity(valid);
     } else if (type === 'tick') {
       if (typeof ev.day === 'number' && typeof ev.tick === 'number' && isObj(ev.finance)) {
-        handlers.onTick?.({ day: ev.day, tick: ev.tick, phase: ev.phase as DayPhase, finance: ev.finance as unknown as FinanceSnapshot });
+        handlers.onTick?.({ day: ev.day, tick: ev.tick, phase: ev.phase as DayPhase, finance: ev.finance as unknown as FinanceSnapshot, agents: Array.isArray(ev.agents) ? ev.agents as LiveAgent[] : undefined });
       }
     }
   };

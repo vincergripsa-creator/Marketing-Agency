@@ -26,68 +26,108 @@ export const PALETTES: readonly PaletteDef[] = [
   { name: 'Cuisine gourmande', family: 'cuisine', palette: { bg: '#fff4e0', primary: '#c8501a', secondary: '#7fa650', accent: '#f1c40f', ink: '#3a2a1a', soft: '#fff9ef' } },
 ];
 
-// Category / keyword → palette family (normalised, accent-free substrings).
+/** Accent-free words between spaces, so that a key is matched from the start of a word. */
+const wordsOf = (s: string): string => ` ${normalizeKey(s).replace(/[^a-z0-9]+/g, ' ').trim()} `;
+
+/** A key matches the start of a word (« chiot » → « chiots »), or a whole word when it ends with a space (« rêve », not « revendre »). */
+const hits = (text: string, keys: readonly string[]): number => keys.reduce((s, k) => s + (text.includes(` ${k}`) ? 1 : 0), 0);
+
+// Category / keyword → palette family. Cuisine comes first: « Cuisine & budget » is a cooking shelf.
 const FAMILY_KEYWORDS: Record<string, string[]> = {
+  cuisine: ['cuisine', 'recette', 'repas', 'gastronomie', 'patisserie', 'batch cooking', 'boulangerie'],
   parentalite: ['parent', 'bebe', 'enfant', 'famille', 'maternite', 'paternite', 'naissance', 'grossesse', 'adolescen', 'creche', 'allaitement', 'maman', 'papa'],
-  animaux: ['animal', 'animaux', 'chien', 'chiot', 'chat', 'chaton', 'cheval', 'equitation', 'lapin', 'compagnie', 'veterinaire'],
-  argent: ['argent', 'business', 'finance', 'budget', 'epargne', 'invest', 'dette', 'entrepreneur', 'freelance', 'vente', 'marketing', 'carriere', 'emploi', 'salaire', 'immobilier', 'impot', 'auto-entrepreneur', 'micro-entreprise'],
-  sante: ['sante', 'forme', 'sport', 'fitness', 'nutrition', 'minceur', 'yoga', 'course', 'muscu', 'regime', 'douleur', 'dos', 'ventre', 'sommeil adulte'],
-  etudes: ['etude', 'ecole', 'examen', 'bac', 'etudiant', 'apprentissage', 'langue', 'concours', 'revision', 'universite', 'lecture'],
-  maison: ['maison', 'jardin', 'deco', 'potager', 'plante', 'menage', 'rangement', 'bricolage', 'demenagement', 'minimalisme'],
-  voyage: ['voyage', 'vacances', 'tourisme', 'van', 'nomade', 'road trip', 'expatri', 'randonnee'],
+  animaux: ['animal', 'animaux', 'chien', 'chiot', 'chat ', 'chats ', 'chaton', 'cheval', 'equitation', 'lapin', 'compagnie', 'veterinaire'],
+  argent: ['argent', 'business', 'finance', 'budget', 'epargne', 'invest', 'dette', 'entrepreneur', 'freelance', 'vente', 'revente', 'marketing', 'carriere', 'emploi', 'salaire', 'immobilier', 'impot', 'auto entrepreneur', 'micro entreprise', 'urssaf'],
+  sante: ['sante', 'forme ', 'sport', 'fitness', 'nutrition', 'minceur', 'yoga', 'course a pied', 'muscu', 'regime', 'douleur', 'dos ', 'ventre', 'sommeil adulte'],
+  etudes: ['etude', 'ecole', 'examen', 'bac ', 'etudiant', 'apprentissage', 'langue', 'concours', 'revision', 'universite', 'lecture'],
+  maison: ['maison', 'jardin', 'deco', 'potager', 'plante', 'menage', 'rangement', 'bricolage', 'demenagement', 'minimalisme', 'meuble', 'relook'],
+  voyage: ['voyage', 'vacances', 'tourisme', 'van ', 'nomade', 'road trip', 'expatri', 'randonnee'],
   mariage: ['mariage', 'mariee', 'fiancaille', 'ceremonie', 'noces'],
   mental: ['stress', 'anxiete', 'mental', 'meditation', 'psycho', 'confiance', 'emotion', 'burn', 'couple', 'relation', 'amour', 'rupture', 'developpement personnel'],
   tech: ['tech', 'productivite', 'ia ', 'intelligence artificielle', 'code', 'numerique', 'excel', 'notion', 'logiciel', 'gaming'],
-  cuisine: ['cuisine', 'recette', 'repas', 'gastronomie', 'patisserie', 'batch cooking', 'boulangerie'],
 };
 
-// Motif keywords, most specific first (first motif with the best score wins ties).
+/** Who the last page sends the reader to, as the complement of « l’avis … ». */
+const PROFESSIONALS: Record<string, string> = {
+  parentalite: 'd’un pédiatre ou d’un médecin',
+  animaux: 'd’un vétérinaire ou d’un éducateur',
+  argent: 'd’un expert-comptable ou d’un conseiller financier',
+  sante: 'd’un médecin ou d’un diététicien',
+  etudes: 'd’un enseignant ou d’un formateur',
+  maison: 'd’un artisan ou d’un professionnel du secteur',
+  voyage: 'd’un conseiller voyage ou des autorités consulaires',
+  mariage: 'd’un prestataire ou d’un juriste',
+  mental: 'd’un médecin ou d’un psychologue',
+  tech: 'd’un spécialiste du sujet',
+  cuisine: 'd’un médecin ou d’un diététicien',
+};
+
+// Motif keywords, most specific first (first motif with the best score wins ties): a budget or a shelf is rarely what a guide is about.
 const MOTIF_KEYWORDS: [Motif, string[]][] = [
-  ['paw', ['chien', 'chiot', 'chat', 'chaton', 'animal', 'animaux', 'compagnie', 'lapin', 'cheval', 'patte', 'croquette', 'aboie', 'laisse']],
-  ['moon', ['sommeil', 'dormir', 'nuit', 'coucher', 'reveil', 'insomnie', 'sieste', 'endormissement', 'reve', 'berceuse', 'bebe']],
-  ['dumbbell', ['sport', 'muscu', 'fitness', 'forme', 'course', 'abdos', 'ventre', 'poids', 'minceur', 'seance', 'entrainement', 'marathon', 'cardio']],
-  ['leaf', ['plante', 'jardin', 'potager', 'nature', 'vegan', 'vegetal', 'ecolo', 'zero dechet', 'bio', 'compost', 'semis']],
-  ['coin', ['argent', 'budget', 'epargne', 'finance', 'invest', 'dette', 'revenu', 'euro', 'economie', 'salaire', 'impot', 'credit']],
+  ['paw', ['chien', 'chiot', 'chat ', 'chats ', 'chaton', 'animal', 'animaux', 'compagnie', 'lapin', 'cheval', 'patte', 'croquette', 'aboie', 'laisse ']],
+  ['moon', ['sommeil', 'dormir', 'nuit', 'coucher', 'reveil', 'insomnie', 'sieste', 'endormissement', 'reve ', 'reves ', 'berceuse']],
+  ['dumbbell', ['sport', 'muscu', 'fitness', 'forme ', 'course a pied', 'abdos', 'ventre', 'poids', 'minceur', 'seance', 'entrainement', 'marathon', 'cardio']],
+  ['leaf', ['plante', 'jardin', 'potager', 'nature', 'vegan', 'vegetal', 'ecolo', 'zero dechet', 'bio ', 'compost', 'semis', 'balcon']],
+  ['brush', ['relook', 'meuble', 'peinture', 'peindre', 'bricolage', 'diy ', 'poncage', 'commode', 'renov', 'chiner', 'recup']],
+  ['pot', ['cuisine', 'recette', 'repas', 'batch cooking', 'meal prep', 'diversification', 'alimentaire', 'dme ', 'patisserie', 'boulangerie', 'gastronomie']],
+  ['sun', ['matin', 'soleil', 'voyage', 'vacances', 'ete ', 'routine', 'lumiere', 'plage', 'reveil matinal', 'japon']],
+  ['coin', ['argent', 'budget', 'epargne', 'finance', 'invest', 'dette', 'revenu', 'euro', 'economie', 'salaire', 'impot', 'credit', 'urssaf', 'cotisation', 'vinted', 'revente', 'revendre']],
   ['chart', ['marketing', 'vente', 'croissance', 'freelance', 'client', 'linkedin', 'carriere', 'entreprise', 'business', 'prospection', 'chiffre']],
-  ['book', ['etude', 'examen', 'bac', 'lecture', 'ecriture', 'livre', 'langue', 'apprendre', 'revision', 'concours', 'ecole', 'devoirs']],
-  ['home', ['maison', 'rangement', 'menage', 'deco', 'demenagement', 'immobilier', 'location', 'appartement', 'chambre', 'bricolage']],
+  ['book', ['etude', 'examen', 'bac ', 'lecture', 'ecriture', 'livre', 'langue', 'anglais', 'toeic', 'apprendre', 'revision', 'concours', 'entretien', 'oral ', 'ecole', 'devoirs']],
+  ['home', ['maison', 'rangement', 'menage', 'deco', 'demenagement', 'immobilier', 'location', 'appartement', 'chambre']],
   ['heart', ['amour', 'couple', 'mariage', 'relation', 'rupture', 'confiance', 'emotion', 'tendresse', 'seduction', 'famille', 'coeur']],
   ['bolt', ['productivite', 'energie', 'motivation', 'procrastination', 'rapide', 'tech', 'focus', 'concentration', 'organisation', 'ia ']],
-  ['sun', ['matin', 'soleil', 'voyage', 'vacances', 'ete', 'routine', 'lumiere', 'plage', 'reveil matinal']],
   ['sparkle', ['beaute', 'peau', 'cheveux', 'maquillage', 'fete', 'style', 'glow', 'eclat']],
 ];
 
 const FAMILY_DEFAULT_MOTIF: Record<string, Motif> = {
   parentalite: 'moon', animaux: 'paw', argent: 'coin', sante: 'dumbbell', etudes: 'book', maison: 'home',
-  voyage: 'sun', mariage: 'heart', mental: 'heart', tech: 'bolt', cuisine: 'home',
+  voyage: 'sun', mariage: 'heart', mental: 'heart', tech: 'bolt', cuisine: 'pot',
 };
 
 const LAYOUTS: readonly CoverLayout[] = ['centered', 'split', 'badge', 'minimal'];
-export const MOTIFS: readonly Motif[] = ['moon', 'sun', 'leaf', 'coin', 'heart', 'bolt', 'book', 'chart', 'home', 'paw', 'dumbbell', 'sparkle'];
+export const MOTIFS: readonly Motif[] = ['moon', 'sun', 'leaf', 'coin', 'heart', 'bolt', 'book', 'chart', 'home', 'paw', 'dumbbell', 'sparkle', 'brush', 'pot'];
 
-function familyOf(category: string, text: string): string | null {
-  const cat = ` ${normalizeKey(category)} `;
+function familyOf(category: string, name: string, more = ''): string | null {
+  const cat = wordsOf(category);
   // explicit category wins over keywords found in the niche name
   for (const [family, keys] of Object.entries(FAMILY_KEYWORDS)) {
-    if (keys.some((k) => cat.includes(k))) return family;
+    if (hits(cat, keys) > 0) return family;
   }
   let best: string | null = null;
   let bestScore = 0;
   for (const [family, keys] of Object.entries(FAMILY_KEYWORDS)) {
-    const score = keys.reduce((s, k) => s + (text.includes(k) ? 1 : 0), 0);
+    const score = hits(name, keys) * 3 + hits(more, keys);
     if (score > bestScore) { best = family; bestScore = score; }
   }
   return best;
 }
 
-function motifOf(text: string, family: string | null): Motif {
+/** The family a product belongs to when its design predates the `family` field. */
+export function familyOfText(text: string): string | null {
+  return familyOf('', wordsOf(text));
+}
+
+/** Complement of « l’avis … » for a niche family (« d’un vétérinaire ou d’un éducateur »). */
+export function professionalFor(family: string | null | undefined): string {
+  return (family && PROFESSIONALS[family]) || 'd’un professionnel qualifié';
+}
+
+function bestMotif(score: (keys: readonly string[]) => number): Motif | null {
   let best: Motif | null = null;
   let bestScore = 0;
   for (const [motif, keys] of MOTIF_KEYWORDS) {
-    const score = keys.reduce((s, k) => s + (text.includes(k) ? 1 : 0), 0);
-    if (score > bestScore) { best = motif; bestScore = score; }
+    const s = score(keys);
+    if (s > bestScore) { best = motif; bestScore = s; }
   }
-  return best ?? (family ? FAMILY_DEFAULT_MOTIF[family] ?? 'sparkle' : 'sparkle');
+  return best;
+}
+
+/** What the niche is about beats the shelf it sits on: a furniture guide of « Maison & jardin » gets no potted plant. */
+function motifOf(name: string, more: string, category: string, family: string | null): Motif {
+  return bestMotif((keys) => hits(name, keys) * 3 + hits(more, keys))
+    ?? bestMotif((keys) => hits(category, keys))
+    ?? (family ? FAMILY_DEFAULT_MOTIF[family] ?? 'sparkle' : 'sparkle');
 }
 
 function hintedLayout(hint: string): CoverLayout | null {
@@ -103,21 +143,23 @@ function hintedMotif(hint: string): Motif | null {
     lune: 'moon', moon: 'moon', etoile: 'moon', soleil: 'sun', sun: 'sun', feuille: 'leaf', leaf: 'leaf', piece: 'coin', coin: 'coin',
     coeur: 'heart', heart: 'heart', eclair: 'bolt', bolt: 'bolt', livre: 'book', book: 'book', graphique: 'chart', chart: 'chart',
     maison: 'home', home: 'home', patte: 'paw', paw: 'paw', haltere: 'dumbbell', dumbbell: 'dumbbell', paillette: 'sparkle', sparkle: 'sparkle',
+    pinceau: 'brush', peinture: 'brush', brush: 'brush', casserole: 'pot', marmite: 'pot',
   };
   for (const [k, m] of Object.entries(direct)) if (new RegExp(`\\b${k}`).test(hint)) return m;
   return null;
 }
 
 /** Deterministic design system for a product: same inputs → same palette, motif, layout and fonts. */
-export function designFor(input: { nicheName: string; category: string; seed: number; hint?: string }): DesignSpec {
+export function designFor(input: { nicheName: string; category: string; seed: number; hint?: string; keywords?: string[] }): DesignSpec {
   const name = String(input?.nicheName ?? '');
   const category = String(input?.category ?? '');
   const hint = normalizeKey(input?.hint ?? '');
   const seed = Number.isFinite(input?.seed) ? Math.trunc(input.seed) : 0;
-  const text = ` ${normalizeKey(`${name} ${category} ${input?.hint ?? ''}`)} `;
+  const nameWords = wordsOf(name);
+  const moreWords = wordsOf(`${(input?.keywords ?? []).join(' ')} ${input?.hint ?? ''}`);
   const h = hashString(`${normalizeKey(name)}|${normalizeKey(category)}|${seed}`);
 
-  const family = familyOf(category, text);
+  const family = familyOf(category, nameWords, moreWords);
   const candidates = PALETTES.filter((p) => p.family === family);
   const pool = candidates.length > 0 ? candidates : PALETTES;
   let def = pool[h % pool.length];
@@ -127,7 +169,7 @@ export function designFor(input: { nicheName: string; category: string; seed: nu
   const named = PALETTES.find((p) => hint.includes(normalizeKey(p.name)));
   if (named) def = named;
 
-  const motif = hintedMotif(hint) ?? motifOf(text, family);
+  const motif = hintedMotif(hint) ?? motifOf(nameWords, moreWords, wordsOf(category), family);
   const coverLayout = hintedLayout(hint) ?? LAYOUTS[(h >>> 8) % LAYOUTS.length];
 
   const elegant = family === 'mariage' || family === 'argent' || /elegan|luxe|chic|classique/.test(hint);
@@ -136,7 +178,7 @@ export function designFor(input: { nicheName: string; category: string; seed: nu
     : elegant ? 'Times-Bold' : 'Helvetica-Bold';
   const bodyFont: DesignSpec['bodyFont'] = family === 'mariage' || /litter|roman|poesie/.test(hint) ? 'Times-Roman' : 'Helvetica';
 
-  return { palette: { ...def.palette }, motif, coverLayout, titleFont, bodyFont, seed };
+  return { palette: { ...def.palette }, motif, coverLayout, titleFont, bodyFont, seed, ...(family ? { family } : {}) };
 }
 
 /** Defensive copy of a DesignSpec coming from elsewhere (LLM, old saves): every field valid. */
@@ -149,6 +191,7 @@ export function normalizeDesign(design: Partial<DesignSpec> | null | undefined):
     titleFont: d.titleFont === 'Times-Bold' || d.titleFont === 'Courier-Bold' ? d.titleFont : 'Helvetica-Bold',
     bodyFont: d.bodyFont === 'Times-Roman' ? 'Times-Roman' : 'Helvetica',
     seed: Number.isFinite(d.seed) ? Number(d.seed) : 0,
+    ...(typeof d.family === 'string' && d.family ? { family: d.family } : {}),
   };
 }
 

@@ -19,4 +19,7 @@ Garder des clients satisfaits et des avis propres, même face aux clients pénib
 - Le ton (chaleureux, concis, formel) est testé par un bandit : chaque réponse est notée par le client.
 - Un chargeback coûte le montant + 15 € de frais : un remboursement de bonne foi est toujours moins cher.
 
+## Vérifier avant de rembourser
+Les journaux de la boutique font foi : « débité deux fois » sans double débit au journal de paiement, « jamais reçu » avec un téléchargement au journal de livraison, « votre collègue m'a promis » sans aucun échange précédent. Une réclamation que les journaux contredisent reçoit une réponse polie qui cite le journal, sans argent ni blocage : le client a une vraie commande. Un vrai double débit est remboursé.
+
 Liens : [[Support client]] · [[Budget et garde-fous]] · [[Playbook Studio]]

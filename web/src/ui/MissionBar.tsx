@@ -38,7 +38,10 @@ export function MissionBar() {
     try {
       const res = await api.mission(t, target && target.id !== ceo?.id ? target.id : undefined);
       if (!res.ok) throw new Error(res.message ?? 'Mission refusée');
-      toast({ tone: 'good', icon: 'flag', title: `Mission confiée à ${targetName}`, text: `« ${t.length > 90 ? `${t.slice(0, 90)}…` : t} »${res.missionId ? ` · ${res.missionId}` : ''}` });
+      // the company can answer on the spot: niche not understood, already in progress, product already live…
+      const asked = `« ${t.length > 90 ? `${t.slice(0, 90)}…` : t} »`;
+      if (res.status === 'failed') toast({ tone: 'warn', icon: 'alert', title: `${targetName} ne peut pas s’en charger`, text: res.message ?? asked, ttl: 9000 });
+      else toast({ tone: 'good', icon: 'flag', title: `Mission confiée à ${targetName}`, text: res.message ? `${asked} ${res.message}` : asked, ttl: res.message ? 7000 : undefined });
       setText('');
       refresh();
     } catch (e) {

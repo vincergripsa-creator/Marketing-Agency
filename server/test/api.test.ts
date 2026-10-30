@@ -1,12 +1,13 @@
+import { EventEmitter } from 'node:events';
 import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
-import { request as httpRequest } from 'node:http';
+import { request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type {
-  Activity, AgentState, ChapterContent, DailyKpi, FinanceSnapshot, InboxMessage, LedgerEntry, Product, Task, WorldState,
+  Activity, AgentState, ChapterContent, CompanySnapshot, DailyKpi, FinanceSnapshot, InboxMessage, LedgerEntry, Product, Task, WorldState,
 } from '../src/shared.js';
 import { buildConfig, mergeEnv, parseEnvFile, parseMindMode } from '../src/api/env.js';
 import { isEntryPoint } from '../src/api/entry.js';
@@ -15,10 +16,11 @@ import {
   estimateCashProfit, flushSaves, isValidRunId, listRuns, loadWorld, makeRunId, newRunId, saveWorld, scheduleSave,
 } from '../src/api/persist.js';
 import { createAgencyServer, devLandingPage, type SessionLike } from '../src/api/server.js';
-import { sseFrame } from '../src/api/sse.js';
+import { SseHub, sseFrame, type SnapshotSource } from '../src/api/sse.js';
 import {
-  buildSnapshot, DEFAULT_LIMITS, estimateFinance, serializeSnapshot, shrinkValue, SNAPSHOT_BUDGET_BYTES, trimContent, trimInbox, trimTasks,
+  buildSnapshot, DEFAULT_LIMITS, estimateFinance, serializeLiveSnapshot, serializeSnapshot, shrinkValue, SNAPSHOT_BUDGET_BYTES, taskStatsOf, TIGHT_LIMITS, trimContent, trimInbox, trimTasks,
 } from '../src/api/trim.js';
+import { FEES, minStartingCash } from '../src/sim/balance.js';
 import { banditInsights, CliError, fmtEur, kpiRow, parseCliArgs, tableHeader, verdict } from '../src/cli.js';
 
 // ───────────────────────────── module doubles for the live session ─────────────────────────────
@@ -366,10 +368,23 @@ describe('path traversal protection', () => {
     const s = sanitizeScenario({ startingCash: '1e9', difficulty: 'cauchemar', mindMode: 'claude', seed: 12.7, horizonDays: 3, evil: 'x', goal: { targetProfit: 2000, byDay: 45 }, founderApproval: 'yes' });
     expect(s).toEqual({ startingCash: 1_000_000, difficulty: 'cauchemar', mindMode: 'claude', seed: 12, horizonDays: 7, goal: { targetProfit: 2000, byDay: 45 } });
     expect(sanitizeScenario({ difficulty: 'impossible', companyName: '   ' })).toEqual({});
+    expect(sanitizeScenario({ startingCash: minStartingCash() })).toEqual({ startingCash: minStartingCash() });
     expect(parseControl({ action: 'play', speed: 4 })).toEqual({ action: 'play', speed: 4 });
     expect(parseControl({ action: 'pause' })).toEqual({ action: 'pause' });
     expect(() => parseControl({ action: 'rewind' })).toThrow(HttpError);
     expect(() => parseControl({ action: 'play', speed: 3 })).toThrow(/Vitesse/);
+  });
+
+  it('refuses a budget that cannot pay the launch and a month of fixed costs, in French', () => {
+    const fixed = 30 * (FEES.boutiqueDaily + FEES.toolsDaily);
+    expect(minStartingCash()).toBeGreaterThanOrEqual(FEES.setupCost + fixed);
+    expect(minStartingCash()).toBe(110);
+    for (const startingCash of [0, 50, 109.99, '40', -5]) {
+      expect(() => sanitizeScenario({ startingCash })).toThrow(HttpError);
+      expect(() => sanitizeScenario({ startingCash })).toThrow(/Budget de départ trop bas : il faut au moins 110 €/);
+    }
+    expect(() => parseCliArgs(['--budget', '40'])).toThrow(/Budget de départ trop bas : il faut au moins 110 €/);
+    expect(parseCliArgs(['--budget', '110']).budget).toBe(110);
   });
 
   it('detects the process entry module', () => {
@@ -487,19 +502,159 @@ describe('snapshot trimming', () => {
     expect(shrinkValue({ a: { b: { c: { d: { e: 1 } } } } }, 10)).toEqual({ a: { b: { c: { d: '{…}' } } } });
   });
 
-  it('estimates finance from the ledger with either sign convention', () => {
+  it('estimates finance from the ledger', () => {
     const w = makeWorld();
     // 1..299: 99 multiples of 3 are ad spend (-5), the other 200 are sales (+19)
     expect(estimateCashProfit(w)).toEqual({ cash: 500 + 200 * 19 - 99 * 5, profit: 200 * 19 - 99 * 5, capital: 500 });
-    const magnitudes = { ledger: [
-      { id: 'a', day: 1, type: 'capital' as const, amount: 500, memo: '', ref: null },
-      { id: 'b', day: 1, type: 'ad_spend' as const, amount: 40, memo: '', ref: null },
-      { id: 'c', day: 1, type: 'revenue' as const, amount: 19, memo: '', ref: null },
-    ] };
-    expect(estimateCashProfit(magnitudes)).toEqual({ cash: 479, profit: -21, capital: 500 });
     const f = estimateFinance(w);
     expect(f.adSpend).toBe(495);
-    expect(f.roas7d).toBe(1.9);
+    expect(f.revenue).toBe(3800);
+  });
+
+  /** A run with a payment reserve still held, a released one, and a creator scam: payout, reversal, loss. */
+  function moneyWorld(): WorldState {
+    const w = makeWorld();
+    const entry = (id: string, day: number, type: LedgerEntry['type'], amount: number, ref: string | null = null): LedgerEntry => ({ id, day, type, amount, memo: '', ref });
+    w.day = 12;
+    w.market.events = [];
+    w.ledger = [
+      entry('a', 1, 'capital', 500),
+      entry('b', 1, 'tool_subscription', -60, 'setup'),
+      entry('c', 3, 'revenue', 300),
+      entry('d', 3, 'ad_spend', -40),
+      entry('e', 3, 'payment_fee', -5),
+      entry('f', 4, 'platform_fee', -30, 'hold:4'),
+      entry('g', 8, 'platform_fee', 30, 'hold:4'),
+      entry('h', 5, 'creator_payout', -100, 'prt_1'),
+      entry('i', 5, 'creator_payout', 100, 'reversal:prt_1'),
+      entry('j', 5, 'scam_loss', -100, 'prt_1'),
+      entry('k', 9, 'refund', -19),
+      entry('l', 10, 'platform_fee', -0.97, 'fixed:10'),
+      entry('m', 11, 'platform_fee', -143.1, 'hold:11'),
+    ];
+    return w;
+  }
+
+  it('the ledger fallbacks read holds and reversals like the sim: a hold is never a cost, a reversal cancels its payout', async () => {
+    const { financeSnapshot } = await vi.importActual<typeof import('../src/sim/finance.js')>('../src/sim/finance.js');
+    const w = moneyWorld();
+    const sim = financeSnapshot(w);
+    expect(estimateFinance(w)).toEqual(sim);
+    expect(sim).toMatchObject({ otherCosts: 160, fees: 5.97, refunds: 19, adSpend: 40, revenue: 300 });
+    // 143,10 € held today: the cash is down by that much, the profit is not
+    expect(sim.profit).toBe(75.03);
+    expect(sim.cash).toBe(431.93);
+    expect(estimateCashProfit(w)).toEqual({ cash: 431.93, profit: 75.03, capital: 500 });
+    // once the reserve is released nothing is left of it
+    w.ledger.push({ id: 'n', day: 12, type: 'platform_fee', amount: 143.1, memo: '', ref: 'hold:11' });
+    expect(estimateFinance(w)).toEqual(financeSnapshot(w));
+    expect(estimateFinance(w)).toMatchObject({ fees: 5.97, profit: 75.03, cash: 575.03 });
+  });
+
+  it('a snapshot that falls back on the ledger shows the same finance as the sim, outage days included', async () => {
+    const { financeSnapshot } = await vi.importActual<typeof import('../src/sim/finance.js')>('../src/sim/finance.js');
+    const w = moneyWorld();
+    w.market.events = [{ id: 'evt_1', day: 2, kind: 'platform_outage', title: 'x', description: 'x', severity: 'warn', refs: { day: 3 } }];
+    expect(estimateFinance(w)).toEqual(financeSnapshot(w));
+  });
+});
+
+describe('what the UI may see', () => {
+  const world = makeWorld();
+
+  it('the inbox of a normal snapshot has no ground truth; god mode serves it apart', () => {
+    const snap = buildSnapshot(world, FINANCE);
+    expect(JSON.stringify(snap.market.inbox)).not.toContain('"intent"');
+    expect(snap.godMode).toBeUndefined();
+    const god = buildSnapshot(world, FINANCE, true);
+    expect(JSON.stringify(god.market.inbox)).not.toContain('"intent"');
+    expect(Object.keys(god.godMode!.intents)).toHaveLength(god.market.inbox.length);
+    const first = world.market.inbox.find((m) => m.id === god.market.inbox[0]!.id)!;
+    expect(god.godMode!.intents[first.id]).toBe(first.intent);
+  });
+
+  it('the live snapshot keeps open tasks whole, drops the payload of finished ones and the text of guides and ads', () => {
+    const w = makeWorld();
+    const open = w.company.tasks[0]!;
+    open.status = 'awaiting_founder';
+    open.input = { productId: 'prd_1', founderAsk: 'Payer '.repeat(30) };
+    const done = w.company.tasks.find((t) => t.status === 'done')!;
+    w.company.tasks.push({ ...done, id: 'tsk_recent', dayDone: 99, input: { productId: 'prd_1', blob: 'x'.repeat(500), nested: { a: 1 } }, output: { adCap: 12, note: 'n'.repeat(500), outline: { chapters: [] } } });
+    w.company.products[0]!.salesPage = { headline: 'h', subheadline: 's', painBullets: [], solution: 'x'.repeat(900), chapterBlurbs: [], bonusBlurb: '', objections: [], guarantee: '', cta: 'c', hypeLevel: 0.4 };
+    const live = JSON.parse(serializeLiveSnapshot(w, FINANCE)) as CompanySnapshot;
+    expect(String(live.company.tasks.find((t) => t.id === open.id)!.input.founderAsk).length).toBeGreaterThan(100);
+    const finished = live.company.tasks.find((t) => t.id === 'tsk_recent')!;
+    expect(finished.input).toEqual({ productId: 'prd_1' });
+    expect(finished.output).toEqual({ adCap: 12 });
+    const p = live.company.products[0]!;
+    expect(p.salesPage).toBeNull();
+    expect(p.content!.chapters).toEqual([]);
+    expect(p.content!.nextStep).toEqual(w.company.products[0]!.content!.nextStep);
+    expect(serializeLiveSnapshot(w, FINANCE).length).toBeLessThan(serializeSnapshot(w, FINANCE).length);
+  });
+
+  it('counts tasks on the whole list, whatever the snapshot keeps of it', () => {
+    const base = makeWorld().company.tasks[0]!;
+    const task = (id: string, dept: Task['dept'], status: Task['status'], dayCreated: number, dayDone: number | null, kind: Task['kind'] = 'write_pdf'): Task => ({ ...base, id, dept, status, dayCreated, dayDone, kind });
+    const tasks = [
+      ...Array.from({ length: 500 }, (_, i) => task(`tsk_${i}`, 'studio', 'done', 1, 2)),
+      task('a', 'growth', 'failed', 19, 20, 'produce_ad'),
+      task('b', 'growth', 'cancelled', 20, 20, 'produce_ad'),
+      task('c', 'growth', 'pending', 20, null, 'launch_campaign'),
+      task('d', 'growth', 'done', 18, 20, 'launch_campaign'),
+    ];
+    const stats = taskStatsOf(tasks, 20);
+    expect(stats.days.find((d) => d.day === 2)).toEqual({ day: 2, created: 0, done: 500, failed: 0, cancelled: 0 });
+    expect(stats.days.at(-1)).toEqual({ day: 20, created: 2, done: 1, failed: 1, cancelled: 1 });
+    expect(stats.days.map((d) => d.day)).toEqual([1, 2, 18, 19, 20]);
+    expect(stats.depts.studio).toMatchObject({ days: [], kinds7d: {}, done: 500, avgDelayDays: 1 });
+    expect(stats.depts.growth).toMatchObject({ done: 1, avgDelayDays: 2, kinds7d: { produce_ad: 2, launch_campaign: 2 } });
+    expect(stats.depts.growth!.days.at(-1)).toEqual({ day: 20, created: 2, done: 1, failed: 1, cancelled: 1 });
+    const w = makeWorld();
+    w.company.tasks = tasks;
+    const snap = buildSnapshot(w, FINANCE, false, TIGHT_LIMITS);
+    expect(snap.company.tasks.filter((t) => t.status === 'done').length).toBeLessThanOrEqual(TIGHT_LIMITS.doneTasks);
+    expect(snap.taskStats!.days.find((d) => d.day === 2)!.done).toBe(500);
+  });
+});
+
+describe('SSE pacing', () => {
+  function stream(source: SnapshotSource, sse: ConstructorParameters<typeof SseHub>[1]) {
+    const frames: string[] = [];
+    const req = Object.assign(new EventEmitter(), { socket: { setTimeout() {}, setNoDelay() {}, setKeepAlive() {} } }) as unknown as IncomingMessage;
+    const res = Object.assign(new EventEmitter(), { writableEnded: false, destroyed: false, writeHead() {}, write: (f: string) => { frames.push(f); return true; }, end() {} }) as unknown as ServerResponse;
+    const hub = new SseHub(source, { heartbeatMs: 60_000, ...sse });
+    hub.attach(req, res, false);
+    return { hub, count: (type: string) => frames.filter((f) => f.startsWith(`data: {"type":"${type}"`)).length, frames };
+  }
+
+  it('sends a tick event for every tick but at most one full snapshot per interval, the light one when there is one', async () => {
+    let day = 1;
+    const source: SnapshotSource = { snapshotJson: () => '{"full":true}', liveSnapshotJson: () => '{"live":true}', tickJson: () => JSON.stringify({ type: 'tick', day }) };
+    const s = stream(source, { snapshotMinIntervalMs: 120 });
+    expect(s.frames.at(-1)).toContain('"live":true');
+    for (let i = 0; i < 12; i++) { s.hub.tick(); await new Promise((r) => setTimeout(r, 25)); }
+    await new Promise((r) => setTimeout(r, 150));
+    expect(s.count('tick')).toBe(12);
+    const snapshots = s.count('snapshot');
+    expect(snapshots).toBeGreaterThanOrEqual(3);
+    expect(snapshots).toBeLessThanOrEqual(5);
+    expect(s.frames.some((f) => f.includes('"full":true'))).toBe(false);
+    // a new day does not wait for the interval
+    s.hub.tick();
+    await new Promise((r) => setTimeout(r, 15));
+    const before = s.count('snapshot');
+    day = 2;
+    s.hub.tick();
+    await new Promise((r) => setTimeout(r, 15));
+    expect(s.count('snapshot')).toBe(before + 1);
+    s.hub.close();
+  });
+
+  it('defaults to about one snapshot per second', () => {
+    const hub = new SseHub({ snapshotJson: () => '{}', tickJson: () => '{}' });
+    expect((hub as unknown as { opts: { snapshotMinIntervalMs: number } }).opts.snapshotMinIntervalMs).toBe(1000);
+    hub.close();
   });
 });
 
@@ -509,6 +664,28 @@ describe('persistence', () => {
   let dir: string;
   beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), 'agency-runs-')); });
   afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it('the run list never counts a payment reserve as a loss', async () => {
+    const w = makeWorld('run-20261030-120000');
+    w.ledger = [
+      { id: 'a', day: 1, type: 'capital', amount: 500, memo: '', ref: null },
+      { id: 'b', day: 2, type: 'revenue', amount: 393.1, memo: '', ref: null },
+      { id: 'c', day: 3, type: 'platform_fee', amount: -143.1, memo: '', ref: 'hold:3' },
+    ];
+    const own = join(dir, 'reserve');
+    await saveWorld(w, { dir: own });
+    expect((await listRuns({ dir: own })).find((r) => r.runId === w.runId)).toMatchObject({ cash: 750, profit: 393.1 });
+  });
+
+  it('reads the finance of a save when it serialises, not when it was asked for', async () => {
+    const w = makeWorld('run-20261030-121000');
+    let profit = 1;
+    const own = join(dir, 'differe');
+    scheduleSave(w, 10_000, { dir: own, finance: () => ({ cash: 10, profit }) });
+    profit = 2;
+    await flushSaves();
+    expect((await listRuns({ dir: own })).find((r) => r.runId === w.runId)).toMatchObject({ cash: 10, profit: 2 });
+  });
 
   it('formats run ids', () => {
     expect(makeRunId(new Date(2026, 9, 3, 7, 5, 9))).toBe('run-20261003-070509');
@@ -651,10 +828,17 @@ describe('HTTP server', () => {
     const sc = await call(port, 'POST', '/api/scenario', JSON.stringify({ startingCash: 800, difficulty: 'facile' }));
     expect(sc.status).toBe(200);
     expect(JSON.parse(sc.body).runId).toBe(world.runId);
+    const poor = await call(port, 'POST', '/api/scenario', JSON.stringify({ startingCash: 50 }));
+    expect(poor.status).toBe(400);
+    expect(JSON.parse(poor.body).error).toMatch(/il faut au moins 110 €/);
     const created = JSON.parse(calls.find((c) => c.startsWith('newRun:'))!.slice(7));
     expect(created).toMatchObject({ startingCash: 800, difficulty: 'facile' });
     expect(typeof created.seed).toBe('number');
     expect(JSON.parse((await call(port, 'POST', '/api/mission', JSON.stringify({ text: 'Lance un 2e PDF', agentId: 'ag_noam' }))).body)).toEqual({ ok: true, missionId: 'mis_77' });
+    // The company's answer travels with the mission: a refused subject is known at once.
+    fake.missionState = (id) => (id === 'mis_77' ? { status: 'failed', message: 'Je ne lance rien sur « apiculture ».' } : {});
+    expect(JSON.parse((await call(port, 'POST', '/api/mission', JSON.stringify({ text: 'Lance un guide sur l’apiculture' }))).body)).toEqual({ ok: true, missionId: 'mis_77', status: 'failed', message: 'Je ne lance rien sur « apiculture ».' });
+    delete fake.missionState;
     expect((await call(port, 'POST', '/api/mission', JSON.stringify({ text: '   ' }))).status).toBe(400);
     expect(JSON.parse((await call(port, 'POST', '/api/chat', JSON.stringify({ agentId: 'ag_margaux', text: 'Salut' }))).body).reply).toContain('Salut');
     const unknown = await call(port, 'POST', '/api/chat', JSON.stringify({ agentId: 'ag_x', text: 'Salut' }));
@@ -902,7 +1086,7 @@ describe('live session', () => {
     expect(await s.chat('Margaux', 'Coucou')).toBe('Bien reçu : Coucou'); // a first name works too
     expect(await s.mission('Écris des hooks', 'noam')).toBe('mis_42');
     // the live session info carries every SessionInfo field the UI reads
-    expect(Object.keys(s.info()).sort()).toEqual(['busy', 'day', 'intervalMs', 'lastError', 'mindMode', 'playing', 'runId', 'speed', 'status', 'tick']);
+    expect(Object.keys(s.info()).sort()).toEqual(['busy', 'day', 'intervalMs', 'lastError', 'minStartingCash', 'mindMode', 'playing', 'runId', 'speed', 'status', 'tick']);
     await s.approve('tsk_1', true);
     expect(fake.approvals).toContain('tsk_1:true');
     await expect(s.approve('tsk_absent', true)).rejects.toMatchObject({ status: 404 });

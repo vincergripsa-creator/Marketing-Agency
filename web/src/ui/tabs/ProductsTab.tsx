@@ -156,7 +156,13 @@ function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) 
           Qualité du guide
         </SectionTitle>
         <QualityBars q={q} />
-        {showIssues && q?.issues?.length ? <ul className="issues">{q.issues.map((s, i) => <li key={i}>{s}</li>)}</ul> : null}
+        {q?.blocking?.length ? (
+          <div className="blocking">
+            <strong className="small">Points bloquants</strong>
+            <ul className="issues">{q.blocking.map((b, i) => <li key={i}>{b.text}</li>)}</ul>
+          </div>
+        ) : null}
+        {showIssues && q?.issues?.length ?<ul className="issues">{q.issues.map((s, i) => <li key={i}>{s}</li>)}</ul> : null}
 
         {st.reviews?.length ? (
           <>

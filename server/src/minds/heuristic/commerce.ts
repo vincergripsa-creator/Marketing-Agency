@@ -3,13 +3,13 @@
  * promise level driven by `hype`) and the "try to kill it" review before anything ships.
  */
 import type { NicheBrief, PdfContent, Product, QualityReport, SalesPage, VoiceOfCustomer } from '../../shared.js';
-import type { RedTeamVerdict } from '../../contracts.js';
+import type { RedTeamFacts, RedTeamVerdict } from '../../contracts.js';
 import { RISK_RULES } from '../lexicon.js';
 import { conflictsWith } from '../playbook.js';
 import { ensurePdf } from '../shapes.js';
-import { bare, bestLabel, cap, clean, fit, fmtEur, lf, lowerFirst, norm, ofAud, q, uniqStrings, type LocalRng } from '../util.js';
+import { bare, bestLabel, cap, clean, fit, fmtEur, lf, lowerFirst, norm, ofAud, q, splitSentences, uniqStrings, type LocalRng } from '../util.js';
 import { buildNicheCtx, FALLBACK } from './niche.js';
-import { inferKind, inline, promiseOutcome, type Kind } from './studio.js';
+import { inferKind, inline, promiseOutcome } from './studio.js';
 
 export function nicheFromProduct(p: Product | null | undefined, voc?: VoiceOfCustomer | null): NicheBrief {
   return {
@@ -22,36 +22,10 @@ export function nicheFromProduct(p: Product | null | undefined, voc?: VoiceOfCus
   };
 }
 
-const BLURBS: Record<Kind, string[]> = {
-  comprendre: [
-    'Le mécanisme qui entretient tout — et pourquoi ce n’est pas de votre faute.',
-    'Ce qui se passe vraiment, expliqué simplement : la pièce qui manquait au puzzle.',
-  ],
-  diagnostic: [
-    'La grille d’observation de 3 jours qui révèle le moment précis où tout se joue.',
-    'Trois jours d’observation, une page : vous saurez enfin par quoi commencer.',
-  ],
-  methode: [
-    'Les étapes, dans l’ordre exact où les appliquer — la deuxième surprend presque tout le monde.',
-    'La méthode pas à pas, pensée pour être tenue même un soir de grande fatigue.',
-  ],
-  erreurs: [
-    'Les erreurs que presque tout le monde fait sans le savoir (la n°1 va vous surprendre).',
-    'Ce qu’il faut arrêter dès ce soir, et quoi faire à la place, en un tableau.',
-  ],
-  situations: [
-    'Quoi faire les jours où tout déraille : fatigue, imprévus, entourage qui ne suit pas.',
-    'Les réponses toutes prêtes aux situations qui font rechuter tout le monde.',
-  ],
-  programme: [
-    'Le plan jour par jour, avec une seule nouveauté par phase : impossible de se perdre.',
-    'Votre calendrier précis, phase par phase, à cocher chaque soir.',
-  ],
-  durer: [
-    'Les réflexes qui gardent les résultats quand la vie reprend ses droits.',
-    'Comment ne pas retomber dans les anciennes habitudes, même après une mauvaise semaine.',
-  ],
-};
+/** A chapter sells itself with its own opening, never with a sentence shared by every guide. */
+function blurbOf(intro: string, title: string): string {
+  return fit(splitSentences(intro)[0] ?? intro, 170) || title;
+}
 
 interface AnswerCtx { audArt: string; chapters: number; minutes: number; price: number; dur: string; brand: string }
 
@@ -77,9 +51,6 @@ const GENERIC_ANSWERS: ((c: AnswerCtx) => string)[] = [
   (c) => `C’est une question que beaucoup se posent : le guide la traite pas à pas, et vous avez 14 jours pour être remboursé s’il ne vous aide pas (un simple e-mail à l’équipe ${c.brand} suffit).`,
   () => 'Le plus simple est d’essayer le premier chapitre ce soir : il suffit pour savoir si la méthode vous convient.',
 ];
-
-/** The observation diary is for babies and pets; an admin / skill reader takes stock instead. */
-const DIAG_NONCARE = ['Trois jours pour faire le point sur une seule page : vous saurez enfin par quoi commencer.', 'L’état des lieux en une page qui montre le point précis qui bloque.'];
 
 function answerFor(objection: string, ctx: AnswerCtx, used: Set<string>): string {
   const n = norm(objection);
@@ -124,17 +95,14 @@ export function heuristicSalesPage(
     : hype >= 0.35
       ? `Enfin : ${desired}${enDur ? ` —${enDur}` : ''}, sans tout bouleverser`
       : phrase ? `${cap(q(phrase))} ? Voici un plan clair, pas à pas` : `${cap(desired)} : le plan clair, pas à pas`;
-  const subheadline = `Le guide PDF pour ${c.audArt} : ${nCh} chapitres courts, des étapes numérotées, des exemples réels et un bonus offert.${hype >= 0.7 ? ` La méthode la plus complète du marché pour en finir avec le problème.` : ''}`;
+  const subheadline = `Le guide PDF pour ${c.audArt} : ${nCh} chapitres courts, des étapes numérotées, des exemples types et un bonus offert.${hype >= 0.7 ? ` La méthode la plus complète du marché pour en finir avec le problème.` : ''}`;
 
   const painBullets = uniqStrings([...c.phrases, ...c.pains]).slice(0, Math.max(3, Math.min(6, c.phrases.length || 4)));
   const methodCh = content.chapters.find((ch, i) => inferKind(ch.title, i, content.chapters.length) === 'methode');
   const firstStep = (methodCh ?? content.chapters[0])?.steps[0];
   const solution = `« ${title} » rassemble, en ${nCh} chapitres, ce qui fonctionne vraiment pour ${c.audArt}. Pas de théorie interminable : on commence par ${firstStep ? inline(bare(firstStep)) : 'faire le point pendant trois jours'}, puis on suit un plan de ${durTxt} vers un seul objectif : ${desired}. Chaque chapitre se termine par une checklist, pour savoir exactement où vous en êtes.${hype >= 0.7 && canRisk('100 %') ? ' Une méthode efficace à 100 %, même si vous avez déjà tout essayé.' : ''}`;
 
-  const chapterBlurbs = content.chapters.map((ch, i) => ({
-    title: ch.title,
-    blurb: rng.pick((() => { const k = inferKind(ch.title, i, nCh); return k === 'diagnostic' && !c.care ? DIAG_NONCARE : BLURBS[k]; })()),
-  }));
+  const chapterBlurbs = content.chapters.map((ch) => ({ title: ch.title, blurb: blurbOf(ch.intro, ch.title) }));
   const bonusName = bare(content.bonus.title.replace(/^bonus\s*:\s*/i, '')) || 'la fiche SOS';
   const bonusBlurb = `Cadeau inclus : ${lf(bonusName)}. ${fit(clean(content.bonus.intro), 160) || 'Un outil prêt à imprimer pour les moments difficiles.'}`;
 
@@ -157,15 +125,79 @@ export function heuristicSalesPage(
 const SUBJECT: Record<'idea' | 'pdf' | 'sales_page' | 'ad', string> = { idea: 'l’idée', pdf: 'le PDF', sales_page: 'la page de vente', ad: 'la pub' };
 const BROAD = /tout le monde|pour tous|tous les (ages|niveaux|profils)|debutants? (et|ou) (experts?|confirmes)|de 7 a 77 ans|tous ages|toute la famille|n'importe qui|grand public/;
 
-export function heuristicRedTeam(input: { subject: 'idea' | 'pdf' | 'sales_page' | 'ad'; summary: string; quality: QualityReport | null }): RedTeamVerdict {
+/** A TikTok ad costs several euros per sale: under this price the market cannot pay it back. */
+const LOW_MARKET_PRICE = 12;
+const THIN_MARKET_PRICE = 15;
+const WEAK_DEMAND = 35;
+/** Share of the known pains a guide may leave out before it has to be rebuilt from its plan. */
+const MISSED_PAINS_KILL = 0.6;
+
+interface Finding { reason: string; fix: string; severe?: boolean }
+
+/** Is the idea worth a guide? Only what the company's own research can show (signals, competitors, anchors). */
+function ideaFindings(f: RedTeamFacts): Finding[] {
+  const out: Finding[] = [];
+  const t = `« ${f.title} »`;
+  const demand = f.signal ? (f.signal.searchInterest + f.signal.tiktokBuzz) / 2 : null;
+  const anchor = f.voc?.medianAnchor ?? null;
+  const rivals = f.competitors?.medianPrice ?? null;
+  const market = anchor !== null || rivals !== null ? Math.max(anchor ?? 0, rivals ?? 0) : null;
+  const paid = [anchor !== null ? `les clients citent ${fmtEur(anchor)}` : '', rivals !== null ? `les concurrents vendent ${fmtEur(rivals)}` : ''].filter(Boolean).join(', ');
+  if (market !== null && market < LOW_MARKET_PRICE) {
+    out.push({ reason: `Marché trop bon marché pour ${t} : ${paid}. Une vente ne rembourse pas une pub TikTok.`, fix: 'Choisir une niche où les acheteurs paient au moins 14 €.', severe: true });
+  } else if (market !== null && market < THIN_MARKET_PRICE) {
+    out.push({ reason: `Marge fine sur ${t} : ${paid}.`, fix: 'Prévoir un angle plus précis qui justifie un palier de prix au-dessus, sinon rester en organique.' });
+  }
+  if (demand !== null && demand < WEAK_DEMAND) {
+    out.push({ reason: `Demande faible pour ${t} : recherche ${Math.round(f.signal!.searchInterest)}/100, buzz TikTok ${Math.round(f.signal!.tiktokBuzz)}/100.`, fix: 'Vérifier un angle plus large dans la même douleur ou passer à la niche suivante.', severe: market !== null && market < THIN_MARKET_PRICE });
+  }
+  if (f.signal?.competition === 'forte' && f.competitors && f.competitors.count > 0 && (f.competitors.avgRating ?? 0) >= 4.3 && f.competitors.reviews >= 300) {
+    out.push({ reason: `Terrain occupé : ${f.competitors.count} concurrents notés ${fmtRating(f.competitors.avgRating!)}/5 avec ${f.competitors.reviews} avis.`, fix: 'Attaquer un sous-problème précis que leurs guides laissent de côté.' });
+  }
+  if (f.voc && f.voc.pains < 3) out.push({ reason: `Voix du client trop mince : ${f.voc.pains} douleur(s) documentée(s) pour ${t}.`, fix: 'Reprendre la recherche avant d’écrire : commentaires, avis, forums.' });
+  if (f.voc && f.voc.sensitiveClaims >= 5) out.push({ reason: `Sujet sensible pour ${t} : ${f.voc.sensitiveClaims} allégations interdites par la plateforme sur cette niche.`, fix: 'Écrire chaque promesse en résultat observable, jamais en résultat garanti.' });
+  return out;
+}
+
+function fmtRating(n: number): string {
+  return (Math.round(n * 10) / 10).toString().replace('.', ',');
+}
+
+/** Does the guide answer what its buyers actually say? Read from the guide itself. */
+function guideFindings(f: RedTeamFacts): Finding[] {
+  const g = f.guide;
+  if (!g) return [];
+  const out: Finding[] = [];
+  const named = (xs: string[], n = 2) => xs.slice(0, n).map((x) => `« ${fit(bare(x), 60)} »`).join(', ');
+  if (g.uncoveredPains.length) {
+    const most = g.painsKnown > 0 && g.uncoveredPains.length >= 3 && g.uncoveredPains.length / g.painsKnown >= MISSED_PAINS_KILL;
+    if (most || g.uncoveredPains.length >= 2) {
+      out.push({
+        reason: `${g.uncoveredPains.length} douleur(s) sur ${g.painsKnown} absentes de « ${f.title} » : ${named(g.uncoveredPains)}.`,
+        fix: `Traiter ces douleurs avec une réponse concrète : ${named(g.uncoveredPains, 3)}.`, severe: most,
+      });
+    }
+  }
+  if (g.chapters > 0 && g.chaptersWithoutExample.length * 2 > g.chapters) {
+    out.push({ reason: `${g.chaptersWithoutExample.length} chapitres sur ${g.chapters} sans exemple, dont ${named(g.chaptersWithoutExample, 1)}.`, fix: 'Un exemple tiré de la recherche par chapitre.' });
+  }
+  return out;
+}
+
+export function heuristicRedTeam(input: { subject: 'idea' | 'pdf' | 'sales_page' | 'ad'; summary: string; quality: QualityReport | null; facts?: RedTeamFacts | null }): RedTeamVerdict {
   const subj = SUBJECT[input.subject] ?? 'le livrable';
+  const feminine = input.subject !== 'pdf';
+  const f = input.facts ?? null;
   const summary = clean(input.summary);
-  const n = norm(summary);
+  // With the facts, only what WE say is judged: the research quoted in a summary (the claims the platform bans, what
+  // customers write) is not our promise. That list alone used to return the same « fix » for every idea.
+  const ours = f ? clean([f.title, f.audience, f.problem, f.guide?.promise ?? ''].join(' — ')) : summary;
+  const n = norm(ours);
   const qr = input.quality;
   const reasons: string[] = [];
   const fixes: string[] = [];
   const broad = BROAD.test(n);
-  const risky = RISK_RULES.filter((r) => r.re.test(summary)).map((r) => r.label.toLowerCase());
+  const risky = RISK_RULES.filter((r) => r.re.test(ours)).map((r) => r.label.toLowerCase());
 
   if (broad) {
     reasons.push(`Règle du un violée : ${subj} s’adresse à « tout le monde », donc à personne.`);
@@ -179,6 +211,8 @@ export function heuristicRedTeam(input: { subject: 'idea' | 'pdf' | 'sales_page'
     reasons.push('Résumé trop maigre pour juger sérieusement.');
     fixes.push('Préciser l’audience, le problème, la promesse et la preuve avant de redemander une revue.');
   }
+  const findings = f ? (input.subject === 'idea' ? ideaFindings(f) : guideFindings(f)) : [];
+  for (const x of findings) { reasons.push(x.reason); fixes.push(x.fix); }
 
   if (qr) {
     const s = (v: number) => `${Math.round(v)}/100`;
@@ -193,26 +227,31 @@ export function heuristicRedTeam(input: { subject: 'idea' | 'pdf' | 'sales_page'
   }
 
   const ruleOfOneBroken = broad || (qr !== null && qr.specificity < 35);
+  const severe = findings.find((x) => x.severe);
   let verdict: RedTeamVerdict['verdict'];
-  if ((qr && qr.compliance < 35) || ruleOfOneBroken || (qr && qr.overall < 35)) verdict = 'kill';
-  else if ((qr && qr.overall < 70) || (!qr && (risky.length > 0 || summary.length < 30))) verdict = 'fix';
+  if ((qr && qr.compliance < 35) || ruleOfOneBroken || (qr && qr.overall < 35) || severe) verdict = 'kill';
+  else if ((qr && qr.overall < 70) || findings.length || (!qr && (risky.length > 0 || summary.length < 30))) verdict = 'fix';
   else verdict = 'go';
 
+  const who = f ? `« ${fit(f.title, 60)} »` : subj;
   if (verdict === 'kill') {
-    reasons.unshift(`Je tue ${subj} en l’état : ${qr && qr.compliance < 35 ? 'risque de conformité trop élevé' : ruleOfOneBroken ? 'la règle du un n’est pas respectée' : 'la qualité est trop loin du seuil'}.`);
+    reasons.unshift(`Je tue ${who} en l’état : ${qr && qr.compliance < 35 ? 'risque de conformité trop élevé' : ruleOfOneBroken ? 'la règle du un n’est pas respectée' : severe ? fit(severe.reason, 150) : 'la qualité est trop loin du seuil'}.`.replace(/\.\.$/, '.'));
     fixes.push(input.subject === 'idea' ? 'Repartir de la recherche : une niche plus étroite, des douleurs plus précises.' : 'Reprendre depuis le plan, pas seulement la forme.');
   } else if (verdict === 'go') {
-    reasons.unshift(qr ? `Note globale ${Math.round(qr.overall)}/100 : au-dessus du seuil de 70, rien de bloquant.` : `Rien de bloquant trouvé dans ${subj} : audience précise, pas d’allégation à risque.`);
     if (qr) {
+      const treated = f?.guide ? `, ${f.guide.painsKnown - f.guide.uncoveredPains.length} douleurs clients sur ${f.guide.painsKnown} traitées` : '';
+      reasons.unshift(`${cap(who)} tient : note ${Math.round(qr.overall)}/100${treated}, rien de bloquant.`);
       const weakest = (['specificity', 'structure', 'actionability', 'humanTone', 'design', 'promiseMatch', 'compliance'] as const)
         .map((k) => ({ k, v: qr[k] })).sort((a, b) => a.v - b.v)[0]!;
       const label: Record<string, string> = { specificity: 'la spécificité', structure: 'la structure', actionability: 'le côté actionnable', humanTone: 'le ton humain', design: 'le design', promiseMatch: 'l’adéquation promesse/contenu', compliance: 'la conformité' };
       if (weakest.v < 85) fixes.push(`Amélioration possible plus tard : ${label[weakest.k]} (${Math.round(weakest.v)}/100).`);
-    }
+    } else if (f?.signal) {
+      reasons.unshift(`${cap(who)} tient : recherche ${Math.round(f.signal.searchInterest)}/100, buzz ${Math.round(f.signal.tiktokBuzz)}/100, concurrence ${f.signal.competition}${f.competitors?.medianPrice ? `, prix médian ${fmtEur(f.competitors.medianPrice)}` : ''}.`);
+    } else reasons.unshift(`Rien de bloquant trouvé dans ${who} : audience précise, pas d’allégation à risque.`);
   } else {
-    reasons.unshift(qr ? `Note globale ${Math.round(qr.overall)}/100 : sous le seuil de 70, à corriger avant de livrer.` : `${cap(subj)} doit être corrigé${input.subject === 'sales_page' || input.subject === 'ad' ? 'e' : ''} avant de passer.`);
+    // Findings speak for themselves: the first reason is what is wrong with this product, not a verdict line.
+    if (qr && qr.overall < 70) reasons.unshift(`Note globale ${Math.round(qr.overall)}/100 pour ${who} : sous le seuil de 70, à corriger avant de livrer.`);
+    else if (!findings.length) reasons.unshift(`${cap(who)} doit être corrigé${!f && feminine ? 'e' : ''} avant de passer.`);
   }
   return { verdict, reasons: uniqStrings(reasons).slice(0, 8), fixes: uniqStrings(fixes).slice(0, 6) };
 }
-
-

@@ -7,9 +7,9 @@ import { addDeliverable, incident, nameOf, nicheBriefOf, nicheName, productOf, s
 import { deliverables, learning, sim } from '../modules.js';
 import { addPlaybookRule, AD_FORMATS, bannedHits, directivesOf, HOOK_STYLES } from '../playbook.js';
 import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, type CampaignMetrics } from '../metrics.js';
-import { adHistory, companyPaidBlock, cooldownDays, launchableCreatives, MIN_CAMPAIGN_BUDGET, productPaidBlock, promotionBlock, STOP_LOSS_ROAS, TEST_CAMPAIGN_BUDGET, versionSince } from '../acquisition.js';
+import { adHistory, companyPaidBlock, cooldownDays, launchableCreatives, MIN_CAMPAIGN_BUDGET, NO_TRACTION_ROAS, productHealth, productPaidBlock, promotionBlock, scalingRoom, STOP_LOSS_DAYS, STOP_LOSS_ROAS, STOP_LOSS_SPEND, TEST_CAMPAIGN_BUDGET, versionSince } from '../acquisition.js';
 import { createTask, isOpen } from '../tasks.js';
-import { clamp, dec, eur, idNum, numOf, pct, round2, short, str, uniq } from '../util.js';
+import { clamp, dec, eur, idNum, keywords, numOf, pct, round2, short, str, uniq } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { NO_PRODUCT, requireProduct, reworkNotes, mindWith } from './common.js';
 import { COMPLIANCE_WORDS, FORMAT_LABELS, HOOK_LABELS } from './phrases.js';
@@ -19,8 +19,9 @@ interface HookItem { hookStyle: HookStyle; hook: string }
 
 const GROWTH_WRITERS = ['sarah', 'chloe', 'tom', 'leo'];
 
-function runningExperiment(ctx: RuntimeCtx, dimension: string) {
-  return ctx.world.company.experiments.find((e) => e.status === 'running' && e.dimension === dimension) ?? null;
+/** The test running on this dimension for this niche: a test on one guide says nothing about another's creatives. */
+function runningExperiment(ctx: RuntimeCtx, dimension: string, nicheId: string) {
+  return ctx.world.company.experiments.find((e) => e.status === 'running' && e.dimension === dimension && (e.nicheId ?? nicheId) === nicheId) ?? null;
 }
 
 function isHookStyle(v: unknown): v is HookStyle {
@@ -98,15 +99,14 @@ export const ORGANIC_REPEAT_WINDOW_DAYS = 7;
 const ORGANIC_FORMATS: AdFormat[] = ['text_slideshow', 'faceless_voiceover', 'carousel'];
 
 /**
- * Stop-loss with a minimum sample (rule of the Growth playbook):
- *   - no traction: ROAS < 0,4 after 25 € → stop at once;
- *   - otherwise ROAS < 0,8 only counts after at least 2 days AND 40 € (whole life, or the last 3 days).
+ * The stop-loss of Budget et garde-fous: ROAS < 0,8 after 25 € spent over at least 2 days (whole life, or the last 3
+ * days: a winner can turn into a loser) → pause; no traction at all (ROAS < 0,4 after 25 €) → pause at once.
  */
 export function stopLossReason(life: CampaignMetrics, recent: CampaignMetrics): string | null {
   const days = (m: CampaignMetrics) => new Set(m.rows.filter((r) => r.spend > 0).map((r) => r.day)).size;
-  if (life.spend >= 25 && life.roas < 0.4) return `stop-loss, ROAS ${dec(life.roas)} après ${eur(life.spend)} (aucune traction)`;
-  if (days(life) >= 2 && life.spend >= 40 && life.roas < STOP_LOSS_ROAS) return `stop-loss, ROAS ${dec(life.roas)} après ${eur(life.spend)} sur ${days(life)} jours`;
-  if (days(recent) >= 2 && recent.spend >= 40 && recent.roas < STOP_LOSS_ROAS) return `stop-loss sur 3 jours, ROAS ${dec(recent.roas)} pour ${eur(recent.spend)}`;
+  if (life.spend >= STOP_LOSS_SPEND && life.roas < NO_TRACTION_ROAS) return `stop-loss, ROAS ${dec(life.roas)} après ${eur(life.spend)} (aucune traction)`;
+  if (days(life) >= STOP_LOSS_DAYS && life.spend >= STOP_LOSS_SPEND && life.roas < STOP_LOSS_ROAS) return `stop-loss, ROAS ${dec(life.roas)} après ${eur(life.spend)} sur ${days(life)} jours`;
+  if (days(recent) >= STOP_LOSS_DAYS && recent.spend >= STOP_LOSS_SPEND && recent.roas < STOP_LOSS_ROAS) return `stop-loss sur 3 jours, ROAS ${dec(recent.roas)} pour ${eur(recent.spend)}`;
   return null;
 }
 
@@ -183,7 +183,7 @@ export const growthHandlers: HandlerMap = {
       const d = directivesOf(ctx.world, agent.id, nicheName(ctx, product.nicheId));
       const styles: HookStyle[] = [];
       if (d.hook) styles.push(d.hook);
-      const exp = runningExperiment(ctx, 'hook_style');
+      const exp = runningExperiment(ctx, 'hook_style', product.nicheId);
       if (exp) for (const v of exp.variants) if (isHookStyle(v)) styles.push(v);
       for (let i = 0; i < 8 && uniq(styles).length < 4; i++) {
         const s = learning.chooseArm(ctx.world, dim, HOOK_STYLES, ctx.rng);
@@ -209,9 +209,10 @@ export const growthHandlers: HandlerMap = {
       const product = productOf(ctx, task.input.productId);
       if (!n || !product || product.status === 'killed') return;
       const used = ctx.world.company.creatives.filter((c) => c.productId === product.id).length;
+      const forced = Array.isArray(task.input.experimentVariants) ? (task.input.experimentVariants as string[]) : [];
       const ads = Array.from({ length: n }, (_, i) => createTask(ctx.world, {
         kind: 'produce_ad', title: `Produire une pub TikTok n° ${used + i + 1} — « ${short(product.title, 40)} »`,
-        input: { productId: product.id, nicheId: product.nicheId, variant: used + i, ...(str(task.input.attachTo) ? { attachTo: str(task.input.attachTo) } : {}) },
+        input: { productId: product.id, nicheId: product.nicheId, variant: used + i, ...(forced[i] ? { experimentVariant: forced[i] } : {}), ...(str(task.input.attachTo) ? { attachTo: str(task.input.attachTo) } : {}) },
         dependsOn: [], createdBy: task.assignee ?? 'leo', missionId: task.missionId, priority: task.priority,
       }));
       if (task.input.launch === true) {
@@ -237,10 +238,16 @@ export const growthHandlers: HandlerMap = {
       if (!pool.length) return { fail: 'Pas de hook disponible pour produire la pub.', summary: 'Pas de hook.' };
       const used = new Set(ctx.world.company.creatives.filter((c) => c.productId === product.id && c.id !== existingId).map((c) => c.hook));
       if (existing && task.attempts > 0) used.add(existing.hook);
-      const hookExp = runningExperiment(ctx, 'hook_style');
-      const wanted = hookExp && hookExp.variants.length ? hookExp.variants[variant % hookExp.variants.length] : null;
+      const hookExp = runningExperiment(ctx, 'hook_style', product.nicheId);
+      const forced = str(task.input.experimentVariant);
+      const wanted = hookExp && hookExp.variants.length ? (forced && hookExp.variants.includes(forced) ? forced : hookExp.variants[variant % hookExp.variants.length]) : null;
       const unused = pool.filter((h) => !used.has(h.hook));
-      const candidates = unused.length ? unused : pool;
+      // Once Léo sent a hook back on this guide, the team only keeps those that talk about the problem or the audience.
+      const subject = keywords(`${product.title} ${product.problem} ${product.audience}`);
+      const onTopic = (h: HookItem) => keywords(h.hook).some((w) => subject.includes(w));
+      const sentBack = task.attempts > 0 || ctx.world.company.tasks.some((t) => t.kind === 'produce_ad' && t.input.productId === product.id && t.reviews.some((r) => r.verdict === 'changes'));
+      const preferred = sentBack ? unused.filter(onTopic) : [];
+      const candidates = preferred.length ? preferred : unused.length ? unused : pool;
       // A rework never takes back the hook it is replacing; otherwise a proven hook may get a new execution.
       // A hook that got a creative refused by TikTok is never reused.
       const refused = new Set(ctx.world.company.creatives.filter((c) => c.productId === product.id && c.review.status === 'rejected').map((c) => c.hook));
@@ -258,9 +265,10 @@ export const growthHandlers: HandlerMap = {
       }
       // Format: playbook preference for the first ad, experiment variants, else the bandit.
       const d = directivesOf(ctx.world, agent.id, nicheName(ctx, product.nicheId));
-      const fmtExp = runningExperiment(ctx, 'ad_format');
+      const fmtExp = runningExperiment(ctx, 'ad_format', product.nicheId);
       let format: AdFormat;
-      if (fmtExp && fmtExp.variants.length && isFormat(fmtExp.variants[variant % fmtExp.variants.length])) format = fmtExp.variants[variant % fmtExp.variants.length] as AdFormat;
+      if (fmtExp && forced && isFormat(forced) && fmtExp.variants.includes(forced)) format = forced;
+      else if (fmtExp && fmtExp.variants.length && isFormat(fmtExp.variants[variant % fmtExp.variants.length])) format = fmtExp.variants[variant % fmtExp.variants.length] as AdFormat;
       else if (d.format && variant === 0) format = d.format;
       else { const f = learning.chooseArm(ctx.world, `ad_format:${product.nicheId}`, AD_FORMATS, ctx.rng); format = isFormat(f) ? f : 'text_slideshow'; }
       const bannedClaims = uniq([...bannedFor(ctx, product, agent.id), ...COMPLIANCE_WORDS]);
@@ -300,7 +308,7 @@ export const growthHandlers: HandlerMap = {
     async onDone(ctx, task) {
       const creative = ctx.world.company.creatives.find((c) => c.id === task.output?.creativeId);
       const product = productOf(ctx, task.input.productId);
-      if (!creative || !product || product.status === 'killed') return;
+      if (!creative || !product || product.status === 'killed' || task.output?.dropped === true) return;
       const res = ctx.tools.submitCreative(creative.id);
       creative.review = { status: res.status, reason: res.reason, day: ctx.world.day };
       if (res.status === 'approved') {
@@ -335,13 +343,14 @@ export const growthHandlers: HandlerMap = {
         say(ctx, agent.id, `${agent.name} ne lance pas de campagne pour « ${short(product.title, 40)} » : ${reason}`, 'ad', { productId: product.id });
         return { summary: `Pas de campagne : ${reason}.`, skipReview: true, output: { skipped: true, reason: code, why: reason, ...extra } };
       };
-      const quality = promotionBlock(ctx.world, product);
-      if (quality) return skip(`${quality} — on ne pousse pas un guide que les acheteurs n'aiment pas`, 'quality');
+      const severe = productHealth(ctx.world, product).severe;
+      if (severe) return skip(`${severe} — on ne pousse pas un guide que les acheteurs n'aiment pas`, 'quality');
       const blocked = companyPaidBlock(ctx.world);
       if (blocked) return skip(blocked, 'company');
       // Cooldown / "ads-dead" are the team's own rules: a founder request or the CEO's watchdog overrides them.
-      const overrides = task.createdBy === 'founder' || task.input.force === true;
+      // A product that loses money or a « couper les pubs » lesson only yield to the founder.
       const productBlock = productPaidBlock(ctx.world, product);
+      const overrides = task.createdBy === 'founder' || (task.input.force === true && !productBlock?.final);
       if (productBlock && !overrides) return skip(productBlock.reason, productBlock.hard ? 'blocked' : 'cooldown');
       const ready = launchableCreatives(ctx.world, product.id);
       if (!ready.length) {
@@ -371,6 +380,9 @@ export const growthHandlers: HandlerMap = {
       if (!ctx.world.company.campaigns.some((c) => c.id === id)) {
         ctx.world.company.campaigns.push({ id, productId: input.productId, name: input.name, creativeIds: input.creativeIds, dailyBudget: input.dailyBudget, status: 'active', targeting: input.targeting, startDay: ctx.world.day, createdBy: agent.id });
       }
+      // The founder overrode the numbers: only he, or the stop-loss, ends this campaign.
+      const launched = ctx.world.company.campaigns.find((c) => c.id === id);
+      if (launched && productBlock?.final && task.createdBy === 'founder') launched.founderForced = true;
       say(ctx, agent.id, `${agent.name} lance « ${input.name} » : ${eur(daily)}/jour, ${creatives.length} créas, ${input.targeting.ageMin}-${input.targeting.ageMax} ans`, 'ad', { productId: product.id });
       return { summary: `Campagne lancée à ${eur(daily)}/jour avec ${creatives.length} créas.`, output: { campaignId: id, dailyBudget: daily, creativeIds: input.creativeIds } };
     },
@@ -394,21 +406,23 @@ export const growthHandlers: HandlerMap = {
         const product = productOf(ctx, c.productId);
         if (!product || product.status === 'killed' || product.status === 'paused') { pause(c, 'produit arrêté'); continue; }
         if (budget.bankrupt) { pause(c, 'trésorerie négative'); continue; }
+        const barred = c.founderForced ? null : productPaidBlock(ctx.world, product);
+        if (barred?.final) { pause(c, barred.reason); continue; }
         const life = campaignMetrics(all, c.id, c.startDay);
         const recent = campaignMetrics(stats, c.id, Math.max(c.startDay, ctx.world.day - 3));
         const yesterday = campaignMetrics(stats, c.id, Math.max(c.startDay, ctx.world.day - 1));
-        // 1. Stop-loss with a minimum sample (Playbook Growth): one bad day is noise, except when nothing sells at all.
-        //    - no traction: ROAS < 0,4 after 25 €;
-        //    - regular: ROAS < 0,8 after at least 2 days AND 40 €, on the whole life AND on the last 3 days
-        //      (a winner can turn into a loser).
+        // 1. Stop-loss on a sample (Budget et garde-fous): one bad day is noise, except when nothing sells at all.
+        //    Under the rule the campaign stops; it is never shrunk to 5 €/day while the sample takes days to arrive.
         const stop = stopLossReason(life, recent);
         if (stop) {
           pause(c, stop);
           const losers = adHistory(ctx.world, product.id, versionSince(ctx.world, product)).losers;
           const wait = cooldownDays(losers);
-          requestCreatives(ctx, product, task, wait === 0
-            ? { produce: 2, launch: true, why: `${stop} : il faut un nouvel angle` }
-            : { produce: 2, why: `${losers} campagnes perdantes d'affilée : créas prêtes pour une relance dans ${wait} jour(s)` });
+          if (!productPaidBlock(ctx.world, product)?.hard) {
+            requestCreatives(ctx, product, task, wait === 0
+              ? { produce: 2, launch: true, why: `${stop} : il faut un nouvel angle` }
+              : { produce: 2, why: `${losers} campagnes perdantes d'affilée : créas prêtes pour une relance dans ${wait} jour(s)` });
+          }
           continue;
         }
         // 2. Survival mode: only clearly profitable campaigns keep running.
@@ -436,12 +450,13 @@ export const growthHandlers: HandlerMap = {
           requestCreatives(ctx, product, task, { produce: Math.max(1, Math.min(2, tired)), attachTo: c.id, why: tired ? `${tired} créa(s) fatiguée(s)` : `CTR en baisse (${pct(recent.ctr, 2)})` });
         }
         // 4. Scale winners (+30 % max) while the last day still holds, trim the lukewarm ones — inside the CFO envelope.
-        const room = Math.max(0, budget.adCap - committedAdBudget(ctx.world, c.id));
+        const room = Math.max(0, scalingRoom(ctx.world, product, budget.adCap) - committedAdBudget(ctx.world, c.id));
         let next = c.dailyBudget;
         if (recent.spend >= 10 && recent.roas >= 1.8 && (yesterday.spend < 5 || yesterday.roas >= 1.4)) next = round2(c.dailyBudget * 1.3);
         // Brake: a big budget that collapsed yesterday (CPM spike, saturated audience) is halved at once.
         else if (yesterday.spend >= 30 && yesterday.roas < 0.5) next = round2(c.dailyBudget * 0.5);
-        else if (recent.spend >= 20 && recent.roas < 1.3) next = round2(c.dailyBudget * 0.7);
+        // Trim the lukewarm only: under the stop-loss, tomorrow's sample decides, a smaller budget would only delay it.
+        else if (recent.spend >= 20 && recent.roas < 1.3 && recent.roas >= STOP_LOSS_ROAS) next = round2(c.dailyBudget * 0.7);
         next = round2(Math.max(5, Math.min(next, room)));
         if (room < 5) { pause(c, `enveloppe CFO épuisée (${eur(budget.adCap)})`); continue; }
         const before = c.dailyBudget;

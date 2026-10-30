@@ -193,7 +193,7 @@ function countMatches(text: string, term: string): number {
 
 /** Sentences of a text (same rule as util.splitSentences, kept local to avoid a cycle). */
 function sentencesOf(t: string): string[] {
-  return t.split(/(?<=[.!?…])\s+(?=[«"\p{Lu}\p{N}—–-])/u).map((x) => x.trim()).filter(Boolean);
+  return t.split(/(?<=[.!?…]|[.!?…]\s»)\s+(?=[«"\p{Lu}\p{N}—–-])/u).map((x) => x.trim()).filter(Boolean);
 }
 
 function capFirst(s: string): string {

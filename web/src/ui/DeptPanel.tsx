@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import type { DeptId, Task, TaskKind } from '../../../shared/types';
 import { Avatar, Bar, ChiefBadge, cx, Empty, Pill, SectionTitle, Segmented } from './common';
 import { useApp } from './context';
+import { deptCalendar } from './derive';
 import { fmtDec, fmtInt } from './format';
 import { Icon } from './icons';
 import {
@@ -45,7 +46,7 @@ export function DeptPanel({ deptId, onClose }: { deptId: DeptId; onClose(): void
       <div className="side-body">
         {tab === 'apercu' ? <Overview deptId={deptId} tasks={tasks} /> : null}
         {tab === 'taches' ? <DeptTasks tasks={tasks} /> : null}
-        {tab === 'calendrier' ? <DeptCalendar tasks={tasks} /> : null}
+        {tab === 'calendrier' ? <DeptCalendar deptId={deptId} tasks={tasks} /> : null}
       </div>
     </SidePanel>
   );
@@ -58,14 +59,16 @@ function Overview({ deptId, tasks }: { deptId: DeptId; tasks: Task[] }) {
   const members = (snapshot?.company?.agents ?? []).filter((a) => a.dept === deptId).sort((a, b) => Number(b.isChief) - Number(a.isChief) || a.name.localeCompare(b.name));
   const today = tasks.filter((t) => t.dayCreated === day || t.dayDone === day).length;
   const running = tasks.filter((t) => t.status === 'in_progress' || t.status === 'review').length;
+  // server counts cover every task of the team; the task list of a snapshot only keeps the latest finished ones
+  const stats = snapshot?.taskStats?.depts?.[deptId];
   const done = tasks.filter((t) => t.status === 'done' && t.dayDone !== null);
-  const avgDelay = done.length ? done.reduce((s, t) => s + ((t.dayDone ?? t.dayCreated) - t.dayCreated), 0) / done.length : null;
+  const avgDelay = stats ? stats.avgDelayDays : done.length ? done.reduce((s, t) => s + ((t.dayDone ?? t.dayCreated) - t.dayCreated), 0) / done.length : null;
 
   const tools = toolGroupsOf(members.flatMap((a) => a.tools ?? []));
   const kinds = [...new Set(members.flatMap((a) => a.taskKinds ?? []))];
   const since = Math.max(1, day - 6);
-  const kindCount = new Map<TaskKind, number>();
-  for (const t of tasks) if ((t.dayDone ?? t.dayCreated) >= since) kindCount.set(t.kind, (kindCount.get(t.kind) ?? 0) + 1);
+  const kindCount = new Map<TaskKind, number>(Object.entries(stats?.kinds7d ?? {}) as [TaskKind, number][]);
+  if (!stats) for (const t of tasks) if ((t.dayDone ?? t.dayCreated) >= since) kindCount.set(t.kind, (kindCount.get(t.kind) ?? 0) + 1);
   const maxKind = Math.max(1, ...kindCount.values());
 
   return (
@@ -151,25 +154,23 @@ function DeptTasks({ tasks }: { tasks: Task[] }) {
   );
 }
 
-function DeptCalendar({ tasks }: { tasks: Task[] }) {
+function DeptCalendar({ deptId, tasks }: { deptId: DeptId; tasks: Task[] }) {
   const { snapshot } = useApp();
-  const day = snapshot?.day ?? 1;
-  const days: { d: number; done: Task[]; created: Task[] }[] = [];
-  for (let d = day; d >= Math.max(1, day - 13); d--) {
-    days.push({ d, done: tasks.filter((t) => t.dayDone === d && t.status === 'done'), created: tasks.filter((t) => t.dayCreated === d) });
-  }
-  if (tasks.length === 0) return <Empty icon="calendar">Le calendrier se remplira dès que l’équipe recevra ses premières tâches.</Empty>;
+  const today = snapshot?.day ?? 1;
+  const days = deptCalendar(snapshot, deptId, tasks);
+  if (tasks.length === 0 && days.every((d) => d.doneCount === 0 && d.createdCount === 0)) return <Empty icon="calendar">Le calendrier se remplira dès que l’équipe recevra ses premières tâches.</Empty>;
   return (
     <div className="dept-cal">
-      {days.map(({ d, done, created }) => (
-        <div key={d} className={cx('dept-cal-day', d === day && 'is-today')}>
+      {days.map(({ day, doneCount, createdCount, done, created, hidden }) => (
+        <div key={day} className={cx('dept-cal-day', day === today && 'is-today')}>
           <div className="dept-cal-head">
-            <strong>Jour {d}</strong>
-            <span className="muted small">{fmtInt(done.length)} terminée{done.length > 1 ? 's' : ''} · {fmtInt(created.length)} créée{created.length > 1 ? 's' : ''}</span>
+            <strong>Jour {day}</strong>
+            <span className="muted small">{fmtInt(doneCount)} terminée{doneCount > 1 ? 's' : ''} · {fmtInt(createdCount)} créée{createdCount > 1 ? 's' : ''}</span>
           </div>
-          {done.length === 0 && created.length === 0 ? <div className="muted small">Journée calme.</div> : null}
+          {doneCount === 0 && createdCount === 0 ? <div className="muted small">Journée calme.</div> : null}
           {done.map((t) => <div key={t.id} className="dept-cal-item"><Icon name="check" size={12} className="txt-good" /> {t.title}</div>)}
           {created.filter((t) => t.status !== 'done').map((t) => <div key={t.id} className="dept-cal-item muted"><Icon name="plus" size={12} /> {t.title} <span className="small">({TASK_STATUS_LABEL[t.status].toLowerCase()})</span></div>)}
+          {hidden > 0 ? <div className="muted small">Détail indisponible pour {fmtInt(hidden)} tâche{hidden > 1 ? 's' : ''} : seules les plus récentes sont conservées.</div> : null}
         </div>
       ))}
     </div>

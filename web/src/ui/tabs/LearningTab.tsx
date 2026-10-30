@@ -7,8 +7,8 @@ import { useApp } from '../context';
 import { fmtDec, fmtEur, fmtInt, fmtPct, fmtRoas, ok, safeDiv } from '../format';
 import { Icon } from '../icons';
 import {
-  agentColor, agentName, banditArmLabel, banditDimensionLabel, EXPERIMENT_DIM_LABEL, HOOK_LABEL, LESSON_TOPIC_LABEL, LESSON_TOPIC_TONE,
-  METRIC_LABEL,
+  agentColor, agentName, banditArmLabel, banditDimensionLabel, EXPERIMENT_DIM_LABEL, EXPERIMENT_STATUS, HOOK_LABEL, LESSON_TOPIC_LABEL,
+  LESSON_TOPIC_TONE, METRIC_LABEL,
 } from '../labels';
 
 interface Trend { id: string; label: string; values: (number | null)[]; fmt(n: number): string; higherIsBetter: boolean; color: string }
@@ -181,10 +181,11 @@ function Experiments({ experiments }: { experiments: Experiment[] }) {
         const values = e.variants.map((v) => e.results?.[v]?.value ?? 0);
         const max = Math.max(0.0001, ...values);
         const isRate = e.metric === 'ctr' || e.metric === 'cvr' || e.metric === 'refund_rate' || e.metric === 'resolution';
+        const status = EXPERIMENT_STATUS[e.status];
         return (
           <div key={e.id} className="experiment card">
             <div className="bandit-head">
-              <Pill tone={e.status === 'running' ? 'blue' : 'green'}>{e.status === 'running' ? 'En cours' : 'Conclue'}</Pill>
+              <Pill tone={status.tone} title={status.title}>{status.label}</Pill>
               <span className="muted small">{EXPERIMENT_DIM_LABEL[e.dimension] ?? e.dimension} · {METRIC_LABEL[e.metric] ?? e.metric} · J{e.day}{e.endDay ? ` → J${e.endDay}` : ''} · {agentName(lookups, e.owner)}</span>
             </div>
             <div className="exp-hyp">{e.hypothesis}</div>

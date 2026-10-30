@@ -80,6 +80,7 @@ function ruleConfidence(world: WorldState, rule: string): number {
   const lesson = (world.company.lessons ?? []).find((l) => ruleKey(l.insight) === key);
   if (lesson) return lesson.confidence;
   if (rule.startsWith(COACHING_PREFIX)) return 0.5;
+  if (BANNED_RX.test(rule)) return 0.9; // a banned claim was learned the hard way: it goes last
   return 0.55; // seed rules written by the runtime
 }
 
@@ -110,12 +111,27 @@ const SINGLETON_RX: readonly RegExp[] = [
   /Ton support\s*«\s*([^»]+?)\s*»/i,
 ];
 
-/** Directive family of a rule: same family = same slot in the playbook. */
-function directiveKind(rule: string): string | null {
+const TONE_RX = SINGLETON_RX.length - 1;
+/** « … sur « Niche » » right after a directive scopes it to one niche (same reading as the runtime's parser). */
+const SCOPE_RX = /^\s*(?:\([^)]*\)\s*)?sur\s*«\s*([^»]+?)\s*»/i;
+
+/** Directive family of a rule: same family = same slot in the playbook. Each niche has its own slot; the support tone has one. */
+export function directiveKind(rule: string): string | null {
   const b = BANNED_RX.exec(rule);
   if (b) return `banned:${fold(b[1]!.trim())}`;
-  const i = SINGLETON_RX.findIndex((rx) => rx.test(rule));
-  return i >= 0 ? `single:${i}` : null;
+  for (const [i, rx] of SINGLETON_RX.entries()) {
+    const m = rx.exec(rule);
+    if (!m) continue;
+    const scope = i === TONE_RX ? null : SCOPE_RX.exec(rule.slice(m.index + m[0].length));
+    return `single:${i}:${scope ? fold(scope[1]!) : ''}`;
+  }
+  return null;
+}
+
+/** Slot of a one-value directive (hook, format, price, promise, tone), null for anything else. */
+export function directiveSlot(rule: string): string | null {
+  const kind = directiveKind(rule);
+  return kind?.startsWith('single:') ? kind : null;
 }
 
 /**
@@ -161,6 +177,24 @@ export function replaceRuleEverywhere(world: WorldState, oldRule: string, newRul
     if (i < 0) continue;
     if (pb.some((r) => ruleKey(r) === ruleKey(newRule))) pb.splice(i, 1);
     else pb[i] = newRule;
+    changed.push(agentId);
+  }
+  return changed;
+}
+
+/**
+ * A directive holds one value across the whole agency: every other rule of that slot, in any playbook, becomes
+ * this one (a measured lesson also beats an unmeasured seed rule). Returns the agents whose playbook changed.
+ */
+export function syncDirective(world: WorldState, rule: string): string[] {
+  const slot = directiveSlot(rule);
+  if (!slot) return [];
+  const changed: string[] = [];
+  for (const [agentId, pb] of Object.entries(world.company.playbooks ?? {})) {
+    const first = pb.findIndex((r) => r !== rule && directiveSlot(r) === slot);
+    if (first < 0) continue;
+    if (!pb.includes(rule)) pb[first] = rule;
+    world.company.playbooks[agentId] = pb.filter((r) => r === rule || directiveSlot(r) !== slot);
     changed.push(agentId);
   }
   return changed;

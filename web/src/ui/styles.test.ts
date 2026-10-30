@@ -30,6 +30,14 @@ function animation(sel: string): { name: string; ms: number } {
   return { name: m[1]!, ms: Number(m[2]) * (m[3] === 's' ? 1000 : 1) };
 }
 
+describe('focus stays visible on the text inputs that remove their own outline', () => {
+  for (const sel of ['.search', '.mission', '.brain-search']) {
+    it(`${sel} shows a ring while its input has focus`, () => {
+      expect(rule(`${sel}:focus-within`)).toMatch(/(outline|box-shadow):\s*[^;]*#3b82f6/);
+    });
+  }
+});
+
 describe('panel opening', () => {
   for (const sel of ['.overlay', '.side-panel', '.modal']) {
     it(`${sel} opens in ≤ 150 ms without an opacity fade`, () => {

@@ -95,7 +95,7 @@ function coinStack(cx: number, base: number, count: number, i: Ink, uid: string)
   return out;
 }
 
-// ───────────────────────────── the 12 motifs ─────────────────────────────
+// ───────────────────────────── the 14 motifs ─────────────────────────────
 
 function moon(i: Ink, uid: string, v: number): string {
   return `<defs>${lin(`${uid}moon`, i.heroLight, i.hero)}${rad(`${uid}halo`, i.heroLight, i.heroLight)}</defs>`
@@ -280,8 +280,49 @@ function sparkle(i: Ink, uid: string, v: number): string {
     + stars(127 + v, 8, i.light, { x: 6, y: 6, w: 188, h: 188 }, 6);
 }
 
+/** DIY: a brush loaded with paint above an open can, on a stroke of colour. */
+function brush(i: Ink, uid: string, v: number): string {
+  const metal = mix(i.soft, i.dark, 0.25);
+  return `<defs>${lin(`${uid}can`, lighten(i.c1, 0.12), darken(i.c1, 0.2))}${lin(`${uid}paint`, i.heroLight, i.hero)}</defs>`
+    + `<circle cx="100" cy="96" r="86" fill="${i.c2Light}" opacity="0.5"/>`
+    // stroke of paint across the bottom
+    + `<path d="M8 164 C40 146 72 176 108 160 S168 142 194 158 V182 C164 170 136 190 104 182 S44 176 8 192Z" fill="url(#${uid}paint)"/>`
+    // open can with a drip
+    + `<path d="M34 100 H104 L100 170 C100 176 96 180 90 180 H48 C42 180 38 176 38 170Z" fill="url(#${uid}can)"/>`
+    + `<ellipse cx="69" cy="100" rx="35" ry="11" fill="${metal}"/><ellipse cx="69" cy="101" rx="29" ry="8" fill="url(#${uid}paint)"/>`
+    + `<path d="M42 104 C42 122 50 124 50 134 C50 142 60 142 60 134 C60 124 66 120 66 108Z" fill="${i.hero}"/>`
+    + `<path d="M34 100 C34 70 104 70 104 100" fill="none" stroke="${i.dark}" stroke-width="3" opacity="0.55"/>`
+    + `<rect x="84" y="130" width="6" height="34" rx="3" fill="${i.light}" opacity="0.28"/>`
+    // brush, tilted, bristles down
+    + `<g transform="rotate(32 142 78)">`
+    + `<rect x="130" y="4" width="24" height="70" rx="10" fill="${darken(i.hero, 0.3)}"/><rect x="136" y="10" width="5" height="54" rx="2.5" fill="${i.light}" opacity="0.3"/>`
+    + `<rect x="124" y="70" width="36" height="22" rx="3" fill="${metal}"/><path d="M124 78 H160 M124 84 H160" stroke="${i.dark}" stroke-width="1.6" opacity="0.35"/>`
+    + `<path d="M124 92 H160 C164 116 158 134 146 146 C142 136 136 140 130 132 C124 122 122 108 124 92Z" fill="url(#${uid}paint)"/>`
+    + `<path d="M132 94 C131 106 133 116 137 124 M146 94 C146 108 147 118 149 128" fill="none" stroke="${i.heroDark}" stroke-width="2" stroke-linecap="round" opacity="0.5"/></g>`
+    + stars(137 + v, 5, i.light, { x: 10, y: 8, w: 110, h: 56 }, 7);
+}
+
+/** Cooking: a steaming pot with its ladle, for batch cooking and first meals alike. */
+function pot(i: Ink, uid: string, v: number): string {
+  const steam = (x: number) => `<path d="M${x} 72 C${x - 12} 58 ${x + 12} 46 ${x} 30" fill="none" stroke="${i.light}" stroke-width="5" stroke-linecap="round" opacity="0.8"/>`;
+  return `<defs>${lin(`${uid}pot`, lighten(i.c1, 0.15), darken(i.c1, 0.22))}</defs>`
+    + `<circle cx="100" cy="98" r="86" fill="${i.c2Light}" opacity="0.5"/>`
+    + steam(70) + steam(102) + steam(134)
+    // ladle resting in the pot
+    + `<g transform="rotate(24 150 60)"><rect x="146" y="14" width="9" height="86" rx="4.5" fill="${darken(i.hero, 0.3)}"/><circle cx="150.5" cy="16" r="7" fill="${darken(i.hero, 0.3)}"/></g>`
+    // handles, body, rim
+    + `<rect x="14" y="108" width="34" height="13" rx="6.5" fill="${darken(i.c1, 0.3)}"/><rect x="152" y="108" width="34" height="13" rx="6.5" fill="${darken(i.c1, 0.3)}"/>`
+    + `<path d="M36 92 H164 V150 C164 170 150 182 130 182 H70 C50 182 36 170 36 150Z" fill="url(#${uid}pot)"/>`
+    + `<rect x="28" y="82" width="144" height="15" rx="7.5" fill="${i.hero}"/><rect x="36" y="85" width="86" height="4" rx="2" fill="${i.light}" opacity="0.45"/>`
+    + `<rect x="50" y="108" width="7" height="56" rx="3.5" fill="${i.light}" opacity="0.25"/>`
+    // label: a heart on the pot
+    + `<path d="${heartPath(80, 112, 42)}" fill="${i.hero}"/>`
+    + leafShape(164, 178, 24, -28, mix(i.c1, i.c2, 0.5), i.light) + leafShape(30, 182, 20, -150, i.c1, i.light)
+    + stars(149 + v, 4, i.light, { x: 10, y: 8, w: 56, h: 60 }, 6);
+}
+
 const DRAW: Record<Motif, (i: Ink, uid: string, v: number) => string> = {
-  moon, sun, leaf, coin, heart, bolt, book, chart, home, paw, dumbbell, sparkle,
+  moon, sun, leaf, coin, heart, bolt, book, chart, home, paw, dumbbell, sparkle, brush, pot,
 };
 
 /** Raw illustration markup in a 200×200 coordinate box (gradient ids are prefixed with `uid`). */

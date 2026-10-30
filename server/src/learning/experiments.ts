@@ -1,11 +1,13 @@
 /** A/B experiments: results recomputed from world data, concluded on sample size or after 7 days. */
 import type { Experiment, WorldState } from '../shared.js';
-import { nextId } from '../core/index.js';
+import { emit, nextId } from '../core/index.js';
 import { nearestArm } from './bandits.js';
 import { addRow, adRows, emptyAgg, indexWorld, priceOnDay, productOfRow, type FunnelAgg } from './data.js';
 import { fold, round, safeDiv, unique } from './text.js';
 
 export const EXPERIMENT_MAX_DAYS = 7;
+/** A variant still without a single observation this many days after the start: the test measures nothing, it stops. */
+export const EXPERIMENT_NO_DATA_DAYS = 2;
 
 interface VariantAgg extends FunnelAgg {
   orders: number;
@@ -230,6 +232,13 @@ export function updateExperiments(world: WorldState): Experiment[] {
     const threshold = experimentThreshold(e);
     const enough = e.variants.length > 0 && e.variants.every((v) => (e.results[v]?.n ?? 0) >= threshold);
     const expired = world.day - e.day >= EXPERIMENT_MAX_DAYS;
+    if (!enough && world.day - e.day >= EXPERIMENT_NO_DATA_DAYS && e.variants.some((v) => (e.results[v]?.n ?? 0) === 0)) {
+      e.status = 'cancelled';
+      e.endDay = world.day;
+      e.winner = null;
+      emit(world, { agentId: e.owner, kind: 'thought', text: `Test A/B annulé : « ${e.hypothesis} », une variante n'a reçu aucun trafic en ${EXPERIMENT_NO_DATA_DAYS} jours.` });
+      continue;
+    }
     if (!enough && !expired) continue;
     e.status = 'concluded';
     e.endDay = world.day;

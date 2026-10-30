@@ -11,6 +11,10 @@ export const LEVEL_THRESHOLDS = [0, 60, 150, 280, 450, 680, 960, 1300, 1700, 220
 export const MAX_LEVEL = LEVEL_THRESHOLDS.length;
 const PROMOTION_XP = 60;
 const GOOD_WEEK_XP = 20;
+/** Deliverables approved by a reviewer since the last promotion: a promotion rewards checked work, not ticket counts. */
+const PROMOTION_MIN_APPROVED = 2;
+/** Work sent back by reviewers this week from which nobody is promoted, however much was finished. */
+const PROMOTION_MAX_RETURNS = 3;
 
 export function levelForXp(xp: number): number {
   let level = 1;
@@ -114,16 +118,26 @@ export async function performanceReview(world: WorldState, brain: BrainVault): P
   const avg = Math.round(agents.reduce((s, a) => s + (scores.get(a.id) ?? 0), 0) / agents.length);
   lines.push(`Revue RH semaine ${week} : score moyen ${avg}/100 sur ${plural(agents.length, 'agent', 'agents')} (${activeIds.length} actifs).`);
 
-  // promotions: top 3 active agents with a solid score
-  const ranked = agents.filter((a) => activeIds.includes(a.id)).sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0) || (totals.get(b.id)!.done - totals.get(a.id)!.done));
-  const promoted = ranked.filter((a) => (scores.get(a.id) ?? 0) >= 70).slice(0, 3);
+  // promotions: top 3 active agents with a solid score AND work a reviewer approved since their last promotion, a
+  // clean week, and not two weeks in a row. The cap is the top of the scale: nobody is lowered, nobody goes past it.
+  const approvedSince = (a: WorldState['company']['agents'][number]) => totals.get(a.id)!.approved - (a.perf.approvedAtPromotion ?? 0);
+  const eligible = agents.filter((a) => {
+    const w = weekly.get(a.id) ?? empty();
+    return activeIds.includes(a.id) && (a.level ?? 1) < MAX_LEVEL && (scores.get(a.id) ?? 0) >= 70
+      && approvedSince(a) >= PROMOTION_MIN_APPROVED && w.rejected === 0 && w.changes < PROMOTION_MAX_RETURNS && w.failed === 0 && a.perf.promotedWeek !== week - 1;
+  });
+  const ranked = eligible.sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0) || (a.level ?? 1) - (b.level ?? 1) || a.id.localeCompare(b.id));
+  const promoted = ranked.slice(0, 3);
   const promotionLines: string[] = [];
   for (const a of promoted) {
+    const reviewed = approvedSince(a);
+    a.perf.promotedWeek = week;
+    a.perf.approvedAtPromotion = totals.get(a.id)!.approved;
     a.xp = (a.xp ?? 0) + PROMOTION_XP;
     a.level = Math.min(MAX_LEVEL, Math.max(a.level ?? 1, levelForXp(a.xp)) + 1);
     a.xp = Math.max(a.xp, LEVEL_THRESHOLDS[a.level - 1] ?? a.xp);
     const w = weekly.get(a.id) ?? empty();
-    const line = `Promotion : ${a.name} (${deptName(world, a.dept)}) passe niveau ${a.level} — score ${scores.get(a.id)}/100, ${plural(w.done, 'tâche terminée', 'tâches terminées')} cette semaine, ${plural(w.rejected, 'rejet', 'rejets')}.`;
+    const line = `Promotion : ${a.name} (${deptName(world, a.dept)}) passe niveau ${a.level} — score ${scores.get(a.id)}/100, ${plural(reviewed, 'livrable validé', 'livrables validés')} en relecture, ${plural(w.done, 'tâche terminée', 'tâches terminées')} cette semaine, ${plural(w.rejected + w.changes, 'renvoi en relecture', 'renvois en relecture')}.`;
     lines.push(line);
     promotionLines.push(line);
     changed.add(a.id);
@@ -174,6 +188,15 @@ export async function performanceReview(world: WorldState, brain: BrainVault): P
     }
   }
 
+  // what reviewers and the Red Team sent back this week: a refusal is a management fact, not a footnote
+  const returnsLines = agents
+    .map((a) => ({ a, w: weekly.get(a.id) ?? empty() }))
+    .filter((x) => x.w.rejected + x.w.changes > 0)
+    .sort((x, y) => (y.w.rejected + y.w.changes) - (x.w.rejected + x.w.changes) || x.a.id.localeCompare(y.a.id))
+    .slice(0, 6)
+    .map(({ a, w }) => `${a.name} : ${plural(w.rejected + w.changes, 'renvoi', 'renvois')}${topNote(w.notes) ? ` (motif fréquent : « ${topNote(w.notes)} »)` : ''}`);
+  if (returnsLines.length) lines.push(`Renvois en relecture cette semaine — ${returnsLines.slice(0, 3).join(' · ')}.`);
+
   // departments
   const depts = new Map<DeptId, number[]>();
   for (const a of agents) if (activeIds.includes(a.id)) depts.set(a.dept, [...(depts.get(a.dept) ?? []), scores.get(a.id) ?? 0]);
@@ -186,22 +209,25 @@ export async function performanceReview(world: WorldState, brain: BrainVault): P
 
   // rh/revue-semaine-N.md
   const table = [
-    '| Agent | Département | Rôle | Score | Niveau | Terminées (sem.) | Approuvées | Rejetées | Échecs |',
-    '|---|---|---|---|---|---|---|---|---|',
+    '| Agent | Département | Rôle | Score | Niveau | Terminées (sem.) | Renvois (sem.) | Approuvées | Rejetées | Échecs |',
+    '|---|---|---|---|---|---|---|---|---|---|',
     ...[...agents]
       .sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0))
       .map((a) => {
         const t = totals.get(a.id)!;
         const w = weekly.get(a.id) ?? empty();
-        return `| [[${agentNoteName(world, a)}]] | ${deptName(world, a.dept)} | ${a.role || '—'} | ${scores.get(a.id) ?? 0}/100${activeIds.includes(a.id) ? '' : ' (inactif)'} | ${a.level ?? 1} | ${w.done} | ${t.approved} | ${t.rejected} | ${t.failed} |`;
+        return `| [[${agentNoteName(world, a)}]] | ${deptName(world, a.dept)} | ${a.role || '—'} | ${scores.get(a.id) ?? 0}/100${activeIds.includes(a.id) ? '' : ' (inactif)'} | ${a.level ?? 1} | ${w.done} | ${w.rejected + w.changes} | ${t.approved} | ${t.rejected} | ${t.failed} |`;
       }),
   ].join('\n');
   const body = [
     `> ${lines[0]}`,
     '',
     '## Promotions',
-    ...(promotionLines.length ? promotionLines.map((l) => `- ${l}`) : ['- Aucune promotion cette semaine (score ≥ 70 requis).']),
+    ...(promotionLines.length ? promotionLines.map((l) => `- ${l}`) : ['- Aucune promotion cette semaine (score ≥ 70 et travail validé en relecture requis).']),
     ...(levelUps.length ? ['', '## Montées de niveau', ...levelUps.map((l) => `- ${l}`)] : []),
+    '',
+    '## Renvois en relecture',
+    ...(returnsLines.length ? returnsLines.map((l) => `- ${l}`) : ['- Aucun livrable renvoyé cette semaine.']),
     '',
     '## Coaching',
     ...(coachingLines.length ? coachingLines.map((l) => `- ${l}`) : ['- Personne sous le seuil de 55/100 avec assez de données.']),
@@ -215,7 +241,7 @@ export async function performanceReview(world: WorldState, brain: BrainVault): P
     table,
     '',
     '## Méthode',
-    'Score = 50 % taux d’approbation en revue (a priori 80 %) + 35 % fiabilité (tâches terminées sans échec) + 15 % volume (vs médiane), lissé avec la semaine précédente. Promotion : top 3 avec un score ≥ 70. Coaching : score < 55 avec au moins 2 rejets ou échecs.',
+    `Score = 50 % taux d’approbation en revue (a priori 80 %) + 35 % fiabilité (tâches terminées sans échec) + 15 % volume (vs médiane), lissé avec la semaine précédente. Promotion : top 3 des scores ≥ 70 avec au moins ${PROMOTION_MIN_APPROVED} livrables validés en relecture depuis la dernière promotion, sans rejet ni échec dans la semaine et avec moins de ${PROMOTION_MAX_RETURNS} renvois en relecture, jamais deux semaines de suite, plafond au niveau ${MAX_LEVEL}. Coaching : score < 55 avec au moins 2 rejets ou échecs.`,
     '',
     [week > 1 ? `Semaine précédente : [[revue-semaine-${week - 1}]]` : null, '[[Playbook RH]]', '[[00 - Accueil]]'].filter(Boolean).join(' · '),
   ].join('\n');

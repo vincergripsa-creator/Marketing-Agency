@@ -1,5 +1,5 @@
 /** Money/state moves shared by the tools (agent actions) and the daily tick (market). */
-import { emit, nextId } from '../core/index.js';
+import { emit, nextId, round2 } from '../core/index.js';
 import type { Rng } from '../contracts.js';
 import type { AdCreative, Campaign, Customer, NicheTruth, Order, Product, WorldEvent, WorldEventKind, WorldState } from '../shared.js';
 import { EVENTS, FEES } from './balance.js';
@@ -41,55 +41,78 @@ export function nicheOf(world: WorldState, product: Product | undefined | null):
   return (product && findNiche(world, product.nicheId)) || FALLBACK_NICHE;
 }
 
-function bumpRefundStats(world: WorldState, order: Order): void {
+/** What can still be repaid on an order: its price minus everything already given back. */
+export function repayableLeft(order: Order): number {
+  return round2(Math.max(0, order.price - (order.refundedAmount ?? 0)));
+}
+
+function addRefundAmount(world: WorldState, order: Order, amount: number): void {
   const p = productById(world, order.productId);
-  if (p) {
-    p.stats.refunds += 1;
-    p.stats.refundAmount = Math.round((p.stats.refundAmount + order.price) * 100) / 100;
-  }
+  if (p) p.stats.refundAmount = round2(p.stats.refundAmount + amount);
+}
+
+function bumpRefundStats(world: WorldState, order: Order, amount: number): void {
+  addRefundAmount(world, order, amount);
+  const p = productById(world, order.productId);
+  if (p) p.stats.refunds += 1;
   const c = customerById(world, order.customerId);
   if (c) c.satisfaction = Math.max(-1, c.satisfaction - 0.3);
 }
 
-/** Full refund of an order. Returns the amount refunded (0 when already refunded / disputed). */
-export function refundOrder(world: WorldState, order: Order, memo: string): number {
+/**
+ * Full refund: reverses what is left of the order after any goodwill gesture. Returns the amount given back
+ * (0 when already refunded / disputed). `scam_loss` books a refund obtained through a false claim.
+ */
+export function refundOrder(world: WorldState, order: Order, memo: string, type: 'refund' | 'scam_loss' = 'refund'): number {
   if (order.refunded || order.chargeback) return 0;
+  const amount = repayableLeft(order);
   order.refunded = true;
   order.refundedDay = world.day;
-  recordLedger(world, { type: 'refund', amount: -order.price, memo, ref: order.id });
-  bumpRefundStats(world, order);
-  return order.price;
-}
-
-/** Bank dispute: the sale is reversed AND a fixed fee is charged. Returns the total cost. */
-export function chargebackOrder(world: WorldState, order: Order): number {
-  if (order.refunded || order.chargeback) return 0;
-  order.chargeback = true;
-  order.refunded = true;
-  order.refundedDay = world.day;
-  const cost = order.price + FEES.chargebackFee;
-  recordLedger(world, { type: 'chargeback', amount: -cost, memo: `Litige bancaire (chargeback) : ${fmtEur(order.price)} + ${fmtEur(FEES.chargebackFee)} de frais`, ref: order.id });
-  bumpRefundStats(world, order);
-  return cost;
-}
-
-/** Partial goodwill refund (booked as 'discount'). */
-export function partialRefund(world: WorldState, order: Order | undefined, share: number, memo: string): number {
-  if (!order || order.refunded || order.chargeback) return 0;
-  const amount = Math.round(order.price * share * 100) / 100;
-  if (amount <= 0) return 0;
-  recordLedger(world, { type: 'discount', amount: -amount, memo, ref: order.id });
+  order.refundedAmount = order.price;
+  if (amount > 0) recordLedger(world, { type, amount: -amount, memo, ref: order.id });
+  bumpRefundStats(world, order, amount);
   return amount;
 }
 
+/** Bank dispute: what is left of the sale is reversed AND a fixed fee is charged. Returns the total cost. */
+export function chargebackOrder(world: WorldState, order: Order): number {
+  if (order.refunded || order.chargeback) return 0;
+  const left = repayableLeft(order);
+  order.chargeback = true;
+  order.refunded = true;
+  order.refundedDay = world.day;
+  order.refundedAmount = order.price;
+  const cost = round2(left + FEES.chargebackFee);
+  recordLedger(world, { type: 'chargeback', amount: -cost, memo: `Litige bancaire (chargeback) : ${fmtEur(left)} + ${fmtEur(FEES.chargebackFee)} de frais`, ref: order.id });
+  bumpRefundStats(world, order, left);
+  return cost;
+}
+
+/** Partial goodwill refund, at most one per order (booked as 'discount' unless it pays a false claim). */
+export function partialRefund(world: WorldState, order: Order | undefined, share: number, memo: string, type: 'discount' | 'scam_loss' = 'discount'): number {
+  if (!order || order.refunded || order.chargeback || (order.refundedAmount ?? 0) > 0) return 0;
+  const amount = Math.min(repayableLeft(order), round2(order.price * share));
+  if (amount <= 0) return 0;
+  order.refundedAmount = amount;
+  recordLedger(world, { type, amount: -amount, memo, ref: order.id });
+  addRefundAmount(world, order, amount);
+  return amount;
+}
+
+/** True when this customer really bought this product (refunded or not): the only people who can rate it. */
+export function isVerifiedBuyer(world: WorldState, customer: Customer | undefined, product: Product): boolean {
+  return !!customer && world.market.orders.some((o) => o.customerId === customer.id && o.productId === product.id);
+}
+
+/** Every store review goes through here: only a verified buyer of the product can leave one. */
 export function reviewProduct(world: WorldState, rng: Rng, product: Product | undefined, customer: Customer | undefined, rating: number, kind: ReviewKind): boolean {
-  if (!product) return false;
-  addReview(world, rng, product, customer?.id ?? 'anonyme', rating, nicheOf(world, product), kind);
+  if (!product || !isVerifiedBuyer(world, customer, product)) return false;
+  addReview(world, rng, product, customer!.id, rating, nicheOf(world, product), kind);
   return true;
 }
 
-/** Ids an event is about (product, niche, creative, creator); undefined / null values are dropped. */
-export type EventRefs = { [K in keyof NonNullable<WorldEvent['refs']>]?: string | null };
+/** Ids an event is about (product, niche, creative, creator) and the day it announces; empty values are dropped. */
+export type EventRefs = { [K in Exclude<keyof NonNullable<WorldEvent['refs']>, 'day'>]?: string | null } & { day?: number | null };
 
 function cleanRefs(refs: EventRefs | undefined): WorldEvent['refs'] | undefined {
   if (!refs) return undefined;
@@ -98,6 +121,7 @@ function cleanRefs(refs: EventRefs | undefined): WorldEvent['refs'] | undefined 
     const v = refs[k];
     if (typeof v === 'string' && v && v !== FALLBACK_NICHE.id) out[k] = v;
   }
+  if (typeof refs.day === 'number' && Number.isFinite(refs.day)) out.day = refs.day;
   return Object.keys(out).length ? out : undefined;
 }
 

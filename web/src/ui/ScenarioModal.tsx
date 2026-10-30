@@ -1,42 +1,22 @@
 // "Nouveau scénario": configure a fresh run (budget, difficulty, goal, mind) or load a saved one.
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { CompanySnapshot, Difficulty, ScenarioConfig } from '../../../shared/types';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import type { CompanySnapshot, Difficulty } from '../../../shared/types';
 import { api, type RunSummary } from '../api';
 import { cx, Empty } from './common';
 import { useApp } from './context';
 import { fmtEur, fmtEurSigned } from './format';
 import { Icon } from './icons';
 import { DIFFICULTY_INFO } from './labels';
+import { budgetError, budgetTooLow, deadlineNote, defaultForm, minCashOf, scenarioConfig, settleField, type NumberField, type ScenarioForm } from './scenarioForm';
 
 const RUN_STATUS: Record<string, string> = { running: 'en cours', paused: 'en pause', bankrupt: 'faillite', goal_reached: 'objectif atteint', finished: 'terminée' };
 
-type Form = Omit<ScenarioConfig, 'goal'> & { targetProfit: number; byDay: number };
-
-function defaults(s: ScenarioConfig | undefined): Form {
-  return {
-    name: s?.name ?? 'Agence PDF',
-    companyName: s?.companyName ?? 'Pixel Agency',
-    seed: Math.floor(Math.random() * 100_000),
-    startingCash: s?.startingCash ?? 500,
-    horizonDays: s?.horizonDays ?? 60,
-    difficulty: s?.difficulty ?? 'normal',
-    mindMode: s?.mindMode ?? 'auto',
-    founderApproval: s?.founderApproval ?? false,
-    chargeCompute: s?.chargeCompute ?? false,
-    maxComputeEur: s?.maxComputeEur ?? 5,
-    targetProfit: s?.goal?.targetProfit ?? 1000,
-    byDay: s?.goal?.byDay ?? s?.horizonDays ?? 60,
-  };
-}
-
-function num(v: string, fallback: number, min: number, max: number): number {
-  const n = Number(v.replace(',', '.'));
-  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
-}
+const randomSeed = () => Math.floor(Math.random() * 100_000);
 
 export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded(s: CompanySnapshot): void }) {
   const { snapshot, demo, toast } = useApp();
-  const [form, setForm] = useState<Form>(() => defaults(snapshot?.scenario));
+  const minCash = minCashOf(snapshot);
+  const [form, setForm] = useState<ScenarioForm>(() => defaultForm(snapshot?.scenario, minCash, randomSeed()));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
@@ -51,24 +31,30 @@ export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded
     return () => { cancelled = true; };
   }, [demo]);
 
-  const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const set = <K extends keyof ScenarioForm>(k: K, v: ScenarioForm[K]) => setForm((f) => ({ ...f, [k]: v }));
+
+  /** Raw text while typing; the field settles on blur, or when the scenario is launched. */
+  const numberInput = (field: NumberField) => ({
+    type: 'text',
+    inputMode: 'decimal',
+    autoComplete: 'off',
+    value: form[field],
+    onChange: (e: ChangeEvent<HTMLInputElement>) => { set(field, e.target.value); setError(null); },
+    onBlur: () => setForm((f) => settleField(f, field)),
+  } as const);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (demo) { setError('Le serveur n’est pas connecté : lance « npm run dev » puis réessaie.'); return; }
+    const refusal = budgetError(form, minCash);
+    if (refusal) { setError(refusal); return; }
     setBusy(true);
     setError(null);
-    const { targetProfit, byDay, ...rest } = form;
-    const config: Partial<ScenarioConfig> = {
-      ...rest,
-      name: rest.name.trim() || 'Agence PDF',
-      companyName: rest.companyName.trim() || 'Pixel Agency',
-      goal: { targetProfit, byDay: Math.min(byDay, rest.horizonDays) },
-    };
+    const config = scenarioConfig(form);
     try {
       const snap = await api.scenario(config);
       onLoaded(snap);
-      toast({ tone: 'good', icon: 'flag', title: 'Nouveau scénario lancé', text: `${config.companyName} · ${fmtEur(config.startingCash ?? 0, 0)} · ${DIFFICULTY_INFO[config.difficulty ?? 'normal'].label}` });
+      toast({ tone: 'good', icon: 'flag', title: 'Nouveau scénario lancé', text: `${config.companyName} · ${fmtEur(config.startingCash ?? 0, 0)} · ${DIFFICULTY_INFO[config.difficulty ?? 'normal'].label} · ${fmtEur(config.goal?.targetProfit, 0)} avant le jour ${config.goal?.byDay}` });
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Impossible de lancer le scénario');
@@ -92,6 +78,8 @@ export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded
     }
   };
 
+  const deadline = deadlineNote(form);
+
   return (
     <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal glass" role="dialog" aria-modal="true" aria-label="Nouveau scénario" ref={dialogRef}>
@@ -110,20 +98,28 @@ export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded
             <div className="form-grid">
               <label className="field"><span>Nom du scénario</span><input value={form.name} onChange={(e) => set('name', e.target.value)} maxLength={60} /></label>
               <label className="field"><span>Entreprise</span><input value={form.companyName} onChange={(e) => set('companyName', e.target.value)} maxLength={40} /></label>
-              <label className="field"><span>Budget de départ (€)</span><input type="number" min={50} max={100000} step={50} value={form.startingCash} onChange={(e) => set('startingCash', num(e.target.value, 500, 50, 100000))} /></label>
-              <label className="field"><span>Horizon (jours)</span><input type="number" min={7} max={365} value={form.horizonDays} onChange={(e) => { const h = num(e.target.value, 60, 7, 365); setForm((f) => ({ ...f, horizonDays: h, byDay: Math.min(f.byDay, h) || h })); }} /></label>
-              <label className="field"><span>Objectif de profit (€)</span><input type="number" min={0} max={1000000} step={50} value={form.targetProfit} onChange={(e) => set('targetProfit', num(e.target.value, 1000, 0, 1_000_000))} /></label>
-              <label className="field"><span>Avant le jour</span><input type="number" min={1} max={form.horizonDays} value={form.byDay} onChange={(e) => set('byDay', num(e.target.value, form.horizonDays, 1, form.horizonDays))} /></label>
+              <label className="field">
+                <span>Budget de départ (€)</span>
+                <input {...numberInput('startingCash')} />
+                <span className={cx('field-note', budgetTooLow(form, minCash) && 'is-bad')}>Minimum {fmtEur(minCash, 0)} : frais de démarrage et premier mois de frais fixes.</span>
+              </label>
+              <label className="field"><span>Horizon (jours)</span><input {...numberInput('horizonDays')} /></label>
+              <label className="field"><span>Objectif de profit (€)</span><input {...numberInput('targetProfit')} /></label>
+              <label className="field">
+                <span>Avant le jour</span>
+                <input {...numberInput('byDay')} />
+                {deadline ? <span className="field-note is-warn">{deadline}</span> : null}
+              </label>
               <label className="field">
                 <span>Graine (seed)</span>
                 <span className="field-inline">
-                  <input type="number" value={form.seed} onChange={(e) => set('seed', Math.floor(num(e.target.value, 42, 0, 2 ** 31 - 1)))} />
-                  <button type="button" className="icon-btn" onClick={() => set('seed', Math.floor(Math.random() * 100_000))} title="Graine aléatoire"><Icon name="dice" size={15} /></button>
+                  <input {...numberInput('seed')} />
+                  <button type="button" className="icon-btn" onClick={() => set('seed', String(randomSeed()))} title="Graine aléatoire"><Icon name="dice" size={15} /></button>
                 </span>
               </label>
               <label className="field">
                 <span>Plafond compute Claude (€)</span>
-                <input type="number" min={0} max={500} step={1} value={form.maxComputeEur} onChange={(e) => set('maxComputeEur', num(e.target.value, 5, 0, 500))} />
+                <input {...numberInput('maxComputeEur')} />
               </label>
             </div>
 

@@ -1,7 +1,7 @@
 // French labels and lookup helpers shared by every panel.
 import type {
   ActivityKind, AdFormat, AgentState, AgentStatus, CompanySnapshot, DayPhase, DeptDef, DeptId, Deliverable,
-  Difficulty, HookStyle, InboxMessage, LedgerType, Lesson, MessageIntent, ModelTier, ProductStatus, Task,
+  Difficulty, Experiment, HookStyle, InboxMessage, LedgerType, Lesson, MessageIntent, ModelTier, ProductStatus, Task,
   TaskKind, TaskStatus, ToolName, WorldEvent,
 } from '../../../shared/types';
 import type { IconName } from './icons';
@@ -82,6 +82,9 @@ export const TASK_KIND_LABEL: Record<TaskKind, string> = {
   daily_report: 'Rapport du jour',
   run_experiment: 'Expérience A/B',
   budget_review: 'Revue du budget',
+  reconcile_ledger: 'Rapprochement du grand livre',
+  weekly_pnl: 'P&L de la semaine',
+  follow_missions: 'Suivi des missions',
   retro: 'Rétro du soir',
   performance_review: 'Revue RH',
 };
@@ -162,6 +165,9 @@ export const LEDGER_LABEL: Record<LedgerType, string> = {
   compute: 'Compute Claude', creator_payout: 'Commissions créateurs', scam_loss: 'Pertes (arnaques)', discount: 'Remises',
 };
 
+/** Ledger entries with a 'hold:' ref: typed platform_fee on the server, but cash timing only (see derive.ts isReserve). */
+export const RESERVE_LABEL = 'Réserve de paiement (temporaire)';
+
 export const LESSON_TOPIC_LABEL: Record<Lesson['topic'], string> = {
   ads: 'Pub', pricing: 'Prix', product: 'Produit', support: 'Support', niche: 'Niche', finance: 'Finance', process: 'Process', partnership: 'Partenariats',
 };
@@ -200,6 +206,11 @@ export const EXPERIMENT_DIM_LABEL: Record<string, string> = {
 };
 export const METRIC_LABEL: Record<string, string> = {
   ctr: 'CTR', cvr: 'Conversion', roas: 'ROAS', refund_rate: 'Taux de remboursement', resolution: 'Résolution',
+};
+export const EXPERIMENT_STATUS: Record<Experiment['status'], { label: string; tone: Tone; title?: string }> = {
+  running: { label: 'En cours', tone: 'blue' },
+  concluded: { label: 'Conclue', tone: 'green' },
+  cancelled: { label: 'Annulée', tone: 'neutral', title: 'Une variante n’a reçu aucun trafic : le test n’a rien appris.' },
 };
 
 // ───────────────────────────── Activity kinds ─────────────────────────────

@@ -87,7 +87,7 @@ export interface AgentState extends AgentDef {
   energy: number;        // 0..100, drops while working, coffee restores
   level: number;         // 1.. grows with xp
   xp: number;
-  perf: { done: number; approved: number; rejected: number; failed: number; score: number }; // score 0..100
+  perf: { done: number; approved: number; rejected: number; failed: number; score: number; promotedWeek?: number; approvedAtPromotion?: number }; // score 0..100
   bubble: string | null; // short speech bubble shown above the sprite
 }
 
@@ -123,6 +123,9 @@ export type TaskKind =
   | 'daily_report'        // Analyse
   | 'run_experiment'      // Analyse
   | 'budget_review'       // Finance
+  | 'reconcile_ledger'    // Finance: daily ledger reconciliation (orders, ad platform, refunds)
+  | 'weekly_pnl'          // Finance: weekly profit and loss per product
+  | 'follow_missions'     // Direction: founder missions follow-up, stale tasks unblocked
   | 'retro'               // RH: lessons of the day → brain + playbooks
   | 'performance_review'; // RH: weekly agent reviews
 
@@ -162,6 +165,11 @@ export interface Mission {
   ownerId: AgentId;         // chief in charge
   taskIds: string[];
   status: 'open' | 'done' | 'failed';
+  nicheId?: string | null;  // founder mission: the niche the company understood it to be about
+  wantsProduct?: boolean;   // the founder asked for a product: closes only once one is live in nicheId
+  productId?: string | null; // the resulting product
+  outcome?: string | null;  // French, where it stands, written for the founder
+  relaunches?: number;      // chains restarted by the chief of staff after a dead end
 }
 
 export interface ChatMessage { id: string; day: number; from: 'founder' | AgentId; text: string; at: number }
@@ -197,22 +205,40 @@ export interface PdfContent {
  * - do_dont: every label is prefixed « À faire : … » or « À éviter : … » (order free).
  * - quote: labels[0] = the quote, labels[1] = attribution (optional).
  * - timeline: labels are « Phase : action » (e.g. « Nuits 1-3 : … »).
- * - bar_chart: values 0..100 aligned with labels.
+ * - bar_chart: values 0..100 aligned with labels, measured values only (never an invented index).
+ * - grid: labels and values stay empty, everything is in `grid` (a renderer without grid support skips it).
  */
 export interface VisualSpec {
-  type: 'timeline' | 'bar_chart' | 'checklist_card' | 'quote' | 'steps_diagram' | 'icon_grid' | 'do_dont';
+  type: 'timeline' | 'bar_chart' | 'checklist_card' | 'quote' | 'steps_diagram' | 'icon_grid' | 'do_dont' | 'grid';
   title: string;
   labels: string[];
   values: number[];           // for charts (0..100); empty otherwise
+  grid?: GridSpec;            // required when type === 'grid'
 }
+
+/**
+ * Printable table the reader fills in by hand (tracker, log, budget, planning sheet).
+ * The table has rows.length lines and columns.length columns; the first column holds the row labels.
+ * cells[r][c] pre-fills a cell, c counting the columns AFTER the first one; null or missing = empty box
+ * to write in. cells may be shorter than rows, and may be absent for a fully blank table.
+ */
+export interface GridSpec {
+  columns: string[];          // header labels, the first one heads the row labels (at least 2 columns)
+  rows: string[];             // row labels, '' for a blank line
+  cells?: (string | null)[][];
+}
+
+/** Kind of guide a niche calls for: drives chapter kinds, plan logic and bonus types of the writer. */
+export type GuideArchetype = 'habitude' | 'projet' | 'demarche' | 'examen' | 'evenement' | 'systeme' | 'paliers';
 
 export interface DesignSpec {
   palette: { bg: string; primary: string; secondary: string; accent: string; ink: string; soft: string };
-  motif: 'moon' | 'sun' | 'leaf' | 'coin' | 'heart' | 'bolt' | 'book' | 'chart' | 'home' | 'paw' | 'dumbbell' | 'sparkle';
+  motif: 'moon' | 'sun' | 'leaf' | 'coin' | 'heart' | 'bolt' | 'book' | 'chart' | 'home' | 'paw' | 'dumbbell' | 'sparkle' | 'brush' | 'pot';
   coverLayout: 'centered' | 'split' | 'badge' | 'minimal';
   titleFont: 'Helvetica-Bold' | 'Times-Bold' | 'Courier-Bold';
   bodyFont: 'Helvetica' | 'Times-Roman';
   seed: number;
+  family?: string;            // niche family (deliverables/design.ts): it names the right professional on the last page
 }
 
 export interface SalesPage {
@@ -226,6 +252,7 @@ export interface SalesPage {
   guarantee: string;
   cta: string;
   hypeLevel: number;          // 0..1 — overpromising raises conversion but also refunds & ad rejections
+  priceWritten?: number;      // price of the product when this copy was written: the page prints the price of the day instead
 }
 
 export interface QualityReport {
@@ -238,6 +265,7 @@ export interface QualityReport {
   promiseMatch: number;       // sales page promise vs actual content
   compliance: number;         // risky claims (health, money, guarantees)
   issues: string[];           // French, actionable
+  blocking?: { dimension: 'specificity' | 'structure' | 'actionability' | 'humanTone' | 'design' | 'promiseMatch' | 'compliance'; text: string }[]; // what a reviewer cannot let through, whatever the global score
   evaluator: 'heuristic' | 'claude' | 'hybrid';
 }
 
@@ -271,6 +299,8 @@ export interface Product {
   launchedDay: number | null;
   stats: ProductStats;
   priceHistory: { day: number; price: number }[];
+  brief?: { angle: string };  // internal positioning note, never customer-facing
+  pagePrint?: string;         // what sales-page.html shows of the live product (price, reviews…): when it changes, the page is re-rendered
 }
 
 // ───────────────────────────── TikTok ads (virtual platform) ─────────────────────────────
@@ -307,6 +337,8 @@ export interface Campaign {
   targeting: { interests: string[]; ageMin: number; ageMax: number };
   startDay: number;
   createdBy: AgentId;
+  pausedFor?: 'outage';     // paused for an announced outage: resumed the next morning
+  founderForced?: boolean;  // launched by the founder against the company's own stop rules: only he (or the stop-loss) ends it
 }
 
 export interface CampaignInputShape {
@@ -348,6 +380,9 @@ export interface Order {
   campaignId: string | null; creatorId: string | null;
   refunded: boolean; chargeback: boolean;
   refundedDay?: number | null;  // day of the refund / chargeback, for exact daily attribution
+  refundedAmount?: number;      // EUR already given back (goodwill gesture, refund, chargeback), never above price
+  charges?: number;             // card debits in the payment log (2 = a real double charge)
+  downloads?: number;           // PDF downloads in the delivery log (0 = the buyer never got the file)
 }
 
 export type MessageIntent =
@@ -373,6 +408,9 @@ export interface InboxMessage {
   replyScore?: number | null; // 0..100 score of the last support reply (set by replyToMessage)
   repliedDay?: number | null;
 }
+
+/** A message as the UI receives it: the ground truth stays on the server (god mode: CompanySnapshot.godMode.intents). */
+export type PublicInboxMessage = Omit<InboxMessage, 'intent'>;
 
 export interface SupportReplyInput {
   text: string;
@@ -415,13 +453,29 @@ export type LedgerType =
 
 export interface LedgerEntry { id: string; day: number; type: LedgerType; amount: number; memo: string; ref: string | null }
 
+/** Profit and loss of one product over a window, from the ledger. */
+export interface ProductPnl {
+  productId: string; title: string; sales: number;
+  revenue: number; refunds: number; adSpend: number; fees: number; creators: number;
+  profit: number;             // revenue - refunds - adSpend - fees - creators
+  roas: number | null;        // revenue net of refunds / ad spend, null without ad spend
+}
+
+/** The accountant's weekly report, kept for the kill and budget decisions. */
+export interface WeeklyPnl {
+  week: number; fromDay: number; toDay: number;
+  products: ProductPnl[];     // best first
+  unallocated: number;        // fixed costs and compute, shared by the whole company (negative)
+  total: number;              // sum of the products + unallocated: the profit of the window
+}
+
 export interface FinanceSnapshot {
   cash: number;
   revenue: number; refunds: number; adSpend: number; fees: number; compute: number; otherCosts: number;
   profit: number;             // cumulative, excluding starting capital
   profit7d: number;
   burn7d: number;             // average daily net outflow over 7 days (positive = burning)
-  runwayDays: number | null;  // null when profitable
+  runwayDays: number | null;  // null when not burning cash, 0 when cash ≤ 0
   roas7d: number;
   bankrupt: boolean;
 }
@@ -449,7 +503,15 @@ export interface VoiceOfCustomer {
   phrases: string[];          // verbatim customer phrases ("il se réveille toutes les 2h")
   objections: string[];       // why they hesitate to buy
   desiredOutcomes: string[];
-  knowledge: { tips: string[]; steps: string[]; mistakes: string[]; examples: string[]; facts: string[] }; // raw material to write the PDF
+  /**
+   * Raw material to write the PDF. The research samples each array item by item, so every item stands
+   * on its own and carries its structure in plain French:
+   * - mistakes: « Erreur. Pourquoi. → Correction. » (the fix stays with its mistake);
+   * - steps: « Action. Détail. (étape 3 ; quand ; durée) », rank restores the order, « diagnostic » marks the observation step;
+   * - tips: « Si situation : réponse. » is a troubleshooting case, anything else a plain tip;
+   * - any item may start with « [sujet] »: it belongs to a follow-up guide on that sub-problem, never to the main guide.
+   */
+  knowledge: { tips: string[]; steps: string[]; mistakes: string[]; examples: string[]; facts: string[]; archetype?: GuideArchetype };
   priceAnchors: number[];     // prices people mention / pay
   bannedClaims: string[];     // claims the ad platform refuses in this niche
 }
@@ -469,6 +531,8 @@ export interface Lesson {
   source: AgentId;
   appliesTo: AgentId[];       // playbooks that received it
   notePath: string;           // brain-relative path of the markdown note
+  supersededBy?: string;      // set on a retired lesson (CompanyState.retiredLessons): id of the lesson that replaced it
+  retiredDay?: number;
 }
 
 export interface BanditArm { key: string; alpha: number; beta: number; pulls: number; reward: number }
@@ -478,7 +542,8 @@ export interface Experiment {
   id: string; day: number; owner: AgentId; hypothesis: string;
   dimension: 'hook_style' | 'ad_format' | 'price' | 'sales_hype' | 'support_tone' | 'niche';
   variants: string[]; metric: 'ctr' | 'cvr' | 'roas' | 'refund_rate' | 'resolution';
-  status: 'running' | 'concluded';
+  productId?: string | null;  // the product whose traffic carries the test
+  status: 'running' | 'concluded' | 'cancelled'; // cancelled = a variant never got traffic: nothing was learned
   results: Record<string, { n: number; value: number }>;
   winner: string | null; endDay: number | null;
 }
@@ -498,7 +563,7 @@ export type WorldEventKind =
 
 export interface WorldEvent {
   id: string; day: number; kind: WorldEventKind; title: string; description: string; severity: 'info' | 'warn' | 'danger' | 'good';
-  refs?: { productId?: string; nicheId?: string; creativeId?: string; creatorId?: string };
+  refs?: { productId?: string; nicheId?: string; creativeId?: string; creatorId?: string; day?: number }; // day: the announced day (platform_outage)
 }
 
 export type ActivityKind =
@@ -548,6 +613,7 @@ export interface NicheTruth {
   seasonality: number[];      // 7 values, day-of-week multipliers
   voc: VoiceOfCustomer;       // full deep VoC (research reveals subsets)
   competitors: CompetitorProduct[];
+  scamCreatorIds?: string[];  // creators of this niche who take an advance and vanish, explicit red flag or not
 }
 
 export interface MarketState {
@@ -576,7 +642,8 @@ export interface CompanyState {
   campaigns: Campaign[];
   deliverables: Deliverable[];
   research: { trends: TrendSignal[]; voc: Record<string, VoiceOfCustomer>; competitors: Record<string, CompetitorProduct[]>; shortlist: string[] };
-  lessons: Lesson[];
+  lessons: Lesson[];                        // active lessons only: a replaced lesson moves to retiredLessons
+  retiredLessons?: Lesson[];                // superseded lessons (history), never applied
   experiments: Experiment[];
   bandits: Record<string, BanditArm[]>;     // key = dimension (+ optional ":nicheId")
   playbooks: Record<AgentId, string[]>;     // learned rules injected into each agent's work
@@ -585,6 +652,7 @@ export interface CompanyState {
   pendingApprovals: string[];               // task ids awaiting founder (founderApproval mode)
   budget?: { day: number; adCap: number; survival: boolean; note: string } | null; // CFO envelope of the day
   lastRetroDay?: number;                    // idempotence of the evening retro (survives save/reload)
+  pnl?: WeeklyPnl[];                        // weekly P&L per product, oldest first
 }
 
 export interface WorldState {
@@ -615,7 +683,7 @@ export interface CompanySnapshot {
   mind: WorldState['mind'];
   company: CompanyState;
   market: {
-    inbox: InboxMessage[];          // most recent 80
+    inbox: InboxMessage[];          // most recent 80, the `intent` field left out (PublicInboxMessage; god mode: godMode.intents)
     adStats: DailyAdStats[];        // last 14 days
     organicPosts: OrganicPost[];    // last 30
     creators: CreatorProfile[];
@@ -628,9 +696,31 @@ export interface CompanySnapshot {
   finance: FinanceSnapshot;
   ledger: LedgerEntry[];            // last 150
   activity: Activity[];             // last 200
-  godMode?: { niches: Pick<NicheTruth, 'id' | 'name' | 'demand' | 'wtp' | 'competition' | 'tiktokAffinity' | 'hookAffinity'>[] };
+  godMode?: {
+    niches: Pick<NicheTruth, 'id' | 'name' | 'demand' | 'wtp' | 'competition' | 'tiktokAffinity' | 'hookAffinity'>[];
+    intents: Record<string, MessageIntent>;   // message id → ground truth, for the messages of this snapshot
+  };
+  taskStats?: TaskStats;            // counted on every task, whatever company.tasks keeps
   session?: SessionInfo;            // live server loop state (play/pause, speed)
 }
+
+/** Tasks of one day: created counts on dayCreated; done, failed and cancelled on dayDone. */
+export interface DayTaskCounts { day: number; created: number; done: number; failed: number; cancelled: number }
+
+export interface DeptTaskCounts {
+  days: DayTaskCounts[];            // last 14 days, oldest first, days without any task left out
+  kinds7d: Partial<Record<TaskKind, number>>; // last 7 days (dayDone, else dayCreated), by kind
+  done: number;                     // done tasks of the whole run
+  avgDelayDays: number | null;      // their average dayDone - dayCreated
+}
+
+export interface TaskStats {
+  days: DayTaskCounts[];            // every day of the run with a task, oldest first
+  depts: Partial<Record<DeptId, DeptTaskCounts>>;
+}
+
+/** What moves on every tick: the light 'tick' event carries it between two full snapshots. */
+export type LiveAgent = Pick<AgentState, 'id' | 'status' | 'place' | 'currentTaskId' | 'energy' | 'bubble'>;
 
 // ───────────────────────────── HTTP API shapes (api/ ↔ web/) ─────────────────────────────
 
@@ -647,6 +737,7 @@ export interface SessionInfo {
   day?: number;
   tick?: number;
   lastError?: string | null;
+  minStartingCash?: number;         // lowest budget POST /api/scenario accepts (EUR)
 }
 
 export interface RunInfo {
@@ -657,7 +748,7 @@ export interface RunInfo {
 }
 
 export interface ControlResponse { ok: boolean; status: WorldState['status']; speed: Speed; playing: boolean; message: string; session?: SessionInfo }
-export interface MissionResponse { ok: boolean; missionId: string }
+export interface MissionResponse { ok: boolean; missionId: string; status?: Mission['status']; message?: string }
 export interface ChatResponse { reply: string }
 export interface ApproveResponse { ok: boolean; message: string }
 
@@ -665,4 +756,4 @@ export interface ApproveResponse { ok: boolean; message: string }
 export type StreamEvent =
   | { type: 'snapshot'; snapshot: CompanySnapshot }
   | { type: 'activity'; activity: Activity[] }
-  | { type: 'tick'; day: number; tick: number; phase: DayPhase; finance: FinanceSnapshot };
+  | { type: 'tick'; day: number; tick: number; phase: DayPhase; finance: FinanceSnapshot; agents?: LiveAgent[] };

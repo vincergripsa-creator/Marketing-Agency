@@ -2,7 +2,7 @@
 import type { InboxMessage, Order, SupportReplyInput } from '../../shared.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { incident, productOf, say } from '../ctx.js';
-import { learning } from '../modules.js';
+import { learning, sim } from '../modules.js';
 import { claimedMessageIds } from '../metrics.js';
 import { directivesOf, SUPPORT_TONES, withTone } from '../playbook.js';
 import { createTask } from '../tasks.js';
@@ -24,6 +24,42 @@ export function scamSignals(m: InboxMessage): string[] {
   return SCAM_PATTERNS.filter((rx) => rx.test(text)).map((rx) => rx.source);
 }
 
+const fold = (s: string): string => s.toLocaleLowerCase('fr').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[’]/g, "'");
+
+const DOUBLE_CHARGE = /(debite|preleve|paye|facture)e?\(?e?\)? (deux|2) fois|deux prelevements|double (prelevement|paiement|debit)/;
+const NEVER_RECEIVED = /jamais (rien )?recu|jamais pu ouvrir|pas ete fait par moi|pas fait par moi/;
+const PHONE_PROMISE = /collegue m'a promis|on m'a promis/;
+
+/** The claim's own words against our logs. */
+export interface LogCheck { falseClaim: boolean; realDoubleCharge: boolean; proof: string | null }
+
+/**
+ * What the payment and delivery logs say about a claim (data the shop really has): a double charge the payment log
+ * does not show, a guide « never received » that was downloaded, a phone promise with no earlier contact.
+ */
+export function checkClaim(world: RuntimeCtx['world'], m: InboxMessage, order: Order | null): LogCheck {
+  const none: LogCheck = { falseClaim: false, realDoubleCharge: false, proof: null };
+  if (!order) return none;
+  const text = fold(`${m.subject} ${m.body}`);
+  if (DOUBLE_CHARGE.test(text)) {
+    if (typeof order.charges !== 'number') return none;
+    if (order.charges >= 2) return { falseClaim: false, realDoubleCharge: true, proof: 'deux débits au journal de paiement' };
+    return { falseClaim: true, realDoubleCharge: false, proof: 'notre journal de paiement ne montre qu’un seul débit sur cette commande' };
+  }
+  if (NEVER_RECEIVED.test(text) && typeof order.downloads === 'number' && order.downloads >= 1) {
+    return { falseClaim: true, realDoubleCharge: false, proof: `notre journal de livraison montre ${order.downloads} téléchargement(s) du guide sur cette commande` };
+  }
+  if (PHONE_PROMISE.test(text) && !world.market.inbox.some((x) => x.customerId === m.customerId && x.id !== m.id && x.day <= m.day)) {
+    return { falseClaim: true, realDoubleCharge: false, proof: 'nous n’avons aucun échange précédent avec vous, et nous ne traitons pas de remboursement par téléphone' };
+  }
+  return none;
+}
+
+/** A refusal from the logs: polite and factual, it keeps the door open. A good answer is what stops a dispute at the bank. */
+function logsReply(ctx: RuntimeCtx, agentName: string, order: Order, proof: string): string {
+  return `Bonjour,\n\nMerci de nous avoir écrit. Nous avons vérifié votre commande ${order.id} : ${proof}. Nous ne pouvons donc pas donner suite à cette demande de remboursement. Si quelque chose nous a échappé, envoyez-nous simplement une capture et nous regarderons à nouveau.\n\n— ${agentName}, Service client ${ctx.world.company.name}`;
+}
+
 /** Urgency from what the agent can SEE (deadline, mood, channel, words) — never the hidden intent. */
 export function urgency(m: InboxMessage, day: number): number {
   let u = 0;
@@ -40,6 +76,11 @@ function customerName(ctx: RuntimeCtx, m: InboxMessage): string {
 
 function runningToneExperiment(ctx: RuntimeCtx) {
   return ctx.world.company.experiments.find((e) => e.status === 'running' && e.dimension === 'support_tone') ?? null;
+}
+
+/** Replies already sent during a test: the next message takes the next variant, even when they arrive one by one. */
+function repliesDuring(ctx: RuntimeCtx, day: number): number {
+  return ctx.world.market.inbox.filter((m) => (m.repliedDay ?? 0) >= day).length;
 }
 
 export function openMessages(ctx: RuntimeCtx): InboxMessage[] {
@@ -65,18 +106,28 @@ export const supportHandlers: HandlerMap = {
       const policy = [...SUPPORT_POLICY, ...mind.playbook.filter((r) => !/^Ne jamais écrire/.test(r))];
       const replies: Record<string, unknown>[] = [];
       let scoreSum = 0;
+      const offset = exp ? repliesDuring(ctx, exp.day) : 0;
       for (const [i, msg] of batch.entries()) {
         const product = productOf(ctx, msg.productId) ?? null;
         const order: Order | null = msg.orderId ? ctx.world.market.orders.find((o) => o.id === msg.orderId) ?? null : null;
-        const tone = exp && exp.variants.length ? exp.variants[i % exp.variants.length]! : learnedTone ?? learning.chooseArm(ctx.world, 'support_tone', SUPPORT_TONES, ctx.rng);
+        const tone = exp && exp.variants.length ? exp.variants[(offset + i) % exp.variants.length]! : learnedTone ?? learning.chooseArm(ctx.world, 'support_tone', SUPPORT_TONES, ctx.rng);
         const toneMind = mindWith({ ...mind, playbook: withTone(mind.playbook, tone) }, []);
         const cust = ctx.world.market.customers.find((c) => c.id === msg.customerId);
         const customer = cust ? { name: cust.name, archetype: cust.archetype } : msg.customerName ? { name: msg.customerName, archetype: 'normal' } : null;
         let reply: SupportReplyInput = await ctx.engine.writeSupportReply({ message: msg, product, order, policy, customer }, toneMind);
         // Guards from the playbook: never pay/click for a scam, never refund without a real order, big refunds need the founder.
         const signals = scamSignals(msg);
+        // The logs before the feelings: a claim they disprove gets a factual answer and no money; a real double charge is repaid.
+        const logs = checkClaim(ctx.world, msg, order);
+        if (logs.falseClaim && order) {
+          reply = { text: logsReply(ctx, agent.name, order, logs.proof!), action: 'none', detectedIntent: 'arnaque' };
+          say(ctx, agent.id, `${agent.name} vérifie les journaux : ${short(logs.proof!, 80)}, pas de remboursement`, 'thought', { messageId: msg.id });
+        } else if (logs.realDoubleCharge && order) {
+          reply = { ...reply, action: 'refund', detectedIntent: 'bug_paiement' };
+        }
         const moneyOut = reply.action === 'refund' || reply.action === 'discount_code';
-        const suspicious = (reply.detectedIntent === 'arnaque' && reply.action !== 'block' && reply.action !== 'ignore')
+        // A real order is never answered like a phishing DM: the claim is refused from the logs, the customer is not blocked.
+        const suspicious = (!order && reply.detectedIntent === 'arnaque' && reply.action !== 'block' && reply.action !== 'ignore')
           || (moneyOut && (!order || (signals.length >= 2 && order.refunded)))
           || (!order && signals.length >= 2 && reply.action !== 'block' && reply.action !== 'ignore');
         if (suspicious) {
@@ -92,7 +143,7 @@ export const supportHandlers: HandlerMap = {
           reply = { ...reply, action: 'escalate' };
           gated = true;
           createTask(ctx.world, {
-            kind: 'handle_refund', title: `Rembourser ${eur(order.price)} à ${customerName(ctx, msg)}`,
+            kind: 'handle_refund', title: `Rembourser ${eur(sim.repayableLeft(order))} à ${customerName(ctx, msg)}`,
             input: { orderId: order.id, messageId: msg.id, productId: msg.productId, reason: 'Demande de remboursement de bonne foi' },
             createdBy: agent.id, missionId: task.missionId, priority: 1,
           });
@@ -102,13 +153,13 @@ export const supportHandlers: HandlerMap = {
         scoreSum += outcome.score;
         const label = INTENT_LABELS[reply.detectedIntent] ?? reply.detectedIntent;
         say(ctx, agent.id, `${agent.name} répond à ${customerName(ctx, msg)} (${label}, ton ${tone}) : ${short(outcome.customerReaction, 70)} (score ${Math.round(outcome.score)}/100)`, 'message', { messageId: msg.id, ...(msg.productId ? { productId: msg.productId } : {}) });
-        if (outcome.consequence === 'refund' || reply.action === 'refund') say(ctx, agent.id, `Remboursement accordé à ${customerName(ctx, msg)}${order ? ` (${eur(order.price)})` : ''}`, 'refund', { messageId: msg.id });
+        if (outcome.consequence === 'refund' || reply.action === 'refund') say(ctx, agent.id, `Remboursement accordé à ${customerName(ctx, msg)}${outcome.cost > 0 ? ` (${eur(outcome.cost)})` : ''}`, 'refund', { messageId: msg.id });
         if (outcome.consequence === 'scam_loss') incident(ctx, `Arnaque : ${agent.name} a perdu ${eur(outcome.cost)} face à « ${short(msg.subject, 40)} »`);
         if (outcome.consequence === 'chargeback') incident(ctx, `Chargeback de ${customerName(ctx, msg)} malgré la réponse de ${agent.name} (${eur(outcome.cost)})`);
         if (outcome.consequence === 'bad_review') incident(ctx, `Mauvais avis après une réponse support (${label}, score ${Math.round(outcome.score)}/100)`);
         if (outcome.score < 40) incident(ctx, `Réponse support faible (${Math.round(outcome.score)}/100, ton ${tone}) sur « ${short(msg.subject, 40)} »`);
         if (reply.detectedIntent === 'plainte_qualite' && product) say(ctx, agent.id, `${agent.name} remonte une plainte qualité au Studio : « ${short(msg.body, 70)} »`, 'thought', { productId: product.id, messageId: msg.id });
-        replies.push({ messageId: msg.id, productId: msg.productId, detected: reply.detectedIntent, action: reply.action, tone, score: outcome.score, consequence: outcome.consequence, gated, complaint: reply.detectedIntent === 'plainte_qualite' ? short(msg.body, 160) : null });
+        replies.push({ messageId: msg.id, productId: msg.productId, detected: reply.detectedIntent, action: reply.action, tone, score: outcome.score, consequence: outcome.consequence, gated, complaint: reply.detectedIntent === 'plainte_qualite' ? short(msg.body, 160) : null, ...(logs.proof ? { proof: logs.proof } : {}) });
       }
       const avg = Math.round(scoreSum / batch.length);
       return { summary: `${batch.length} message(s) traité(s), score moyen ${avg}/100.`, output: { replies, avgScore: avg } };
@@ -121,14 +172,15 @@ export const supportHandlers: HandlerMap = {
       const order = orderId ? ctx.world.market.orders.find((o) => o.id === orderId) : undefined;
       if (!order) return { summary: 'Commande introuvable : rien à rembourser.', skipReview: true, output: { skipped: true } };
       if (order.refunded || order.chargeback) return { summary: 'Commande déjà remboursée.', skipReview: true, output: { skipped: true, already: true } };
+      const amount = sim.repayableLeft(order); // what is left after a goodwill gesture
       if (order.price > 50 && ctx.world.scenario.founderApproval && task.input.founderApproved !== true) {
-        return { summary: `Remboursement de ${eur(order.price)} prêt : en attente du fondateur.`, awaitFounder: `Rembourser ${eur(order.price)} (commande ${order.id})` };
+        return { summary: `Remboursement de ${eur(amount)} prêt : en attente du fondateur.`, awaitFounder: `Rembourser ${eur(amount)} (commande ${order.id})` };
       }
       const reason = str(task.input.reason) ?? 'Remboursement de bonne foi';
       const res = ctx.tools.issueRefund(order.id, reason);
       if (!res.ok) return { fail: `Remboursement refusé par la boutique : ${res.message}`, summary: res.message };
-      say(ctx, agent.id, `${agent.name} rembourse ${eur(order.price)} (commande ${order.id}) : ${short(reason, 60)}`, 'refund', { productId: order.productId, ...(str(task.input.messageId) ? { messageId: str(task.input.messageId) } : {}) });
-      return { summary: `Remboursement de ${eur(order.price)} effectué.`, output: { orderId: order.id, amount: order.price } };
+      say(ctx, agent.id, `${agent.name} rembourse ${eur(amount)} (commande ${order.id}) : ${short(reason, 60)}`, 'refund', { productId: order.productId, ...(str(task.input.messageId) ? { messageId: str(task.input.messageId) } : {}) });
+      return { summary: `Remboursement de ${eur(amount)} effectué.`, output: { orderId: order.id, amount } };
     },
   },
 };

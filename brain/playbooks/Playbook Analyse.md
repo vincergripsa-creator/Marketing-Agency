@@ -18,5 +18,8 @@ CTR par hook et par format, conversion de la page, ROAS, CAC, taux de remboursem
 
 ## Expériences
 Dès que deux variantes d'une même dimension (hook, format, prix, ton du support) ont été jouées, Emma lance un test formel avec une hypothèse, une métrique et un gagnant.
+- **Un test se fait sur du trafic réel** : pas de test de pub ou de prix sans campagne active, et les variantes sans pub en ligne reçoivent leurs créas au lancement.
+- **Une variante sans aucune donnée après 2 jours** : le test est annulé, il ne prouvait rien.
+- **Une question tranchée le reste** : on ne reteste que sur une nouvelle version du guide ou si le gagnant a perdu plus de 40 % de sa valeur sur la dernière semaine.
 
 Liens : [[Objectifs]] · [[Prix]] · [[Canaux d'acquisition]] · [[Playbook Growth]]

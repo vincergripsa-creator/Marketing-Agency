@@ -7,14 +7,14 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentState, DailyAdStats, Experiment, Product, WorldState } from '../src/shared.js';
+import type { AgentState, DailyAdStats, Experiment, PdfContent, Product, WorldState } from '../src/shared.js';
 import type { BrainVault, ContentEngine, MindContext, RunPaths } from '../src/contracts.js';
 import { createRng } from '../src/core/index.js';
 import { createWorld, defaultScenario } from '../src/runtime/index.js';
 import { sim } from '../src/runtime/modules.js';
 import type { RuntimeCtx } from '../src/runtime/ctx.js';
 import { createTask } from '../src/runtime/tasks.js';
-import { priceMove, buildHeuristicPlan, KILL_MIN_VIEWS } from '../src/runtime/strategy.js';
+import { priceMove, buildHeuristicPlan, KILL_MIN_VIEWS, materialize, PAID_PRICE_FLOOR } from '../src/runtime/strategy.js';
 import { experimentCandidate, PRICE_TEST_LOW_CVR } from '../src/runtime/handlers/ops.js';
 import { productHealth } from '../src/runtime/acquisition.js';
 import { growthHandlers } from '../src/runtime/handlers/growth.js';
@@ -206,7 +206,10 @@ describe('CEO price decisions (strategy.priceMove)', () => {
     world.company.experiments.push(concludedPriceTest(p, 10, 17, ['24', '29'], '24'));
     expect(priceMove(ctx, p)).toMatchObject({ input: { productId: p.id, reason: 'winner', price: 24 } });
     world.company.experiments[0]!.winner = null;
-    expect(priceMove(ctx, p)).toMatchObject({ input: { reason: 'winner', price: 24 } }); // control = price before the test
+    const control = priceMove(ctx, p);
+    expect(control).toMatchObject({ input: { reason: 'controle', price: 24 } }); // control = price before the test
+    expect(control!.why).toMatch(/retour au prix de contrôle/);
+    expect(control!.why).not.toMatch(/gagnant|rapporte le plus/);
     // once applied (a change after the test), the test no longer drives the price
     p.price = 24;
     p.priceHistory.push({ day: 18, price: 24 });
@@ -247,6 +250,22 @@ describe('CEO price decisions (strategy.priceMove)', () => {
     expect(priceMove(ctx, p)).toBeNull();
   });
 
+  it('a guide under the paid floor is raised at once, and a price cut never goes back under it', () => {
+    const world = createWorld(defaultScenario({ seed: 3, mindMode: 'heuristic' }), 'test-price');
+    const ctx = { world } as unknown as RuntimeCtx;
+    world.day = 6;
+    const cheap = addProduct(world, 'prd_cheap', { price: 9, priceHistory: [{ day: 5, price: 9 }] });
+    expect(cheap.price).toBeLessThan(PAID_PRICE_FLOOR);
+    expect(priceMove(ctx, cheap)).toMatchObject({ input: { reason: 'hausse' } }); // no sale yet: the floor does not wait for them
+    // a follow-up guide lives off its parent's buyers, no ad has to pay for it
+    addProduct(world, 'prd_parent', { upsellProductId: cheap.id });
+    expect(priceMove(ctx, cheap)).toBeNull();
+    const floor = addProduct(world, 'prd_floor', { price: PAID_PRICE_FLOOR, priceHistory: [{ day: 2, price: PAID_PRICE_FLOOR }] });
+    world.day = 11;
+    for (let d = 2; d <= 9; d++) world.market.adStats.push(adRow(d, floor.id, 45, d === 5 ? 1 : 0, PAID_PRICE_FLOOR)); // 360 visitors, 1 sale
+    expect(priceMove(ctx, floor)?.input.reason).not.toBe('baisse');
+  });
+
   it('a price test goes one tier down when paid conversion is low, one tier up otherwise', async () => {
     const { world, ctx, cleanup } = await setup(5);
     try {
@@ -254,10 +273,42 @@ describe('CEO price decisions (strategy.priceMove)', () => {
       const p = addProduct(world, 'prd_test', { price: 24, priceHistory: [{ day: 2, price: 24 }] });
       p.stats.sales = 12;
       for (let d = 14; d <= 19; d++) world.market.adStats.push(adRow(d, p.id, 40, d === 15 ? 1 : 0, 24)); // CVR 0,4 %
+      world.company.campaigns.push({ id: 'cpg_test', productId: p.id, name: 'Campagne', creativeIds: [], dailyBudget: 20, status: 'active', targeting: { interests: [], ageMin: 25, ageMax: 45 }, startDay: 14, createdBy: 'adam' });
+      world.company.research.competitors[p.nicheId] = [{ title: 'Concurrent', price: 29, rating: 4, reviews: 40, weaknesses: [] }] as never;
       expect(PRICE_TEST_LOW_CVR).toBeGreaterThan(1 / 240);
       expect(experimentCandidate(ctx)).toMatchObject({ dimension: 'price', variants: ['24', '19'] });
       for (const s of world.market.adStats) s.purchases = 2; // CVR 5 %
       expect(experimentCandidate(ctx)).toMatchObject({ dimension: 'price', variants: ['24', '29'] });
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ───────────────────────────── the rewrite ─────────────────────────────
+
+describe('a rewrite starts from what the last version left out', () => {
+  it('listens to buyers again first, and is told which pains and chapters are missing', async () => {
+    const { world, ctx, cleanup } = await setup(5);
+    try {
+      world.day = 20;
+      const nicheId = world.market.niches[0]!.id;
+      const voc = ctx.tools.minePains(nicheId, 'deep');
+      world.company.research.voc[nicheId] = { ...voc, pains: ['Le problème que personne ne traite dans ce guide'] };
+      const chapter = { title: 'Le plan', intro: 'Intro.', paragraphs: ['Un paragraphe.'], steps: ['Une étape.'], example: null, checklist: [], visual: null };
+      const content: PdfContent = {
+        title: 'Guide', subtitle: '', audience: 'parents', promise: 'Un plan', introduction: [], chapters: [chapter], bonus: { ...chapter, title: 'Bonus' },
+        nextStep: { title: '', text: '', upsellProductId: null }, wordCount: 10,
+      };
+      const p = addProduct(world, 'prd_v1', { nicheId, content });
+      const tasks = materialize(ctx, [{ kind: 'write_pdf', title: 'Réécrire', dept: 'studio', priority: 1, input: { productId: p.id, pipeline: 'v2', feedback: ['Trop général'] }, why: 'Note basse' }], { createdBy: 'camille', missionId: null });
+      const listen = tasks.find((t) => t.kind === 'mine_pains');
+      const write = tasks.find((t) => t.kind === 'write_pdf');
+      const human = tasks.find((t) => t.kind === 'humanize_pdf');
+      expect(p.version).toBe(2);
+      expect(listen).toMatchObject({ input: { nicheId, depth: 'deep' } });
+      expect(write!.dependsOn).toContain(listen!.id);
+      expect(human!.input.gaps).toEqual({ pains: ['Le problème que personne ne traite dans ce guide'], chapters: ['Le plan'] });
     } finally {
       cleanup();
     }

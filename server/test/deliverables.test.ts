@@ -2,13 +2,14 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inflateSync } from 'node:zlib';
+import PDFDocument from 'pdfkit';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { AdCreative, ChapterContent, PdfContent, Product, SalesPage, VisualSpec } from '../src/shared.js';
+import type { AdCreative, ChapterContent, DesignSpec, PdfContent, Product, SalesPage, VisualSpec } from '../src/shared.js';
 import { designFor, renderAdStoryboard, renderCoverSvg, renderPdf, renderSalesPageHtml } from '../src/deliverables/index.js';
-import { sanitizePdfText } from '../src/deliverables/text.js';
+import { sanitizePdfText, wholeClause } from '../src/deliverables/text.js';
 import { titleBlock } from '../src/deliverables/cover.js';
-import { MIN_PAGE_FILL, planIntro } from '../src/deliverables/pdf.js';
-import { splitDoDont } from '../src/deliverables/pdfVisuals.js';
+import { finalWording, MIN_PAGE_FILL, planIntro } from '../src/deliverables/pdf.js';
+import { gridWidths, splitDoDont, type PdfTheme } from '../src/deliverables/pdfVisuals.js';
 
 // ───────────────────────────── fixture ─────────────────────────────
 
@@ -383,7 +384,7 @@ describe('PDF pages read like the founder reads them', () => {
       const file = join(dir, `headings-${n}.pdf`);
       await renderPdf({ product, content: { ...content, chapters }, design, brand: 'Pixel Agency', outFile: file });
       for (const [i, page] of (await pdfPagesText(file)).entries()) {
-        expect(bodyOf(page), `variante ${n}, page ${i + 1}`).not.toMatch(/(Étape par étape|Votre checklist|EXEMPLE CONCRET)$/);
+        expect(bodyOf(page), `variante ${n}, page ${i + 1}`).not.toMatch(/(Étape par étape|Votre checklist|EXEMPLE TYPE)$/);
         // a chapter's checklist never sits alone on an otherwise empty page
         expect(bodyOf(page).startsWith('Votre checklist') && bodyOf(page).length < 400, `variante ${n}, page ${i + 1} : checklist seule`).toBe(false);
       }
@@ -405,7 +406,7 @@ describe('PDF pages read like the founder reads them', () => {
 
   it('the last page and the running heads never double their labels', async () => {
     const file = join(dir, 'labels.pdf');
-    await renderPdf({ product, content: { ...content, nextStep: { ...content.nextStep, title: 'La suite est ici : la marche en laisse sans tirer' } }, design, brand: 'Pixel Agency', outFile: file });
+    await renderPdf({ product, content, design, brand: 'Pixel Agency', outFile: file, upsell: { title: 'La suite est ici : la marche en laisse sans tirer', url: '/runs/r/files/prd_2/v1/sales-page.html' } });
     const all = (await pdfPagesText(file)).join(' ');
     expect(all).toContain('la marche en laisse sans tirer');
     expect(all).not.toMatch(/La suite est ici\s*:?\s*La suite est ici/);
@@ -413,5 +414,266 @@ describe('PDF pages read like the founder reads them', () => {
     expect(all).not.toMatch(/Bonus · Bonus|Bonus offert : Bonus/);
     // bar values are a 0..100 index, not percentages
     expect(all).not.toMatch(/\b68 %/);
+  });
+});
+
+// ───────────────────────────── printable sheets, last page, niche fit ─────────────────────────────
+
+/** Inflated page streams: what is really drawn, for what the text alone cannot show. */
+async function pageStreams(file: string): Promise<string[]> {
+  const buf = await readFile(file);
+  const s = buf.toString('latin1');
+  const out: string[] = [];
+  const re = /stream\r?\n/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s))) {
+    const start = m.index + m[0].length;
+    const end = s.indexOf('endstream', start);
+    if (end < 0) break;
+    try {
+      const txt = inflateSync(buf.subarray(start, end)).toString('latin1');
+      if (/\bBT\b/.test(txt)) out.push(txt);
+    } catch { /* not a deflated stream */ }
+  }
+  return out;
+}
+
+const sheet = (grid: NonNullable<VisualSpec['grid']>, title = 'Votre carnet de 14 jours'): VisualSpec => ({ type: 'grid', title, labels: [], values: [], grid });
+const withSheet = (visual: VisualSpec): PdfContent => ({ ...content, chapters: [{ ...chapter(0), visual }] });
+const days = (n: number) => Array.from({ length: n }, (_, i) => `Jour ${i + 1}`);
+
+describe('fillable grid', () => {
+  it('is drawn although its labels are empty, as a table with readable headers and blank cells', async () => {
+    const file = join(dir, 'grid.pdf');
+    const columns = ['Jour', 'Sorties', 'Pipis dehors', 'Accidents', 'Heure à risque'];
+    await renderPdf({ product, content: withSheet(sheet({ columns, rows: days(14) })), design, brand: 'Pixel Agency', outFile: file });
+    const pages = await pdfPagesText(file);
+    const page = pages.find((p) => p.includes('Votre carnet de 14 jours'));
+    expect(page).toBeTruthy();
+    for (const c of columns) expect(page).toContain(c);
+    for (const d of days(14)) expect(page).toContain(d);
+    expect(page).toContain('À imprimer et à remplir à la main.');
+    // the table stays on one page: no row spilled to another one
+    expect(pages.filter((p) => p.includes('Jour 14')).length).toBe(1);
+  });
+
+  it('a ticking column is a box to tick, never ticked in advance', async () => {
+    const file = join(dir, 'grid-tick.pdf');
+    const rows = days(7);
+    await renderPdf({ product, content: withSheet(sheet({ columns: ['Jour', 'Au programme', 'Fait'], rows, cells: rows.map((d) => [`Priorité : sortir le chiot, ${d}`, null]) }, 'Votre plan à cocher')), design, brand: 'Pixel Agency', outFile: file });
+    const pages = await pdfPagesText(file);
+    const at = pages.findIndex((p) => p.includes('Votre plan à cocher'));
+    expect(pages[at]).toContain('Cochez chaque ligne une fois faite.');
+    expect(pages[at]).toContain('Fait');
+    expect(pages[at]).toContain('Priorité : sortir le chiot, Jour 7');
+    // drawCheckbox strokes its tick at 1.8 pt: the page has boxes, and no tick
+    expect((await pageStreams(file))[at]).not.toMatch(/\b1\.8 w\b/);
+  });
+
+  it('holds 21 rows, 7 columns and a 250-character plan cell, every word printed', async () => {
+    const file = join(dir, 'grid-big.pdf');
+    const long = Array.from({ length: 6 }, (_, k) => `action numéro ${k + 1} du premier jour, avec sa durée (10 min)`).join(' ; ');
+    expect(long.length).toBeGreaterThan(250);
+    const columns = ['Jour', 'Démarrer', 'Coucher', 'Réveils', 'Plus longue plage', 'Ce qui a aidé', 'Fait'];
+    const rows = days(21);
+    await renderPdf({ product, content: withSheet(sheet({ columns, rows, cells: rows.map((_, i) => [i === 0 ? long : null, null, null, null, null, null]) })), design, brand: 'Pixel Agency', outFile: file });
+    const all = (await pdfPagesText(file)).join(' ');
+    for (const c of columns) expect(all).toContain(c);
+    for (let k = 1; k <= 6; k++) expect(all).toContain(`numéro ${k}`);
+    expect(all).toContain('Jour 21');
+    expect(all).not.toContain('…  ');
+  });
+
+  it('a sheet longer than a page repeats its header and loses no row', async () => {
+    const file = join(dir, 'grid-long.pdf');
+    await renderPdf({ product, content: withSheet(sheet({ columns: ['Séance', 'Date', 'Note'], rows: Array.from({ length: 60 }, (_, i) => `Séance ${i + 1}`) })), design, brand: 'Pixel Agency', outFile: file });
+    const pages = await pdfPagesText(file);
+    for (let i = 1; i <= 60; i++) expect(pages.filter((p) => new RegExp(`Séance ${i}( |$)`).test(p)).length, `ligne ${i}`).toBe(1);
+    const spread = pages.filter((p) => /Séance \d/.test(p));
+    expect(spread.length).toBeGreaterThanOrEqual(2);
+    for (const p of spread) expect(p).toContain('Date Note');
+  });
+
+  it('takes the whole width, however few or many columns it has', () => {
+    const doc = new PDFDocument({ autoFirstPage: false });
+    const theme: PdfTheme = { p: design.palette, title: 'Helvetica-Bold', body: 'Helvetica', bold: 'Helvetica-Bold', italic: 'Helvetica-Oblique', ink: '#111111', muted: '#666666', primaryInk: '#223344', accentInk: '#884400', line: '#cccccc', card: '#f5f5f5' };
+    for (const columns of [['Jour', 'Fait'], ['Jour', 'Note', 'Fait'], ['', 'Prévu', 'Payé'], Array.from({ length: 12 }, (_, k) => `Colonne${k + 1}`)]) {
+      const widths = gridWidths(doc, columns, days(3), columns.map((c) => c === 'Fait'), columns.map(() => false), 475, theme);
+      expect(widths.reduce((a, b) => a + b, 0), columns.join()).toBeCloseTo(475, 3);
+      expect(Math.min(...widths), columns.join()).toBeGreaterThan(0);
+    }
+  });
+
+  it('a malformed grid is skipped, the guide still renders', async () => {
+    const res = await renderPdf({ product, content: withSheet({ type: 'grid', title: 'x', labels: [], values: [] }), design, brand: 'Pixel Agency', outFile: join(dir, 'grid-none.pdf') });
+    expect(res.pages).toBeGreaterThan(3);
+  });
+});
+
+describe('the last page says what is true today', () => {
+  const plan = { dest: 'chapitre-5', label: 'Je reviens à mon plan' };
+  const stale = {
+    title: 'Votre prochaine étape', upsellProductId: 'prd_2',
+    text: 'Vous avez toutes les cartes en main. Il reste une chose à faire : ouvrir le plan. Si un guide complémentaire paraît pour les maîtres, vous en serez informé à l’adresse utilisée pour votre achat.',
+  };
+  const NESTED = 'Objectif « Un chiot propre en quelques semaines » : le guide complet pour les nouveaux propriétaires pressés';
+
+  it('a text written before the upsell existed stops announcing it, and the button names it whole, without nested guillemets', () => {
+    const say = finalWording({ nextStep: stale }, { title: NESTED, url: '/runs/r/files/prd_2/v1/sales-page.html' }, plan);
+    expect(say.heading).toBe('La suite est ici');
+    expect(say.subtitle).toBe(NESTED.replace(/ ([:»])/g, ' $1').replace('« ', '« '));
+    expect(say.paragraphs.join(' ')).not.toMatch(/en serez informé|complémentaire paraît/);
+    expect(say.paragraphs.join(' ')).toContain('ouvrir le plan');
+    expect(say.cta).toContain('“Un chiot propre en quelques semaines”');
+    expect((say.cta!.match(/«/g) ?? []).length).toBe(1);
+    expect((say.cta!.match(/»/g) ?? []).length).toBe(1);
+    expect(say.cta).not.toMatch(/…/);
+    expect(say.under).toBe('Disponible sur notre boutique');
+  });
+
+  it('a text that already names the follow-up guide is kept as written', () => {
+    const text = 'Votre chiot est propre. « La marche en laisse » prend le relais.';
+    const say = finalWording({ nextStep: { ...stale, text } }, { title: 'La marche en laisse', url: 'https://boutique.test/laisse' }, plan);
+    expect(say.paragraphs).toEqual([sanitizePdfText(text)]);
+    expect(say.under).toBe('boutique.test/laisse');
+  });
+
+  it('without an upsell nothing is sold: no shop, no next guide, a button back to the plan', () => {
+    const say = finalWording({ nextStep: { title: 'En finir avec les aboiements', text: 'Notre prochain guide sur ce sujet est en préparation. Vous serez prévenu en priorité.', upsellProductId: null } }, null, plan);
+    expect(say.heading).toBe('Votre prochaine étape');
+    expect(say.subtitle).toBe('');
+    expect(say.paragraphs.join(' ')).not.toMatch(/prochain guide|prévenu/);
+    expect(say.paragraphs.join(' ').length).toBeGreaterThan(20);
+    expect(say).toMatchObject({ cta: plan.label, dest: plan.dest, under: '' });
+  });
+
+  it('prints « Disponible sur notre boutique » only when a page exists', async () => {
+    const rich = withSheet(sheet({ columns: ['Jour', 'Fait'], rows: days(3) }));
+    const none = join(dir, 'final-none.pdf');
+    await renderPdf({ product, content: rich, design, brand: 'Pixel Agency', outFile: none, upsell: null });
+    const noneText = (await pdfPagesText(none)).join(' ');
+    expect(noneText).not.toContain('Disponible sur notre boutique');
+    expect(noneText).not.toContain('La suite est ici');
+    expect(noneText).toContain('Je reviens à mon plan');
+
+    const bad = join(dir, 'final-bad.pdf');
+    await renderPdf({ product, content: rich, design, brand: 'Pixel Agency', outFile: bad, upsell: { title: 'La marche en laisse', url: 'javascript:alert(1)' } });
+    expect((await pdfPagesText(bad)).join(' ')).not.toContain('Disponible sur notre boutique');
+
+    const good = join(dir, 'final-good.pdf');
+    await renderPdf({ product, content: rich, design, brand: 'Pixel Agency', outFile: good, upsell: { title: 'La marche en laisse', url: '/runs/r/files/prd_2/v1/sales-page.html' } });
+    expect((await pdfPagesText(good)).join(' ')).toContain('Disponible sur notre boutique');
+  });
+
+  it('the button holds a title of any length: every word printed, the page does not overflow', async () => {
+    const short = await renderPdf({ product, content, design, brand: 'Pixel Agency', outFile: join(dir, 'cta-short.pdf'), upsell: { title: 'La suite', url: 'https://boutique.test/x' } });
+    const file = join(dir, 'cta-long.pdf');
+    const res = await renderPdf({ product, content, design, brand: 'Pixel Agency', outFile: file, upsell: { title: `${NESTED} et tous ceux qui vivent en appartement sans jardin ni cour`, url: 'https://boutique.test/x' } });
+    expect(res.pages).toBe(short.pages);
+    const last = (await pdfPagesText(file)).at(-1)!;
+    expect(last).toContain('Découvrir « Objectif “Un chiot propre');
+    expect(last).toContain('sans jardin ni cour »');
+  });
+});
+
+describe('design fits the niche', () => {
+  it('scores what the niche is about before its shelf', () => {
+    const table: [string, string, DesignSpec['motif']][] = [
+      ['Relooker un meuble ancien sans le rater', 'Maison & jardin', 'brush'],
+      ['Potager sur balcon en appartement', 'Maison & jardin', 'leaf'],
+      ['Batch cooking pour familles à budget serré', 'Cuisine & budget', 'pot'],
+      ['Diversification alimentaire et DME pour bébé de 6 mois', 'Parentalité', 'pot'],
+      ['Sommeil de bébé (6-12 mois) qui se réveille la nuit', 'Parentalité', 'moon'],
+      ['Chat qui griffe le canapé', 'Animaux', 'paw'],
+      ['Revendre sur Vinted pour arrondir ses fins de mois', 'Argent & entrepreneuriat', 'coin'],
+      ['Japon petit budget : 2 semaines de voyage', 'Voyage', 'sun'],
+      ['Organiser son mariage à moins de 10 000 €', 'Vie & événements', 'heart'],
+      ['Freelances : trouver ses 3 premiers clients sur LinkedIn', 'Argent & entrepreneuriat', 'chart'],
+    ];
+    for (const [nicheName, category, motif] of table) expect(designFor({ nicheName, category, seed: 1 }).motif, nicheName).toBe(motif);
+  });
+
+  it('matches words, not fragments of words, and reads the keywords', () => {
+    expect(designFor({ nicheName: 'Réussir ses achats', category: 'Vie pratique', seed: 1 }).motif).not.toBe('paw');
+    expect(designFor({ nicheName: 'Un projet du week-end', category: 'Maison & jardin', seed: 1, keywords: ['ponçage', 'peinture'] }).motif).toBe('brush');
+    expect(designFor({ nicheName: 'Un projet du week-end', category: 'Maison & jardin', seed: 1 }).motif).not.toBe('brush');
+  });
+
+  it('draws the new motifs as valid SVG on every layout', () => {
+    for (const motif of ['brush', 'pot'] as const) {
+      for (const coverLayout of ['centered', 'split', 'badge', 'minimal'] as const) {
+        assertBalancedXml(renderCoverSvg({ title: 'Relooker un meuble', subtitle: 'Pas à pas', audience: 'Débutants', design: { ...design, motif, coverLayout }, brand: 'Pixel Agency' }));
+      }
+    }
+  });
+
+  it('the disclaimer names the professional of the niche, from the design or, for an old save, from the product', async () => {
+    const last = async (name: string, d: DesignSpec, p: Product = product) => {
+      const file = join(dir, `${name}.pdf`);
+      await renderPdf({ product: p, content, design: d, brand: 'Pixel Agency', outFile: file });
+      return (await pdfPagesText(file)).at(-1)!;
+    };
+    const chiot = await last('pro-chiot', design);
+    expect(chiot).toContain('vétérinaire');
+    expect(chiot).not.toContain('conseiller financier');
+    const meuble = await last('pro-meuble', designFor({ nicheName: 'Relooker un meuble ancien sans le rater', category: 'Maison & jardin', seed: 1 }));
+    expect(meuble).toContain('artisan');
+    expect(meuble).not.toMatch(/vétérinaire|médecin/);
+    const budget = await last('pro-urssaf', designFor({ nicheName: 'Déclarer son chiffre d’affaires à l’URSSAF', category: 'Argent & entrepreneuriat', seed: 1 }));
+    expect(budget).toContain('expert-comptable');
+    const { family: _family, ...old } = design;
+    expect(await last('pro-old', old)).toContain('vétérinaire');
+  });
+});
+
+describe('an audience is a whole clause', () => {
+  const LONG = "Nouveaux propriétaires d'un chiot de 2 à 6 mois vivant en appartement avec un petit balcon, un budget serré et deux enfants qui rentrent de l'école à 16 h 30 chaque jour de la semaine";
+
+  it('is cut where a phrase ends', () => {
+    expect(wholeClause("Nouveaux propriétaires d'un chiot de 2 à 6 mois vivant en appartement", (s) => s.length <= 60)).toBe("Nouveaux propriétaires d'un chiot de 2 à 6 mois");
+    expect(wholeClause('Couples fiancés qui veulent un beau mariage', (s) => s.length <= 20)).toBe('Couples fiancés');
+    expect(wholeClause('Parents de 2 ou 3 enfants', (s) => s.length <= 40)).toBe('Parents de 2 ou 3 enfants');
+  });
+
+  it('never ends on an ellipsis on any cover layout', () => {
+    for (const coverLayout of ['centered', 'split', 'badge', 'minimal'] as const) {
+      const shown = svgText(renderCoverSvg({ title: 'Un chiot propre', subtitle: '', audience: LONG, design: { ...design, coverLayout }, brand: 'Pixel Agency' })).replace(/\s+/g, ' ');
+      expect(shown, coverLayout).toContain('Pour : Nouveaux propriétaires');
+      expect(shown, coverLayout).not.toMatch(/…/);
+      expect(shown, coverLayout).not.toMatch(/\b(?:vivant|en|de|avec|et)\s+PIXEL/);
+    }
+  });
+
+  it('and on the sales page too', () => {
+    const html = renderSalesPageHtml({ product: { ...product, audience: LONG }, salesPage, coverSvg: '<svg viewBox="0 0 10 10"></svg>', design, brand: 'Pixel Agency' });
+    const eyebrow = /class="eyebrow">(.*?)<\/span>/s.exec(html)![1]!;
+    expect(eyebrow).toContain('Nouveaux propriétaires');
+    expect(eyebrow).not.toMatch(/…/);
+  });
+});
+
+describe('sales page wording', () => {
+  it('the button shows the price of the day, whatever price it was written with', () => {
+    const html = renderSalesPageHtml({ product: { ...product, price: 29 }, salesPage: { ...salesPage, cta: 'Je commence ce soir — 24 €' }, coverSvg: '<svg viewBox="0 0 10 10"></svg>', design, brand: 'Pixel Agency' });
+    expect(html).toMatch(/Je commence ce soir — 29.€/);
+    expect(html).not.toMatch(/ce soir — 24/);
+  });
+
+  it('the cover never promises real examples', () => {
+    const svg = renderCoverSvg({ title: 'Un guide', subtitle: 'Sous-titre', audience: 'Débutants', design: { ...design, coverLayout: 'split' }, brand: 'Pixel Agency' });
+    expect(svg).toContain('Exemples types');
+    expect(svg).not.toMatch(/Exemples concrets|exemples réels/i);
+  });
+});
+
+describe('PDF example callouts', () => {
+  it('are labelled by what the writer announced, never as real', async () => {
+    const file = join(dir, 'examples.pdf');
+    const chapters = [{ ...chapter(0), example: 'Exemple type : Manon vit au 4e étage et programme une sortie après chaque sieste.' }, { ...chapter(1), example: 'Mise en situation : un soir, vous vous surprenez à douter.' }];
+    await renderPdf({ product, content: { ...content, chapters }, design, brand: 'Pixel Agency', outFile: file });
+    const all = (await pdfPagesText(file)).join(' ');
+    expect(all).toContain('EXEMPLE TYPE Manon vit au 4e étage');
+    expect(all).toContain('MISE EN SITUATION Un soir, vous vous surprenez');
+    expect(all).not.toContain('EXEMPLE CONCRET');
   });
 });

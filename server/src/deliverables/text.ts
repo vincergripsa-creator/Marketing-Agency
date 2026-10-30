@@ -178,6 +178,30 @@ export function truncate(value: string, max: number): string {
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:.–—-]+$/, '')}…`;
 }
 
+const CLAUSE_CUT = /\s*\(|,\s|\s[:;—–]\s|\s(?=(?:qui|que|vivant|habitant|avec|sans|dans|en|pour|de|du|des|à|au|aux|et|ou)\s)|\s(?=d['’])/giu;
+const OPEN_END = /(?:^|\s)(?:qui|que|vivant|habitant|avec|sans|dans|en|pour|de|du|des|d['’]\S*|à|au|aux|et|ou|la|le|les|un|une|l['’]\S*|\d+)$/iu;
+
+/**
+ * Longest head of `text` that `fits`, cut where a phrase really ends (« … d’un chiot de 2 à 6 mois | vivant en
+ * appartement »), never with an ellipsis: an audience stays a whole clause wherever it has to be shortened.
+ */
+export function wholeClause(text: string, fits: (s: string) => boolean): string {
+  const t = collapseSpaces(String(text ?? ''));
+  if (!t || fits(t)) return t;
+  const cuts = [...t.matchAll(CLAUSE_CUT)].map((m) => m.index ?? 0).sort((a, b) => b - a);
+  for (const i of cuts) {
+    const head = t.slice(0, i).trim();
+    if (head.length >= 8 && !OPEN_END.test(head) && fits(head)) return head;
+  }
+  // no boundary fits: the longest run of whole words, whatever the width allows
+  const words = t.split(' ');
+  for (let k = words.length - 1; k > 0; k--) {
+    const head = words.slice(0, k).join(' ').replace(/[\s,;:]+$/, '');
+    if (!OPEN_END.test(head) && fits(head)) return head;
+  }
+  return words[0] ?? '';
+}
+
 // ───────────────────────────── misc helpers ─────────────────────────────
 
 /** FNV-1a 32-bit hash — deterministic variety without touching the simulation RNG. */

@@ -3,24 +3,31 @@
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { CompanySnapshot, Product, SessionInfo } from '../../../shared/types';
+import type { CompanySnapshot, Deliverable, Product, SessionInfo, Task, WeeklyPnl } from '../../../shared/types';
 import { mockSnapshot } from '../world/mockSnapshot';
-import { FileLink } from './common';
+import { DeliverableLink, FileLink } from './common';
 import { AppContext, type AppCtx } from './context';
+import { DeptPanel } from './DeptPanel';
 import { sessionView } from './derive';
+import { EndBanner } from './EndBanner';
 import { SimHud } from './Hud';
 import { buildLookups } from './labels';
+import { ScenarioModal } from './ScenarioModal';
 import { AdsTab } from './tabs/AdsTab';
+import { CalendarTab } from './tabs/CalendarTab';
 import { FinanceTab } from './tabs/FinanceTab';
+import { GalleryTab } from './tabs/GalleryTab';
 import { InboxTab } from './tabs/InboxTab';
+import { LearningTab } from './tabs/LearningTab';
 import { ProductsTab } from './tabs/ProductsTab';
+import { TasksTab } from './tabs/TasksTab';
 import { addToast, Toasts, type Toast } from './Toasts';
 
 const noop = () => undefined;
 
-function render(s: CompanySnapshot, el: ReactElement, demo = false): string {
+function render(s: CompanySnapshot, el: ReactElement, demo = false, godMode = false): string {
   const ctx: AppCtx = {
-    snapshot: s, lookups: buildLookups(s), activity: s.activity, demo, godMode: false, runId: s.runId,
+    snapshot: s, lookups: buildLookups(s), activity: s.activity, demo, godMode, runId: s.runId,
     toast: noop, openAgent: noop, openDept: noop, openProduct: noop, centerAgent: noop, centerDept: noop, setTab: noop, openBrainNote: noop, refresh: noop,
   };
   return renderToStaticMarkup(<AppContext.Provider value={ctx}>{el}</AppContext.Provider>);
@@ -90,6 +97,187 @@ describe('inbox shows customer names', () => {
   });
 });
 
+describe('inbox: the true intent comes from god mode only', () => {
+  const NOTE = 'Vraie intention';
+  // a snapshot as the server sends it: no `intent` on the messages
+  const publicMessages = (s: CompanySnapshot) => s.market.inbox.map(({ intent: _truth, ...m }) => m) as CompanySnapshot['market']['inbox'];
+  const inbox = (godMode: boolean, intents?: NonNullable<CompanySnapshot['godMode']>['intents']) => {
+    const s = mockSnapshot();
+    const { godMode: _hidden, ...rest } = s;
+    const snapshot: CompanySnapshot = { ...rest, market: { ...s.market, inbox: publicMessages(s) }, ...(intents ? { godMode: { niches: [], intents } } : {}) };
+    return { html: render(snapshot, <InboxTab onClose={noop} />, false, godMode), first: s.market.inbox.slice().sort((a, b) => b.day - a.day || b.id.localeCompare(a.id))[0]! };
+  };
+
+  it('reads godMode.intents, keyed by message', () => {
+    const { first } = inbox(false);
+    const { html } = inbox(true, { [first.id]: 'arnaque' });
+    expect(html).toContain(NOTE);
+    expect(html).toContain('Arnaque');
+  });
+  it('shows nothing without god mode, even when the snapshot still holds intents', () => {
+    const { first } = inbox(false);
+    expect(inbox(false, { [first.id]: 'arnaque' }).html).not.toContain(NOTE);
+  });
+  it('a message newer than the last god poll shows no empty pill', () => {
+    expect(inbox(true, {}).html).not.toContain(NOTE);
+  });
+});
+
+describe('founder approval card', () => {
+  const pending = (s: CompanySnapshot, input: Task['input']): CompanySnapshot => {
+    const t: Task = { ...s.company.tasks[0]!, id: 'tsk_ask', kind: 'launch_campaign', title: 'Lancer une campagne', status: 'awaiting_founder', input };
+    return { ...s, company: { ...s.company, tasks: [...s.company.tasks, t], pendingApprovals: ['tsk_ask'] } };
+  };
+  it('prints the request with its amount, never the raw input keys', () => {
+    const s = pending(mockSnapshot(), { productId: 'prd_91', nicheId: 'batch-cooking-budget', founderPhase: 'before', founderAsk: 'Lancer une campagne TikTok à 40,00 €/jour pour « Chiot »' });
+    const card = render(s, <TasksTab onClose={noop} />).match(/<div class="approval-card">.*?<div class="approval-actions">/)?.[0] ?? '';
+    expect(card).toContain('Lancer une campagne TikTok à 40,00 €/jour pour « Chiot »');
+    for (const raw of ['productId', 'nicheId', 'founderPhase', 'founderAsk', 'prd_91']) expect(card, raw).not.toContain(raw);
+  });
+});
+
+describe('task counts on the panels', () => {
+  const trimmed = (): CompanySnapshot => {
+    const s = mockSnapshot();
+    const done = s.company.tasks.filter((t) => t.status === 'done').slice(0, 1).map((t) => ({ ...t, dept: 'finance' as const, dayCreated: s.day, dayDone: s.day }));
+    return { ...s, company: { ...s.company, tasks: done, kpis: [] } };
+  };
+  const stats = (s: CompanySnapshot): CompanySnapshot => ({
+    ...s,
+    taskStats: {
+      days: [{ day: s.day, created: 18, done: 18, failed: 0, cancelled: 0 }],
+      depts: { finance: { days: [{ day: s.day, created: 7, done: 7, failed: 0, cancelled: 0 }], kinds7d: { budget_review: 5 }, done: 90, avgDelayDays: 2.5 } },
+    },
+  });
+
+  it('calendar: the real count, and the honest label for the detail it lost', () => {
+    const html = render(stats(trimmed()), <CalendarTab onClose={noop} />);
+    expect(html).toContain('Tâches terminées · 18');
+    expect(html).toContain('Détail indisponible pour 17 tâches');
+  });
+  it('team panel: skills and delay come from the server counts', () => {
+    const html = render(stats(trimmed()), <DeptPanel deptId="finance" onClose={noop} />);
+    expect(html).toContain('2,5 j');
+    expect(html).toMatch(/<span class="skill-val">5<\/span>/);
+  });
+  it('task list: the count of the run, and what the list shows of it', () => {
+    const s = stats(trimmed());
+    const html = render({ ...s, taskStats: { ...s.taskStats!, days: [{ day: 3, created: 300, done: 300, failed: 0, cancelled: 0 }] } }, <TasksTab onClose={noop} />);
+    expect(html).toContain('1 terminées les plus récentes affichées sur 300');
+  });
+});
+
+describe('Finance: payment reserves and ledger counts', () => {
+  const ledgerOf = (s: CompanySnapshot, extra: CompanySnapshot['ledger']) => ({ ...s, ledger: [...s.ledger, ...extra] });
+  const hold = { id: 'led_h', day: 9, type: 'platform_fee' as const, amount: -1374.3, memo: 'Réserve de sécurité', ref: 'hold:evt_1' };
+  const release = { id: 'led_r', day: 16, type: 'platform_fee' as const, amount: 1374.3, memo: 'Libération de la réserve', ref: 'hold:release:16' };
+  const pnlBlock = (html: string) => html.slice(html.indexOf('Par type d’écriture'), html.indexOf('Compute (Claude)'));
+
+  const fee = { id: 'led_f', day: 9, type: 'platform_fee' as const, amount: -12.61, memo: 'Frais', ref: 'fixed:9' };
+  const AMOUNT = /1\s374,30/;
+
+  it('an active reserve has its own line, and platform fees do not move', () => {
+    const block = pnlBlock(render(ledgerOf(mockSnapshot(), [fee, hold]), <FinanceTab onClose={noop} />));
+    expect(block).toContain('Réserve de paiement (temporaire)');
+    expect(block).toMatch(AMOUNT);
+    expect(block).not.toMatch(/−1\s374,30/); // not a cost
+    expect(block).toMatch(/Frais plateforme<\/span>.*?−12,61/);
+  });
+  it('a release alone is no income', () => {
+    const block = pnlBlock(render(ledgerOf(mockSnapshot(), [fee, release]), <FinanceTab onClose={noop} />));
+    expect(block).not.toMatch(AMOUNT);
+    expect(block).not.toContain('Réserve de paiement');
+    expect(block).toMatch(/Frais plateforme<\/span>.*?−12,61/);
+  });
+  it('the ledger table names the reserve instead of a fee', () => {
+    const html = render(ledgerOf(mockSnapshot(), [hold]), <FinanceTab onClose={noop} />);
+    expect(html).toMatch(/lt-hold">Réserve de paiement \(temporaire\)</);
+  });
+  it('a whole ledger says so, a trimmed one says how many entries it holds', () => {
+    const s = mockSnapshot();
+    expect(render(s, <FinanceTab onClose={noop} />)).toContain(`Grand livre · ${s.ledger.length} écritures`);
+    const html = render({ ...s, ledger: s.ledger.slice(1) }, <FinanceTab onClose={noop} />);
+    expect(html).toContain(`Grand livre · ${s.ledger.length - 1} dernières écritures`);
+    expect(html).not.toContain('150 dernières');
+  });
+  it('no-burn runway is not called profitable', () => {
+    const s = mockSnapshot();
+    const html = render({ ...s, finance: { ...s.finance, runwayDays: null, profit7d: -5 } }, <FinanceTab onClose={noop} />);
+    expect(html).toContain('illimitée');
+    expect(html).toContain('dernière semaine sans perte');
+    expect(html).not.toContain('>rentable<');
+  });
+  it('prints the latest weekly P&L per product', () => {
+    const s = mockSnapshot();
+    const report: WeeklyPnl = { week: 2, fromDay: 8, toDay: 14, unallocated: -35, total: 120.5, products: [{ productId: s.company.products[0]!.id, title: 'Guide du chiot', sales: 12, revenue: 240, refunds: 24, adSpend: 40, fees: 8, creators: 0, profit: 168, roas: 5.4 }] };
+    const html = render({ ...s, company: { ...s.company, pnl: [{ ...report, week: 1, products: [] }, report] } }, <FinanceTab onClose={noop} />);
+    expect(html).toContain('Résultat par produit · semaine 2');
+    expect(html).toContain('Guide du chiot');
+    expect(html).toContain('+168,00');
+  });
+});
+
+describe('deliverables that are brain notes', () => {
+  const note: Deliverable = { id: 'dlv_n', kind: 'report', title: 'Rapport du jour 29', productId: null, creativeId: null, path: 'brain/journal/jour-029.md', createdBy: 'raphael', day: 29, quality: null };
+  const withDeliverables = (list: Deliverable[]) => { const s = mockSnapshot(); return { ...s, company: { ...s.company, deliverables: list } }; };
+
+  it('open in the Cerveau reader, not as a raw file', () => {
+    const html = render(withDeliverables([note]), <GalleryTab onClose={noop} />);
+    expect(html).toContain('<button type="button" class="tile"');
+    expect(html).not.toContain('href="/runs/');
+    const link = render(mockSnapshot(), <DeliverableLink path={note.path}>Rapport</DeliverableLink>);
+    expect(link).toContain('<button');
+    expect(link).not.toContain('jour-029.md"');
+  });
+  it('other files stay new-tab links', () => {
+    const pdf = render(mockSnapshot(), <DeliverableLink path="files/prd_1/v1/guide.pdf">PDF</DeliverableLink>);
+    expect(pdf).toContain('href="/runs/');
+    expect(pdf).toContain('target="_blank"');
+  });
+  it('stay disabled in demo mode', () => {
+    expect(render(withDeliverables([note]), <GalleryTab onClose={noop} />, true)).toContain('tile is-disabled');
+  });
+});
+
+describe('labels of the new statuses', () => {
+  it('a cancelled experiment is not « Conclue »', () => {
+    const s = mockSnapshot();
+    const e = { ...s.company.experiments[0]!, id: 'exp_c', status: 'cancelled' as const, winner: null };
+    const html = render({ ...s, company: { ...s.company, experiments: [e] } }, <LearningTab onClose={noop} />);
+    expect(html).toContain('Annulée');
+    expect(html).not.toContain('>Conclue<');
+  });
+  it('a campaign paused for an outage says so', () => {
+    const s = mockSnapshot();
+    const c = { ...s.company.campaigns[0]!, status: 'paused' as const, pausedFor: 'outage' as const };
+    expect(render({ ...s, company: { ...s.company, campaigns: [c] } }, <AdsTab onClose={noop} />)).toContain('Pause panne');
+  });
+  it('blocking quality issues are shown without opening the remarks', () => {
+    const s = withProduct(mockSnapshot(), (p) => ({ ...p, quality: p.quality && { ...p.quality, blocking: [{ dimension: 'compliance', text: 'Promesse de résultat garanti' }] } }));
+    const html = render(s, <ProductsTab onClose={noop} />);
+    expect(html).toContain('Points bloquants');
+    expect(html).toContain('Promesse de résultat garanti');
+  });
+  it('a founder mission prints where it stands', () => {
+    const s = mockSnapshot();
+    const m = { ...s.company.missions[0]!, id: 'mis_o', status: 'failed' as const, outcome: 'Aucune niche ne correspond à ta demande.' };
+    expect(render({ ...s, company: { ...s.company, missions: [m] } }, <TasksTab onClose={noop} />)).toContain('Aucune niche ne correspond à ta demande.');
+  });
+});
+
+describe('scenario form', () => {
+  it('shows the minimum budget the server states', () => {
+    const s = mockSnapshot();
+    const html = render({ ...s, session: { ...s.session!, minStartingCash: 140 } }, <ScenarioModal onClose={noop} onLoaded={noop} />);
+    expect(html).toMatch(/Minimum 140\s€/);
+  });
+  it('number fields hold free text: no min, max or step for the browser to fight with', () => {
+    const html = render(mockSnapshot(), <ScenarioModal onClose={noop} onLoaded={noop} />);
+    expect(html).not.toContain('type="number"');
+    expect(html).toContain('inputMode="decimal"');
+  });
+});
+
 describe('Finance shows the CFO envelope', () => {
   it('ad cap, survival badge and note from company.budget', () => {
     const s = mockSnapshot();
@@ -121,6 +309,33 @@ describe('HUD follows snapshot.session', () => {
     expect(html).toContain('title="Lecture"');
     expect(html).toMatch(/class="speed-btn speed-on"[^>]*>×2</);
     expect(html).not.toContain('Incident');
+  });
+  it('the founder keeps every control after the goal or a bankruptcy, none once the run is finished', () => {
+    const controls = (status: CompanySnapshot['status']) => {
+      const s: CompanySnapshot = { ...mockSnapshot(), status, session: sess({ playing: true, speed: 4 }) };
+      const html = render(s, <SimHud sim={sessionView(s, 1)} onControl={noop} busy={false} />);
+      const group = html.slice(html.indexOf('class="speed"'));
+      return { pause: html.includes('title="Pause"'), disabled: group.split('disabled=""').length - 1 };
+    };
+    expect(controls('goal_reached')).toEqual({ pause: true, disabled: 0 });
+    expect(controls('bankrupt')).toEqual({ pause: true, disabled: 0 });
+    expect(controls('finished')).toEqual({ pause: false, disabled: 7 });
+  });
+});
+
+describe('run milestone banner', () => {
+  const banner = (status: CompanySnapshot['status']) => render({ ...mockSnapshot(), status }, <EndBanner onNewScenario={noop} onDismiss={noop} onFinance={noop} />);
+  it('a bankrupt agency continues in survival mode', () => {
+    const html = banner('bankrupt');
+    expect(html).toContain('Faillite');
+    expect(html).toContain('continue en mode survie');
+    expect(html).not.toContain('relance un scénario');
+  });
+  it('a reached goal keeps the agency running', () => {
+    expect(banner('goal_reached')).toContain('continue de tourner');
+  });
+  it('nothing while the run is ordinary', () => {
+    expect(banner('running')).toBe('');
   });
 });
 

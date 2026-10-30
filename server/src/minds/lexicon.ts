@@ -71,6 +71,9 @@ export function isCliche(sentence: string): boolean {
   return CLICHE_PATTERNS.some((re) => re.test(n));
 }
 
+/** A named person shown as a case (« Sophie, 45 ans, … », « Marc (32 ans) a perdu … »): a persona, never a proof. */
+export const NAMED_CASE = /(?:^|[\s«“])\p{Lu}\p{Ll}{2,}\s*[,(]\s*\d{1,2}\s*ans\b|\bun cas (?:concret|réel|client)\b/iu;
+
 /** Words the ad platform / fact-checker treat as risky claims. */
 export const RISKY_AD_PHRASES: readonly string[] = ['garanti', '100 %', 'à coup sûr', 'en 3 jours seulement'];
 

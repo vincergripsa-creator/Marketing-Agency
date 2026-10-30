@@ -7,14 +7,15 @@ import { EventEmitter } from 'node:events';
 import { emit, round2, runPaths } from '../core/index.js';
 import { createBrainVault } from '../learning/index.js';
 import { createContentEngine } from '../minds/index.js';
+import { minStartingCash } from '../sim/balance.js';
 import { Company, createWorld, defaultScenario } from '../runtime/index.js';
 import type { BrainNote, BrainVault, CompanyApi, ContentEngine, RunPaths, StepResult, UsageEvent } from '../contracts.js';
-import type { RunInfo, ScenarioConfig, SessionInfo, WorldState } from '../shared.js';
+import type { LiveAgent, MissionResponse, RunInfo, ScenarioConfig, SessionInfo, WorldState } from '../shared.js';
 import { TICKS_PER_DAY } from '../shared.js';
 import { config, type ConfigMindMode } from './env.js';
 import { errorStatus, HttpError, type ControlAction, type Speed } from './http.js';
 import { flushSaves, isValidRunId, listRuns, loadWorld, newRunId, runsDir, saveWorld, scheduleSave } from './persist.js';
-import { safeFinance, snapshotJson } from './snapshot.js';
+import { liveSnapshotJson, safeFinance, snapshotJson } from './snapshot.js';
 
 export interface MountedRun {
   world: WorldState;
@@ -167,6 +168,7 @@ export class AgencySession {
       day: this.run?.world.day ?? 0,
       tick: this.run?.world.tick ?? 0,
       lastError: this.lastError,
+      minStartingCash: minStartingCash(),
     };
   }
 
@@ -410,15 +412,15 @@ export class AgencySession {
     const run = this.run;
     if (!run) return;
     try {
-      const f = safeFinance(run.world);
-      await saveWorld(run.world, { finance: { cash: f.cash, profit: f.profit } });
+      await saveWorld(run.world, { finance: () => safeFinance(run.world) });
     } catch (err) {
       console.error(`[sauvegarde] ${run.world.runId} :`, (err as Error).message);
     }
   }
 
   private touch(): void {
-    if (this.run) scheduleSave(this.run.world, 2000);
+    const run = this.run;
+    if (run) scheduleSave(run.world, 2000, { finance: () => safeFinance(run.world) });
     this.events.emit('state');
   }
 
@@ -449,6 +451,12 @@ export class AgencySession {
     const id = await run.company.giveMission(text, target ?? undefined);
     this.touch();
     return id;
+  }
+
+  /** The founder's answer to a mission: its status and what the company said about it. */
+  missionState(id: string): Pick<MissionResponse, 'status' | 'message'> {
+    const m = this.world.company.missions.find((x) => x.id === id);
+    return { status: m?.status, ...(m?.outcome ? { message: m.outcome } : {}) };
   }
 
   async chat(agentId: string, text: string): Promise<string> {
@@ -484,9 +492,16 @@ export class AgencySession {
     return snapshotJson(run.world, god, { session: this.info() });
   }
 
+  /** The snapshot of the live stream: lighter than the one of GET /api/state (see LIVE_LIMITS). */
+  liveSnapshotJson(god = false): string {
+    const run = this.mounted();
+    return liveSnapshotJson(run.world, god, { session: this.info() });
+  }
+
   tickJson(): string {
     const w = this.world;
-    return JSON.stringify({ type: 'tick', day: w.day, tick: w.tick, phase: w.phase, finance: safeFinance(w) });
+    const agents: LiveAgent[] = w.company.agents.map(({ id, status, place, currentTaskId, energy, bubble }) => ({ id, status, place, currentTaskId, energy, bubble }));
+    return JSON.stringify({ type: 'tick', day: w.day, tick: w.tick, phase: w.phase, finance: safeFinance(w), agents });
   }
 
   async brainList(): Promise<Omit<BrainNote, 'body'>[]> {

@@ -5,19 +5,21 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import type { BrainVault, ContentEngine, LessonDraft, RunPaths } from '../src/contracts.js';
 import { createRng } from '../src/core/index.js';
 import type {
-  AdCreative, AgentState, DailyAdStats, DeptId, LedgerEntry, Order, Product, Task, WorldState,
+  AdCreative, AgentState, DailyAdStats, DailyKpi, DeptId, LedgerEntry, Order, Product, Task, WorldState,
 } from '../src/shared.js';
 import {
   armStats, chooseArm, computeDailyKpi, createBrainVault, performanceReview, rewardArm, runRetro, startExperiment,
   updateExperiments,
 } from '../src/learning/index.js';
 import { sampleBeta } from '../src/learning/bandits.js';
-import { addRule, agentsForLesson, DEPT_RULES_SECTION } from '../src/learning/playbooks.js';
+import { addRule, agentsForLesson, DEPT_RULES_SECTION, directiveKind, syncDirective } from '../src/learning/playbooks.js';
 import { extractBannedTerm, FINANCE_KEY } from '../src/learning/heuristics.js';
-import { conclusionOf, MAX_NEW_LESSONS_PER_RETRO } from '../src/learning/retro.js';
+import { applyDailyRewards, conclusionOf, MAX_NEW_LESSONS_PER_RETRO } from '../src/learning/retro.js';
+import { financeView } from '../src/learning/data.js';
+import { parsePlaybook } from '../src/runtime/playbook.js';
 import { financeSnapshot, recordLedger } from '../src/sim/index.js';
 import { parseNote, serializeNote } from '../src/learning/markdown.js';
-import { slugify, safeFileName, tokenize } from '../src/learning/text.js';
+import { round, slugify, safeFileName, tokenize } from '../src/learning/text.js';
 
 // ───────────────────────────── fixture ─────────────────────────────
 
@@ -436,11 +438,23 @@ describe('experiments', () => {
     startExperiment(world, { day: 1, owner: 'emma', hypothesis: '19 € rapporte plus que 9 €', dimension: 'price', variants: ['9', '19'], metric: 'cvr' });
     world.market.adStats.push(stat(1, 'crt_1', 3000, 90, 40, 2, 20));
     world.day = 8;
+    expect(updateExperiments(world)).toEqual([]); // nothing to conclude: only one variant has data
+    const e = world.company.experiments[0]!;
+    expect(e.status).toBe('cancelled');
+    expect(e.results['19']).toEqual({ n: 40, value: 0.95 });
+    expect(e.results['9']).toEqual({ n: 0, value: 0 });
+    expect(e.winner).toBeNull();
+  });
+
+  it('expires after 7 days with data on every variant, even short of the sample', () => {
+    const world = makeWorld();
+    startExperiment(world, { day: 1, owner: 'emma', hypothesis: '19 € rapporte plus que 9 €', dimension: 'price', variants: ['9', '19'], metric: 'cvr' });
+    world.company.products[0]!.priceHistory = [{ day: 1, price: 9 }, { day: 2, price: 19 }];
+    world.market.adStats.push(stat(1, 'crt_1', 3000, 90, 40, 2, 20), stat(2, 'crt_1', 3000, 90, 40, 2, 40));
+    world.day = 8;
     const [e] = updateExperiments(world);
     expect(e!.status).toBe('concluded');
-    expect(e!.results['19']).toEqual({ n: 40, value: 0.95 });
-    expect(e!.results['9']).toEqual({ n: 0, value: 0 });
-    expect(e!.winner).toBeNull(); // only one variant has data
+    expect(e!.endDay).toBe(8);
   });
 
   it('scopes product experiments to their niche (explicit or inferred from the hypothesis)', () => {
@@ -819,6 +833,62 @@ describe('performanceReview', () => {
     expect(await brain.read('rh/revue-semaine-2.md')).not.toBeNull();
   });
 
+  it('promotions follow one level scale: reviewed work only, never down, skipped at the cap, not twice in a row', async () => {
+    const { levelForXp, MAX_LEVEL } = await import('../src/learning/review.js');
+    expect(levelForXp(0)).toBe(1);
+    expect(levelForXp(1_000_000)).toBe(MAX_LEVEL);
+    const world = makeWorld();
+    world.day = 7;
+    const reviewed = (assignee: string, count: number) => {
+      for (let i = 0; i < count; i++) {
+        world.company.tasks.push({
+          id: `tsk_${assignee}_${i}`, kind: 'write_sales_page', title: 'Page', dept: 'boutique', assignee, createdBy: 'camille', missionId: null, dependsOn: [], status: 'done', priority: 2,
+          dayCreated: 6, dayDone: 6, progress: 1, workLeft: 0, attempts: 0, reviewer: 'clara', reviews: [{ by: 'clara', day: 6, verdict: 'approve', notes: [] }], input: {}, output: null, deliverableIds: [], log: [],
+        });
+      }
+    };
+    const set = (id: string, perf: Partial<AgentState['perf']>, over: Partial<AgentState> = {}) => {
+      const a = world.company.agents.find((x) => x.id === id)!;
+      Object.assign(a.perf, perf);
+      Object.assign(a, over);
+      return a;
+    };
+    // Raw volume: 130 tasks nobody reviewed, best score of the team.
+    const volume = set('adam', { done: 130, approved: 0, rejected: 0, failed: 0, score: 100 }, { level: 4 });
+    for (let i = 0; i < 12; i++) {
+      world.company.tasks.push({
+        id: `tsk_vol_${i}`, kind: 'post_organic', title: 'Post', dept: 'growth', assignee: 'adam', createdBy: 'camille', missionId: null, dependsOn: [], status: 'done', priority: 3,
+        dayCreated: 6, dayDone: 6, progress: 1, workLeft: 0, attempts: 0, reviewer: null, reviews: [], input: {}, output: null, deliverableIds: [], log: [],
+      });
+    }
+    const worker = set('sarah', { done: 6, approved: 6, rejected: 0, failed: 0 }, { level: 3 });
+    reviewed('sarah', 6);
+    // An old save above the scale, and an agent at the cap: neither moves.
+    const veteran = set('leo', { done: 40, approved: 30, rejected: 0, failed: 0 }, { level: 22, xp: 2400 });
+    const capped = set('elise', { done: 40, approved: 30, rejected: 0, failed: 0 }, { level: MAX_LEVEL, xp: 2300 });
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+
+    const lines = await performanceReview(world, brain);
+    const promotions = lines.filter((l) => l.startsWith('Promotion :'));
+    expect(promotions.some((l) => l.includes('Sarah'))).toBe(true);
+    expect(promotions.some((l) => l.includes('6 livrables validés'))).toBe(true);
+    expect(promotions.some((l) => /Adam|Léo|Élise/.test(l))).toBe(false);
+    expect(volume.level).toBe(4);
+    expect(worker.level).toBe(4);
+    expect(veteran.level).toBe(22);
+    expect(capped.level).toBe(MAX_LEVEL);
+    // The next week the same agent waits: promotions go to whoever earned one since.
+    world.day = 14;
+    reviewed('sarah', 0);
+    for (const t of world.company.tasks) if (t.assignee === 'sarah') { t.dayDone = 13; t.reviews[0]!.day = 13; }
+    set('sarah', { approved: 12 });
+    const next = (await performanceReview(world, brain)).filter((l) => l.startsWith('Promotion :'));
+    expect(next.some((l) => l.includes('Sarah'))).toBe(false);
+    const note = await brain.read('rh/revue-semaine-2.md');
+    expect(note?.body).toMatch(/validés en relecture depuis la dernière promotion/);
+  });
+
   it('handles a world without agents', async () => {
     const world = makeWorld();
     world.company.agents = [];
@@ -842,10 +912,10 @@ describe('playbook rules', () => {
 
     world.company.lessons.push(
       { id: 'les_a', day: 1, topic: 'pricing', insight: 'Prix cible « 19 » sur « A » : forte preuve.', evidence: '', confidence: 0.9, source: 'nora', appliesTo: [], notePath: 'lecons/a.md' },
-      { id: 'les_b', day: 2, topic: 'pricing', insight: 'Prix cible « 24 » sur « B » : faible preuve.', evidence: '', confidence: 0.3, source: 'nora', appliesTo: [], notePath: 'lecons/b.md' },
+      { id: 'les_b', day: 2, topic: 'pricing', insight: 'Prix cible « 24 » sur « A » : faible preuve.', evidence: '', confidence: 0.3, source: 'nora', appliesTo: [], notePath: 'lecons/b.md' },
     );
     expect(addRule(world, 'clara', 'Prix cible « 19 » sur « A » : forte preuve.')).toBe('added');
-    expect(addRule(world, 'clara', 'Prix cible « 24 » sur « B » : faible preuve.')).toBe('skipped'); // weaker singleton
+    expect(addRule(world, 'clara', 'Prix cible « 24 » sur « A » : faible preuve.')).toBe('skipped'); // weaker rule of the same niche
     expect(world.company.playbooks.clara!.filter((r) => r.startsWith('Prix cible'))).toHaveLength(1);
 
     for (let i = 0; i < 15; i++) addRule(world, 'clara', `Règle libre numéro ${i}`);
@@ -961,4 +1031,327 @@ describe('KPI / ledger invariant over a real 60-day headless company', () => {
       expect(new Set(keys).size).toBe(keys.length);
     }, 240_000);
   }
+});
+
+// ───────────────────────────── directives: one value per slot ─────────────────────────────
+
+describe('directive slots', () => {
+  it('gives each niche its own slot, and the support tone a single one', () => {
+    const world = makeWorld();
+    const a = 'Privilégier le hook « pov » (POV) sur « Chat qui griffe » : CTR 3 %.';
+    const b = 'Privilégier le hook « mistake » (Erreur) sur « Propreté du chiot » : CTR 5 %.';
+    expect(directiveKind(a)).not.toBe(directiveKind(b));
+    expect(addRule(world, 'sarah', a)).toBe('added');
+    expect(addRule(world, 'sarah', b)).toBe('added');
+    expect(world.company.playbooks.sarah).toEqual(expect.arrayContaining([a, b]));
+    // same niche: same slot
+    const c = 'Privilégier le hook « story » (Histoire) sur « Chat qui griffe » : CTR 4 %.';
+    expect(addRule(world, 'sarah', c)).toBe('replaced');
+    expect(world.company.playbooks.sarah).not.toContain(a);
+    expect(world.company.playbooks.sarah).toEqual(expect.arrayContaining([b, c]));
+    // another directive on the same niche has its own slot, a rule without scope too
+    expect(directiveKind('Privilégier le format « carousel » (x) sur « Chat qui griffe » : CTR 4 %.')).not.toBe(directiveKind(c));
+    expect(directiveKind('Privilégier le hook « story »')).not.toBe(directiveKind(c));
+    // the tone never has a scope
+    expect(directiveKind('Ton support « concis » : score 80/100.')).toBe(directiveKind('Ton support « chaleureux » : il gagne l’expérience.'));
+    // « sur les pages de vente » is not a niche
+    expect(directiveKind('Niveau de promesse max « 0.4 » sur les pages de vente : x.')).toBe(directiveKind('Niveau de promesse max « 0.6 »'));
+  });
+
+  it('reads a niche exactly like the runtime, including a price still to test', () => {
+    const toTest = 'Prix cible « 29 » sur « Sommeil » à tester : 7 % des visiteurs achètent déjà à 24 €.';
+    expect(directiveKind(toTest)).toBe(directiveKind('Prix cible « 24 » sur « Sommeil » : 0,60 € par visiteur.'));
+    expect(parsePlaybook([toTest], 'Sommeil').targetPrice).toBe(29);
+    expect(parsePlaybook([toTest], 'Chiot').targetPrice).toBeNull();
+  });
+
+  it('a price lesson still to test applies to its niche only', async () => {
+    const world = makeWorld();
+    world.company.creatives = world.company.creatives.filter((c) => c.review.status === 'approved');
+    world.market.adStats.push(stat(1, 'crt_1', 9000, 300, 200, 16, 50));
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    const lessons = await runRetro(world, stubEngine(), brain, []);
+    const price = lessons.find((l) => l.key === 'prix-sommeil')!;
+    expect(price.insight).toMatch(/^Prix cible « 24 » sur « Sommeil de bébé \(6-12 mois\) » à tester : /);
+    expect(parsePlaybook([price.insight], 'Propreté du chiot').targetPrice).toBeNull();
+    expect(parsePlaybook([price.insight], 'Sommeil de bébé (6-12 mois)').targetPrice).toBe(24);
+  });
+
+  it('syncDirective leaves one value of a slot across every playbook', () => {
+    const world = makeWorld();
+    const rule = 'Ton support « chaleureux » : il gagne l’expérience.';
+    world.company.playbooks = {
+      ines: ['Répondre vite.', 'Ton support « concis » : score 80/100.', 'Ton support « formel »'],
+      clara: ['Ton support « formel »'],
+      leo: ['Rien à voir.', 'Privilégier le hook « story »'],
+      adam: [rule, 'Ton support « concis »'],
+    };
+    expect(syncDirective(world, rule).sort()).toEqual(['adam', 'clara', 'ines']);
+    expect(world.company.playbooks).toEqual({
+      ines: ['Répondre vite.', rule],
+      clara: [rule],
+      leo: ['Rien à voir.', 'Privilégier le hook « story »'],
+      adam: [rule],
+    });
+    expect(syncDirective(world, 'Une règle libre')).toEqual([]);
+  });
+});
+
+describe('runRetro: an experiment settles a directive', () => {
+  const hookRules = (world: WorldState) => Object.values(world.company.playbooks).flat().filter((r) => r.startsWith('Privilégier le hook'));
+
+  it('retires the observational lesson of the same niche and dimension, and observations cannot reopen it', async () => {
+    const world = makeWorld();
+    seedDay1(world);
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    await runRetro(world, stubEngine(), brain, []);
+    const observed = world.company.lessons.find((l) => l.key === 'pub-hook-sommeil')!;
+    expect(observed.insight).toMatch(/« story »/);
+    expect(world.company.playbooks.sarah).toContain(observed.insight);
+
+    // the A/B test says the opposite, while the 14-day window of the observation still favours « story »
+    world.day = 2;
+    const e = startExperiment(world, { day: 2, owner: 'emma', nicheId: 'sommeil', hypothesis: 'Le chiffre choc bat l’histoire', dimension: 'hook_style', variants: ['story', 'stat'], metric: 'ctr' });
+    world.market.adStats.push(stat(2, 'crt_1', 3500, 70, 50, 2, 20), stat(2, 'crt_2', 3500, 175, 120, 5, 20));
+    await runRetro(world, stubEngine(), brain, []);
+    expect(e.winner).toBe('stat');
+    const active = world.company.lessons.filter((l) => l.insight.startsWith('Privilégier le hook'));
+    expect(active).toHaveLength(1);
+    expect(active[0]!.insight).toMatch(/^Privilégier le hook « stat »/);
+    expect(world.company.retiredLessons?.map((l) => l.id)).toEqual([observed.id]);
+    expect(observed).toMatchObject({ supersededBy: active[0]!.id, retiredDay: 2 });
+    expect(new Set(hookRules(world))).toEqual(new Set([active[0]!.insight]));
+    expect(world.company.playbooks.sarah).toContain(active[0]!.insight);
+    const note = (await brain.read(observed.notePath))!;
+    expect(note.body).toContain('Leçon retirée le jour 2');
+    expect(note.body).toContain('Retirée — jour 2');
+    expect((await brain.read('journal/jour-002.md'))?.body).toContain('### Leçons retirées');
+    expect(world.activity.some((a) => a.kind === 'lesson' && a.text.startsWith('Leçon retirée'))).toBe(true);
+
+    // the observation keeps saying « story » on day 3: it does not come back
+    world.day = 3;
+    world.market.adStats.push(stat(3, 'crt_1', 5000, 200, 150, 6, 25), stat(3, 'crt_2', 5000, 40, 30, 1, 25));
+    await runRetro(world, stubEngine(), brain, []);
+    expect(world.company.lessons.filter((l) => l.insight.startsWith('Privilégier le hook'))).toHaveLength(1);
+    expect(new Set(hookRules(world))).toEqual(new Set([active[0]!.insight]));
+    expect(world.company.retiredLessons).toHaveLength(1); // no lesson created then retired again every evening
+  });
+
+  it('another niche keeps its own conclusion', async () => {
+    const world = makeWorld();
+    seedDay1(world);
+    world.company.lessons.push({ key: 'pub-hook-chat', id: 'les_chat', day: 1, topic: 'ads', insight: 'Privilégier le hook « pov » (POV) sur « Chat qui griffe » : CTR 5 %.', evidence: '', confidence: 0.8, source: 'nora', appliesTo: ['sarah'], notePath: 'lecons/chat.md' });
+    world.company.playbooks.sarah!.push('Privilégier le hook « pov » (POV) sur « Chat qui griffe » : CTR 5 %.');
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    await runRetro(world, stubEngine(), brain, []);
+    expect(world.company.retiredLessons ?? []).toEqual([]);
+    expect(world.company.playbooks.sarah!.filter((r) => r.startsWith('Privilégier le hook'))).toHaveLength(2);
+  });
+
+  it('the support tone stays one value: the experiment replaces the bandit lesson and the seed rules everywhere', async () => {
+    const world = makeWorld();
+    world.company.creatives = [];
+    world.day = 5;
+    world.company.bandits.support_tone = [
+      { key: 'concis', alpha: 30, beta: 5, pulls: 30, reward: 27 },
+      { key: 'chaleureux', alpha: 20, beta: 15, pulls: 30, reward: 18 },
+    ];
+    world.company.playbooks.clara = ['Ton support « formel »'];
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    await runRetro(world, stubEngine(), brain, []);
+    const bandit = world.company.lessons.find((l) => l.key === 'support-ton')!;
+    expect(bandit.insight).toMatch(/^Ton support « concis »/);
+    expect(world.company.playbooks.ines).toContain(bandit.insight);
+
+    world.day = 6;
+    const e = startExperiment(world, { day: 6, owner: 'emma', hypothesis: 'Un ton chaleureux résout mieux', dimension: 'support_tone', variants: ['concis', 'chaleureux'], metric: 'resolution' });
+    const replies = Array.from({ length: 44 }, (_, i) => ({ messageId: `m${i}`, tone: i % 2 ? 'concis' : 'chaleureux', score: i % 2 ? 70 : 90 }));
+    for (const r of replies) {
+      world.market.inbox.push({
+        id: r.messageId, day: 6, customerId: `c_${r.messageId}`, channel: 'email', subject: 'Q', body: '…', intent: 'question', productId: 'prd_1', orderId: null,
+        mood: 0, status: 'resolved', deadlineDay: 8, thread: [], resolution: null, replyScore: r.score, repliedDay: 6,
+      });
+    }
+    world.company.tasks.push({
+      id: 'tsk_reply', kind: 'reply_inbox', title: 'Répondre', dept: 'support', assignee: 'ines', createdBy: 'system', missionId: null, dependsOn: [], status: 'done',
+      priority: 2, dayCreated: 6, dayDone: 6, progress: 1, workLeft: 0, attempts: 1, reviewer: null, reviews: [], input: {}, output: { replies }, deliverableIds: [], log: [],
+    });
+    await runRetro(world, stubEngine(), brain, []);
+    expect(e.winner).toBe('chaleureux');
+    const tones = world.company.lessons.filter((l) => l.insight.startsWith('Ton support'));
+    expect(tones).toHaveLength(1);
+    expect(tones[0]!.insight).toMatch(/^Ton support « chaleureux »/);
+    expect(world.company.retiredLessons?.map((l) => l.key)).toEqual(['support-ton']);
+    const rules = Object.values(world.company.playbooks).flat().filter((r) => r.startsWith('Ton support'));
+    expect(new Set(rules)).toEqual(new Set([tones[0]!.insight]));
+    expect(rules.length).toBeGreaterThanOrEqual(2); // Inès and Clara
+  });
+});
+
+// ───────────────────────────── announced outage days ─────────────────────────────
+
+describe('announced outage days', () => {
+  /** Days 1-2 sell well (ROAS 1.52), day 3 is an announced outage: lots of traffic, nothing can sell. */
+  function outageWorld(): WorldState {
+    const world = makeWorld();
+    world.day = 3;
+    world.company.creatives = world.company.creatives.filter((c) => c.review.status === 'approved');
+    world.market.events.push({ id: 'evt_o', day: 2, kind: 'platform_outage', title: 'Panne de la boutique annoncée', description: 'Panne du paiement le jour 3.', severity: 'danger', refs: { day: 3 } });
+    world.market.adStats.push(stat(1, 'crt_1', 3000, 90, 60, 2, 25), stat(2, 'crt_1', 3000, 90, 60, 2, 25), stat(3, 'crt_1', 12000, 480, 400, 0, 60));
+    world.ledger.push(entry(1, 'capital', 500), entry(1, 'ad_spend', -25), entry(1, 'revenue', 38), entry(2, 'ad_spend', -25), entry(2, 'revenue', 38), entry(3, 'ad_spend', -60));
+    return world;
+  }
+
+  it('stay out of the conversion, ROAS and niche windows: no performance lesson, the evidence says so', async () => {
+    const world = outageWorld();
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    const lessons = await runRetro(world, stubEngine(), brain, []);
+    expect(lessons.some((l) => /Réécrire la page|Couper les pubs/.test(l.insight))).toBe(false);
+    const niche = lessons.find((l) => l.topic === 'niche')!;
+    expect(niche.insight).toMatch(/^Garder et intensifier/);
+    expect(niche.evidence).toContain('jours 1 à 3 (hors panne du jour 3)');
+    // the day's own KPI stays what happened
+    expect(world.company.kpis[0]).toMatchObject({ day: 3, revenue: 0, adSpend: 60 });
+  });
+
+  it('pay no bandit reward', async () => {
+    const world = outageWorld();
+    expect(applyDailyRewards(world, 3)).toBe(0);
+    expect(world.company.lastRetroDay).toBe(3);
+    expect(Object.values(world.company.bandits).flat().reduce((s, a) => s + a.pulls, 0)).toBe(0);
+    world.company.lastRetroDay = 0;
+    expect(applyDailyRewards(world, 2)).toBeGreaterThan(0); // a normal day still does
+  });
+
+  it('do not count in experiments', () => {
+    const world = outageWorld();
+    const e = startExperiment(world, { day: 1, owner: 'emma', nicheId: 'sommeil', hypothesis: 'Promesse', dimension: 'hook_style', variants: ['story', 'stat'], metric: 'cvr' });
+    updateExperiments(world);
+    expect(e.results.story).toEqual({ n: 120, value: round(4 / 120, 4) });
+  });
+
+  it('leave an « incident externe » note, a factual memo, and keep the day away from the engine', async () => {
+    const world = outageWorld();
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    let seen: DailyKpi[] = [];
+    let incidents: string[] = [];
+    const engine = {
+      mode: 'claude',
+      async extractLessons(input: { kpis: DailyKpi[]; incidents: string[]; heuristicLessons: LessonDraft[] }) {
+        seen = input.kpis;
+        incidents = input.incidents;
+        return input.heuristicLessons;
+      },
+      async dailyMemo() {
+        return 'Priorité de demain : couper les pubs sous ROAS 0,8.';
+      },
+    } as unknown as ContentEngine;
+    await runRetro(world, engine, brain, []);
+    expect(seen.map((k) => k.day)).toEqual([]);
+    expect(incidents[0]).toMatch(/^Incident externe : panne de paiement du jour 3, annoncée le jour 2/);
+    const note = (await brain.read('journal/incident-externe-jour-003.md'))!;
+    expect(note.title).toBe('Incident externe — panne de paiement du jour 3');
+    expect(note.tags).toContain('incident-externe');
+    expect(note.body).toContain('60,00');
+    expect(note.body).toContain('400');
+    expect(note.body).toContain('évitables'); // the outage is not our fault, running ads through it is
+    expect(note.links).toContain('jour-003');
+    const journal = (await brain.read('journal/jour-003.md'))!.body;
+    expect(journal).toContain('Incident externe');
+    expect(journal).toContain('[[incident-externe-jour-003]]');
+    expect(journal).not.toContain('couper les pubs sous ROAS');
+    expect(world.activity.some((a) => a.text.includes('en incident externe'))).toBe(true);
+    // the lesson of the evening stays on the days that could sell
+    expect(world.company.lessons.every((l) => !/jour 3\b/.test(l.insight))).toBe(true);
+  });
+
+  it('a normal day writes no incident note', async () => {
+    const world = makeWorld();
+    seedDay1(world);
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    await runRetro(world, stubEngine(), brain, []);
+    expect(await brain.read('journal/incident-externe-jour-001.md')).toBeNull();
+  });
+});
+
+// ───────────────────────────── runway ─────────────────────────────
+
+describe('runway in lessons', () => {
+  it('is never negative, and the launch costs are not a burn', async () => {
+    const world = makeWorld();
+    world.company.creatives = [];
+    world.day = 5;
+    world.ledger.push(entry(1, 'capital', 100), entry(5, 'ad_spend', -300));
+    expect(financeView(world, 5).runwayDays).toBe(0);
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    await runRetro(world, stubEngine(), brain, []);
+    const lesson = world.company.lessons.find((l) => l.key === FINANCE_KEY)!;
+    expect(lesson.evidence).toContain('runway 0 jours');
+    expect(lesson.evidence).not.toMatch(/runway -/);
+
+    const fresh = makeWorld();
+    fresh.ledger.push(entry(1, 'capital', 500), entry(1, 'tool_subscription', -60, 'setup'), entry(1, 'platform_fee', -1, 'fixed:1'));
+    expect(financeView(fresh, 1)).toMatchObject({ burn7d: 1, runwayDays: 439 });
+  });
+});
+
+// ───────────────────────────── scam lessons ─────────────────────────────
+
+describe('hidden truth in lessons', () => {
+  it('an escalated message is described by what we can read, never by its hidden intent', async () => {
+    const world = makeWorld();
+    world.day = 3;
+    world.market.inbox.push({
+      id: 'm1', day: 1, customerId: 'c1', channel: 'email', subject: 'Débité deux fois', body: '…', intent: 'arnaque', productId: 'prd_1', orderId: 'ord_1',
+      mood: -0.4, status: 'escalated', deadlineDay: 3, thread: [], resolution: null,
+    });
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    await runRetro(world, stubEngine(), brain, []);
+    const lesson = world.company.lessons.find((l) => l.key === 'support-delai')!;
+    expect(lesson.evidence).toContain('Débité deux fois');
+    expect(lesson.evidence).not.toContain('arnaque');
+  });
+});
+
+describe('scam lessons', () => {
+  it('a false claim paid to a real buyer teaches to check the order, a stranger scam stays a stranger scam', async () => {
+    const world = makeWorld();
+    world.market.orders.push(order('ord_f', 1));
+    world.ledger.push(entry(1, 'capital', 500), { ...entry(1, 'scam_loss', -19, 'ord_f'), memo: 'Fausse réclamation payée : Débité deux fois' });
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    await runRetro(world, stubEngine(), brain, []);
+    const lesson = world.company.lessons.find((l) => l.key === 'support-fausse-reclamation')!;
+    expect(lesson.insight).toMatch(/^Vérifier la commande avant de rembourser/);
+    expect(lesson.evidence).toContain('Débité deux fois');
+    expect(world.company.lessons.some((l) => l.key === 'support-arnaque')).toBe(false);
+
+    world.day = 2;
+    world.ledger.push({ ...entry(2, 'scam_loss', -49, 'msg_1'), memo: 'Arnaque au support' });
+    await runRetro(world, stubEngine(), brain, []);
+    expect(world.company.lessons.some((l) => l.key === 'support-arnaque')).toBe(true);
+  });
+
+  it('a scammer without a red flag leaves the numbers to watch, never a harmless flag as a rule', async () => {
+    const world = makeWorld();
+    world.market.creators.push({ id: 'crt_s', handle: 'woof_clean', nicheId: 'sommeil', followers: 42000, avgViews: 2100, engagement: 0.02, askUpfront: 105, askCommission: 0.15, redFlags: ['répond surtout le soir'] });
+    world.market.partnerships.push({ id: 'prt_s', creatorId: 'crt_s', productId: 'prd_1', day: 1, upfront: 105, commission: 0.15, status: 'scam', sales: 0, revenue: 0 });
+    const brain = createBrainVault(await tempPaths());
+    await brain.init();
+    await runRetro(world, stubEngine(), brain, []);
+    const lesson = world.company.lessons.find((l) => l.key === 'partenariat-arnaque')!;
+    expect(lesson.insight).toMatch(/^Ne jamais verser d'avance/);
+    expect(lesson.insight).not.toContain('répond surtout le soir');
+    expect(lesson.evidence).toContain('5 % de vues par abonné');
+    expect(lesson.evidence).toContain('50 € pour 1 000 vues');
+  });
 });

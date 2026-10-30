@@ -1,7 +1,7 @@
 /** Création: SVG cover and final A4 PDF with visuals (real files on disk). */
 import type { DesignSpec, Product } from '../../shared.js';
 import type { RuntimeCtx } from '../ctx.js';
-import { absPath, addDeliverable, productBrief, productOf, readRunFile, runFileExists, say, versionDir, vocOf, writeRunFile } from '../ctx.js';
+import { absPath, addDeliverable, productBrief, productOf, readRunFile, say, versionDir, vocOf, writeRunFile } from '../ctx.js';
 import { deliverables, sim } from '../modules.js';
 import { short, strArr } from '../util.js';
 import type { HandlerMap } from './common.js';
@@ -13,30 +13,30 @@ import { dirname } from 'node:path';
 export function ensureDesign(ctx: RuntimeCtx, product: Product, hint?: string): DesignSpec {
   if (product.design) return product.design;
   const brief = productBrief(ctx, product);
-  product.design = deliverables.designFor({ nicheName: brief.name, category: brief.category, seed: ctx.rng.int(1, 999_999), ...(hint ? { hint } : {}) });
+  product.design = deliverables.designFor({ nicheName: brief.name, category: brief.category, keywords: brief.keywords, seed: ctx.rng.int(1, 999_999), ...(hint ? { hint } : {}) });
   return product.design;
 }
 
 export function coverSvgFor(ctx: RuntimeCtx, product: Product): string {
   return deliverables.renderCoverSvg({
-    title: product.title, subtitle: product.subtitle || product.content?.subtitle || '', audience: product.audience,
+    title: product.title, subtitle: product.content?.subtitle || product.subtitle || '', audience: product.audience,
     design: ensureDesign(ctx, product), brand: ctx.world.company.name,
   });
 }
 
-/** Cover of the current version (re-rendered into the version folder when missing). */
+/** Cover of the current version: the title and the subtitle arrive after the first drawing, so it always follows them. */
 export async function ensureCoverFile(ctx: RuntimeCtx, product: Product): Promise<string> {
   const rel = `${versionDir(product)}/cover.svg`;
-  if (product.files.cover === rel && runFileExists(ctx, rel)) return (await readRunFile(ctx, rel)) ?? coverSvgFor(ctx, product);
   const svg = coverSvgFor(ctx, product);
-  await writeRunFile(ctx, rel, svg);
+  if (product.files.cover !== rel || (await readRunFile(ctx, rel)) !== svg) await writeRunFile(ctx, rel, svg);
   product.files.cover = rel;
   return svg;
 }
 
-function upsellLink(ctx: RuntimeCtx, product: Product): { title: string; url: string } | null {
+export function upsellLink(ctx: RuntimeCtx, product: Product): { title: string; url: string } | null {
   const next = productOf(ctx, product.upsellProductId);
-  if (!next || next.status === 'killed') return null;
+  // only what can be bought today: the last page is printed for the catalogue of the day
+  if (next?.status !== 'live') return null;
   const page = next.files.salesPage ?? `${versionDir(next)}/sales-page.html`;
   return { title: next.title, url: `/runs/${ctx.world.runId}/${page}` };
 }
@@ -49,7 +49,7 @@ export const creationHandlers: HandlerMap = {
       const brief = productBrief(ctx, product);
       const notes = reworkNotes(task);
       const hint = [str0(task.input.hint), task.attempts > 0 ? 'variante plus épurée, titre plus gros' : '', notes[0] ?? ''].filter(Boolean).join(' ; ');
-      product.design = deliverables.designFor({ nicheName: brief.name, category: brief.category, seed: ctx.rng.int(1, 999_999), ...(hint ? { hint } : {}) });
+      product.design = deliverables.designFor({ nicheName: brief.name, category: brief.category, keywords: brief.keywords, seed: ctx.rng.int(1, 999_999), ...(hint ? { hint } : {}) });
       const svg = coverSvgFor(ctx, product);
       const rel = `${versionDir(product)}/cover.svg`;
       await writeRunFile(ctx, rel, svg);

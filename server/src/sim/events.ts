@@ -1,14 +1,16 @@
 /** Random world events rolled at market close (they shape the following days). */
 import { clamp, round2 } from '../core/index.js';
 import type { DifficultyProfile, Rng } from '../contracts.js';
-import type { Product, WorldEvent, WorldEventKind, WorldState } from '../shared.js';
-import { CREATORS, CONVERSION, EVENTS, FEES } from './balance.js';
+import type { Customer, Product, WorldEvent, WorldEventKind, WorldState } from '../shared.js';
+import { CONVERSION, EVENTS, FEES } from './balance.js';
 import { createCustomer, senderArchetype } from './customers.js';
 import { HOLD_REF, cashOf, heldAmount, recordLedger, revenueSince } from './finance.js';
 import { createMessage } from './inbox.js';
-import { difficultyProfile, makeCreator } from './market.js';
+import { difficultyProfile, markScammer, rollCreator } from './market.js';
 import { nicheOf, pushEvent, reviewProduct } from './ops.js';
 import { fmtEur, fmtPct, pickWeighted, short } from './text.js';
+
+export { announcedOutageDays, isAnnouncedOutage } from './outage.js';
 
 function liveProducts(world: WorldState): Product[] {
   return world.company.products.filter((p) => p.status === 'live');
@@ -95,6 +97,18 @@ const trendShift: Roll = (world, rng) => {
     { nicheId: niche.id, productId: (picked ?? affected)?.id ?? null });
 };
 
+/** Most recent buyer of the product with a hostile profile who has not rated it yet. */
+function hostileBuyer(world: WorldState, p: Product): Customer | undefined {
+  const reviewed = new Set(p.stats.reviews.map((r) => r.customerId));
+  const hostile = new Map(world.market.customers.filter((c) => c.archetype === 'troll' || c.archetype === 'karen').map((c) => [c.id, c]));
+  const orders = world.market.orders;
+  for (let i = orders.length - 1; i >= 0; i--) {
+    const o = orders[i]!;
+    if (o.productId === p.id && !reviewed.has(o.customerId) && hostile.has(o.customerId)) return hostile.get(o.customerId);
+  }
+  return undefined;
+}
+
 const badReviewWave: Roll = (world, rng) => {
   const live = liveProducts(world);
   if (!live.length) return null;
@@ -105,10 +119,10 @@ const badReviewWave: Roll = (world, rng) => {
     const troll = createCustomer(world, rng, 'troll');
     createMessage(world, rng, { intent: 'troll', customer: troll, product: p, order: null, niche, channel: rng.chance(0.5) ? 'avis' : 'commentaire_tiktok' });
   }
-  const troll = createCustomer(world, rng, 'troll');
-  reviewProduct(world, rng, p, troll, 1, 'troll');
+  // only a verified buyer can rate the store: the wave reaches the page through a hostile buyer, if there is one
+  const reviewed = reviewProduct(world, rng, p, hostileBuyer(world, p), 1, 'troll');
   return pushEvent(world, 'bad_review_wave', 'Vague de trolls',
-    `Une vidéo moqueuse sur les « vendeurs de PDF » a fait le tour : ${n} messages hostiles et un avis 1 étoile sur « ${short(p.title, 50)} ». Ne pas nourrir les trolls.`, 'danger',
+    `Une vidéo moqueuse sur les « vendeurs de PDF » a fait le tour : ${n} messages hostiles${reviewed ? ' et un avis 1 étoile' : ''} sur « ${short(p.title, 50)} ». Ne pas nourrir les trolls.`, 'danger',
     { productId: p.id, nicheId: niche.id });
 };
 
@@ -135,9 +149,9 @@ const creatorOffer: Roll = (world, rng) => {
   if (niche.id === '_inconnue') return null;
   const used = new Set(world.market.creators.map((c) => c.handle));
   const index = world.market.creators.filter((c) => c.nicheId === niche.id).length + 1;
-  const scamShare = CREATORS.scamShare[world.scenario?.difficulty ?? 'normal'] ?? 0.25;
-  const creator = makeCreator(rng, niche, index, rng.chance(scamShare), used);
+  const { creator, scam } = rollCreator(rng, niche, index, world.scenario?.difficulty ?? 'normal', used);
   creator.id = `crt_${niche.id}_${index}_j${world.day}`;
+  if (scam) markScammer(niche, creator.id);
   world.market.creators.push(creator);
   const sender = createCustomer(world, rng, 'normal');
   sender.name = `@${creator.handle}`;
@@ -157,7 +171,8 @@ const platformOutage: Roll = (world) => {
   if (m.outageDay > world.day) return null;
   m.outageDay = world.day + 1;
   return pushEvent(world, 'platform_outage', 'Panne de la boutique annoncée',
-    `Le prestataire de la boutique prévient d'une panne du paiement le jour ${m.outageDay} : aucune vente ne pourra aboutir ce jour-là. Pensez à mettre les pubs en pause.`, 'danger');
+    `Le prestataire de la boutique prévient d'une panne du paiement le jour ${m.outageDay} : aucune vente ne pourra aboutir ce jour-là. Pensez à mettre les pubs en pause.`, 'danger',
+    { day: m.outageDay });
 };
 
 const seasonalBoost: Roll = (world) => {

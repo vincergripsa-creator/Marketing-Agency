@@ -45,6 +45,9 @@ export const KIND_META: Record<TaskKind, KindMeta> = {
   daily_report: { dept: 'analyse', work: 1, label: 'Rapport du jour', bubble: 'Je prépare le rapport', keywords: 'kpi objectifs roas', topics: ['process', 'ads', 'finance'] },
   run_experiment: { dept: 'analyse', work: 1, label: 'Piloter les expériences A/B', bubble: 'Je pilote les tests A/B', keywords: 'expérience test prix hook', topics: ['ads', 'pricing', 'process'] },
   budget_review: { dept: 'finance', work: 1, label: 'Revue budgétaire', bubble: 'Je fixe le budget du jour', keywords: 'budget garde-fous runway', topics: ['finance'] },
+  reconcile_ledger: { dept: 'finance', work: 1, label: 'Rapprocher le grand livre', bubble: 'Je rapproche le grand livre', keywords: 'grand livre rapprochement frais remboursements', topics: ['finance'] },
+  weekly_pnl: { dept: 'finance', work: 1, label: 'P&L de la semaine par produit', bubble: 'Je boucle le P&L de la semaine', keywords: 'profit marge produit coûts', topics: ['finance'] },
+  follow_missions: { dept: 'direction', work: 1, label: 'Suivre les missions et relancer', bubble: 'Je relance les dossiers en retard', keywords: 'suivi missions planification blocage', topics: ['process'] },
   retro: { dept: 'rh', work: 1, label: 'Rétro du soir', bubble: 'On fait la rétro', keywords: 'leçons erreurs objectifs', topics: ['process'] },
   performance_review: { dept: 'rh', work: 1, label: 'Revue RH hebdomadaire', bubble: 'Je fais les revues RH', keywords: 'performance coaching', topics: ['process'] },
 };
@@ -70,6 +73,7 @@ const DEFAULT_REVIEWER: Partial<Record<TaskKind, AgentId>> = {
   produce_ad: 'leo',
   write_sales_page: 'clara',
   publish_product: 'camille',
+  weekly_pnl: 'gabriel',
 };
 
 export const OPEN_STATUSES: Task['status'][] = ['pending', 'in_progress', 'review', 'awaiting_founder'];
@@ -122,7 +126,8 @@ export function createTask(world: WorldState, spec: TaskSpec): Task {
     const mission = world.company.missions.find((m) => m.id === task.missionId);
     if (mission && !mission.taskIds.includes(task.id)) {
       mission.taskIds.push(task.id);
-      if (mission.status !== 'open') mission.status = 'open';
+      // A mission that delivered its product stays closed: the campaigns that follow are not part of the request.
+      if (mission.status !== 'open' && !mission.wantsProduct) mission.status = 'open';
     }
   }
   return task;
@@ -169,6 +174,13 @@ export function agentById(world: WorldState, id: AgentId | null | undefined): Ag
   return id ? world.company.agents.find((a) => a.id === id) : undefined;
 }
 
+/** The live perf score: reviews passed and tasks finished without failing. */
+export function refreshAgentScore(a: AgentState): void {
+  const q = (a.perf.approved + 1) / (a.perf.approved + a.perf.rejected + 2);
+  const r = (a.perf.done + 1) / (a.perf.done + a.perf.failed + 1);
+  a.perf.score = Math.round(100 * (0.6 * q + 0.4 * r));
+}
+
 /** Load = remaining work of open tasks assigned to the agent. */
 export function agentLoad(world: WorldState, agentId: AgentId): number {
   let load = 0;
@@ -194,9 +206,15 @@ export function capableAgents(world: WorldState, kind: TaskKind, dept?: DeptId):
   return inDept.length ? inDept : able;
 }
 
+/** Has done less than a quarter of what a colleague did: the specialists keep their share, nobody is left out. */
+function farBehind(a: AgentState, b: AgentState): boolean {
+  return a.perf.done * 4 < b.perf.done;
+}
+
 /**
  * Chiefs delegate every ready, unassigned task to the capable member with the lowest load and energy > 20
- * (chiefs work too). Emits 'delegate' (chief → assignee) and 'walk' (assignee to their desk).
+ * (chiefs work too: among equally loaded specialists, a member far behind the others takes the next task, so a
+ * team of three never leaves one of them idle for weeks). Emits 'delegate' (chief → assignee) and 'walk'.
  */
 export function assignReady(world: WorldState): number {
   let assigned = 0;
@@ -212,6 +230,8 @@ export function assignReady(world: WorldState): number {
       if (la !== lb) return la - lb;
       const pa = a.taskKinds[0] === task.kind ? 0 : 1, pb = b.taskKinds[0] === task.kind ? 0 : 1;
       if (pa !== pb) return pa - pb;
+      if (farBehind(a, b)) return -1;
+      if (farBehind(b, a)) return 1;
       if (a.isChief !== b.isChief) return a.isChief ? 1 : -1;
       return b.energy - a.energy;
     });
@@ -248,9 +268,23 @@ export function closeMissions(world: WorldState): Mission[] {
   const closed: Mission[] = [];
   for (const m of world.company.missions) {
     if (m.status !== 'open') continue;
+    // A product was asked for: finished tasks prove nothing, only a product online does (in the niche named, if any).
+    if (m.wantsProduct && (m.nicheId || m.productId)) {
+      const live = world.company.products.find((p) => p.status === 'live' && (m.nicheId ? p.nicheId === m.nicheId : p.id === m.productId));
+      if (live) {
+        m.status = 'done';
+        m.productId = live.id;
+        m.outcome = `« ${live.title} » est en ligne.`;
+        closed.push(m);
+        continue;
+      }
+      if (m.nicheId || world.company.products.find((p) => p.id === m.productId)?.status !== 'killed') continue;
+    }
     const tasks = m.taskIds.map((id) => taskById(world, id)).filter((t): t is Task => !!t);
     if (!tasks.length || tasks.some(isOpen)) continue;
-    m.status = tasks.some((t) => t.status === 'done') ? 'done' : 'failed';
+    // The founder asked for a product, the research ended without choosing any niche.
+    if (m.wantsProduct) m.outcome = 'Aucun produit n’a été créé : la recherche n’a retenu aucune niche.';
+    m.status = !m.wantsProduct && tasks.some((t) => t.status === 'done') ? 'done' : 'failed';
     closed.push(m);
   }
   return closed;

@@ -243,6 +243,9 @@ export const TASK_LABELS: Record<TaskKind, string> = {
   daily_report: 'rapport du jour',
   run_experiment: 'expérience',
   budget_review: 'revue budgétaire',
+  reconcile_ledger: 'rapprochement du grand livre',
+  weekly_pnl: 'P&L hebdomadaire',
+  follow_missions: 'suivi des missions',
   retro: 'rétro',
   performance_review: 'revue RH',
 };

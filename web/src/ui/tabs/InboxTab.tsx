@@ -1,6 +1,6 @@
 // Boîte mail: customer messages (email, TikTok comments, reviews, DMs) and the support threads.
 import { useMemo, useState } from 'react';
-import type { InboxMessage } from '../../../../shared/types';
+import type { InboxMessage, MessageIntent, PublicInboxMessage } from '../../../../shared/types';
 import { cx, Empty, Overlay, Pill, Segmented } from '../common';
 import { useApp } from '../context';
 import { customerLabel } from '../derive';
@@ -66,8 +66,14 @@ export function InboxTab({ onClose }: { onClose(): void }) {
   );
 }
 
-function InboxRow({ m, active, onClick, day }: { m: InboxMessage; active: boolean; onClick(): void; day: number }) {
-  const { godMode } = useApp();
+/** Ground truth of a message: the snapshot only carries it in god mode, a message newer than the last god poll has none yet. */
+function useIntent(m: PublicInboxMessage): MessageIntent | null {
+  const { snapshot, godMode } = useApp();
+  return (godMode && snapshot?.godMode?.intents?.[m.id]) || null;
+}
+
+function InboxRow({ m, active, onClick, day }: { m: PublicInboxMessage; active: boolean; onClick(): void; day: number }) {
+  const intent = useIntent(m);
   const late = m.status === 'open' && m.deadlineDay < day;
   return (
     <button type="button" className={cx('inbox-row', active && 'is-active', m.status === 'open' && 'is-unread')} onClick={onClick}>
@@ -78,7 +84,7 @@ function InboxRow({ m, active, onClick, day }: { m: InboxMessage; active: boolea
         <span className="inbox-meta">
           <span className="mood-dot" style={{ background: moodColor(m.mood) }} title={`Humeur : ${moodLabel(m.mood)}`} />
           <span title={m.customerName ? `Client ${m.customerId}` : undefined}>{customerLabel(m)}</span>
-          {godMode ? <Pill tone={INTENT_TONE[m.intent]} icon="eye" title="Vraie intention (mode dieu)">{INTENT_LABEL[m.intent]}</Pill> : null}
+          {intent ? <Pill tone={INTENT_TONE[intent]} icon="eye" title="Vraie intention (mode dieu)">{INTENT_LABEL[intent]}</Pill> : null}
         </span>
       </span>
       <span className="inbox-side">
@@ -89,8 +95,9 @@ function InboxRow({ m, active, onClick, day }: { m: InboxMessage; active: boolea
   );
 }
 
-function Thread({ m }: { m: InboxMessage }) {
-  const { lookups, godMode, openAgent, openProduct } = useApp();
+function Thread({ m }: { m: PublicInboxMessage }) {
+  const { lookups, openAgent, openProduct } = useApp();
+  const intent = useIntent(m);
   const product = m.productId ? lookups.products.get(m.productId) : undefined;
   const thread = m.thread?.length ? m.thread : [{ from: 'customer' as const, text: m.body, day: m.day }];
   return (
@@ -107,8 +114,8 @@ function Thread({ m }: { m: InboxMessage }) {
           {m.orderId ? <span className="chip chip-sm">Commande {m.orderId}</span> : null}
           {typeof m.replyScore === 'number' ? <span className="chip chip-sm" title={`Qualité de la dernière réponse du Support${m.repliedDay ? ` (J${m.repliedDay})` : ''}`}><Icon name="review" size={11} /> Réponse {Math.round(m.replyScore)}/100</span> : null}
         </div>
-        {godMode ? (
-          <div className="god-note"><Icon name="eye" size={13} /> Vraie intention : <Pill tone={INTENT_TONE[m.intent]}>{INTENT_LABEL[m.intent]}</Pill> <span className="muted small">(invisible pour l’équipe Support)</span></div>
+        {intent ? (
+          <div className="god-note"><Icon name="eye" size={13} /> Vraie intention : <Pill tone={INTENT_TONE[intent]}>{INTENT_LABEL[intent]}</Pill> <span className="muted small">(invisible pour l’équipe Support)</span></div>
         ) : null}
       </div>
       <div className="thread-msgs">

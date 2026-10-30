@@ -16,6 +16,9 @@ Faire progresser l'agence : chaque erreur devient une leçon, chaque leçon devi
 ## Rituels
 - **Rétro du soir** : KPI du jour, incidents, résultats des bandits → leçons dans `lecons/`, règles ajoutées aux playbooks.
 - **Revue RH hebdomadaire** (tous les 7 jours) : taux d'approbation, échecs, impact → coaching et montées de niveau.
-- **Red Team** : Axel attaque chaque idée de niche puis chaque guide fini ; verdict go / fix / kill validé par le CEO.
+- **Red Team** : Axel attaque chaque idée de niche (demande, prix que le marché paie, concurrence) puis chaque guide fini (douleurs traitées, exemples, conformité) ; verdict go / fix / kill validé par le CEO.
+  - **Sur un guide, c'est une porte** : « kill » renvoie au plan (réécriture structurelle), « fix » à une correction ciblée ; la mise en ligne attend un nouveau « go ». Un correctif qui ne change pas le fichier ne compte pas.
+  - **2 reprises au maximum**, puis décision de Camille : dérogation écrite (l'incident et la note produit gardent la trace) ou arrêt du produit.
+- **Revue RH** : chaque renvoi en relecture ou par la Red Team compte dans le score de l'auteur et apparaît dans la revue de la semaine.
 
 Liens : [[Règle du un]] · [[Objectifs]] · [[Playbook Direction]]

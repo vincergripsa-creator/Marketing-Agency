@@ -3,10 +3,10 @@
  * source (a Claude JSON reply, a hand-edited outline, a half-filled content object).
  * `fb` is the heuristic value used to fill whatever is missing or invalid.
  */
-import type { ChapterContent, PdfContent, VisualSpec } from '../shared.js';
+import type { ChapterContent, GridSpec, PdfContent, VisualSpec } from '../shared.js';
 import { clampNum, clean, isStr, strArr } from './util.js';
 
-export const VISUAL_TYPES: readonly VisualSpec['type'][] = ['timeline', 'bar_chart', 'checklist_card', 'quote', 'steps_diagram', 'icon_grid', 'do_dont'];
+export const VISUAL_TYPES: readonly VisualSpec['type'][] = ['timeline', 'bar_chart', 'checklist_card', 'quote', 'steps_diagram', 'icon_grid', 'do_dont', 'grid'];
 
 /** "La suite est ici : X" → "X" (the label belongs to the layout, not to the title). */
 export function stripNextPrefix(s: string): string {
@@ -27,14 +27,29 @@ export function ensureVisual(v: unknown, fb: VisualSpec | null): VisualSpec | nu
   const o = v as Record<string, unknown>;
   const type = VISUAL_TYPES.includes(o.type as VisualSpec['type']) ? (o.type as VisualSpec['type']) : null;
   if (!type) return fb;
+  if (type === 'grid') {
+    const grid = ensureGrid(o.grid);
+    return grid ? { type, title: str(o.title, fb?.title ?? 'À remplir'), labels: [], values: [], grid } : fb;
+  }
   const labels = strArr(o.labels).slice(0, 8);
   if (labels.length === 0) return fb;
-  let values: number[] = [];
-  if (type === 'bar_chart') {
-    const raw = Array.isArray(o.values) ? o.values : [];
-    values = labels.map((_, i) => Math.round(clampNum(raw[i], 0, 100, Math.max(10, 80 - i * 12))));
-  }
+  const raw = Array.isArray(o.values) ? o.values : [];
+  // a chart without its numbers stays a list: a value is never made up to fill a bar
+  const measured = type === 'bar_chart' && labels.every((_, i) => typeof raw[i] === 'number' && Number.isFinite(raw[i]));
+  if (type === 'bar_chart' && !measured) return { type: 'icon_grid', title: str(o.title, fb?.title ?? 'Repères'), labels, values: [] };
+  const values = measured ? labels.map((_, i) => Math.round(clampNum(raw[i], 0, 100, 0))) : [];
   return { type, title: str(o.title, fb?.title ?? 'Repères'), labels: conventionLabels(type, labels), values };
+}
+
+/** A fillable table needs at least two columns and one row; cells are text or empty, nothing else. */
+export function ensureGrid(v: unknown): GridSpec | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const columns = strArr(o.columns);
+  const rows = Array.isArray(o.rows) ? o.rows.map((r) => (typeof r === 'string' ? clean(r) : '')) : [];
+  if (columns.length < 2 || rows.length === 0) return null;
+  const cells = Array.isArray(o.cells) ? o.cells.slice(0, rows.length).map((row) => (Array.isArray(row) ? row.slice(0, columns.length - 1).map((x) => (isStr(x) ? clean(x) : null)) : [])) : null;
+  return { columns, rows, ...(cells ? { cells } : {}) };
 }
 
 const DO_RE = /^\s*(?:à|a)\s+faire\s*:\s*/iu;
@@ -79,11 +94,11 @@ export function conventionLabels(type: VisualSpec['type'], labels: string[]): st
 
 export function ensureChapter(v: unknown, fb: ChapterContent): ChapterContent {
   const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
-  const steps = arr(o.steps, fb.steps, 3, 6);
+  const steps = arr(o.steps, fb.steps, 3, 8);
   return {
     title: str(o.title, fb.title),
     intro: str(o.intro, fb.intro),
-    paragraphs: arr(o.paragraphs, fb.paragraphs, 1, 6),
+    paragraphs: arr(o.paragraphs, fb.paragraphs, 1, 9),
     steps: steps.length >= 3 ? steps : fb.steps,
     example: o.example === null ? (fb.example ?? null) : str(o.example, fb.example ?? '') || null,
     checklist: arr(o.checklist, fb.checklist, 2, 8),

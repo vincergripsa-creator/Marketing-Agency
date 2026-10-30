@@ -1,7 +1,8 @@
 // Small presentational building blocks shared by all panels.
 import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 import type { QualityReport } from '../../../shared/types';
-import { fileUrl } from '../api';
+import { brainNotePath, fileUrl } from '../api';
+import { useApp } from './context';
 import { clamp01, fmtInt } from './format';
 import { Icon, type IconName } from './icons';
 import type { Tone } from './labels';
@@ -122,6 +123,20 @@ export function FileLink({ runId, path, children, icon = 'external', demo, class
     <a className={cx('btn btn-sm btn-ghost', className)} href={fileUrl(runId, path)} {...NEW_TAB} title={title ?? path}>
       <Icon name={icon} size={13} />{children}
     </a>
+  );
+}
+
+/** A deliverable: brain notes (reports, research) open in the Cerveau reader, every other file in a new tab. */
+export function DeliverableLink({ path, children, icon, className, title }: {
+  path: string; children: ReactNode; icon?: IconName; className?: string; title?: string;
+}) {
+  const { runId, demo, openBrainNote } = useApp();
+  const note = demo ? null : brainNotePath(runId, path);
+  if (!note) return <FileLink runId={runId} path={path} demo={demo} icon={icon} className={className} title={title}>{children}</FileLink>;
+  return (
+    <button type="button" className={cx('btn btn-sm btn-ghost', className)} onClick={() => openBrainNote(note)} title={title ?? 'Ouvrir dans le cerveau'}>
+      <Icon name={icon ?? 'brain'} size={13} />{children}
+    </button>
   );
 }
 

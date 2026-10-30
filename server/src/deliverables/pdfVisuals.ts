@@ -1,10 +1,10 @@
 /**
  * Vector infographics for the PDF (pdfkit drawing calls only, no glyph icons):
- * timeline, bar_chart, checklist_card, quote, steps_diagram, icon_grid, do_dont.
+ * timeline, bar_chart, checklist_card, quote, steps_diagram, icon_grid, do_dont, and the fillable grid.
  * Every visual is laid out first (height known) then drawn, so the caller can keep it on one page.
  */
 import type { VisualSpec } from '../shared.js';
-import { darken, lighten, mix, readableOn, type Palette } from './color.js';
+import { darken, ensureContrast, lighten, mix, readableOn, type Palette } from './color.js';
 import { normalizeKey, sanitizePdfText, type StdFont } from './text.js';
 
 export interface PdfTheme {
@@ -297,7 +297,7 @@ function checklistCard(doc: Doc, v: VisualSpec, labels: string[], width: number,
     for (let c = 0; c < cols; c++) {
       let cy = y;
       for (let k = c * perCol; k < Math.min(labels.length, (c + 1) * perCol); k++) {
-        drawCheckbox(doc, x + c * (colW + 16), cy, 12, t.p.primary, true);
+        drawCheckbox(doc, x + c * (colW + 16), cy, 12, t.p.primary, false); // the reader ticks it, not the author
         put(doc, labels[k], x + c * (colW + 16) + 22, cy + 0.5, { font: t.body, size: 10, color: t.ink, width: textW });
         cy += heights[k] + 9;
       }
@@ -465,9 +465,179 @@ function doDont(doc: Doc, v: VisualSpec, rawLabels: string[], width: number, t: 
   }, 'do_dont');
 }
 
+// ───────────────────────────── fillable grid ─────────────────────────────
+
+const GRID_PAD_X = 6;
+const GRID_PAD_Y = 5;
+const GRID_TEXT = 9;
+const GRID_HEAD = 8.8;
+const GRID_LINE_GAP = 1.5;
+/** A line one can really write on with a pen (≈ 8,5 mm); a printed line with a box to tick needs less. */
+export const GRID_WRITE_ROW = 24;
+const GRID_READ_ROW = 22;
+const GRID_BOX = 13;
+
+const TICK_COLUMN = /^(?:fait|fait \?|ok|coché|cochée|à cocher)$/iu;
+
+interface GridRow { label: string; cells: (string | null)[]; h: number; writable: boolean; opensGroup: boolean }
+
+export interface GridModel {
+  rows: GridRow[];
+  /** Height of rows [from, to[ with the header, and the title on the first part. */
+  heightOf(from: number, to: number, withTitle: boolean, extra?: number): number;
+  /** Last row (exclusive) that fits under the header in `room` points, one row at least. */
+  fit(from: number, room: number, withTitle: boolean): number;
+  /** Draws rows [from, to[, each writable row taller by `extra`, and returns the bottom y. */
+  draw(x: number, y: number, from: number, to: number, withTitle: boolean, extra: number): number;
+}
+
+/** Share of the width per column: names and tick boxes take what they need, text columns twice the blank ones. */
+export function gridWidths(doc: Doc, columns: string[], labels: string[], boxes: boolean[], filled: boolean[], width: number, t: PdfTheme): number[] {
+  const pad = GRID_PAD_X * 2 + 2;
+  doc.font(t.bold).fontSize(GRID_HEAD);
+  const longestWord = (s: string): number => Math.max(0, ...s.split(/[\s ]+/).map((w) => doc.widthOfString(w)));
+  const min = columns.map((c, i) => Math.max(i === 0 ? 46 : 38, longestWord(c) + pad));
+  const widest = Math.max(0, ...labels.map((l) => doc.widthOfString(l)));
+  const fixed = columns.map((_, i) => {
+    if (boxes[i]) return Math.max(min[i]!, GRID_BOX + pad);
+    if (i === 0 && widest > 0) return Math.max(min[0]!, Math.min(widest + pad, width * 0.3));
+    return null;
+  });
+  const out = fixed.slice();
+  // a column below its header's longest word takes the room from the others
+  for (let pass = 0; pass < columns.length; pass++) {
+    const free = width - out.reduce<number>((s, w) => s + (w ?? 0), 0);
+    const weight = (i: number) => (filled[i] ? 2.5 : 1);
+    const total = columns.reduce((s, _, i) => s + (out[i] === null ? weight(i) : 0), 0);
+    if (total === 0) break;
+    const short = columns.findIndex((_, i) => out[i] === null && (free * weight(i)) / total < min[i]!);
+    if (short < 0) return columns.map((_, i) => out[i] ?? (free * weight(i)) / total);
+    out[short] = min[short]!;
+  }
+  // every column has its size: the first takes what is left, or all of them shrink when the mins overflow
+  const sum = out.reduce<number>((s, w) => s + (w ?? 0), 0);
+  return out.map((w, i) => (sum < width ? (w ?? 0) + (i === 0 ? width - sum : 0) : ((w ?? 0) * width) / sum));
+}
+
+/** Printable table of a VisualSpec of type `grid`: empty cells to fill by hand, unticked boxes, readable headers. */
+export function gridModel(doc: Doc, v: VisualSpec, width: number, t: PdfTheme): GridModel | null {
+  const g = v.grid;
+  const columns = (g?.columns ?? []).map((c) => sanitizePdfText(c));
+  const rawRows = g?.rows ?? [];
+  if (columns.length < 2 || rawRows.length === 0) return null;
+  const labels = rawRows.map((l) => sanitizePdfText(l));
+  const cellsOf = (r: number): (string | null)[] => columns.slice(1).map((_, c) => {
+    const s = sanitizePdfText(g?.cells?.[r]?.[c] ?? '');
+    return s ? s.charAt(0).toUpperCase() + s.slice(1) : null;
+  });
+  const grid = rawRows.map((_, r) => cellsOf(r));
+  const filled = columns.map((_, i) => i > 0 && grid.some((row) => row[i - 1] !== null));
+  const boxes = columns.map((c, i) => i > 0 && TICK_COLUMN.test(c) && !filled[i]);
+  const widths = gridWidths(doc, columns, labels, boxes, filled, width, t);
+  const textW = (i: number) => widths[i]! - GRID_PAD_X * 2;
+
+  const heads = columns.map((c, i) => measure(doc, c, t.bold, GRID_HEAD, textW(i), GRID_LINE_GAP));
+  const headH = Math.max(...heads) + GRID_PAD_Y * 2;
+  const grouped = labels.some((l) => !l);
+  const rows: GridRow[] = grid.map((cells, r) => {
+    const texts = [measure(doc, labels[r]!, t.bold, GRID_TEXT, textW(0), GRID_LINE_GAP), ...cells.map((c, i) => (c ? measure(doc, c, t.body, GRID_TEXT, textW(i + 1), GRID_LINE_GAP) : 0))];
+    const writable = cells.some((c, i) => c === null && !boxes[i + 1]) || !labels[r];
+    return {
+      label: labels[r]!, cells, writable,
+      h: Math.max(writable ? GRID_WRITE_ROW : GRID_READ_ROW, Math.max(...texts) + GRID_PAD_Y * 2),
+      opensGroup: grouped && r > 0 && !!labels[r],
+    };
+  });
+
+  const title = sanitizePdfText(v.title ?? '');
+  const note = rows.some((r) => r.writable) ? 'À imprimer et à remplir à la main.' : boxes.some(Boolean) ? 'Cochez chaque ligne une fois faite.' : '';
+  const titleW = width - 26;
+  const titleTextH = title ? measure(doc, title, t.bold, 11.5, titleW) : 0;
+  const noteH = note ? 12 : 0;
+  const titleH = title || note ? Math.max(18, titleTextH) + noteH + 10 : 0;
+
+  const lineColor = mix(t.p.primary, '#ffffff', 0.55);
+  const strongLine = mix(t.p.primary, '#ffffff', 0.2);
+  const headBg = mix('#ffffff', t.p.primary, 0.16);
+  const headInk = ensureContrast(t.primaryInk, headBg, 4.5);
+  const labelBg = mix('#ffffff', t.p.primary, 0.06);
+
+  const rowH = (r: GridRow, extra: number): number => r.h + (r.writable ? extra : 0);
+  const heightOf = (from: number, to: number, withTitle: boolean, extra = 0): number =>
+    (withTitle ? titleH : 0) + headH + rows.slice(from, to).reduce((s, r) => s + rowH(r, extra), 0);
+
+  return {
+    rows,
+    heightOf,
+    fit(from, room, withTitle) {
+      let to = from + 1;
+      while (to < rows.length && heightOf(from, to + 1, withTitle) <= room) to += 1;
+      return to;
+    },
+    draw(x, y, from, to, withTitle, extra) {
+      let cy = y;
+      if (withTitle && titleH > 0) {
+        if (title) {
+          doc.save();
+          doc.circle(x + 9, cy + 9, 9).fill(t.p.primary);
+          doc.restore();
+          drawIcon(doc, 'calendar', x + 9, cy + 9, 11, readableOn(t.p.primary, t.ink), 2);
+          put(doc, title, x + 26, cy + 2, { font: t.bold, size: 11.5, color: t.primaryInk, width: titleW });
+        }
+        if (note) put(doc, note, x + 26, cy + Math.max(18, titleTextH) + 1, { font: t.italic, size: 8.4, color: t.muted, width: titleW });
+        cy += titleH;
+      }
+      const xs = widths.reduce<number[]>((acc, w) => [...acc, acc[acc.length - 1]! + w], [x]);
+      const part = rows.slice(from, to);
+      const totalH = headH + part.reduce((s, r) => s + rowH(r, extra), 0);
+      // header
+      doc.save();
+      doc.rect(x, cy, width, headH).fill(headBg);
+      doc.restore();
+      columns.forEach((c, i) => {
+        const align = boxes[i] ? 'center' : 'left';
+        put(doc, c, xs[i]! + GRID_PAD_X, cy + (headH - heads[i]!) / 2, { font: t.bold, size: GRID_HEAD, color: headInk, width: textW(i), align, lineGap: GRID_LINE_GAP });
+      });
+      const top = cy;
+      cy += headH;
+      // rows
+      for (const r of part) {
+        const h = rowH(r, extra);
+        if (r.label) {
+          doc.save();
+          doc.rect(x, cy, widths[0]!, h).fill(labelBg);
+          doc.restore();
+          put(doc, r.label, x + GRID_PAD_X, cy + GRID_PAD_Y, { font: t.bold, size: GRID_TEXT, color: t.ink, width: textW(0), lineGap: GRID_LINE_GAP });
+        }
+        r.cells.forEach((cell, c) => {
+          const i = c + 1;
+          if (boxes[i]) drawCheckbox(doc, xs[i]! + (widths[i]! - GRID_BOX) / 2, cy + (h - GRID_BOX) / 2, GRID_BOX, t.p.primary, false);
+          else if (cell) put(doc, cell, xs[i]! + GRID_PAD_X, cy + GRID_PAD_Y, { font: t.body, size: GRID_TEXT, color: t.ink, width: textW(i), lineGap: GRID_LINE_GAP });
+        });
+        doc.save();
+        doc.lineWidth(r.opensGroup ? 1.2 : 0.7).strokeColor(r.opensGroup ? strongLine : lineColor).moveTo(x, cy).lineTo(x + width, cy).stroke();
+        doc.restore();
+        cy += h;
+      }
+      // frame and column rules, drawn last so that no fill covers them
+      doc.save();
+      doc.lineWidth(0.7).strokeColor(lineColor);
+      for (const lx of xs.slice(1, -1)) doc.moveTo(lx, top).lineTo(lx, top + totalH).stroke();
+      doc.lineWidth(1).strokeColor(strongLine).rect(x, top, width, totalH).stroke();
+      doc.moveTo(x, top + headH).lineTo(x + width, top + headH).stroke();
+      doc.restore();
+      return cy;
+    },
+  };
+}
+
 /** Lays out a VisualSpec as an infographic card; null when there is nothing to draw. */
 export function layoutVisual(doc: Doc, v: VisualSpec | null | undefined, width: number, t: PdfTheme): VisualLayout | null {
   if (!v) return null;
+  if (v.type === 'grid') {
+    const m = gridModel(doc, v, width, t);
+    return m && { height: m.heightOf(0, m.rows.length, true), draw: (x, y) => { m.draw(x, y, 0, m.rows.length, true, 0); } };
+  }
   const raw = (Array.isArray(v.labels) ? v.labels : []).map((l) => String(l ?? '')).filter((l) => sanitizePdfText(l).length > 0).slice(0, 12);
   const labels = raw.map((l) => sanitizePdfText(l));
   if (labels.length === 0) return null;

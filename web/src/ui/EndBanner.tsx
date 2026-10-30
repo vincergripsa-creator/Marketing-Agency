@@ -1,4 +1,4 @@
-// End-of-run banner: bankrupt / goal reached / horizon finished.
+// Run milestone banner: bankrupt and goal reached (the agency keeps working) / horizon finished (the run is over).
 import { useApp } from './context';
 import { fmtEur, fmtEurSigned, fmtInt, sum } from './format';
 import { Icon } from './icons';
@@ -15,9 +15,9 @@ export function EndBanner({ onNewScenario, onDismiss, onFinance }: { onNewScenar
   const goal = snapshot.scenario?.goal;
 
   const conf = st === 'bankrupt'
-    ? { cls: 'end-bad', icon: 'alert' as const, title: 'Faillite', text: `La trésorerie est à sec au jour ${snapshot.day}. L’agence a appris ${fmtInt(lessons)} leçons — relance un scénario pour qu’elle fasse mieux.` }
+    ? { cls: 'end-bad', icon: 'alert' as const, title: 'Faillite', text: `La trésorerie est négative au jour ${snapshot.day}. L’agence continue en mode survie : plus aucune dépense payante, seulement le support, l’organique et les créateurs à la commission, jusqu’au retour d’une trésorerie positive.` }
     : st === 'goal_reached'
-      ? { cls: 'end-good', icon: 'sparkle' as const, title: 'Objectif atteint !', text: `${fmtEurSigned(f?.profit)} de profit au jour ${snapshot.day}${goal ? ` (objectif ${fmtEur(goal.targetProfit, 0)} avant le jour ${goal.byDay})` : ''}.` }
+      ? { cls: 'end-good', icon: 'sparkle' as const, title: 'Objectif atteint !', text: `${fmtEurSigned(f?.profit)} de profit au jour ${snapshot.day}${goal ? ` (objectif ${fmtEur(goal.targetProfit, 0)} avant le jour ${goal.byDay})` : ''}. L’agence continue de tourner jusqu’à la fin de la simulation.` }
       : { cls: (f?.profit ?? 0) >= 0 ? 'end-good' : 'end-neutral', icon: 'flag' as const, title: 'Fin de la simulation', text: `Horizon de ${snapshot.scenario?.horizonDays ?? snapshot.day} jours atteint. Profit final : ${fmtEurSigned(f?.profit)}.` };
 
   return (

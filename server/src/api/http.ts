@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { Difficulty, ScenarioConfig, Speed } from '../shared.js';
+import { FEES, MIN_BUDGET_DAYS, minStartingCash } from '../sim/balance.js';
 
 export type { Speed };
 
@@ -204,7 +205,16 @@ function str(v: unknown, max: number): string | undefined {
   return t || undefined;
 }
 
-/** Keeps only valid, clamped ScenarioConfig fields from an untrusted body. */
+/** Why a starting budget cannot open a company (French, for the founder), or null when it can. */
+export function budgetRefusal(cash: number): string | null {
+  const min = minStartingCash();
+  if (cash >= min) return null;
+  const setup = Math.round(FEES.setupCost);
+  const fixed = Math.round(MIN_BUDGET_DAYS * (FEES.boutiqueDaily + FEES.toolsDaily));
+  return `Budget de départ trop bas : il faut au moins ${min} € (${setup} € de frais de démarrage et ${fixed} € de frais fixes pour ${MIN_BUDGET_DAYS} jours). Avec moins, l'agence serait en faillite dès le premier jour.`;
+}
+
+/** Keeps only valid, clamped ScenarioConfig fields from an untrusted body; an unusable budget is refused (400). */
 export function sanitizeScenario(body: Record<string, unknown>): Partial<ScenarioConfig> {
   const out: Partial<ScenarioConfig> = {};
   const name = str(body.name, 80);
@@ -213,8 +223,12 @@ export function sanitizeScenario(body: Record<string, unknown>): Partial<Scenari
   if (companyName) out.companyName = companyName;
   const seed = num(body.seed, 0, 2 ** 31 - 1);
   if (seed !== undefined) out.seed = Math.floor(seed);
-  const cash = num(body.startingCash, 50, 1_000_000);
-  if (cash !== undefined) out.startingCash = Math.round(cash * 100) / 100;
+  const cash = num(body.startingCash, 0, 1_000_000);
+  if (cash !== undefined) {
+    const refusal = budgetRefusal(cash);
+    if (refusal) throw new HttpError(400, refusal);
+    out.startingCash = Math.round(cash * 100) / 100;
+  }
   const horizon = num(body.horizonDays, 7, 730);
   if (horizon !== undefined) out.horizonDays = Math.round(horizon);
   if (DIFFICULTIES.includes(body.difficulty as Difficulty)) out.difficulty = body.difficulty as Difficulty;

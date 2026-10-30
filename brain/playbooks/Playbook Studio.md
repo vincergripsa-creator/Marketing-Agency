@@ -19,7 +19,7 @@ tags: [playbook, studio, rédaction]
 2. **Plan qui vend** : intro qui reformule le problème, étapes, exemples, bonus, « La suite est ici ».
 3. **Rédaction** (Théo) → relecture de Samuel (score qualité ≥ 68, sinon retour avec notes).
 4. **Humanisation** (Lina) : traquer les phrases génériques d'IA et les remplacer par des détails du terrain.
-5. **Fact-check** (Samuel) : aucune promesse ni aucun chiffre sans source ; validation finale d'Élise.
+5. **Fact-check** (Samuel) : aucune promesse ni aucun chiffre sans source ; validation finale d'Élise. Chaque affirmation inventée qu'il attrape rejoint les « Ne jamais écrire » de tous les rédacteurs : la même phrase n'est prise qu'une fois.
 
 ## Version 2
 Les plaintes qualité remontées par le [[Support client]] déclenchent une réécriture (v2) avec une promesse plus sobre.

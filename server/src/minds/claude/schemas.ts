@@ -17,7 +17,8 @@ const nullable = (s: Schema): Schema => ({ anyOf: [s, { type: 'null' }] });
 const oneOf = (values: readonly string[]): Schema => ({ type: 'string', enum: [...values] });
 export const obj = (props: Record<string, Schema>): Schema => ({ type: 'object', properties: props, required: Object.keys(props), additionalProperties: false });
 
-const VISUAL = obj({ type: oneOf(VISUAL_TYPES), title: S, labels: list(S), values: list(N) });
+const GRID = obj({ columns: list(S), rows: list(S), cells: list(list(nullable(S))) });
+const VISUAL = obj({ type: oneOf(VISUAL_TYPES), title: S, labels: list(S), values: list(N), grid: nullable(GRID) });
 const CHAPTER = obj({ title: S, intro: S, paragraphs: list(S), steps: list(S), example: nullable(S), checklist: list(S), visual: nullable(VISUAL) });
 
 export const INTENTS: readonly MessageIntent[] = ['question', 'non_recu', 'remboursement', 'plainte_qualite', 'sur_mesure', 'partenariat', 'arnaque', 'compliment', 'troll', 'menace_chargeback', 'bug_paiement'];

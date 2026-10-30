@@ -2,21 +2,21 @@
  * Market close for world.day: paid ads → organic → creators → sales → upsells → refunds → reviews →
  * inbox → escalations → random events → fixed costs. Every money move goes through the ledger.
  */
-import { clamp, emit, nextId, round2 } from '../core/index.js';
+import { clamp, emit, nextId, round2, streamRng } from '../core/index.js';
 import type { DifficultyProfile, MarketDayResult, Rng } from '../contracts.js';
 import type {
   AdCreative, Customer, DailyAdStats, InboxMessage, MessageIntent, NicheTruth, Order, Product, QualityReport, WorldEvent, WorldEventKind, WorldState,
 } from '../shared.js';
-import { ADS, CONVERSION, CREATORS, ESCALATION, FEES, INBOX, ORGANIC, REFUNDS, REVIEWS, STATS, UPSELL } from './balance.js';
+import { ADS, CONVERSION, CREATORS, ESCALATION, FEES, INBOX, ORGANIC, REFUNDS, REVIEWS, SCAM, STATS, UPSELL } from './balance.js';
 import { findBannedClaims } from './compliance.js';
 import { buyerArchetype, createCustomer, customerById, senderArchetype } from './customers.js';
 import { releaseHolds, rollEvents, seasonalBoostActive } from './events.js';
 import { adComments } from './feedback.js';
-import { cashOf, recordLedger } from './finance.js';
+import { SETUP_REF, cashOf, recordLedger } from './finance.js';
 import { createMessage, followUpText } from './inbox.js';
 import { difficultyProfile, isScammer } from './market.js';
-import { chargebackOrder, creativeById, nicheOf, orderById, productById, pushEvent, refundOrder, reviewProduct, type EventRefs } from './ops.js';
-import { genericPhraseHits, scoreCreative, scorePdf, scoreSalesPage, vocPhraseHits } from './quality.js';
+import { chargebackOrder, creativeById, nicheOf, orderById, productById, pushEvent, refundOrder, repayableLeft, reviewProduct, type EventRefs } from './ops.js';
+import { genericPhraseHits, guideOverlap, scoreCreative, scorePdf, scoreSalesPage, vocPhraseHits } from './quality.js';
 import { fmtEur, fmtInt, fmtNum, fmtPct, keyTokens, lognormal, norm, overlap, pickWeighted, plural, short, stemSet, uniform } from './text.js';
 
 interface Traffic {
@@ -49,17 +49,20 @@ class Day {
   chargebacks = 0; badReviews = 0;
   readonly outage: boolean;
   readonly boost: boolean;
+  readonly storeRating: number;
   private pdfCache = new Map<string, QualityReport>();
   private salesCache = new Map<string, QualityReport>();
   private creativeCache = new Map<string, QualityReport>();
+  private echoCache = new Map<string, number>();
   private customers = new Map<string, Customer>();
 
-  constructor(readonly world: WorldState, readonly rng: Rng, readonly diff: DifficultyProfile) {
+  constructor(readonly world: WorldState, public rng: Rng, readonly diff: DifficultyProfile) {
     this.day = world.day;
     for (const c of world.market.customers) this.customers.set(c.id, c);
     this.cash = cashOf(world);
     this.outage = world.market.modifiers.outageDay === world.day;
     this.boost = seasonalBoostActive(world);
+    this.storeRating = storeRating(world);
   }
 
   niche(p: Product): NicheTruth { return nicheOf(this.world, p); }
@@ -108,7 +111,30 @@ class Day {
     return r;
   }
 
+  /** How far this follow-up guide repeats the guide its buyer already owns: 0 for a guide of its own, 1 for the same text. */
+  echo(p: Product): number {
+    let e = this.echoCache.get(p.id);
+    if (e === undefined) {
+      const parent = this.world.company.products.find((x) => x.upsellProductId === p.id && x.id !== p.id);
+      const share = parent?.content && p.content ? guideOverlap(p.content, parent.content) : 0;
+      e = clamp((share - UPSELL.echoTolerated) / (1 - UPSELL.echoTolerated), 0, 1);
+      this.echoCache.set(p.id, e);
+    }
+    return e;
+  }
+
   noise(sd: number): number { return Math.exp(this.rng.normal(0, sd)); }
+
+  /** Moves the phase to the stream of one campaign or product: what happens to it does not depend on the ones before. */
+  focus(phase: number, item: number): Rng {
+    this.rng = streamRng(phase, item);
+    return this.rng;
+  }
+}
+
+/** What the buyer finds missing: the page's promises above what the guide holds, and the guide's own promises it does not keep. */
+function promiseShortfall(d: Day, p: Product): number {
+  return ((100 - d.pageQ(p).promiseMatch) + (100 - d.pdfQ(p).promiseMatch)) / 150;
 }
 
 // ───────────────────────────── conversion model ─────────────────────────────
@@ -131,12 +157,39 @@ export function priceFactor(price: number, wtp: { min: number; sweet: number; ma
   return atMax * Math.exp(-(price - max) / Math.max(1, scale));
 }
 
-function ratingFactor(p: Product): number {
-  if (!p.stats.reviews.length || p.stats.rating <= 0) return CONVERSION.ratingNone;
-  const r = p.stats.rating;
+/** How far a price paid went beyond what the niche accepts to pay: 0 up to wtp.max, 1 at twice it. Within the max there is nothing to regret. */
+function overprice(price: number, wtp: { max: number }): number {
+  return clamp((price - wtp.max) / Math.max(1, wtp.max), 0, 1);
+}
+
+/**
+ * Chance that a buyer takes the follow-up guide right after his purchase. Both guides' quality sets the base rate;
+ * the price acts as for any visitor, only harder (exponent): revenue per buyer peaks close to the sweet price and
+ * an upsell priced above what the niche pays collapses.
+ */
+export function upsellRate(qualityPct: number, price: number, wtp: { min: number; sweet: number; max: number }): number {
+  const base = UPSELL.minRate + (UPSELL.maxRate - UPSELL.minRate) * clamp(qualityPct / 100, 0, 1);
+  return base * Math.pow(priceFactor(price, wtp), UPSELL.priceExp);
+}
+
+function ratingEffect(r: number): number {
   if (r >= 4.5) return CONVERSION.ratingHigh;
   if (r < 3.5) return CONVERSION.ratingLow;
   return 1 + (CONVERSION.ratingHigh - 1) * ((r - 3.5) / 1);
+}
+
+/** Average of every review the store has received, or 0 while it has too few to mean anything. */
+export function storeRating(world: WorldState): number {
+  let total = 0;
+  let count = 0;
+  for (const p of world.company.products) for (const r of p.stats.reviews) { total += r.rating; count++; }
+  return count >= CONVERSION.storeMinReviews ? total / count : 0;
+}
+
+/** A guide is judged on its own reviews; without any, a visitor only has the store's reputation to go on. */
+export function trustFactor(p: Product, store: number): number {
+  if (p.stats.reviews.length && p.stats.rating > 0) return ratingEffect(p.stats.rating);
+  return store > 0 ? CONVERSION.ratingNone + (ratingEffect(store) - CONVERSION.ratingNone) * CONVERSION.storeTrust : CONVERSION.ratingNone;
 }
 
 /** Conversion rate of a landing view for this product today (before source multiplier & noise). */
@@ -150,25 +203,27 @@ function baseCvr(d: Day, p: Product): number {
   const compF = 1 - CONVERSION.competitionWeight * n.competition;
   const hypeF = 1 + CONVERSION.hypeBoost * clamp(p.salesPage?.hypeLevel ?? 0.5, 0, 1);
   const boost = d.boost ? CONVERSION.seasonalBoost : 1;
-  return CONVERSION.base * sqF * priceFactor(p.price, n.wtp) * ratingFactor(p) * specF * demandF * dow * compF * hypeF * boost;
+  return CONVERSION.base * sqF * priceFactor(p.price, n.wtp) * trustFactor(p, d.storeRating) * specF * demandF * dow * compF * hypeF * boost;
 }
 
 // ───────────────────────────── 1. paid ads ─────────────────────────────
 
 function runAds(d: Day): void {
-  const { world, rng, diff } = d;
+  const { world, diff } = d;
+  const key = d.rng.int(0, 0x7fffffff);
   const m = world.market;
   const banned = m.adAccount.banned && d.day < m.adAccount.bannedUntilDay;
   const eventCpm = m.modifiers.cpmUntilDay >= d.day ? m.modifiers.cpmMultiplier : 1;
   const dowCpm = ADS.dayOfWeekCpm[(d.day - 1) % 7] ?? 1;
   let blocked = 0; let capped = false;
-  for (const camp of world.company.campaigns) {
+  for (const [index, camp] of world.company.campaigns.entries()) {
     if (camp.status !== 'active') continue;
     const p = productById(world, camp.productId);
     if (!p || p.status !== 'live') continue;
     const creatives = camp.creativeIds.map((id) => creativeById(world, id)).filter((c): c is AdCreative => !!c && c.review.status === 'approved' && c.productId === p.id);
     if (!creatives.length) continue;
     if (banned) { blocked++; continue; }
+    const rng = d.focus(key, index);
     const wanted = Math.max(0, camp.dailyBudget) * uniform(rng, ADS.deliveryMin, ADS.deliveryMax);
     const spendTotal = round2(Math.min(wanted, Math.max(0, d.cash)));
     if (spendTotal < wanted - 0.01) capped = true;
@@ -282,14 +337,14 @@ function runCreators(d: Day): void {
     const creator = world.market.creators.find((c) => c.id === pt.creatorId);
     if (!creator) continue;
     if (pt.status === 'accepted' && pt.day < d.day) {
-      if (isScammer(creator)) {
+      if (isScammer(world, creator)) {
         pt.status = 'scam';
         if (pt.upfront > 0) {
           recordLedger(world, { type: 'creator_payout', amount: pt.upfront, memo: `Requalification de l'avance versée à @${creator.handle}`, ref: `reversal:${pt.id}` });
           recordLedger(world, { type: 'scam_loss', amount: -pt.upfront, memo: `Arnaque : @${creator.handle} a encaissé l'avance sans publier`, ref: pt.id });
         }
         d.notes.push(`Arnaque : @${creator.handle} a encaissé ${fmtEur(pt.upfront)} d'avance et a disparu.`);
-        emit(world, { agentId: null, kind: 'event', text: `@${creator.handle} ne répond plus : l'avance de ${fmtEur(pt.upfront)} est perdue.` });
+        emit(world, { agentId: null, kind: 'event', text: `@${creator.handle} ne répond plus : l'avance de ${fmtEur(pt.upfront)} est perdue.`, refs: { productId: pt.productId } });
         continue;
       }
       if (d.day >= pt.day + CREATORS.deliveryDelayDays) pt.status = 'delivered';
@@ -316,7 +371,7 @@ function newOrder(d: Day, p: Product, source: Order['source'], t: Pick<Traffic, 
   const c = customer ?? createCustomer(world, rng, buyerArchetype(rng, world.scenario?.difficulty ?? 'normal'));
   const o: Order = {
     id: nextId(world, 'ord'), day: d.day, customerId: c.id, productId: p.id, price: p.price, source,
-    campaignId: t.campaignId, creatorId: t.creatorId, refunded: false, chargeback: false,
+    campaignId: t.campaignId, creatorId: t.creatorId, refunded: false, chargeback: false, charges: 1, downloads: 1,
   };
   c.orders.push(o.id);
   world.market.orders.push(o);
@@ -336,8 +391,9 @@ function bookRevenue(d: Day, p: Product, source: Order['source'], count: number,
 }
 
 function runSales(d: Day): void {
-  const { world, rng } = d;
+  const { world } = d;
   if (!d.traffic.length) return;
+  const key = d.rng.int(0, 0x7fffffff);
   const byProduct = new Map<string, Traffic[]>();
   for (const t of d.traffic) {
     const list = byProduct.get(t.productId) ?? [];
@@ -364,6 +420,7 @@ function runSales(d: Day): void {
     const views = entries.reduce((s, t) => s + t.landingViews, 0);
     p.stats.views += views;
     if (d.outage || p.status !== 'live') continue;
+    const rng = d.focus(key, world.company.products.indexOf(p));
     const cvr0 = baseCvr(d, p) * d.noise(CONVERSION.noiseSd);
     const sat = saturation.get(d.niche(p).id) ?? 1;
     const bySource = new Map<Order['source'], { n: number; amount: number }>();
@@ -414,8 +471,7 @@ function runUpsells(d: Day): void {
     if (!upId || upId === p.id) continue;
     const up = productById(world, upId);
     if (!up || up.status !== 'live') continue;
-    const rate = UPSELL.minRate + (UPSELL.maxRate - UPSELL.minRate) * clamp((d.pdfQ(p).overall + d.pdfQ(up).overall) / 200, 0, 1);
-    if (!rng.chance(rate)) continue;
+    if (!rng.chance(upsellRate((d.pdfQ(p).overall + d.pdfQ(up).overall) / 2, up.price, d.niche(up).wtp))) continue;
     const customer = d.customer(o.customerId);
     newOrder(d, up, 'upsell', { campaignId: o.campaignId, creatorId: o.creatorId }, customer);
     p.stats.upsellSales += 1;
@@ -437,8 +493,7 @@ function runUpsells(d: Day): void {
 
 // ───────────────────────────── 6. refunds ─────────────────────────────
 
-/** Ledger ref of the one-off launch costs (FEES.setupCost). */
-export const SETUP_REF = 'setup';
+export { SETUP_REF };
 
 const REFUND_WEIGHTS: number[] = (() => {
   const w = Array.from({ length: REFUNDS.windowDays }, (_, i) => Math.exp(-i / REFUNDS.decayDays));
@@ -448,19 +503,20 @@ const REFUND_WEIGHTS: number[] = (() => {
 
 const INBOX_REFUNDERS: ReadonlySet<string> = new Set(['karen', 'sceptique', 'menace_chargeback', 'impatient']);
 
-function refundProbability(d: Day, p: Product, c: Customer | undefined): number {
+export function refundProbability(d: Day, p: Product, c: Customer | undefined, order: Pick<Order, 'price' | 'source'>): number {
   const n = d.niche(p);
   const pdf = d.pdfQ(p);
-  const sales = d.pageQ(p);
   const base = d.diff.refundBase * (REFUNDS.sensitivityMin + REFUNDS.sensitivitySpan * n.refundSensitivity);
-  const gap = ((100 - sales.promiseMatch) / 150) * REFUNDS.gapWeight;
+  const gap = promiseShortfall(d, p) * REFUNDS.gapWeight;
   const lowQ = (Math.max(0, REFUNDS.lowQualityThreshold - pdf.overall) / 100) * REFUNDS.lowQualityWeight;
   const arche = c ? REFUNDS.archetypeBonus[c.archetype] ?? 0 : 0;
-  return clamp(base + gap + lowQ + arche, 0, REFUNDS.maxCumulative);
+  const regret = overprice(order.price, n.wtp) * REFUNDS.overpriceWeight;
+  const paidTwice = order.source === 'upsell' ? d.echo(p) * REFUNDS.echoWeight : 0;
+  return clamp(base + gap + lowQ + arche + regret + paidTwice, 0, REFUNDS.maxCumulative);
 }
 
 function hasRequest(world: WorldState, orderId: string): boolean {
-  return world.market.inbox.some((m) => m.orderId === orderId && (m.intent === 'remboursement' || m.intent === 'menace_chargeback' || m.intent === 'plainte_qualite'));
+  return world.market.inbox.some((m) => m.orderId === orderId && (m.intent === 'remboursement' || m.intent === 'menace_chargeback' || m.intent === 'plainte_qualite' || m.intent === 'arnaque'));
 }
 
 function runRefunds(d: Day): void {
@@ -481,7 +537,7 @@ function runRefunds(d: Day): void {
       }
       continue;
     }
-    const hazard = refundProbability(d, p, c) * (REFUND_WEIGHTS[age - 1] ?? 0);
+    const hazard = refundProbability(d, p, c, o) * (REFUND_WEIGHTS[age - 1] ?? 0);
     if (!rng.chance(hazard)) continue;
     if (c && INBOX_REFUNDERS.has(c.archetype)) {
       if (hasRequest(world, o.id)) continue;
@@ -518,9 +574,9 @@ function runReviews(d: Day): void {
     if (!rng.chance(chance)) continue;
     const p = productById(world, o.productId);
     if (!p) continue;
-    const gap = (100 - d.pageQ(p).promiseMatch) / 150;
-    const mean = REVIEWS.ratingIntercept + REVIEWS.ratingSlope * d.pdfQ(p).overall - REVIEWS.promiseGapPenalty * gap
-      + (c ? RATING_SHIFT[c.archetype] ?? 0 : 0) - (o.refunded ? 1.5 : 0);
+    const paidTwice = o.source === 'upsell' ? d.echo(p) * REVIEWS.echoPenalty : 0;
+    const mean = REVIEWS.ratingIntercept + REVIEWS.ratingSlope * d.pdfQ(p).overall - REVIEWS.promiseGapPenalty * promiseShortfall(d, p) - paidTwice
+      - REVIEWS.overpricePenalty * overprice(o.price, d.niche(p).wtp) + (c ? RATING_SHIFT[c.archetype] ?? 0 : 0) - (o.refunded ? 1.5 : 0);
     const rating = Math.round(clamp(rng.normal(mean, REVIEWS.ratingSd), 1, 5));
     reviewProduct(world, rng, p, c, rating, 'product');
     reviewed.add(key);
@@ -542,6 +598,27 @@ const BUYER_INTENTS: Record<Customer['archetype'], [MessageIntent, number][]> = 
   menace_chargeback: [['menace_chargeback', 0.6], ['non_recu', 0.4]],
   demande_sur_mesure: [['sur_mesure', 0.8], ['question', 0.2]],
 };
+
+/**
+ * Friendly fraud: a real buyer who keeps the guide and files a false claim to get his money back. The rate scales
+ * with the difficulty's scam rate; the claim reads like an honest one and only the order's logs contradict it.
+ */
+function runFriendlyFraud(d: Day): void {
+  const { world, rng, diff } = d;
+  const chance = (diff.scamRate * SCAM.friendlyFraudPerRate) / SCAM.friendlyFraudWindowDays;
+  const orders = world.market.orders;
+  for (let i = orders.length - 1; i >= 0; i--) {
+    const o = orders[i]!;
+    const age = d.day - o.day;
+    if (age > SCAM.friendlyFraudWindowDays) break;
+    if (age < 1 || o.refunded || o.chargeback || !rng.chance(chance) || hasRequest(world, o.id)) continue;
+    const p = productById(world, o.productId);
+    const c = d.customer(o.customerId);
+    if (!p || !c) continue;
+    createMessage(world, rng, { intent: 'arnaque', customer: c, product: p, order: o, niche: d.niche(p), channel: 'email' });
+    d.messages++;
+  }
+}
 
 function runInbox(d: Day): void {
   const { world, rng, diff } = d;
@@ -625,6 +702,14 @@ function badSupportReview(d: Day, msg: InboxMessage, c: Customer | undefined): b
   return true;
 }
 
+/** The customer goes to his bank. Returns the cost (0 when the order was already refunded or disputed). */
+function dispute(d: Day, order: Order): number {
+  const left = repayableLeft(order);
+  const cost = chargebackOrder(d.world, order);
+  if (cost > 0) { d.chargebacks++; d.refunds++; d.refundAmount = round2(d.refundAmount + left); }
+  return cost;
+}
+
 function runEscalations(d: Day): void {
   const { world, rng } = d;
   for (const msg of world.market.inbox) {
@@ -633,10 +718,13 @@ function runEscalations(d: Day): void {
     const order = orderById(world, msg.orderId);
     const angry = c?.archetype === 'karen' || c?.archetype === 'menace_chargeback';
     switch (msg.intent) {
-      case 'arnaque': case 'troll': case 'partenariat':
-        msg.status = 'resolved';
-        msg.resolution = 'Ignoré : aucune conséquence.';
+      case 'arnaque': case 'troll': case 'partenariat': {
+        // a false claim left unanswered can still end at the buyer's bank: the order is real
+        const cost = msg.intent === 'arnaque' && order && rng.chance(SCAM.friendlyDisputeIgnored) ? dispute(d, order) : 0;
+        msg.status = cost > 0 ? 'escalated' : 'resolved';
+        msg.resolution = cost > 0 ? `Message ignoré → litige bancaire (${fmtEur(cost)}).` : 'Ignoré : aucune conséquence.';
         continue;
+      }
       case 'compliment':
         msg.status = 'resolved';
         msg.resolution = 'Resté sans réponse.';
@@ -647,8 +735,8 @@ function runEscalations(d: Day): void {
     let outcome = 'Client sans réponse : abandon.';
     const cbChance = (ESCALATION.chargeback[msg.intent] ?? 0) + (angry ? ESCALATION.angryArchetypeBoost : 0);
     if (order && !order.refunded && cbChance > 0 && rng.chance(Math.min(0.95, cbChance))) {
-      const cost = chargebackOrder(world, order);
-      if (cost > 0) { d.chargebacks++; d.refunds++; d.refundAmount = round2(d.refundAmount + order.price); outcome = `Message ignoré → litige bancaire (${fmtEur(cost)}).`; }
+      const cost = dispute(d, order);
+      if (cost > 0) outcome = `Message ignoré → litige bancaire (${fmtEur(cost)}).`;
     } else if (rng.chance(Math.min(1, (ESCALATION.badReview[msg.intent] ?? 0) + (angry ? 0.3 : 0)))) {
       if (badSupportReview(d, msg, c)) outcome = 'Message ignoré → avis négatif publié.';
     }
@@ -730,6 +818,8 @@ function summarize(d: Day, result: MarketDayResult): void {
 
 // ───────────────────────────── entry point ─────────────────────────────
 
+const DAY_PHASES = [housekeeping, runAds, runOrganic, runCreators, runSales, runUpsells, runRefunds, runReviews, runFriendlyFraud, runInbox, runEscalations];
+
 export function tickMarket(world: WorldState, rng: Rng): MarketDayResult {
   const day = world.day;
   const result: MarketDayResult = { day, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, adSpend: 0, newMessages: 0, events: [], notes: [] };
@@ -738,18 +828,14 @@ export function tickMarket(world: WorldState, rng: Rng): MarketDayResult {
     return result;
   }
   const d = new Day(world, rng, difficultyProfile(world.scenario?.difficulty ?? 'normal'));
-  housekeeping(d);
-  runAds(d);
-  runOrganic(d);
-  runCreators(d);
-  runSales(d);
-  runUpsells(d);
-  runRefunds(d);
-  runReviews(d);
-  runInbox(d);
-  runEscalations(d);
+  // Each phase draws from its own stream: one more click in the ads does not change who refunds, nor which event comes.
+  const dayKey = rng.int(0, 0x7fffffff);
+  DAY_PHASES.forEach((run, i) => {
+    d.rng = streamRng(dayKey, i);
+    run(d);
+  });
   const before = world.market.events.length;
-  rollEvents(world, rng, d.diff);
+  rollEvents(world, streamRng(dayKey, DAY_PHASES.length), d.diff);
   for (const ev of world.market.events.slice(before)) {
     d.eventIds.push(ev.id);
     d.notes.push(`Événement : ${ev.title}.`);

@@ -1,5 +1,18 @@
 import type { Rng } from '../contracts.js';
 
+/**
+ * The stream of one key (seed, day, phase…): what it draws depends on the key alone, never on how much
+ * any other stream drew. A decision taken today cannot reshuffle what the market does tomorrow.
+ */
+export function streamRng(seed: number, ...keys: number[]): Rng {
+  let h = seed >>> 0;
+  for (const k of keys) {
+    h = Math.imul(h ^ (k >>> 0), 0x9e3779b1) >>> 0;
+    h = (h ^ (h >>> 15)) >>> 0;
+  }
+  return createRng(Math.imul(h ^ (h >>> 13), 0x5bd1e995) >>> 0);
+}
+
 /** Deterministic PRNG (mulberry32). Same seed + same decisions = same simulation. */
 export function createRng(seedOrState: number): Rng {
   let s = seedOrState >>> 0 || 0x9e3779b9;

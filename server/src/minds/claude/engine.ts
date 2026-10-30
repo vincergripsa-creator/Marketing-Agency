@@ -10,14 +10,16 @@ import type {
   ModelTier, NicheBrief, Order, PdfContent, Product, QualityReport, SalesPage, SupportReplyInput, Task, TaskKind, TrendSignal, VoiceOfCustomer,
 } from '../../shared.js';
 import type {
-  AdDraft, ContentEngine, DayPlan, DayPlanItem, LessonDraft, MindContext, OpportunityRanking, Outline, RedTeamVerdict, UsageEvent,
+  AdDraft, ContentEngine, DayPlan, DayPlanItem, GuideGaps, LessonDraft, MindContext, OpportunityRanking, Outline, RedTeamFacts, RedTeamVerdict, UpsellContext, UsageEvent,
 } from '../../contracts.js';
 import { KIND_TITLE } from '../heuristic/direction.js';
 import { heuristicFactCheck } from '../heuristic/editing.js';
 import { HeuristicEngine, productSubjects, resolveBrand, type Usage } from '../heuristic/index.js';
+import { buildNicheCtx } from '../heuristic/niche.js';
+import { promiseOutcome } from '../heuristic/studio.js';
 import { parsePlaybook, scrubDeep } from '../playbook.js';
 import { ensurePdf } from '../shapes.js';
-import { clean, fit, uniqStrings } from '../util.js';
+import { clean, fit, q, uniqStrings } from '../util.js';
 import {
   applyReplacements, nAd, nHooks, nLessons, nMission, nOutline, nPdf, nPlan, nRanking, nRedTeam, nSalesPage, nSupport, nText, nTitles,
 } from './normalize.js';
@@ -75,6 +77,18 @@ function describe(err: unknown): { key: string; text: string } {
   if (err instanceof SyntaxError) return { key: 'json', text: 'JSON invalide' };
   if (err instanceof MindError) return { key: err.message, text: err.message };
   return { key: 'autre', text: err instanceof Error ? fit(err.message, 120) : 'erreur inconnue' };
+}
+
+/** What the studio prompts add to the research: the kind of guide, and the parent a follow-up must not repeat. */
+function guideBrief(niche: NicheBrief, voc: VoiceOfCustomer, upsellOf: UpsellContext | null | undefined): { note: string; voc: unknown } {
+  const c = buildNicheCtx(niche, voc, upsellOf ?? null);
+  const kind = `Nature du guide : ${c.archetype}. Durée du plan : ${c.dur.n} ${c.dur.unit}.`;
+  if (!upsellOf) return { note: kind, voc: vocBrief(voc) };
+  return {
+    note: `${kind}
+Ce guide est un guide de suite : il traite un autre sous-problème que le guide précédent, avec un titre, une promesse et des chapitres différents. Sous-problème : ${q(c.problem)}. Objectif : ${q(promiseOutcome(c))}. Ne reprends aucune section du guide précédent : ${json(upsellOf)}.`,
+    voc: vocBrief(voc, c.topic?.id ?? null),
+  };
 }
 
 function parseJson(text: string): unknown {
@@ -266,51 +280,60 @@ Notes de l'équipe : ${json(input.notes ?? [])}`,
 
   // ───────────────────────────── studio ─────────────────────────────
 
-  async writeTitles(input: { niche: NicheBrief; voc: VoiceOfCustomer; count: number }, ctx: MindContext): Promise<string[]> {
+  async writeTitles(input: { niche: NicheBrief; voc: VoiceOfCustomer; count: number; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<string[]> {
     const fb = await this.h.writeTitles(input, ctx);
     const count = input.count > 0 ? Math.floor(input.count) : 10;
+    const brief = guideBrief(input.niche, input.voc, input.upsellOf);
     return this.run({
       method: 'writeTitles', ctx, schema: SCHEMAS.titles, maxTokens: 3000, effort: 'low', fallback: fb,
-      normalize: (raw, f) => nTitles(raw, f, count),
-      prompt: `Écris exactement ${count} titres pour un guide PDF. Chaque titre dit le problème, pour qui, avec les mots exacts des clients (pas de mots abstraits ou « IA »). Varie les formules (méthode + durée + audience, « Fini … », erreurs à éviter, plan en N jours, de « avant » à « après »…). En lisant le titre, on sait exactement ce qu'il y a dedans.
+      normalize: (raw, f) => nTitles(raw, f, count, input.upsellOf ?? null),
+      prompt: `Écris exactement ${count} titres pour un guide PDF. Chaque titre dit le problème, pour qui, avec les mots exacts des clients (pas de mots abstraits ou « IA »). Varie les formules selon la nature du guide (méthode + durée + audience, « Fini … », erreurs à éviter, plan en N jours, de « avant » à « après »…). En lisant le titre, on sait exactement ce qu'il y a dedans.
+${brief.note}
 Niche : ${json(input.niche)}
-Recherche client : ${json(vocBrief(input.voc))}`,
+Recherche client : ${json(brief.voc)}`,
     });
   }
 
-  async writeOutline(input: { title: string; niche: NicheBrief; voc: VoiceOfCustomer }, ctx: MindContext): Promise<Outline> {
+  async writeOutline(input: { title: string; niche: NicheBrief; voc: VoiceOfCustomer; upsellOf?: UpsellContext | null; revision?: number }, ctx: MindContext): Promise<Outline> {
     const fb = await this.h.writeOutline(input, ctx);
+    const brief = guideBrief(input.niche, input.voc, input.upsellOf);
     return this.run({
       method: 'writeOutline', ctx, schema: SCHEMAS.outline, maxTokens: 4000, effort: 'medium', fallback: fb,
-      normalize: (raw, f) => nOutline(raw, f),
-      prompt: `Écris le plan qui vend du guide « ${clean(input.title)} » : 5 à 7 chapitres numérotés (comprendre le problème, diagnostic, méthode pas à pas, erreurs, situations difficiles, programme jour par jour, tenir dans la durée — adapte à la niche), chacun avec 3 à 5 points concrets tirés de la recherche. bonusTitle commence par « Bonus : » (le cadeau inclus), nextStepTitle = le titre du guide suivant pour la même personne, SANS le préfixe « La suite est ici » (la mise en page l'ajoute).
+      normalize: (raw, f) => nOutline(raw, f, input.upsellOf ?? null),
+      prompt: `Écris le plan qui vend du guide « ${clean(input.title)} » : 5 à 7 chapitres numérotés, propres à la nature de ce guide, chacun avec 3 à 5 points concrets tirés de la recherche. Un projet ponctuel ne s'écrit pas comme un changement d'habitude. Si un titre annonce un nombre d'erreurs ou de cas, le chapitre les développe tous. bonusTitle commence par « Bonus : » et annonce un outil réellement présent dans le guide (tableau, carnet ou fiche à remplir, adapté à la niche). nextStepTitle = le titre du guide suivant pour la même personne, SANS le préfixe « La suite est ici » (la mise en page l'ajoute).
+${brief.note}
+Plan de référence pour ce type de guide (à adapter, pas à recopier) : ${json(fb.chapters.map((c) => c.title))}
 Niche : ${json(input.niche)}
-Recherche client : ${json(vocBrief(input.voc))}`,
+Recherche client : ${json(brief.voc)}`,
     });
   }
 
-  async writePdfContent(input: { title: string; outline: Outline; niche: NicheBrief; voc: VoiceOfCustomer; upsellTitle: string | null }, ctx: MindContext): Promise<PdfContent> {
+  async writePdfContent(input: { title: string; outline: Outline; niche: NicheBrief; voc: VoiceOfCustomer; upsellTitle: string | null; upsellOf?: UpsellContext | null; revision?: number }, ctx: MindContext): Promise<PdfContent> {
     const fb = await this.h.writePdfContent(input, ctx);
+    const brief = guideBrief(input.niche, input.voc, input.upsellOf);
     return this.run({
       method: 'writePdfContent', ctx, schema: SCHEMAS.pdf, maxTokens: 32000, effort: 'medium', stream: true, timeoutMs: 600_000, fallback: fb,
-      normalize: (raw, f) => nPdf(raw, f),
+      normalize: (raw, f) => nPdf(raw, f, input.upsellOf ?? null),
       prompt: `Rédige le guide complet « ${clean(input.title)} » à partir du plan et de la recherche. Phrases simples, pages pensées pour la mise en page, vouvoiement.
+${brief.note}
 Contraintes :
-- 2 500 à 4 500 mots au total.
-- introduction : 3 à 5 paragraphes qui reformulent le problème avec les phrases exactes des clients (entre « »), puis disent ce que le lecteur aura à la fin (promise).
-- chapters : ceux du plan, dans l'ordre (5 à 7). Pour chacun : intro (1-2 phrases), 2 à 4 paragraphes, 3 à 6 étapes concrètes (sans numéro dans le texte), un exemple tiré des exemples de la recherche (ou un « cas typique » présenté honnêtement comme reconstitué), une checklist de 3 à 6 éléments, et un visuel adapté : timeline pour un programme, bar_chart pour comparer (values entre 0 et 100, une par label, présentées comme un indice), do_dont pour les erreurs (chaque label commence par « À éviter : » ou « À faire : »), steps_diagram pour une méthode, icon_grid pour des réflexes, quote pour une phrase client (labels : [citation sans guillemets, attribution]), checklist_card pour une grille. Les labels sont des phrases entières et courtes (40 caractères max pour bar_chart et icon_grid), jamais coupées au milieu ; timeline : « Phase : action ». values vide sauf bar_chart.
-- bonus : un chapitre « cadeau » complet, titre : « ${clean(input.outline?.bonusTitle) || 'Bonus'} ».
-- nextStep : ${clean(input.upsellTitle) ? `title « ${clean(input.upsellTitle)} » (le titre du guide suivant, sans préfixe) et un texte qui donne envie de lire ce guide suivant` : 'title = le titre du prochain guide pour la même personne (sans le préfixe « La suite est ici ») et un texte qui l’annonce'}.
+- 2 500 à 4 500 mots au total. Aucune phrase répétée, aucun conseil donné deux fois.
+- introduction : 3 à 5 paragraphes qui reformulent le problème avec les phrases exactes des clients (entre « »), corrigées de leurs fautes de frappe et de leur argot, puis disent ce que le lecteur aura à la fin (promise).
+- chapters : ceux du plan, dans l'ordre (5 à 7). Pour chacun : intro (1-2 phrases), 2 à 4 paragraphes, 3 à 8 étapes concrètes (sans numéro dans le texte), un exemple tiré de exemplesTypesFictifs et annoncé « Exemple type : » (sans résultat chiffré présenté comme réel), une checklist de 3 à 6 éléments, et un visuel adapté : do_dont pour les erreurs (chaque label commence par « À éviter : » ou « À faire : »), steps_diagram pour une méthode, icon_grid pour des réflexes, quote pour une phrase client (labels : [citation sans guillemets, attribution]), timeline pour un programme (labels « Phase : action »), grid pour tout ce que le lecteur doit remplir (grid = { columns: en-têtes, rows: libellés de lignes, cells: lignes de cellules après la première colonne, null = case vide ; labels et values vides ; plus de checklist_card). bar_chart seulement pour des chiffres présents dans la recherche, sinon une liste. Les labels sont des phrases entières et courtes, jamais coupées au milieu. values vide sauf bar_chart.
+- Chaque erreur est suivie de SA correction, celle de la recherche. Si un titre annonce N erreurs ou N cas, le chapitre en développe exactement N.
+- Le programme reprend toutes les étapes de la méthode sans répéter le diagnostic : habitudes en parallèle pour un changement de comportement, vraie séquence avec durées pour un projet. Un titre qui dit « jour après jour » exige un tableau avec une ligne par jour.
+- bonus : un chapitre « cadeau » complet, titre : « ${clean(input.outline?.bonusTitle) || 'Bonus'} » ; si ce titre annonce un carnet, un tableau ou un planning, son visuel est une grid réellement remplissable.
+- nextStep : ${clean(input.upsellTitle) ? `title « ${clean(input.upsellTitle)} » (le titre du guide suivant, sans préfixe) et un texte qui donne envie de lire ce guide suivant` : `title « ${fb.nextStep.title} » et un texte qui dit au lecteur quoi faire maintenant, sans annoncer de guide qui n’existe pas encore`}.
 - La promesse (promise) n’apparaît qu’une fois dans l’introduction ; l’introduction décrit d’abord la douleur avec les mots des clients. Titre ≤ 95 caractères.
 - Aucune promesse garantie, aucun chiffre absent de la recherche, aucun témoignage inventé.
 
 Plan : ${json(input.outline)}
 Niche : ${json(input.niche)}
-Recherche client : ${json(vocBrief(input.voc))}`,
+Recherche client : ${json(brief.voc)}`,
     });
   }
 
-  async humanize(input: { content: PdfContent; flagged: string[]; voc: VoiceOfCustomer }, ctx: MindContext): Promise<PdfContent> {
+  async humanize(input: { content: PdfContent; flagged: string[]; voc: VoiceOfCustomer; gaps?: GuideGaps | null }, ctx: MindContext): Promise<PdfContent> {
     const fb = await this.h.humanize(input, ctx);
     const content = ensurePdf(input.content);
     return this.run({
@@ -318,27 +341,32 @@ Recherche client : ${json(vocBrief(input.voc))}`,
       normalize: async (raw) => {
         const edited = applyReplacements(content, raw).content;
         // safety net: anything still flat is handled by the heuristic humanizer
-        return this.h.humanize({ content: edited, flagged: input.flagged ?? [], voc: input.voc }, ctx);
+        return this.h.humanize({ content: edited, flagged: input.flagged ?? [], voc: input.voc, gaps: input.gaps ?? null }, ctx);
       },
       prompt: `Passe d'humanisation du guide ci-dessous. Le premier jet est correct mais plat : repère chaque phrase générique ou passe-partout (celles signalées + toutes celles qui pourraient figurer dans n'importe quel guide) et propose une réécriture précise, appuyée sur les phrases clients, exemples et faits de la recherche. Varie aussi les débuts de phrases répétitifs.
 Pour chaque remplacement : original = la phrase copiée EXACTEMENT telle qu'elle apparaît dans le guide ; replacement = la nouvelle phrase (ou "" pour la supprimer). issues = liste courte de ce que tu as changé.
 Phrases signalées par la QA : ${json(input.flagged ?? [])}
-Recherche client : ${json(vocBrief(input.voc))}
+${input.gaps?.pains.length || input.gaps?.chapters.length ? `Manques relevés par la Red Team, à combler avec la recherche (douleurs non traitées, chapitres sans exemple) : ${json(input.gaps)}\n` : ''}Recherche client : ${json(vocBrief(input.voc))}
 Guide : ${json(contentTexts(content))}`,
     });
   }
 
-  async factCheck(input: { content: PdfContent; voc: VoiceOfCustomer }, ctx: MindContext): Promise<{ issues: string[]; content: PdfContent }> {
+  async factCheck(input: { content: PdfContent; voc: VoiceOfCustomer }, ctx: MindContext): Promise<{ issues: string[]; content: PdfContent; claims?: string[] }> {
     const fb = await this.h.factCheck(input, ctx);
     const content = ensurePdf(input.content);
     return this.run({
       method: 'factCheck', ctx, schema: SCHEMAS.edits, maxTokens: 8000, effort: 'medium', stream: true, timeoutMs: 300_000, fallback: fb,
       normalize: (raw) => {
-        const o = (raw && typeof raw === 'object' ? raw : {}) as { issues?: unknown };
+        const o = (raw && typeof raw === 'object' ? raw : {}) as { issues?: unknown; replacements?: unknown };
         const edited = applyReplacements(content, raw).content;
         const net = heuristicFactCheck(edited, input.voc); // what Claude missed
         const issues = uniqStrings([...(Array.isArray(o.issues) ? o.issues.filter((x): x is string => typeof x === 'string') : []), ...net.issues]);
-        return { issues, content: net.content };
+        // what Claude cut out entirely is an invented claim too: the writer must not write it again
+        const removed = (Array.isArray(o.replacements) ? o.replacements : [])
+          .map((r) => (r && typeof r === 'object' ? r as { original?: unknown; replacement?: unknown } : {}))
+          .filter((r) => typeof r.original === 'string' && r.original.trim() && !String(r.replacement ?? '').trim())
+          .map((r) => String(r.original));
+        return { issues, content: net.content, claims: uniqStrings([...removed, ...net.claims]) };
       },
       prompt: `Fact-check du guide ci-dessous avant publication. Repère chaque affirmation risquée ou invérifiable : promesses garanties (« garanti », « 100 % », « à coup sûr »), allégations santé (« guérir », « soigner »), promesses de délai (« dès la première nuit », « en 3 jours seulement »), chiffres absents de la recherche fournie, témoignages qui ressemblent à des inventions. Les phrases clients entre « » sont des citations : ne les modifie pas.
 issues = une ligne par problème, en français (où + quoi + correction). replacements : original = la phrase copiée EXACTEMENT ; replacement = la version honnête et vérifiable.
@@ -347,7 +375,7 @@ Guide : ${json(contentTexts(content))}`,
     });
   }
 
-  async redTeam(input: { subject: 'idea' | 'pdf' | 'sales_page' | 'ad'; summary: string; quality: QualityReport | null }, ctx: MindContext): Promise<RedTeamVerdict> {
+  async redTeam(input: { subject: 'idea' | 'pdf' | 'sales_page' | 'ad'; summary: string; quality: QualityReport | null; facts?: RedTeamFacts | null }, ctx: MindContext): Promise<RedTeamVerdict> {
     const fb = await this.h.redTeam(input, ctx);
     return this.run({
       method: 'redTeam', ctx, schema: SCHEMAS.redTeam, maxTokens: 3000, effort: 'medium', fallback: fb,
@@ -355,6 +383,7 @@ Guide : ${json(contentTexts(content))}`,
       prompt: `Tu es la Red Team : ton travail est d'essayer de tuer ce livrable (${input.subject}) avant qu'il ne sorte. Verdict : « kill » si la conformité est très faible ou si la règle du un est violée, « fix » si la note globale est sous 70 ou s'il y a un problème sérieux, « go » sinon. reasons = pourquoi (en français, précis, chiffré quand possible) ; fixes = corrections actionnables.
 Résumé : ${clean(input.summary)}
 Rapport qualité : ${json(input.quality)}
+Faits vérifiables sur ce produit (recherche et contenu du guide) : ${json(input.facts ?? null)}
 Avis heuristique (pour référence) : ${json(fb)}`,
     });
   }
@@ -374,7 +403,8 @@ Avis heuristique (pour référence) : ${json(fb)}`,
 - bonusBlurb : le cadeau inclus ;
 - objections : 3 à 5 questions-réponses tirées des objections de la recherche ;
 - guarantee : honnête (remboursé sous 14 jours) ;
-- cta : court, avec le prix (${input.product?.price ?? ''} €).
+- cta : court, sans le prix (la page l'affiche à jour à côté du bouton) ;
+- aucune promesse d'exemples réels : les exemples du guide sont des exemples types, et la seule preuve sociale est un avis réel d'acheteur.
 Produit : ${json(productBrief(input.product))}
 Contenu du guide : ${json(contentOutline(ensurePdf(input.content ?? input.product?.content)))}
 Recherche client : ${json(vocBrief(input.voc))}`,
@@ -386,7 +416,7 @@ Recherche client : ${json(vocBrief(input.voc))}`,
     return this.run({
       method: 'writeAdHooks', ctx, schema: SCHEMAS.hooks, maxTokens: 2500, effort: 'low', fallback: fb,
       normalize: (raw, f) => nHooks(raw, f),
-      prompt: `Écris un hook TikTok par style : ${json(fb.map((x) => x.hookStyle))} (question, contrarian = contre-intuitif, story, stat = chiffre issu de la recherche uniquement, pov, mistake = erreur, before_after, listicle). Chaque hook : 90 caractères maximum, tutoiement, mots exacts des clients, accroche dans les 2 premières secondes, aucune allégation interdite.
+      prompt: `Écris un hook TikTok par style : ${json(fb.map((x) => x.hookStyle))} (question, contrarian = contre-intuitif, story, stat = chiffre issu de la recherche uniquement, pov, mistake = erreur, before_after, listicle). Chaque hook : 90 caractères maximum, tutoiement, mots exacts des clients, accroche dans les 2 premières secondes, aucune allégation interdite, pas de prix.
 Produit : ${json(productBrief(input.product))}
 Recherche client : ${json(vocBrief(input.voc))}`,
     });
@@ -398,9 +428,11 @@ Recherche client : ${json(vocBrief(input.voc))}`,
       method: 'writeAd', ctx, schema: SCHEMAS.ad, maxTokens: 4000, effort: 'low', fallback: fb, extraBanned: input.bannedClaims ?? [],
       normalize: (raw, f) => nAd(raw, f, input),
       prompt: `Écris le script d'une pub TikTok au format « ${input.format} » (faceless_voiceover = voix off sans visage, text_slideshow = texte à l'écran, ugc_avatar = avatar face caméra, carousel = cartes). Hook imposé (style ${input.hookStyle}) : « ${clean(input.hook)} » — tu peux l'ajuster légèrement, 90 caractères max.
-4 à 6 scènes : hook (2-3 s), douleur avec les mots des clients, teaser de la méthode, exemple ou preuve honnête, appel à l'action vers le lien en bio. Durée totale 12 à 30 s. onScreenText : 50 caractères max ; voiceover naturel, tutoiement ; visual = description du plan. caption, 4 à 6 hashtags, cta.
+4 à 6 scènes : hook (2-3 s), douleur avec les mots des clients, teaser de la méthode, repère de la recherche ou avis réel, appel à l'action vers le lien en bio. Durée totale 12 à 30 s. onScreenText : 50 caractères max, une phrase entière qui garde sa chute, jamais terminée par « : » ; voiceover naturel, tutoiement ; visual = description du plan. caption, 4 à 6 hashtags, cta.
+Jamais de prix (ni à l'écran, ni en voix off, ni en légende) : il change, la pub reste. Jamais de personne nommée avec un résultat : la seule preuve sociale autorisée est un des avis réels ci-dessous, cité tel quel et sans nom. Si tu cites le bonus, c'est celui-ci : ${json(input.product?.content?.bonus?.title ?? null)}.
 Mots refusés par la plateforme dans cette niche (interdits) : ${json(uniqStrings([...(input.bannedClaims ?? []), ...parsePlaybook(ctx?.playbook).banned]))}
 Produit : ${json(productBrief(input.product))}
+Avis réels d'acheteurs : ${json((input.product?.stats?.reviews ?? []).filter((r) => r.rating >= 4).slice(-5).map((r) => r.text))}
 Recherche client : ${json(vocBrief(input.voc))}`,
     });
   }

@@ -97,7 +97,17 @@ export interface SimModule {
    *  Σ amount = cash. Exceptions keep the caller's sign: refs 'hold:<id>' (payment reserve, cash-only,
    *  excluded from profit) and 'reversal:<id>'. Consumers must sum stored amounts, never re-sign them. */
   recordLedger(world: WorldState, e: { type: LedgerType; amount: number; memo: string; ref?: string | null }): LedgerEntry;
+  /** profit7d, burn7d, roas7d and runway cover the last 7 CLOSED days; burn7d leaves out the one-off launch costs. */
   financeSnapshot(world: WorldState): FinanceSnapshot;
+  /** Last day whose market close is booked (world.day stays open until then). */
+  lastClosedDay(world: WorldState): number;
+  /** What can still be given back on an order (a goodwill gesture lowers it). */
+  repayableLeft(order: Order): number;
+  /** Is this public red flag a scam tell (a text classifier on what the profile shows)? */
+  isScamFlag(flag: string): boolean;
+  /** Announced payment outages, from the public event log only (safe for the company to read). */
+  announcedOutageDays(world: WorldState): number[];
+  isAnnouncedOutage(world: WorldState, day: number): boolean;
   // heuristic quality scorers (used by QA agents AND by the market's conversion model)
   scorePdf(content: PdfContent, ctx: { audience: string; problem: string; voc?: VoiceOfCustomer; design?: DesignSpec | null }): QualityReport;
   scoreSalesPage(sp: SalesPage, product: Product, voc?: VoiceOfCustomer): QualityReport;
@@ -123,7 +133,7 @@ export interface DifficultyProfile {
 
 // deliverables/index.ts must export:
 export interface DeliverablesModule {
-  designFor(input: { nicheName: string; category: string; seed: number; hint?: string }): DesignSpec;
+  designFor(input: { nicheName: string; category: string; seed: number; hint?: string; keywords?: string[] }): DesignSpec;
   renderCoverSvg(input: { title: string; subtitle: string; audience: string; design: DesignSpec; brand: string }): string; // 600x848 viewBox (A4 ratio)
   /** Writes a real A4 PDF: cover (vector art), contents, intro, chapters with numbered step boxes,
    *  example callouts, checklists, VisualSpec infographics, bonus, "La suite est ici" CTA page, page numbers. */
@@ -145,10 +155,25 @@ export interface MindContext {
   brand?: string;              // scenario.companyName (signatures, sales pages)
 }
 
-export interface Outline { title: string; chapters: { title: string; points: string[] }[]; bonusTitle: string; nextStepTitle: string }
+export interface Outline { title: string; chapters: { title: string; points: string[]; kind?: string }[]; bonusTitle: string; nextStepTitle: string }
+/** The guide an upsell follows: given to the writer, it produces a different guide on a distinct sub-problem. */
+export interface UpsellContext {
+  parentTitle: string; parentPromise: string; parentChapterTitles: string[];
+  topicId?: string | null;    // prepared sub-problem chosen for this guide, null = a customer pain (the brief's problem); absent = the writer picks
+}
 export interface OpportunityRanking { ranked: { nicheId: string; score: number; why: string; angle: string; audience: string; problem: string; suggestedPrice: number }[] }
 export interface AdDraft { hook: string; hookStyle: HookStyle; format: AdFormat; scenes: AdScene[]; caption: string; hashtags: string[]; cta: string }
 export interface RedTeamVerdict { verdict: 'go' | 'fix' | 'kill'; reasons: string[]; fixes: string[] }
+/** What the guide leaves out: what a fix pass must add. */
+export interface GuideGaps { pains: string[]; chapters: string[] }
+/** What the Red Team can check on the actual product (the company's own research and the guide itself). */
+export interface RedTeamFacts {
+  title: string; audience: string; problem: string; price: number | null;
+  signal?: { searchInterest: number; tiktokBuzz: number; competition: 'faible' | 'moyenne' | 'forte' } | null;
+  competitors?: { count: number; medianPrice: number | null; avgRating: number | null; reviews: number } | null;
+  voc?: { pains: number; medianAnchor: number | null; sensitiveClaims: number } | null;
+  guide?: { promise: string; wordCount: number; painsKnown: number; uncoveredPains: string[]; chaptersWithoutExample: string[]; chapters: number } | null;
+}
 export interface LessonDraft { topic: Lesson['topic']; insight: string; evidence: string; confidence: number; appliesToRoles: string[] }
 export interface DayPlanItem { kind: TaskKind; title: string; dept: Task['dept']; priority: 1 | 2 | 3; input: Record<string, unknown>; why: string }
 export interface DayPlan { focus: string; items: DayPlanItem[]; memo: string }
@@ -157,12 +182,12 @@ export interface UsageEvent { tier: ModelTier; model: string; inputTokens: numbe
 export interface ContentEngine {
   readonly mode: MindMode;
   rankOpportunities(input: { signals: TrendSignal[]; competitors: Record<string, CompetitorProduct[]>; voc: Record<string, VoiceOfCustomer>; excludeNicheIds: string[] }, ctx: MindContext): Promise<OpportunityRanking>;
-  writeTitles(input: { niche: NicheBrief; voc: VoiceOfCustomer; count: number }, ctx: MindContext): Promise<string[]>;
-  writeOutline(input: { title: string; niche: NicheBrief; voc: VoiceOfCustomer }, ctx: MindContext): Promise<Outline>;
-  writePdfContent(input: { title: string; outline: Outline; niche: NicheBrief; voc: VoiceOfCustomer; upsellTitle: string | null }, ctx: MindContext): Promise<PdfContent>;
-  humanize(input: { content: PdfContent; flagged: string[]; voc: VoiceOfCustomer }, ctx: MindContext): Promise<PdfContent>;
-  factCheck(input: { content: PdfContent; voc: VoiceOfCustomer }, ctx: MindContext): Promise<{ issues: string[]; content: PdfContent }>;
-  redTeam(input: { subject: 'idea' | 'pdf' | 'sales_page' | 'ad'; summary: string; quality: QualityReport | null }, ctx: MindContext): Promise<RedTeamVerdict>;
+  writeTitles(input: { niche: NicheBrief; voc: VoiceOfCustomer; count: number; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<string[]>;
+  writeOutline(input: { title: string; niche: NicheBrief; voc: VoiceOfCustomer; upsellOf?: UpsellContext | null; revision?: number }, ctx: MindContext): Promise<Outline>;
+  writePdfContent(input: { title: string; outline: Outline; niche: NicheBrief; voc: VoiceOfCustomer; upsellTitle: string | null; upsellOf?: UpsellContext | null; revision?: number }, ctx: MindContext): Promise<PdfContent>;
+  humanize(input: { content: PdfContent; flagged: string[]; voc: VoiceOfCustomer; gaps?: GuideGaps | null }, ctx: MindContext): Promise<PdfContent>;
+  factCheck(input: { content: PdfContent; voc: VoiceOfCustomer }, ctx: MindContext): Promise<{ issues: string[]; content: PdfContent; claims?: string[] }>;
+  redTeam(input: { subject: 'idea' | 'pdf' | 'sales_page' | 'ad'; summary: string; quality: QualityReport | null; facts?: RedTeamFacts | null }, ctx: MindContext): Promise<RedTeamVerdict>;
   writeSalesPage(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number }, ctx: MindContext): Promise<SalesPage>;
   writeAdHooks(input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[] }, ctx: MindContext): Promise<{ hookStyle: HookStyle; hook: string }[]>;
   writeAd(input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[] }, ctx: MindContext): Promise<AdDraft>;
@@ -208,12 +233,19 @@ export interface LearningModule {
   rewardArm(world: WorldState, dimension: string, arm: string, reward: number, weight?: number): void;
   armStats(world: WorldState, dimension: string): { key: string; mean: number; pulls: number }[];
   startExperiment(world: WorldState, e: Omit<Experiment, 'id' | 'status' | 'results' | 'winner' | 'endDay'>): Experiment;
-  updateExperiments(world: WorldState): Experiment[];  // returns newly concluded ones
+  updateExperiments(world: WorldState): Experiment[];  // returns newly concluded ones (a test without traffic is cancelled, not concluded)
+  /** Results of an experiment's variants from its `day` to today, recomputed from the market data. */
+  computeExperimentResults(world: WorldState, e: Experiment): Record<string, { n: number; value: number }>;
   /** Evening retro: KPIs of the day + bandit stats + incidents → lessons (dedup), brain notes, playbook rules. */
   runRetro(world: WorldState, engine: ContentEngine, brain: BrainVault, incidents: string[]): Promise<Lesson[]>;
   /** Weekly HR review: agent scores → coaching rules / level ups. Returns French summary lines. */
   performanceReview(world: WorldState, brain: BrainVault): Promise<string[]>;
   computeDailyKpi(world: WorldState, day: number): DailyKpi;
+  /** The single level scale of the agents: level reached with this XP, MAX_LEVEL at most. */
+  levelForXp(xp: number): number;
+  MAX_LEVEL: number;
+  /** Keys of the lessons the company turns into decisions. */
+  LESSON_KEYS: { page(productId: string): string; quality(productId: string): string; niche(nicheId: string): string; advance: string };
 }
 
 // ───────────────────────────── runtime/ ─────────────────────────────
@@ -248,7 +280,7 @@ export interface CompanyApi {
 //   GET  /api/stream               → SSE: StreamEvent ('snapshot' every tick, 'activity' batches)
 //   POST /api/control              { action: 'play' | 'pause' | 'step' | 'day', speed?: 1 | 2 | 4 | 8 }
 //   POST /api/scenario             Partial<ScenarioConfig> → starts a new run, returns snapshot
-//   POST /api/mission              { text, agentId? }
+//   POST /api/mission              { text, agentId? } → { ok, missionId, status, message? } (message: the company's answer)
 //   POST /api/chat                 { agentId, text } → { reply }
 //   POST /api/approve              { taskId, approved }
 //   GET  /api/brain                → BrainNote[] (without body) ; GET /api/brain/note?path=… → BrainNote ; GET /api/brain/graph

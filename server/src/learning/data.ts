@@ -1,6 +1,8 @@
 /** Read-only accessors and aggregations over the world (ledger, ad stats, orders) shared by KPI, experiments and retro. */
 import type { BrainNote } from '../contracts.js';
 import type { AdCreative, AgentState, DailyAdStats, LedgerEntry, Order, Product, WorldState } from '../shared.js';
+import { SETUP_REF } from '../sim/finance.js';
+import { announcedOutageDays } from '../sim/outage.js';
 import { basenameOf } from './markdown.js';
 import { finite, fold, safeDiv, slugify } from './text.js';
 
@@ -62,8 +64,20 @@ export function indexWorld(world: WorldState): WorldIndex {
   };
 }
 
+/**
+ * Ad rows of a window, without the announced outage days: nothing could sell on those days, so they measure
+ * neither the page, the price, the niche nor the creative. Every performance window of the retro goes through here.
+ */
 export function adRows(world: WorldState, fromDay: number, toDay: number): DailyAdStats[] {
-  return (world.market?.adStats ?? []).filter((r) => r.day >= fromDay && r.day <= toDay);
+  const outage = announcedOutageDays(world);
+  return (world.market?.adStats ?? []).filter((r) => r.day >= fromDay && r.day <= toDay && !outage.includes(r.day));
+}
+
+/** « jours 28 à 30 », saying so when announced outage days were left out of the window. */
+export function windowLabel(world: WorldState, fromDay: number, toDay: number): string {
+  const out = announcedOutageDays(world).filter((d) => d >= fromDay && d <= toDay);
+  const excluded = out.length ? ` (hors panne${out.length > 1 ? 's' : ''} du jour ${out.join(', ')})` : '';
+  return `jours ${fromDay} à ${toDay}${excluded}`;
 }
 
 export function productOfRow(ix: WorldIndex, r: DailyAdStats): Product | undefined {
@@ -156,6 +170,7 @@ export function financeView(world: WorldState, day: number): FinanceView {
   let profit7d = 0;
   let adSpend7d = 0;
   let revenue7d = 0;
+  let oneOff7d = 0;
   for (const e of world.ledger ?? []) {
     if (e.day > day) continue;
     const s = amountOf(e);
@@ -166,11 +181,13 @@ export function financeView(world: WorldState, day: number): FinanceView {
       profit7d += s;
       if (e.type === 'ad_spend') adSpend7d -= s;
       if (e.type === 'revenue') revenue7d += s;
+      if (e.ref === SETUP_REF) oneOff7d += s;
     }
   }
   const span = Math.min(7, Math.max(1, day));
-  const burn7d = -profit7d / span;
-  return { cash, cumulativeProfit, profit7d, burn7d, runwayDays: burn7d > 0 ? cash / burn7d : null, adSpend7d, revenue7d };
+  const burn7d = -(profit7d - oneOff7d) / span; // the launch costs are paid once: they say nothing of the daily burn
+  const runwayDays = cash <= 0 ? 0 : burn7d > 0 ? Math.floor(cash / burn7d) : null;
+  return { cash, cumulativeProfit, profit7d, burn7d, runwayDays, adSpend7d, revenue7d };
 }
 
 /** Finds a note in a folder whose basename/title matches one of the candidates (for wikilinks). */

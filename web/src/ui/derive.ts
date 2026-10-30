@@ -1,8 +1,11 @@
 // Pure view-model helpers (no React, no DOM): unit-tested in derive.test.ts.
-import type { Activity, CompanySnapshot, InboxMessage, Speed, WorldEvent } from '../../../shared/types';
+import type {
+  Activity, CompanySnapshot, DayTaskCounts, DeptId, InboxMessage, LedgerEntry, LedgerType, Speed, Task, WorldEvent,
+} from '../../../shared/types';
 
 const SPEEDS: readonly Speed[] = [1, 2, 4, 8];
-const TERMINAL = new Set(['bankrupt', 'goal_reached', 'finished']);
+/** Same rule as isTerminal() on the server: a reached goal or a bankruptcy leaves the agency running (banner and toast only). */
+const TERMINAL = new Set(['finished']);
 
 export function isSpeed(v: unknown): v is Speed {
   return typeof v === 'number' && (SPEEDS as readonly number[]).includes(v);
@@ -16,6 +19,7 @@ export interface SessionView {
   busy: boolean;
   /** Last tick error reported by the server loop (null once a tick succeeds again). */
   lastError: string | null;
+  /** The run is over for good: the server no longer advances it. */
   ended: boolean;
   /** true when the values come from snapshot.session (the source of truth), false = local fallback. */
   fromServer: boolean;
@@ -109,4 +113,138 @@ export function budgetView(s: CompanySnapshot | null | undefined): BudgetView | 
     return { adCap: Math.max(0, o.adCap), survival: o.survival === true, note, day, stale: day < s.day };
   }
   return null;
+}
+
+// ───────────────────────────── Tasks: counts that survive the trimmed task list ─────────────────────────────
+
+/**
+ * Tasks done per day. snapshot.company.tasks only keeps the latest finished tasks, so the counts come from the server:
+ * taskStats (every task of the run), else the daily KPIs, else the list for the days neither covers.
+ */
+export function doneTasksByDay(s: CompanySnapshot | null | undefined): Map<number, number> {
+  const out = new Map<number, number>();
+  const stats = s?.taskStats?.days;
+  if (stats) {
+    for (const d of stats) out.set(d.day, d.done);
+    return out;
+  }
+  for (const k of s?.company?.kpis ?? []) out.set(k.day, k.tasksDone);
+  const fromList = new Map<number, number>();
+  for (const t of s?.company?.tasks ?? []) if (t.status === 'done' && t.dayDone) fromList.set(t.dayDone, (fromList.get(t.dayDone) ?? 0) + 1);
+  for (const [day, n] of fromList) if (!out.has(day)) out.set(day, n);
+  return out;
+}
+
+/** Tasks done in the whole run, by one team or by all of them. null without server counts. */
+export function doneTasksTotal(s: CompanySnapshot | null | undefined, dept: DeptId | 'all'): number | null {
+  const stats = s?.taskStats;
+  if (!stats) return null;
+  if (dept !== 'all') return stats.depts?.[dept]?.done ?? 0;
+  return stats.days.reduce((n, d) => n + d.done, 0);
+}
+
+export interface DeptDay {
+  day: number;
+  doneCount: number;
+  createdCount: number;
+  /** The tasks of that day still present in the snapshot. */
+  done: Task[];
+  created: Task[];
+  /** Tasks of that day whose detail the snapshot no longer holds. */
+  hidden: number;
+}
+
+const DEPT_CALENDAR_DAYS = 14;
+
+/** Last 14 days of a team, today first. `tasks` = the team's tasks in the snapshot. */
+export function deptCalendar(s: CompanySnapshot | null | undefined, dept: DeptId, tasks: readonly Task[]): DeptDay[] {
+  const today = s?.day ?? 1;
+  const counted = s?.taskStats?.depts?.[dept]?.days;
+  const rows = new Map<number, DayTaskCounts>((counted ?? []).map((r) => [r.day, r]));
+  const out: DeptDay[] = [];
+  for (let day = today; day >= Math.max(1, today - DEPT_CALENDAR_DAYS + 1); day--) {
+    const done = tasks.filter((t) => t.dayDone === day && t.status === 'done');
+    const created = tasks.filter((t) => t.dayCreated === day);
+    const doneCount = counted ? rows.get(day)?.done ?? 0 : done.length;
+    const createdCount = counted ? rows.get(day)?.created ?? 0 : created.length;
+    out.push({ day, doneCount, createdCount, done, created, hidden: Math.max(0, doneCount - done.length, createdCount - created.length) });
+  }
+  return out;
+}
+
+// ───────────────────────────── Founder approvals ─────────────────────────────
+
+const WAITING_PREFIX = /^En attente du fondateur\s*:\s*/;
+
+/**
+ * What the founder is asked to approve, in plain French with the amount: the runtime's request (task.input.founderAsk),
+ * else the feed line that announced it, else the task title.
+ */
+export function approvalAsk(task: Task | undefined, activity: readonly Activity[]): string | null {
+  if (!task) return null;
+  const ask = task.input?.founderAsk;
+  if (typeof ask === 'string' && ask.trim()) return ask.trim();
+  for (let i = activity.length - 1; i >= 0; i--) {
+    const a = activity[i]!;
+    if (a.kind === 'founder' && a.refs?.taskId === task.id && WAITING_PREFIX.test(a.text)) return a.text.replace(WAITING_PREFIX, '').trim();
+  }
+  return task.title;
+}
+
+// ───────────────────────────── Quality gates ─────────────────────────────
+
+const RED_TEAM_VERDICT: Record<string, string> = { go: 'Go', fix: 'À corriger', kill: 'À tuer' };
+
+/** Verdict and rework cycle of a Red Team task (both survive the light live snapshot). */
+export function redTeamView(t: Task): { verdict: string | null; cycle: number } | null {
+  if (t.kind !== 'red_team') return null;
+  const verdict = t.output?.finalVerdict;
+  const cycle = t.input?.cycle;
+  return { verdict: typeof verdict === 'string' ? RED_TEAM_VERDICT[verdict] ?? null : null, cycle: typeof cycle === 'number' && cycle > 0 ? cycle : 0 };
+}
+
+/** The task went through on a logged waiver. The live snapshot drops the output object: its log and last review keep the trace. */
+export function hasWaiver(t: Task): boolean {
+  if (t.output?.waiver) return true;
+  const mentions = (lines: readonly string[] | undefined) => (lines ?? []).some((l) => /dérogation/i.test(l));
+  return mentions(t.log) || (t.reviews ?? []).some((r) => mentions(r.notes));
+}
+
+// ───────────────────────────── Ledger ─────────────────────────────
+
+/** Payment reserve ('hold:<id>', 'hold:release:<day>'): the provider freezes cash, then gives it back. Neither a cost nor an income. */
+export function isReserve(e: Pick<LedgerEntry, 'ref'>): boolean {
+  return typeof e.ref === 'string' && e.ref.startsWith('hold:');
+}
+
+export interface LedgerView {
+  /** Total per type, biggest first, capital and reserves left out. */
+  byType: [LedgerType, number][];
+  /** EUR still frozen by the payment provider at the end of the list (≥ 0). */
+  reserve: number;
+  /** Sum of the listed entries, capital and reserves left out. */
+  total: number;
+  /** false = the snapshot only keeps the latest entries (a whole ledger starts with the capital). */
+  complete: boolean;
+}
+
+const cents = (n: number) => Math.round(n * 100) / 100;
+
+export function ledgerView(ledger: readonly LedgerEntry[]): LedgerView {
+  const totals = new Map<LedgerType, number>();
+  let reserve = 0;
+  let total = 0;
+  for (const e of ledger) {
+    // floor at 0: a release whose hold has left the list frees nothing the list counted
+    if (isReserve(e)) { reserve = Math.max(0, reserve - e.amount); continue; }
+    if (e.type === 'capital') continue;
+    totals.set(e.type, (totals.get(e.type) ?? 0) + e.amount);
+    total += e.amount;
+  }
+  return {
+    byType: [...totals].map(([t, v]): [LedgerType, number] => [t, cents(v)]).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])),
+    reserve: cents(reserve),
+    total: cents(total),
+    complete: ledger.length === 0 || ledger[0]!.type === 'capital',
+  };
 }

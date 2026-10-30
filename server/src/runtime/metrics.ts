@@ -4,16 +4,20 @@
  */
 import type { Campaign, DailyAdStats, Product, WorldState } from '../shared.js';
 import { sim } from './modules.js';
-import { round2, sum, strArr } from './util.js';
+import { median, round2, sum, strArr } from './util.js';
 
 export interface WindowMetrics {
   spend: number; revenue: number; adRevenue: number; impressions: number; clicks: number; landingViews: number;
   sales: number; adPurchases: number; refunds: number; refundRate: number; ctr: number; roas: number; days: number;
 }
 
-/** Product metrics from `sinceDay` (inclusive). ROAS = all revenue (net of refunds) / ad spend; Infinity when no spend but sales. */
+/**
+ * Product metrics from `sinceDay` (inclusive). ROAS = all revenue (net of refunds) / ad spend; Infinity when no spend
+ * but sales. Announced outage days are left out of the ad figures: nothing could sell, they measure nothing.
+ */
 export function productMetrics(world: WorldState, productId: string, sinceDay = 1): WindowMetrics {
-  const ads = world.market.adStats.filter((s) => s.productId === productId && s.day >= sinceDay);
+  const outage = sim.announcedOutageDays(world);
+  const ads = world.market.adStats.filter((s) => s.productId === productId && s.day >= sinceDay && !outage.includes(s.day));
   const orders = world.market.orders.filter((o) => o.productId === productId && o.day >= sinceDay);
   const spend = sum(ads.map((s) => s.spend));
   const revenue = sum(orders.filter((o) => !o.refunded && !o.chargeback).map((o) => o.price));
@@ -62,13 +66,26 @@ export function parentOf(world: WorldState, productId: string): Product | undefi
   return world.company.products.find((p) => p.upsellProductId === productId && p.id !== productId);
 }
 
-/** Quality complaints as DETECTED by our support agents (not the hidden ground truth). */
+/** Insults and jokes say nothing about the guide, and neither does a review of the support: a brief is built on what readers say about the content. */
+const NOT_FEEDBACK = /\b(fuyez|arnaques?|escrocs?|vendeurs? de vent|mdr|lol|ptdr|ratio|pigeons?|bouffons?|clowns?)\b|n['’]est pas possible|pas achet|\bsupport\b|service client|z[ée]ro r[ée]ponse/i;
+
+export function isProductFeedback(text: string): boolean {
+  return !NOT_FEEDBACK.test(text);
+}
+
+/** The author really bought this product: what we can check on our own orders, without guessing who is a troll. */
+export function fromBuyer(world: WorldState, messageId: unknown, productId: string): boolean {
+  const msg = world.market.inbox.find((m) => m.id === messageId);
+  return !!msg?.orderId && world.market.orders.some((o) => o.id === msg.orderId && o.productId === productId);
+}
+
+/** Quality complaints as DETECTED by our support agents, from real buyers (not the hidden ground truth). */
 export function detectedComplaints(world: WorldState, productId: string, sinceDay = 1): number {
   let n = 0;
   for (const t of world.company.tasks) {
     if (t.kind !== 'reply_inbox' || t.status !== 'done' || !t.output || (t.dayDone ?? 0) < sinceDay) continue;
     const replies = Array.isArray(t.output.replies) ? (t.output.replies as Record<string, unknown>[]) : [];
-    for (const r of replies) if (r.productId === productId && r.detected === 'plainte_qualite') n++;
+    for (const r of replies) if (r.productId === productId && r.detected === 'plainte_qualite' && fromBuyer(world, r.messageId, productId)) n++;
   }
   return n;
 }
@@ -84,19 +101,68 @@ export function claimedMessageIds(world: WorldState): Set<string> {
   return s;
 }
 
+// ───────────────────────────── price evidence ─────────────────────────────
+
+/** Paid landing views needed at a price before it counts as measured (revenue per visitor). */
+export const PRICE_EVIDENCE_VIEWS = 150;
+/** A price earning less than this share of the best measured price per visitor has lost. */
+export const PRICE_ROLLBACK_RATIO = 0.85;
+/** With no measure above the best price, buyers are assumed to accept this much over what the market pays. */
+export const MARKET_PRICE_MARGIN = 1.25;
+
+export interface PriceTier { price: number; views: number; revenue: number; rpv: number }
+
+/** What each price really earned per paid visitor (the price of a day = the last one set on or before it). */
+export function priceTiers(world: WorldState, p: Product): PriceTier[] {
+  const priceOn = (day: number): number => {
+    let price = p.priceHistory[0]?.price ?? p.price;
+    for (const h of p.priceHistory) if (h.day <= day) price = h.price;
+    return price;
+  };
+  const tiers = new Map<number, { views: number; revenue: number }>();
+  for (const s of world.market.adStats) {
+    if (s.productId !== p.id) continue;
+    const t = tiers.get(priceOn(s.day)) ?? { views: 0, revenue: 0 };
+    t.views += s.landingViews;
+    t.revenue += s.revenue;
+    tiers.set(priceOn(s.day), t);
+  }
+  return [...tiers].map(([price, t]) => ({ price, ...t, rpv: t.views > 0 ? t.revenue / t.views : 0 })).sort((a, b) => a.price - b.price);
+}
+
+/**
+ * How high buyers have shown they will go. Measured prices decide: above the best measured price, a tier that earned
+ * less per visitor is a wall. Where nothing was measured yet, one step is allowed up to what the market pays (median of
+ * customers' anchors and competitors), not the highest anchor anyone ever quoted.
+ */
+export function priceCeiling(world: WorldState, p: Product): { ceiling: number; why: string } {
+  const { research } = world.company;
+  const anchors = (research.voc[p.nicheId]?.priceAnchors ?? []).filter((x) => x > 0);
+  const rivals = (research.competitors[p.nicheId] ?? []).map((c) => c.price).filter((x) => x > 0);
+  const market = Math.max(median(anchors) ?? 0, median(rivals) ?? 0);
+  const marketCap = market > 0 ? market * MARKET_PRICE_MARGIN : 49;
+  const measured = priceTiers(world, p).filter((t) => t.views >= PRICE_EVIDENCE_VIEWS);
+  if (!measured.length) return { ceiling: marketCap, why: `marché à ${round2(market)} €` };
+  const best = measured.reduce((a, b) => (b.rpv > a.rpv ? b : a));
+  const proven = Math.max(...measured.filter((t) => t.rpv >= best.rpv * PRICE_ROLLBACK_RATIO).map((t) => t.price));
+  if (measured.some((t) => t.price > proven)) return { ceiling: proven, why: `au-dessus de ${proven} €, le revenu par visiteur baisse` };
+  return { ceiling: Math.max(proven, marketCap), why: `${proven} € tient, le marché paie ${round2(market)} €` };
+}
+
 // ───────────────────────────── CFO budget ─────────────────────────────
 
-export interface Budget { adCap: number; survival: boolean; cash: number; runwayDays: number | null; rate: number; bankrupt: boolean }
+export interface Budget { adCap: number; survival: boolean; cash: number; runwayDays: number | null; rate: number; bankrupt: boolean; outage: boolean }
 
-/** Daily ad envelope: ≤ 15 % of cash, ≤ 8 % if runway < 14 days, 0 when bankrupt; survival below 30 % of start. */
+/** Daily ad envelope: ≤ 15 % of cash, ≤ 8 % if runway < 14 days, 0 when bankrupt or on an announced outage day; survival below 30 % of start. */
 export function computeBudget(world: WorldState): Budget {
   const fin = sim.financeSnapshot(world);
   const start = Math.max(1, world.scenario.startingCash);
   const lowRunway = fin.runwayDays !== null && fin.runwayDays < 14;
   const rate = lowRunway ? 0.08 : 0.15;
   const bankrupt = fin.bankrupt || fin.cash < 0 || world.status === 'bankrupt';
-  const adCap = bankrupt || fin.cash <= 0 ? 0 : round2(fin.cash * rate);
-  return { adCap, survival: fin.cash < 0.3 * start, cash: round2(fin.cash), runwayDays: fin.runwayDays, rate, bankrupt };
+  const outage = sim.isAnnouncedOutage(world, world.day);
+  const adCap = bankrupt || outage || fin.cash <= 0 ? 0 : round2(fin.cash * rate);
+  return { adCap, survival: fin.cash < 0.3 * start, cash: round2(fin.cash), runwayDays: fin.runwayDays, rate, bankrupt, outage };
 }
 
 /** Today's budget as decided by the CFO this morning (falls back to a live computation). */
@@ -107,7 +173,7 @@ export function currentBudget(world: WorldState): Budget {
       const o = t.output;
       return {
         adCap: o.adCap as number, survival: o.survival === true, cash: Number(o.cash ?? 0),
-        runwayDays: typeof o.runwayDays === 'number' ? o.runwayDays : null, rate: Number(o.rate ?? 0.15), bankrupt: o.bankrupt === true,
+        runwayDays: typeof o.runwayDays === 'number' ? o.runwayDays : null, rate: Number(o.rate ?? 0.15), bankrupt: o.bankrupt === true, outage: o.outage === true,
       };
     }
   }

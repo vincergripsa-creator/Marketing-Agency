@@ -6,6 +6,8 @@
 import type { DailyKpi, Difficulty, FinanceSnapshot, WorldState } from './shared.js';
 import type { ConfigMindMode } from './api/env.js';
 import { isEntryPoint } from './api/entry.js';
+import { budgetRefusal } from './api/http.js';
+import { minStartingCash } from './sim/balance.js';
 
 export interface CliArgs {
   days: number;
@@ -23,7 +25,7 @@ export interface CliArgs {
 export const CLI_USAGE = `Utilisation : npm run sim -- [options]
 
   --days N          nombre de jours simulés (défaut 30)
-  --budget N        trésorerie de départ en € (défaut 500)
+  --budget N        trésorerie de départ en € (défaut 500, minimum ${minStartingCash()})
   --difficulty D    facile | normal | cauchemar (défaut normal)
   --seed N          graine du marché virtuel (défaut 42)
   --mind M          heuristic | claude | auto (défaut heuristic : hors-ligne et gratuit)
@@ -68,7 +70,13 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
     };
     switch (key) {
       case 'days': out.days = Math.round(num(1, 730)); break;
-      case 'budget': out.budget = Math.round(num(10, 1_000_000) * 100) / 100; break;
+      case 'budget': {
+        const budget = num(0, 1_000_000);
+        const refusal = budgetRefusal(budget);
+        if (refusal) throw new CliError(refusal);
+        out.budget = Math.round(budget * 100) / 100;
+        break;
+      }
       case 'seed': out.seed = Math.floor(num(0, 2 ** 31 - 1)); break;
       case 'difficulty': {
         const d = value.toLowerCase() as Difficulty;
@@ -214,7 +222,7 @@ export function verdict({ world, finance, daysRun, filesDir, brainDir, worldFile
   else headline = `PAS ENCORE RENTABLE : ${fmtEur(finance.profit, true)} depuis le départ.`;
   out.push(`  ${headline}`, '');
 
-  const runway = finance.runwayDays === null ? 'illimitée (rentable)' : `${finance.runwayDays} jours`;
+  const runway = finance.runwayDays === null ? 'illimitée (dernière semaine sans perte)' : `${finance.runwayDays} jours`;
   out.push(`  Trésorerie    ${fmtEur(finance.cash)} (départ ${fmtEur(s.startingCash)}) · runway ${runway}`);
   out.push(`  Chiffre d'aff. ${fmtEur(finance.revenue)} · pub ${fmtEur(finance.adSpend)} · remboursements ${fmtEur(finance.refunds)} · frais ${fmtEur(finance.fees + finance.otherCosts)}`);
   out.push(`  ROAS 7 jours  ${fmtNum(finance.roas7d)} · profit 7 jours ${fmtEur(finance.profit7d, true)}${finance.compute > 0 ? ` · calcul IA ${fmtEur(finance.compute)}` : ''}`);
@@ -339,11 +347,12 @@ async function main(argv: readonly string[]): Promise<number> {
     });
   }
 
+  const liveFinance = () => safeFinance(world);
   let interrupted = false;
   process.once('SIGINT', () => {
     interrupted = true;
     console.log('\nInterruption : sauvegarde du run…');
-    persist.saveWorld(world).catch(() => undefined).finally(() => process.exit(130));
+    persist.saveWorld(world, { finance: liveFinance }).catch(() => undefined).finally(() => process.exit(130));
   });
 
   const startDay = world.day;
@@ -352,7 +361,7 @@ async function main(argv: readonly string[]): Promise<number> {
   const t0 = performance.now();
   await run.company.runDays(args.days, (kpi) => {
     run.syncMind();
-    if (kpi.day % 10 === 0) persist.saveWorld(world).catch(() => undefined); // checkpoint for long runs
+    if (kpi.day % 10 === 0) persist.saveWorld(world, { finance: liveFinance }).catch(() => undefined); // checkpoint for long runs
     if (args.quiet) return;
     if (rows > 0 && rows % 30 === 0) console.log(tableHeader());
     console.log(kpiRow(kpi));
@@ -363,8 +372,8 @@ async function main(argv: readonly string[]): Promise<number> {
   const seconds = (performance.now() - t0) / 1000;
 
   if (world.status === 'running') world.status = 'paused';
-  const finance = safeFinance(world);
-  const file = await persist.saveWorld(world, { finance: { cash: finance.cash, profit: finance.profit } });
+  const finance = liveFinance();
+  const file = await persist.saveWorld(world, { finance });
   const daysRun = Math.min(args.days, Math.max(1, world.day - startDay + (world.tick > 0 ? 1 : 0)));
   console.log(verdict({ world, finance, daysRun, filesDir: run.paths.files, brainDir: run.paths.brain, worldFile: file }));
   console.log(`Simulation terminée en ${fmtNum(seconds, 1)} s.`);

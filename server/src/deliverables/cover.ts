@@ -6,7 +6,7 @@ import type { DesignSpec } from '../shared.js';
 import { darken, isDark, lighten, mix, readableOn, ensureContrast, type Palette } from './color.js';
 import { cssFontStack, normalizeDesign } from './design.js';
 import { placeMotif, sparklePath } from './motifs.js';
-import { decoRng, escapeXml, fitText, hashString, n, stripEmoji, textWidth, wrapText, type StdFont } from './text.js';
+import { decoRng, escapeXml, fitText, hashString, n, stripEmoji, textWidth, wholeClause, wrapText, type StdFont } from './text.js';
 
 export const COVER_W = 600;
 export const COVER_H = 848;
@@ -80,9 +80,9 @@ function pill(
   const font: StdFont = o.bold === false ? 'Helvetica' : 'Helvetica-Bold';
   const padX = size * 1.1;
   const maxLines = o.maxLines ?? 2;
-  const all = wrapText(text, o.maxWidth - padX * 2, font, size, 1.06);
-  const lines = all.slice(0, maxLines);
-  if (all.length > maxLines) lines[maxLines - 1] = `${lines[maxLines - 1].replace(/[\s,;.]+$/, '')}…`;
+  const wrap = (s: string) => wrapText(s, o.maxWidth - padX * 2, font, size, 1.06);
+  // too long for the pill: a whole clause, never an ellipsis
+  const lines = wrap(wholeClause(text, (s) => wrap(s).length <= maxLines));
   const lh = Math.round(size * 1.3);
   const textW = Math.max(...lines.map((l) => textWidth(l, font, size) * 1.06));
   const w = Math.min(o.maxWidth, textW + padX * 2);
@@ -219,7 +219,7 @@ function split(c: CoverCtx): string {
   const aud = pill(c.audience ? `Pour : ${c.audience}` : '', 48, y, { fill: p.primary, color: readableOn(p.primary, p.ink), maxWidth: colW, size: 14, anchor: 'start', maxLines: 3 });
   s += aud.svg;
   y += aud.height + (aud.height ? 30 : 0);
-  const features = ['Méthode pas à pas', 'Checklists prêtes à cocher', 'Exemples concrets'];
+  const features = ['Méthode pas à pas', 'Checklists prêtes à cocher', 'Exemples types'];
   for (const f of features) {
     if (y > COVER_H - 80) break;
     const line = fitText(f, { maxWidth: colW - 22, maxLines: 1, font: 'Helvetica-Bold', max: 15, min: 11, scale: 1.05 });
@@ -314,7 +314,8 @@ function minimal(c: CoverCtx): string {
   s += `<circle cx="${n(COVER_W - 56 - artSize / 2 + 20)}" cy="${n(artY + artSize / 2)}" r="${n(artSize * 0.48)}" fill="${p.secondary}" opacity="0.28"/>`;
   s += `<circle cx="${n(COVER_W - 56 - artSize / 2 - 70)}" cy="${n(artY + artSize * 0.2)}" r="22" fill="${p.accent}" opacity="0.5"/>`;
   s += placeMotif(c.d.motif, p, `${uid}m`, COVER_W - 56 - artSize + 20, artY, artSize, c.d.seed % 7);
-  const audLines = c.audience ? wrapText(`Pour : ${c.audience}`, 230, 'Helvetica-Bold', 14, 1.06).slice(0, 4) : [];
+  const audWrap = (s: string) => wrapText(s, 230, 'Helvetica-Bold', 14, 1.06);
+  const audLines = c.audience ? audWrap(wholeClause(`Pour : ${c.audience}`, (s) => audWrap(s).length <= 4)) : [];
   const audTop = COVER_H - 104 - audLines.length * 19;
   s += audLines.length ? `<rect x="56" y="${n(audTop - 4)}" width="4" height="${n(audLines.length * 19 + 2)}" fill="${p.accent}"/>` : '';
   s += audLines.map((l, k) => `<text x="70" y="${n(audTop + 10 + k * 19)}" font-family="${SANS}" font-size="14" font-weight="bold" fill="${ink}">${escapeXml(l)}</text>`).join('');

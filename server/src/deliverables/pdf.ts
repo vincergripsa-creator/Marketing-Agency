@@ -9,13 +9,13 @@ import { mkdir, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import PDFDocument from 'pdfkit';
 import SVGtoPDF from 'svg-to-pdfkit';
-import type { ChapterContent, DesignSpec, PdfContent, Product } from '../shared.js';
+import type { ChapterContent, DesignSpec, PdfContent, Product, VisualSpec } from '../shared.js';
 import { contrast, darken, ensureContrast, isDark, lighten, mix, readableOn } from './color.js';
-import { normalizeDesign } from './design.js';
+import { familyOfText, normalizeDesign, professionalFor } from './design.js';
 import { renderCoverSvg } from './cover.js';
 import { motifSvg, sparklePath } from './motifs.js';
-import { drawCheckbox, drawCheckMark, drawIcon, layoutVisual, measure, put, type PdfTheme } from './pdfVisuals.js';
-import { hashString, normalizeKey, sanitizePdfText, truncate, wrapText, type StdFont } from './text.js';
+import { drawCheckbox, drawCheckMark, drawIcon, GRID_WRITE_ROW, gridModel, layoutVisual, measure, put, type PdfTheme } from './pdfVisuals.js';
+import { hashString, normalizeKey, sanitizePdfText, textWidth, truncate, wrapText, type StdFont } from './text.js';
 
 const PAGE_W = 595.28;
 const PAGE_H = 841.89;
@@ -74,6 +74,18 @@ const fontCallback = (family: string, bold: boolean, italic: boolean): string =>
   if (/georgia|times|serif/.test(f.replace('sans-serif', ''))) return bold && italic ? 'Times-BoldItalic' : bold ? 'Times-Bold' : italic ? 'Times-Italic' : 'Times-Roman';
   return bold && italic ? 'Helvetica-BoldOblique' : bold ? 'Helvetica-Bold' : italic ? 'Helvetica-Oblique' : 'Helvetica';
 };
+
+/** The callout says what the text is: the writers announce a made-up case (« Exemple type : ») and it is never called real. */
+function exampleParts(text: string | null | undefined): { label: string; text: string } {
+  const s = S(text ?? '');
+  const m = /^(exemple type|mise en situation)\s*:\s*/iu.exec(s);
+  if (!m) return { label: 'Exemple type', text: s };
+  const rest = s.slice(m[0].length);
+  return { label: m[1]!, text: rest.charAt(0).toUpperCase() + rest.slice(1) };
+}
+
+/** Line height (pt) a sheet gets when the page has room for handwriting: more on a page of its own, more when it is short. */
+const gridRowTarget = (rows: number, ownPage: boolean): number => (ownPage ? 38 : rows <= 8 ? 34 : rows <= 16 ? 30 : 26);
 
 /** Checklist card spacing (pt): head = title band, row = gap after each item, pad = card bottom, after = gap below the card. */
 const CHECK_NORMAL = { head: 50, row: 10, pad: 8, after: 18 };
@@ -264,13 +276,13 @@ class GuideWriter {
   }
 
   example(text: string | null | undefined): void {
-    const s = S(text ?? '');
+    const { label, text: s } = exampleParts(text);
     if (!s) return;
     const { doc, t } = this;
     const textW = CW - 44;
     const th = measure(doc, s, t.italic, 10.8, textW, 3.4);
     const h = th + 52;
-    if (h > this.bottom - M.top - 20) { this.subheading('Exemple concret'); this.para(s, { font: t.italic }); return; }
+    if (h > this.bottom - M.top - 20) { this.subheading(label); this.para(s, { font: t.italic }); return; }
     this.ensure(h + 14);
     doc.y += 4;
     const y = doc.y;
@@ -280,7 +292,7 @@ class GuideWriter {
     doc.restore();
     put(doc, '”', M.left + CW - 58, y - 2, { font: 'Times-Bold', size: 72, color: lighten(t.p.accent, 0.4), width: 50, align: 'right' });
     drawIcon(doc, 'chat', M.left + 26, y + 21, 15, t.accentInk, 1.9);
-    this.label('Exemple concret', M.left + 40, y + 17, t.accentInk, 8.5);
+    this.label(label, M.left + 40, y + 17, t.accentInk, 8.5);
     put(doc, s, M.left + 22, y + 38, { font: t.italic, size: 10.8, color: t.ink, width: textW, lineGap: 3.4 });
     doc.y = y + h + 16;
   }
@@ -316,7 +328,7 @@ class GuideWriter {
 
   /** Vertical space the example callout consumes (0 when there is none). */
   exampleNeed(text: string | null | undefined): number {
-    const s = S(text ?? '');
+    const s = exampleParts(text).text;
     if (!s) return 0;
     const th = measure(this.doc, s, this.t.italic, 10.8, CW - 44, 3.4);
     return th + 52 + 20;
@@ -347,8 +359,10 @@ class GuideWriter {
    */
   chapterTail(ch: ChapterContent): void {
     const items = arr(ch?.checklist);
+    // a sheet to print closes the chapter: it may take a page of its own without stranding the checklist
+    const sheet = ch?.visual?.type === 'grid' ? ch.visual : null;
     const blocks = [
-      { need: this.visualNeed(ch?.visual ?? null), draw: () => this.visual(ch?.visual ?? null) },
+      { need: sheet ? 0 : this.visualNeed(ch?.visual ?? null), draw: () => this.visual(ch?.visual ?? null) },
       { need: this.exampleNeed(ch?.example), draw: () => this.example(ch?.example) },
     ].filter((b) => b.need > 0);
     const ck = this.checklistNeed(items);
@@ -375,10 +389,37 @@ class GuideWriter {
       b.draw();
     });
     this.checklist(items, 'Votre checklist', tight);
+    if (sheet) this.grid(sheet);
+  }
+
+  /**
+   * A sheet the reader prints: it stays whole on one page whenever it can (it moves to the next page rather than
+   * break), a longer one repeats its header, and blank lines get taller when the page has room for handwriting.
+   */
+  grid(v: VisualSpec): void {
+    const { doc, t } = this;
+    const m = gridModel(doc, v, CW, t);
+    if (!m) return;
+    const count = m.rows.length;
+    const roomOf = () => this.bottom - doc.y - 8;
+    if (m.heightOf(0, count, true) > roomOf()) this.newPage(this.section, false);
+    for (let from = 0; from < count;) {
+      const first = from === 0;
+      const target = gridRowTarget(count, doc.y <= M.top);
+      const to = m.fit(from, roomOf(), first);
+      const writable = m.rows.slice(from, to).filter((r) => r.writable).length;
+      const spare = roomOf() - m.heightOf(from, to, first);
+      const grow = writable ? Math.max(0, Math.min(target - GRID_WRITE_ROW, spare / writable)) : 0;
+      doc.y = m.draw(M.left, doc.y + 4, from, to, first, grow) + 16;
+      doc.x = M.left;
+      from = to;
+      if (from < count) this.newPage(this.section, false);
+    }
   }
 
   visual(v: ChapterContent['visual']): void {
     const { doc, t } = this;
+    if (v?.type === 'grid') { this.grid(v); return; }
     const layout = layoutVisual(doc, v, CW, t);
     if (!layout) return;
     const maxH = this.bottom - M.top - 10;
@@ -695,18 +736,107 @@ function introPage(w: GuideWriter, product: Product, content: PdfContent): void 
   }
 }
 
+export interface FinalWording {
+  heading: string; subtitle: string; paragraphs: string[];
+  cta: string | null;   // null: no button (nothing to link to)
+  dest: string | null;  // inside the guide, when there is no shop page to link to
+  under: string;
+}
+
+/** A sentence about a guide that does not exist yet: it was true when the text was written, not any more once one is linked. */
+const FUTURE_GUIDE = /si un guide|prochain guide|guide suivant|en préparation|vous serez prévenu|vous en serez informé/iu;
+/** A sentence selling a next guide: without one in the shop, it promises something the reader cannot get. */
+const SELLS_GUIDE = /prochain guide|guide suivant|en préparation|vous serez prévenu|sur notre boutique|disponible sur|déjà disponible/iu;
+
+const sentencesOf = (text: string): string[] => S(text).split(/\n+/).flatMap((p) => p.split(/(?<=[.!?…])\s+(?=[«\p{Lu}])/u)).map((s) => s.trim()).filter(Boolean);
+
+/**
+ * The last page, true for the catalogue of the day whatever the stored text says: that text is written with the
+ * guide, and a follow-up may have been linked (or killed) since. Guillemets of a title become “ ” inside the button's.
+ */
+export function finalWording(content: Pick<PdfContent, 'nextStep'>, upsell: { title: string; url: string } | null | undefined, plan: { dest: string; label: string } | null): FinalWording {
+  const next = content.nextStep ?? { title: '', text: '', upsellProductId: null };
+  const title = S(upsell?.title ?? '').replace(/^la\s+suite\s+est\s+ici\s*(?:[:—–-]\s*)?/i, '').trim();
+  const stored = S(next.text);
+  if (!title) {
+    const kept = sentencesOf(stored).filter((s) => !SELLS_GUIDE.test(s));
+    return {
+      heading: 'Votre prochaine étape', subtitle: '',
+      paragraphs: kept.length ? [kept.join(' ')] : ['Il reste une chose à faire : ouvrir le plan à la première ligne, et noter ce qui change.'],
+      cta: plan?.label ?? null, dest: plan?.dest ?? null, under: '',
+    };
+  }
+  // absolute store URL, or a run-relative one ("/runs/<id>/files/…/sales-page.html") resolved by the viewer
+  const rawUrl = String(upsell?.url ?? '').trim();
+  const url = /^https?:\/\//i.test(rawUrl) || /^\.{0,2}\/(?!\/)/.test(rawUrl) ? rawUrl : null;
+  const plain = title.replace(/«\s*/g, '“').replace(/\s*»/g, '”');
+  const named = keyOf(stored).includes(keyOf(title));
+  const body = named ? stored.split(/\n+/).map((s) => s.trim()).filter(Boolean) : [[
+    ...sentencesOf(stored).filter((s) => !FUTURE_GUIDE.test(s)),
+    'Si vous voulez aller plus loin, ce guide traite un autre point, à part, dans le même format.',
+  ].join(' ')];
+  return {
+    heading: 'La suite est ici', subtitle: title, paragraphs: body,
+    cta: url ? `Découvrir « ${plain} »` : null, dest: null,
+    under: url ? (/^https?:/i.test(url) ? url.replace(/^https?:\/\//i, '') : 'Disponible sur notre boutique') : '',
+  };
+}
+
+const CTA_FONT: StdFont = 'Helvetica-Bold';
+const CTA_ARROW_ROOM = 84;
+
+/** Pill sized to its text: 14 pt on one or two lines, smaller and on three lines at most for a long title. Returns its box. */
+function ctaButton(w: GuideWriter, label: string): { x: number; y: number; w: number; h: number } {
+  const { doc, t } = w;
+  const textRoom = CW - CTA_ARROW_ROOM;
+  const wrap = (size: number) => wrapText(label, textRoom, CTA_FONT, size);
+  let size = 14;
+  while (size > 11 && wrap(size).length > 2) size -= 1;
+  const lines = wrap(size);
+  const lh = size * 1.28;
+  const bw = Math.min(CW, Math.max(300, Math.max(...lines.map((l) => textWidth(l, CTA_FONT, size))) + CTA_ARROW_ROOM));
+  const bh = Math.max(56, lines.length * lh + 26);
+  w.ensure(bh + 60);
+  doc.y += 8;
+  const bx = M.left + (CW - bw) / 2;
+  const by = doc.y;
+  doc.save();
+  doc.roundedRect(bx + 2, by + 5, bw, bh, 28).fillOpacity(0.18).fill(darken(t.p.accent, 0.5));
+  doc.fillOpacity(1);
+  doc.roundedRect(bx, by, bw, bh, 28).fill(t.p.accent);
+  doc.restore();
+  const fg = readableOn(t.p.accent, t.ink);
+  const top = by + (bh - lines.length * lh) / 2 + (lh - size) / 2;
+  lines.forEach((line, k) => put(doc, line, bx + 18, top + k * lh, { font: CTA_FONT, size, color: fg, width: bw - CTA_ARROW_ROOM + 4, align: 'center', lineGap: 0 }));
+  doc.save();
+  doc.lineWidth(2.4).lineCap('round').lineJoin('round').strokeColor(fg)
+    .moveTo(bx + bw - 40, by + bh / 2).lineTo(bx + bw - 26, by + bh / 2)
+    .moveTo(bx + bw - 31, by + bh / 2 - 5).lineTo(bx + bw - 26, by + bh / 2).lineTo(bx + bw - 31, by + bh / 2 + 5).stroke();
+  doc.restore();
+  return { x: bx, y: by, w: bw, h: bh };
+}
+
+/** The plan to go back to when no follow-up guide exists: the last chapter that holds a sheet. */
+function planTarget(content: PdfContent): { dest: string; label: string } | null {
+  const chapters = arr(content.chapters);
+  if (!chapters.length) return null;
+  const at = chapters.map((c) => c.visual?.type === 'grid').lastIndexOf(true);
+  return at >= 0 ? { dest: `chapitre-${at + 1}`, label: 'Je reviens à mon plan' } : { dest: 'chapitre-1', label: 'Je reviens au premier chapitre' };
+}
+
 function finalPage(w: GuideWriter, content: PdfContent, product: Product, upsell: { title: string; url: string } | null | undefined): void {
   const { doc, t } = w;
-  const next = content.nextStep ?? { title: '', text: '', upsellProductId: null };
-  w.toc.push({ kind: 'final', label: 'Et après ?', title: 'La suite est ici', page: 0, dest: 'la-suite' });
-  w.newPage('La suite est ici', true);
+  const say = finalWording(content, upsell, planTarget(content));
+  w.toc.push({ kind: 'final', label: 'Et après ?', title: say.heading, page: 0, dest: 'la-suite' });
+  w.newPage(say.heading, true);
   doc.addNamedDestination('la-suite');
   w.toc[w.toc.length - 1].page = w.pageIndex + 1;
 
-  // the layout already prints « La suite est ici »: the subtitle is the next guide's title only
-  const subtitle = S(next.title).replace(/^la\s+suite\s+est\s+ici\s*(?:[:—–-]\s*)?/i, '').trim();
-  const subH = subtitle ? measure(doc, subtitle, t.body, 15, CW - 150, 3) : 0;
-  const bandH = Math.max(270, 168 + subH + 40);
+  const headW = CW - 150;
+  const headH = measure(doc, say.heading, t.title, 36, headW);
+  const subY = 86 + headH + 10;
+  const subH = say.subtitle ? measure(doc, say.subtitle, t.body, 15, headW, 3) : 0;
+  const bandH = Math.max(270, subY + subH + 40);
   doc.save();
   const g = doc.linearGradient(0, 0, PAGE_W, bandH);
   g.stop(0, t.bandA).stop(1, t.bandB);
@@ -718,42 +848,22 @@ function finalPage(w: GuideWriter, content: PdfContent, product: Product, upsell
   w.svg(motifSvg(w.design.motif, t.p, 'fin', 3), PAGE_W - M.right - 150, 60, 150, 150);
   const bandLight = t.bandFg === '#ffffff';
   w.label('Et maintenant ?', M.left, 66, tone(bandLight ? lighten(t.p.accent, 0.35) : t.primaryInk, mix(t.bandA, t.bandB, 0.5), bandLight), 9.5);
-  put(doc, 'La suite est ici', M.left, 86, { font: t.title, size: 36, color: t.bandFg, width: CW - 150 });
-  if (subtitle) put(doc, subtitle, M.left, 150, { font: t.body, size: 15, color: t.bandFg, width: CW - 150, lineGap: 3 });
+  put(doc, say.heading, M.left, 86, { font: t.title, size: 36, color: t.bandFg, width: headW });
+  if (say.subtitle) put(doc, say.subtitle, M.left, subY, { font: t.body, size: 15, color: t.bandFg, width: headW, lineGap: 3 });
   doc.x = M.left;
   doc.y = bandH + 30;
 
-  const paragraphs = S(next.text).split(/\n+/).map((s) => s.trim()).filter(Boolean);
-  paragraphs.forEach((p, k) => w.para(p, k === 0 ? { size: 11.6, gap: 4 } : {}));
+  say.paragraphs.forEach((p, k) => w.para(p, k === 0 ? { size: 11.6, gap: 4 } : {}));
 
-  // big CTA button
-  // absolute store URL, or a run-relative one ("/runs/<id>/files/…/sales-page.html") resolved by the viewer
-  const rawUrl = String(upsell?.url ?? '').trim();
-  const url = /^https?:\/\//i.test(rawUrl) || /^\.{0,2}\/(?!\/)/.test(rawUrl) ? rawUrl : null;
-  const cta = upsell?.title ? `Découvrir « ${truncate(S(upsell.title), 46)} »` : 'Je passe à l’étape suivante';
-  doc.font('Helvetica-Bold').fontSize(14);
-  const bw = Math.min(CW, Math.max(300, doc.widthOfString(cta) + 70));
-  const bh = 56;
-  w.ensure(bh + 60);
-  doc.y += 8;
-  const bx = M.left + (CW - bw) / 2;
-  const by = doc.y;
-  doc.save();
-  doc.roundedRect(bx + 2, by + 5, bw, bh, bh / 2).fillOpacity(0.18).fill(darken(t.p.accent, 0.5));
-  doc.fillOpacity(1);
-  doc.roundedRect(bx, by, bw, bh, bh / 2).fill(t.p.accent);
-  doc.restore();
-  const ctaFg = readableOn(t.p.accent, t.ink);
-  put(doc, cta, bx + 20, by + 21, { font: 'Helvetica-Bold', size: 14, color: ctaFg, width: bw - 64, align: 'center' });
-  doc.save();
-  doc.lineWidth(2.4).lineCap('round').lineJoin('round').strokeColor(ctaFg)
-    .moveTo(bx + bw - 40, by + bh / 2).lineTo(bx + bw - 26, by + bh / 2)
-    .moveTo(bx + bw - 31, by + bh / 2 - 5).lineTo(bx + bw - 26, by + bh / 2).lineTo(bx + bw - 31, by + bh / 2 + 5).stroke();
-  doc.restore();
-  if (url) doc.link(bx, by, bw, bh, url);
-  const under = url && /^https?:/i.test(url) ? url.replace(/^https?:\/\//i, '') : 'Disponible sur notre boutique';
-  put(doc, S(under), M.left, by + bh + 10, { font: t.body, size: 9, color: t.muted, width: CW, align: 'center' });
-  doc.y = by + bh + 40;
+  // big CTA button: to the next guide's shop page, or back to the plan
+  if (say.cta) {
+    const box = ctaButton(w, say.cta);
+    const link = String(upsell?.url ?? '').trim();
+    if (say.dest) doc.goTo(box.x, box.y, box.w, box.h, say.dest);
+    else doc.link(box.x, box.y, box.w, box.h, link);
+    if (say.under) put(doc, S(say.under), M.left, box.y + box.h + 10, { font: t.body, size: 9, color: t.muted, width: CW, align: 'center' });
+    doc.y = box.y + box.h + 40;
+  }
 
   // quick recap of the chapters
   const chapters = arr(content.chapters);
@@ -785,7 +895,8 @@ function finalPage(w: GuideWriter, content: PdfContent, product: Product, upsell
   // thanks + disclaimer
   const thanks = `Merci de votre confiance. Si ce guide vous a aidé, dites-le-nous : chaque retour nous aide à l’améliorer pour la prochaine version. — L’équipe ${S(w.brand)}`;
   w.para(thanks, { font: t.italic, size: 10.4, color: t.muted, after: 10 });
-  const disclaimer = `Ce guide est fourni à titre informatif et pédagogique. Il ne remplace pas l’avis d’un professionnel qualifié (médecin, vétérinaire, conseiller financier…) adapté à votre situation. Version ${Math.max(1, Math.trunc(product.version || 1))}.`;
+  const family = w.design.family ?? familyOfText(`${product.title} ${product.audience} ${product.problem}`);
+  const disclaimer = `Ce guide est fourni à titre informatif et pédagogique. Il ne remplace pas l’avis ${professionalFor(family)}, adapté à votre situation. Version ${Math.max(1, Math.trunc(product.version || 1))}.`;
   w.para(disclaimer, { size: 8, color: t.muted, after: 0 });
 }
 

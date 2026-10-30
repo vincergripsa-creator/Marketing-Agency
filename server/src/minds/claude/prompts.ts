@@ -6,6 +6,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { PdfContent, Product, VoiceOfCustomer } from '../../shared.js';
 import type { MindContext } from '../../contracts.js';
+import { parseKnowledge } from '../heuristic/knowledge.js';
 import { CLICHE_TEMPLATES } from '../lexicon.js';
 import { clean, fit } from '../util.js';
 
@@ -23,6 +24,7 @@ const COMPANY = `## L'entreprise
 
 ## Garde-fous (non négociables)
 - Ne rien inventer : pas de faux avis, pas de témoignages fabriqués, pas de chiffres sans source. Les seuls chiffres autorisés viennent de la recherche fournie.
+- Les personnages d'exemple sont fictifs : ils sont toujours annoncés « Exemple type », et aucun résultat chiffré n'est présenté comme vécu par un vrai client.
 - Pas de promesse garantie (« garanti », « 100 % », « à coup sûr », « en 3 jours seulement »), pas d'allégation santé (« guérir », « soigner »), pas d'argent facile, pas de fausse urgence.
 - Remboursement accordé sans discuter sous 14 jours si la demande est de bonne foi. Ne jamais payer ni cliquer sur un lien suspect : les arnaques sont bloquées.
 - Honnêteté : si une information manque, le dire plutôt que l'inventer.
@@ -64,12 +66,21 @@ export function json(v: unknown): string {
   return JSON.stringify(v, null, 1);
 }
 
-export function vocBrief(v: VoiceOfCustomer | null | undefined): unknown {
+/**
+ * The research as Claude reads it: the items' structure (fix of each mistake, rank and moment of each
+ * step, troubleshooting cases) is made explicit, and only the material of the guide being written is shown.
+ */
+export function vocBrief(v: VoiceOfCustomer | null | undefined, topicId: string | null = null): unknown {
   if (!v) return null;
+  const { core, topics } = parseKnowledge(v.knowledge ?? { tips: [], steps: [], mistakes: [], examples: [], facts: [] });
+  const m = topicId ? topics[topicId] ?? core : core;
   return {
     profondeur: v.depth, douleurs: v.pains, phrasesClients: v.phrases, objections: v.objections, resultatsVoulus: v.desiredOutcomes,
-    conseils: v.knowledge?.tips, etapes: v.knowledge?.steps, erreurs: v.knowledge?.mistakes, exemples: v.knowledge?.examples,
-    faits: v.knowledge?.facts, prixCites: v.priceAnchors, allegationsInterdites: v.bannedClaims,
+    conseils: m.tips, etapes: m.steps.map((s) => ({ rang: s.rank, action: s.text, detail: s.detail, moment: s.when, duree: s.duration, diagnostic: s.diagnostic })),
+    erreurs: m.pairs.map((p) => ({ erreur: p.mistake, pourquoi: p.why, correction: p.fix })),
+    situations: m.situations.map((s) => ({ si: s.when, reponse: s.what })),
+    aObserver: m.observe, pourTenir: m.keep, modeles: m.models,
+    exemplesTypesFictifs: m.examples, faits: m.facts, prixCites: v.priceAnchors, allegationsInterdites: v.bannedClaims,
   };
 }
 
