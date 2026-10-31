@@ -1697,3 +1697,12 @@ Taken by the orchestrator after reading each stage gate. They rank with §1.
 - D64. `Product.visual.explored` is never shown: it reads the designer's hidden talent out. The line of pdf §17 is dropped, the hidden-truth guardrail wins.
 - D65. The cut ladder of §6 stays unused unless a real limit appears. Its clock was an estimate, the founder set no deadline.
 - D66. A polish stage runs after S13 and before S14, judged by eye on real frames and pages: the composition of 9:16 frames, real guide pages in most voiced ads, the review card, half-empty guide pages. It lands before S14 because how often a cut shows a page moves the video score.
+- D67. The reserve term of D9 applies only outside survival: its floor is the survival line, so under it `adCap` read 0 for good. Survival keeps the control's envelope and its own rules. This replaces the `min(rate × cash, cash − reserve)` row of scale §4.3 under survival.
+- D68. A founder's kill is final: the niche it closed gets `reopenDay: null`. A kit or follow-up the founder stops leaves the niche alone. Reopening would need its own order.
+- D69. `Product.paidRead` keeps what a paid test cost once the raw ad rows pass 90 days, so a finished test is not read as untested.
+- D70. The live snapshot limit is 400 000 bytes, as A6 and `longrun.test.ts` say, not the 500 000 of D39 and P12.1's Done. The stricter number passes, so it holds.
+- D71. Compaction keeps a row wherever a reader needs it, past the table of scale §7.2: creatives of a non-killed product stay whole, killed products keep `content.promise`, and open missions no longer pin rows because `Mission.gone` folds them.
+- D72. `kpi.channels` leaves the TIGHT and LIVE views, against channels.md:792: nothing reads it there, the UI reads the world.
+- D73. `isServerOnlyFile` also tests the real path of the file: Windows short names such as `WORLD~1.JSO` pass the regex of D51.
+- D74. A `test` guide has no bounded wait yet: 23 lines stay after S11, 11 idle for 30 days or more. S14 reads them and decides.
+- D75. One existing test was loosened at S10 for a stated reason: « a competent policy that never learns » in `sim.test.ts` reads `cash > -50` instead of `bankrupt === false`, because a clone now takes 10 % of conversion at once. S14 re-reads it after calibration.
