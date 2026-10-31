@@ -8,7 +8,7 @@ import type { RuntimeCtx } from './ctx.js';
 import { learning, sim } from './modules.js';
 import { productPnls } from './accounting.js';
 import { activeHolds } from './holds.js';
-import { activeCampaigns, currentBudget } from './metrics.js';
+import { activeCampaigns, currentBudget, reviewCount } from './metrics.js';
 import { founderMissionLines } from './missions.js';
 import { isOpen, openTasks, taskById } from './tasks.js';
 import { dec, eur, round2, short, sum, uniq } from './util.js';
@@ -98,7 +98,7 @@ function productLines(ctx: RuntimeCtx): string[] {
     const name = p.title === niche ? `« ${short(p.title, 60)} »` : `« ${short(p.title, 60)} » (${short(niche, 40)})`;
     if (p.decision && p.decision.status === p.status) return [`Décision produit : ${name} ${p.status === 'killed' ? 'arrêté' : 'mis en pause'} le jour ${p.decision.day}, ${short(oneLine(p.decision.reason), 170)}`];
     if (p.status === 'idea' || p.status === 'research') return [];
-    return [`Fiche produit : ${name} ${p.status === 'live' ? 'en ligne' : 'en production'}, ${p.stats.sales} ventes, ${p.stats.reviews.length ? `note ${dec(p.stats.rating, 1)}/5 sur ${p.stats.reviews.length} avis` : 'pas encore d’avis'}, prix ${eur(p.price)}`];
+    return [`Fiche produit : ${name} ${p.status === 'live' ? 'en ligne' : 'en production'}, ${p.stats.sales} ventes, ${reviewCount(p) ? `note ${dec(p.stats.rating, 1)}/5 sur ${reviewCount(p)} avis` : 'pas encore d’avis'}, prix ${eur(p.price)}`];
   });
   return [...lines, ...activeHolds(w).map((h) => `Ordre du fondateur : ${oneLine(h.reason)}`)];
 }

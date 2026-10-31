@@ -3,12 +3,14 @@
  * Creates (or resumes) runs/<runId>, runs the agency as fast as possible, prints a daily KPI table
  * and a final French verdict.
  */
-import type { DailyKpi, Difficulty, FinanceSnapshot, OrgConfig, WorldState } from './shared.js';
+import type { DailyKpi, Deliverable, Difficulty, FinanceSnapshot, OrgConfig, WorldState } from './shared.js';
 import type { ConfigMindMode } from './api/env.js';
 import { isEntryPoint } from './api/entry.js';
 import { budgetRefusal } from './api/http.js';
 import { LEAN_ORG } from './runtime/org/constants.js';
 import { minRunCash } from './runtime/org/payroll.js';
+
+const MAX_DAYS = 3650;
 
 export interface CliArgs {
   days: number;
@@ -19,6 +21,8 @@ export interface CliArgs {
   mindExplicit: boolean;
   runId: string | null;
   org: OrgConfig;
+  open: boolean;
+  scaling: boolean;
   quiet: boolean;
   verbose: boolean;
   help: boolean;
@@ -26,7 +30,7 @@ export interface CliArgs {
 
 export const CLI_USAGE = `Utilisation : npm run sim -- [options]
 
-  --days N          nombre de jours simulés (défaut 30)
+  --days N          nombre de jours simulés (défaut 30, maximum ${MAX_DAYS})
   --budget N        trésorerie de départ en € (défaut 500, minimum ${minRunCash({ org: LEAN_ORG })}, ${minRunCash({ org: { ...LEAN_ORG, payroll: false } })} avec --no-payroll)
   --difficulty D    facile | normal | cauchemar (défaut normal)
   --seed N          graine du marché virtuel (défaut 42)
@@ -34,6 +38,8 @@ export const CLI_USAGE = `Utilisation : npm run sim -- [options]
   --team T          lean | legacy31 (défaut lean : les 8 fondateurs, qui recrutent quand les chiffres le demandent)
   --no-hire         l'équipe reste telle quelle (bras de contrôle)
   --no-payroll      les agents ne sont pas payés (bras de contrôle)
+  --no-scaling      l'agence garde ses décisions d'avant la croissance (bras de contrôle)
+  --open            le run n'a pas de fin : il dépasse son horizon, et --days dit seulement quand s'arrêter de regarder
   --run-id X        nom du run (reprend le run s'il existe déjà, avec son équipe)
   --quiet           n'affiche que le verdict final
   --verbose         affiche aussi le fil d'activité des agents
@@ -48,9 +54,9 @@ export class CliError extends Error {}
 export function parseCliArgs(argv: readonly string[]): CliArgs {
   const out: CliArgs = {
     days: 30, budget: 500, difficulty: 'normal', seed: 42, mind: 'heuristic', mindExplicit: false,
-    runId: null, org: { ...LEAN_ORG }, quiet: false, verbose: false, help: false,
+    runId: null, org: { ...LEAN_ORG }, open: false, scaling: true, quiet: false, verbose: false, help: false,
   };
-  const flags = new Set(['quiet', 'verbose', 'help', 'no-hire', 'no-payroll']);
+  const flags = new Set(['quiet', 'verbose', 'help', 'no-hire', 'no-payroll', 'no-scaling', 'open']);
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i]!;
     if (tok === '-h') { out.help = true; continue; }
@@ -62,6 +68,8 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
       else if (key === 'verbose') out.verbose = true;
       else if (key === 'no-hire') out.org.autoHire = false;
       else if (key === 'no-payroll') out.org.payroll = false;
+      else if (key === 'no-scaling') out.scaling = false;
+      else if (key === 'open') out.open = true;
       else out.help = true;
       continue;
     }
@@ -76,7 +84,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
       return n;
     };
     switch (key) {
-      case 'days': out.days = Math.round(num(1, 730)); break;
+      case 'days': out.days = Math.round(num(1, MAX_DAYS)); break;
       case 'budget': out.budget = Math.round(num(0, 1_000_000) * 100) / 100; break;
       case 'seed': out.seed = Math.floor(num(0, 2 ** 31 - 1)); break;
       case 'difficulty': {
@@ -227,7 +235,7 @@ export function verdict({ world, finance, daysRun, filesDir, brainDir, worldFile
   const lastDay = world.tick === 0 ? Math.max(1, world.day - 1) : world.day;
   if (world.status === 'bankrupt' || finance.bankrupt) headline = `FAILLITE : trésorerie négative à la fin du jour ${lastDay} (${fmtEur(finance.cash)}). L'agence survit sans pub, sur l'organique et les créateurs à la commission.`;
   else if (world.status === 'goal_reached' || (s.goal?.targetProfit > 0 && finance.profit >= s.goal.targetProfit)) {
-    const reachedDay = world.market?.events?.find((e) => e.kind === 'goal_reached')?.day ?? 0;
+    const reachedDay = world.company.goalReachedDay ?? world.market?.events?.find((e) => e.kind === 'goal_reached')?.day ?? 0;
     headline = reachedDay > s.goal.byDay
       ? `OBJECTIF ATTEINT APRÈS L'ÉCHÉANCE : ${fmtEur(finance.profit, true)} de profit (objectif ${fmtEur(s.goal.targetProfit)} avant le jour ${s.goal.byDay}, atteint au jour ${reachedDay}).`
       : `OBJECTIF ATTEINT : ${fmtEur(finance.profit, true)} de profit (objectif ${fmtEur(s.goal.targetProfit)}).`;
@@ -245,7 +253,7 @@ export function verdict({ world, finance, daysRun, filesDir, brainDir, worldFile
   const products = world.company.products ?? [];
   const live = products.filter((p) => p.status === 'live');
   const totalSales = products.reduce((n, p) => n + (p.stats?.sales ?? 0), 0);
-  out.push(`  Produits      ${products.length} créé${products.length > 1 ? 's' : ''}, ${live.length} en ligne · ${totalSales} vente${totalSales > 1 ? 's' : ''} · ${world.market.customers?.length ?? 0} clients`);
+  out.push(`  Produits      ${products.length} créé${products.length > 1 ? 's' : ''}, ${live.length} en ligne · ${totalSales} vente${totalSales > 1 ? 's' : ''} · ${(world.market.customers?.length ?? 0) + (world.company.archive?.customers ?? 0)} clients`);
 
   const best = products
     .filter((p) => (p.stats?.sales ?? 0) > 0)
@@ -279,7 +287,7 @@ export function verdict({ world, finance, daysRun, filesDir, brainDir, worldFile
     for (const b of bandits) out.push(`    • ${b}`);
   }
 
-  const kinds = (k: string) => (world.company.deliverables ?? []).filter((d) => d.kind === k).length;
+  const kinds = (k: Deliverable['kind']) => (world.company.archive?.deliverableKinds?.[k] ?? 0) + (world.company.deliverables ?? []).filter((d) => d.kind === k).length;
   out.push('', '  Fichiers générés :');
   out.push(`    ${filesDir}`);
   out.push(`    ${plural(kinds('pdf'), 'PDF', 'PDF')} · ${plural(kinds('cover'), 'couverture')} · ${plural(kinds('sales_page'), 'page de vente', 'pages de vente')} · ${plural(kinds('ad_storyboard') + kinds('ad_preview'), 'storyboard/aperçu TikTok', 'storyboards/aperçus TikTok')}`);
@@ -323,12 +331,17 @@ async function main(argv: readonly string[]): Promise<number> {
   let world: WorldState;
   const resumed = args.runId !== null && persist.runExists(args.runId);
   if (resumed) {
-    const loaded = await persist.loadWorld(args.runId!);
+    const loaded = await persist.loadWorldSafe(args.runId!);
     if (!loaded) {
-      console.error(`Erreur : le run ${args.runId} existe mais sa sauvegarde est illisible.`);
+      console.error(`Erreur : le run ${args.runId} existe mais aucune de ses sauvegardes n'est lisible.`);
       return 1;
     }
-    world = loaded;
+    if (loaded.from !== 'world') console.log(`Attention : sauvegarde illisible, reprise depuis ${loaded.from === 'prev' ? 'la précédente' : 'le dernier point de contrôle'} (${plural(loaded.lostTicks ?? 0, 'créneau', 'créneaux')} à refaire).`);
+    world = loaded.world;
+    if (args.open) {
+      world.scenario.openEnded = true;
+      if (world.status === 'finished') world.status = 'paused';
+    }
   } else {
     const base = runtime.defaultScenario();
     const scenario = runtime.defaultScenario({
@@ -338,7 +351,9 @@ async function main(argv: readonly string[]): Promise<number> {
       seed: args.seed,
       mindMode: args.mind,
       maxComputeEur: config.maxComputeEur,
-      horizonDays: Math.max(base.horizonDays, args.days),
+      horizonDays: args.open ? base.horizonDays : Math.max(base.horizonDays, args.days),
+      openEnded: args.open,
+      scaling: args.scaling,
       org: args.org,
     });
     world = runtime.createWorld(scenario, args.runId ?? persist.newRunId());

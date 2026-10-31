@@ -11,7 +11,7 @@ import { multiChannel, openChannels, planChannels } from './channels.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, latestOutput, nameOf, productOf, speak, vocOf } from './ctx.js';
 import { learning, sim } from './modules.js';
-import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, fromBuyer, isProductFeedback, isUpsellProduct, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO, referenceChannel } from './metrics.js';
+import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, feedbackOf, isProductFeedback, isUpsellProduct, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO, recentReviews, referenceChannel } from './metrics.js';
 import { adsHeldSince, launchHold, productHold } from './holds.js';
 import { officerId } from './org/officers.js';
 import { createProductPipeline, createUpsellPipeline, createV2Pipeline, excludedNiches, killProduct, openTasksForProduct, pauseProduct, resumePipeline } from './pipeline.js';
@@ -81,15 +81,8 @@ function reworkItem(ctx: RuntimeCtx, p: Product, why: string, priority: 1 | 2 | 
 
 /** What buyers said about the current version: a v2 brief never quotes someone who did not buy, nor an insult. */
 export function customerFeedback(ctx: RuntimeCtx, p: Product, since: number): string[] {
-  const out: string[] = [];
-  for (const t of ctx.world.company.tasks) {
-    if (t.kind !== 'reply_inbox' || t.status !== 'done' || (t.dayDone ?? 0) < since) continue;
-    const replies = Array.isArray(t.output?.replies) ? (t.output!.replies as Record<string, unknown>[]) : [];
-    for (const r of replies) {
-      if (r.productId === p.id && typeof r.complaint === 'string' && fromBuyer(ctx.world, r.messageId, p.id) && isProductFeedback(r.complaint)) out.push(r.complaint);
-    }
-  }
-  for (const r of p.stats.reviews) if (r.day >= since && r.rating <= 2 && isProductFeedback(r.text)) out.push(`Avis ${r.rating}/5 : ${r.text}`);
+  const out = feedbackOf(ctx.world, p.id).filter((f) => f.day >= since && f.text && isProductFeedback(f.text)).map((f) => f.text);
+  for (const r of recentReviews(p)) if (r.day >= since && r.rating <= 2 && isProductFeedback(r.text)) out.push(`Avis ${r.rating}/5 : ${r.text}`);
   return uniq(out).slice(0, 6);
 }
 
@@ -191,6 +184,8 @@ export const PRICE_DOWN_VIEWS = 300;
 /** Under this price a guide cannot pay for its ads however well it sells: a paid visitor costs about 0,30 € and 2 % of them buy. */
 export const PAID_PRICE_FLOOR = 14;
 const PRICE_TIERS = [9, 14, 19, 24, 29, 39, 49];
+/** How far back the sales behind a raise are read: a price that held for months says little of this month. */
+const PRICE_READ_DAYS = 60;
 
 /** Ad revenue per paid landing view of a product over [from, to] (what one more visitor is worth at that price), on its reference channel. */
 export function revenuePerVisitor(w: RuntimeCtx['world'], productId: string, from: number, to: number): { views: number; rpv: number } {
@@ -263,7 +258,7 @@ export function priceMove(ctx: RuntimeCtx, p: Product): { input: Record<string, 
   const abandoned = hist.some((h, i) => h.price === up && i < hist.length - 1 && hist[i + 1]!.price < up);
   if (abandoned || up > priceCeiling(w, p).ceiling) return null;
   if (p.price < PAID_PRICE_FLOOR && !isUpsellProduct(w, p.id)) return { input: { productId: p.id, reason: 'hausse' }, why: `À ${eur(p.price)}, un guide ne rembourse jamais sa pub : on passe au palier suivant sans attendre.` };
-  const sinceChange = productMetrics(w, p.id, lastChange);
+  const sinceChange = productMetrics(w, p.id, Math.max(lastChange, day - PRICE_READ_DAYS));
   const goodRating = p.stats.reviews.length < 3 || p.stats.rating >= 4.2;
   if (sinceChange.sales >= PRICE_RAISE_SALES && goodRating && sinceChange.refundRate < 0.08 && day - lastChange >= PRICE_RAISE_DAYS) {
     return { input: { productId: p.id, reason: 'hausse' }, why: `${sinceChange.sales} ventes depuis le dernier prix, avis bons : on monte d'un palier.` };
@@ -477,7 +472,8 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   }
 
   // 1c. The market moves: a weekly watch (trends, competitors of what we sell) while the company can look ahead.
-  const lastScan = Math.max(0, ...w.company.tasks.filter((t) => t.kind === 'scan_trends' && t.status !== 'cancelled' && t.status !== 'failed').map((t) => t.dayDone ?? t.dayCreated));
+  const lastDone = w.company.lastDone ?? {};
+  const lastScan = Math.max(lastDone['scan_trends:'] ?? 0, ...w.company.tasks.filter((t) => t.kind === 'scan_trends' && t.status !== 'cancelled' && t.status !== 'failed').map((t) => t.dayDone ?? t.dayCreated));
   if ((live.length || building.length > producing.length) && day - lastScan >= RESEARCH_REFRESH_DAYS && !open('scan_trends') && !budget.survival && w.status !== 'bankrupt') {
     items.push(planItem('scan_trends', { refresh: true }, 'Veille hebdomadaire : nouvelles tendances, prix et concurrents.', 3, 'Rafraîchir la veille du marché'));
   }
@@ -512,11 +508,11 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   for (const p of live) {
     const pid = p.id;
     const upsell = isUpsellProduct(w, pid);
-    const all = productMetrics(w, pid);
+    const sold = Math.max(p.stats.sales, productMetrics(w, pid).sales); // a life's sales: the orders held only reach back 120 days
     const m7 = productMetrics(w, pid, Math.max(1, day - 6));
     const canPromote = !promotionBlock(w, p);
 
-    const lastScout = Math.max(0, ...w.company.tasks.filter((t) => t.kind === 'find_creators' && t.input.productId === pid).map((t) => t.dayCreated));
+    const lastScout = Math.max(lastDone[`find_creators:${pid}`] ?? 0, ...w.company.tasks.filter((t) => t.kind === 'find_creators' && t.input.productId === pid).map((t) => t.dayCreated));
     const deals = w.market.partnerships.filter((x) => x.productId === pid).length;
     if (canPromote && p.stats.sales >= 3 && !open('find_creators', pid) && !open('negotiate_deal', pid) && (lastScout === 0 || day - lastScout >= 7) && deals < 6) {
       items.push(planItem('find_creators', { productId: pid }, `${p.stats.sales} ventes : assez de preuve sociale pour recruter des créateurs à la commission.`, 3, titled('find_creators', p)));
@@ -539,7 +535,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
     }
     // A conversion lesson of the retro rewrites the page; it does not stay a sentence in a playbook.
     const pageLesson = lessonOf(ctx, learning.LESSON_KEYS.page(pid), since);
-    const lastPage = Math.max(p.launchedDay ?? 0, ...w.company.tasks.filter((t) => t.kind === 'write_sales_page' && t.status === 'done' && t.input.productId === pid).map((t) => t.dayDone ?? 0));
+    const lastPage = Math.max(p.launchedDay ?? 0, lastDone[`write_sales_page:${pid}`] ?? 0, ...w.company.tasks.filter((t) => t.kind === 'write_sales_page' && t.status === 'done' && t.input.productId === pid).map((t) => t.dayDone ?? 0));
     if (pageLesson && lessonDay(pageLesson) >= lastPage && day - lastPage >= PAGE_REWORK_GAP_DAYS && !reworking && !open('write_sales_page', pid)) {
       items.push(planItem('write_sales_page', { productId: pid, reason: 'lesson', fixes: ['Reprendre les mots exacts des clients et traiter leurs objections avant qu’ils les posent.'] }, `Leçon du jour ${lessonDay(pageLesson)} : ${short(pageLesson.insight, 110)}`, 2, titled('write_sales_page', p, ' (leçon de conversion)')));
     }
@@ -553,10 +549,10 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
     }
 
     const liked = p.stats.reviews.length < 3 || p.stats.rating >= 3.8;
-    const profitable = all.sales >= 10 && liked && (m7.spend > 0 ? m7.roas >= 1.5 : m7.sales >= 5);
+    const profitable = sold >= 10 && liked && (m7.spend > 0 ? m7.roas >= 1.5 : m7.sales >= 5);
     const noSubject = latestOutput(w, 'design_upsell', pid)?.noSubject === true; // already looked: nothing distinct to sell them
     if (!upsell && !p.upsellProductId && profitable && !noSubject && !launchHold(w) && !open('design_upsell', pid)) {
-      items.push(planItem('design_upsell', { productId: pid }, `Produit rentable (ROAS 7 j ${Number.isFinite(m7.roas) ? dec(m7.roas) : '∞'}, ${all.sales} ventes) : la suite pour le même public.`, 2, titled('design_upsell', p)));
+      items.push(planItem('design_upsell', { productId: pid }, `Produit rentable (ROAS 7 j ${Number.isFinite(m7.roas) ? dec(m7.roas) : '∞'}, ${sold} ventes) : la suite pour le même public.`, 2, titled('design_upsell', p)));
     }
   }
 

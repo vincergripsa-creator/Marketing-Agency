@@ -8,6 +8,7 @@
  */
 import type { AdFormat, AdScene, CreatorProfile, HookStyle, Product, Review, VoiceOfCustomer } from '../../shared.js';
 import type { AdDraft, SearchAdDraft, UpsellContext } from '../../contracts.js';
+import { recentReviews } from '../../sim/feedback.js';
 import { NAMED_CASE, RISK_RULES, RISKY_AD_PHRASES } from '../lexicon.js';
 import { AD_FORMATS, conflictsWith, containsBanned, HOOK_STYLES } from '../playbook.js';
 import { bare, bestLabel, cap, clauseLabel, clean, fit, fmtEur, fmtNum, fmtPct, labelOf, lf, lowerFirst, norm, ofAud, plainTitle, q, theUnit, uniqStrings, withArticle, type LocalRng } from '../util.js';
@@ -377,7 +378,7 @@ function riskyLine(phrase: string, c: NicheCtx): { vo: string; screen: string } 
 
 /** A buyer's good review about the guide itself, short enough to be read out, free of any claim the platform refuses. */
 function quotableReviews(p: Product | null | undefined): Review[] {
-  return (p?.stats?.reviews ?? []).filter((r) => r && r.rating >= 4 && bare(r.text).length >= 12 && bare(r.text).length <= 110
+  return (p ? recentReviews(p) : []).filter((r) => r && r.rating >= 4 && bare(r.text).length >= 12 && bare(r.text).length <= 110
     && !/support|service client/i.test(r.text) && !RISK_RULES.some((x) => x.re.test(r.text)));
 }
 

@@ -25,6 +25,7 @@ export function sseFrame(json: string): string {
 
 export class SseHub {
   private readonly clients = new Set<Client>();
+  private readonly watching = new Set<(viewers: number) => void>();
   private activity: Activity[] = [];
   private activityTimer: NodeJS.Timeout | null = null;
   private snapshotTimer: NodeJS.Timeout | null = null;
@@ -45,6 +46,22 @@ export class SseHub {
     return this.clients.size;
   }
 
+  /** Each time the number of viewers changes. */
+  onClients(cb: (viewers: number) => void): () => void {
+    this.watching.add(cb);
+    return () => { this.watching.delete(cb); };
+  }
+
+  private viewersChanged(): void {
+    for (const cb of this.watching) {
+      try { cb(this.clients.size); } catch (err) { console.error('[sse] spectateurs :', (err as Error).message); }
+    }
+  }
+
+  private remove(client: Client): void {
+    if (this.clients.delete(client)) this.viewersChanged();
+  }
+
   attach(req: IncomingMessage, res: ServerResponse, god = false): void {
     req.socket.setTimeout(0);
     req.socket.setNoDelay(true);
@@ -57,7 +74,8 @@ export class SseHub {
     });
     const client: Client = { res, god, blocked: false, stale: false };
     this.clients.add(client);
-    const drop = () => { this.clients.delete(client); };
+    this.viewersChanged();
+    const drop = () => this.remove(client);
     req.on('close', drop);
     res.on('close', drop);
     res.on('error', drop);
@@ -161,6 +179,7 @@ export class SseHub {
       try { c.res.end(); } catch { /* already gone */ }
     }
     this.clients.clear();
+    this.viewersChanged();
   }
 
   private snapshotFrame(god: boolean): string {
@@ -189,13 +208,13 @@ export class SseHub {
 
   private write(c: Client, frame: string): void {
     if (c.res.writableEnded || c.res.destroyed) {
-      this.clients.delete(c);
+      this.remove(c);
       return;
     }
     try {
       if (!c.res.write(frame)) c.blocked = true;
     } catch {
-      this.clients.delete(c);
+      this.remove(c);
     }
   }
 }

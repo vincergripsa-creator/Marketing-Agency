@@ -1,5 +1,5 @@
 /** BrainVault: the run's Obsidian-style markdown vault (runs/<runId>/brain), with an in-memory search index. */
-import { cp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { BrainNote, BrainVault, RunPaths } from '../contracts.js';
 import { seedBrainDir } from '../core/index.js';
@@ -9,7 +9,7 @@ import { fold, foldSameLength, safeFileName, tokenize } from './text.js';
 /** Folders every run vault has (git does not keep the empty ones of the seed). */
 export const VAULT_FOLDERS = ['lecons', 'journal', 'niches', 'produits', 'post-mortems', 'playbooks', 'rh'] as const;
 
-const CACHE_TTL_MS = 5000;     // safety net for writers outside this process; writes here update the index directly
+const CACHE_TTL_MS = 60_000;   // safety net for writers outside this process; writes here update the index directly, and a rebuild reads every note
 const EXCERPT_RADIUS = 160;
 
 interface IndexedNote extends BrainNote {
@@ -81,6 +81,18 @@ function addToIndex(idx: VaultIndex, n: IndexedNote): void {
   idx.notes.set(n.path, n);
   for (const t of docTerms(n)) idx.df.set(t, (idx.df.get(t) ?? 0) + 1);
   idx.totalLen += n.len;
+}
+
+function removeFromIndex(idx: VaultIndex, path: string): void {
+  const old = idx.notes.get(path);
+  if (!old) return;
+  for (const t of docTerms(old)) {
+    const v = (idx.df.get(t) ?? 1) - 1;
+    if (v <= 0) idx.df.delete(t);
+    else idx.df.set(t, v);
+  }
+  idx.totalLen -= old.len;
+  idx.notes.delete(path);
 }
 
 function toBrainNote(n: IndexedNote): BrainNote {
@@ -171,6 +183,40 @@ function makeExcerpt(body: string, qTokens: string[]): string {
     if (sp > center) end = sp;
   }
   return `${start > 0 ? '…' : ''}${plain.slice(start, end).trim()}${end < plain.length ? '…' : ''}`;
+}
+
+const DAY_NOTE = /^jour-(\d+)\.md$/;
+
+/**
+ * Daily journals older than `keepDays` merge into journal/mois-NN.md (scale §7.2): a year of them weighs more than the rest of the
+ * brain, and a search reads them all. Nothing is lost, and a merge that stopped midway finishes at the next pass.
+ */
+export async function mergeJournals(paths: RunPaths, day: number, keepDays: number): Promise<number> {
+  const dir = join(resolve(paths.brain), 'journal');
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const months = new Map<number, { name: string; n: number }[]>();
+  for (const name of names) {
+    const n = Number(DAY_NOTE.exec(name)?.[1] ?? 0);
+    if (!n || day - n < keepDays) continue;
+    const month = Math.ceil(n / 30);
+    months.set(month, [...(months.get(month) ?? []), { name, n }]);
+  }
+  const vault = createBrainVault(paths);
+  const root = resolve(paths.brain);
+  let merged = 0;
+  for (const [month, notes] of [...months].sort((a, b) => a[0] - b[0])) {
+    const path = `journal/mois-${String(month).padStart(2, '0')}.md`;
+    const days = notes.sort((a, b) => a.n - b.n);
+    const texts = await Promise.all(days.map(async ({ name, n }) => `## Jour ${n}\n\n${parseNote(await readFile(join(dir, name), 'utf8'), name).body.trim()}`));
+    await vault.append(path, texts.join('\n\n'), day);
+    for (const { name } of days) {
+      await rm(join(dir, name), { force: true });
+      const idx = caches.get(process.platform === 'win32' ? root.toLowerCase() : root);
+      if (idx) removeFromIndex(idx, `journal/${name}`);
+      merged++;
+    }
+  }
+  return merged;
 }
 
 export function createBrainVault(paths: RunPaths): BrainVault {

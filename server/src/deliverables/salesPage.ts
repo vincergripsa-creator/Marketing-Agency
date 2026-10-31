@@ -302,6 +302,7 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
   const bonusTitle = String(content?.bonus?.title ?? '').replace(/^bonus\s*(?:offert\s*)?[:—–-]\s*/i, '').replace(/^./, (ch) => ch.toUpperCase());
   const reviews = [...(product.stats?.reviews ?? [])].filter((r) => r && r.text).sort((a, b) => b.day - a.day || b.rating - a.rating);
   const avg = (product.stats?.rating ?? 0) > 0 ? product.stats.rating : reviews.length ? reviews.reduce((s, r) => s + r.rating, 0) / reviews.length : 0;
+  const reviewTotal = Math.max(product.stats?.ratingCount ?? 0, reviews.length); // the list keeps the latest ones, the stars and this line read them all
   const objections = (sp?.objections ?? []).filter((o) => o && o.q);
   const practical = [
     { q: 'Comment je reçois le guide ?', a: 'Tout de suite après le paiement : un lien de téléchargement s’affiche et vous est aussi envoyé par e-mail. Le PDF se lit sur téléphone, tablette et ordinateur.' },
@@ -326,7 +327,7 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
   ].join('');
 
   const ratingLine = reviews.length && avg > 0
-    ? `<div class="rating-line">${starsHtml(avg)}<span><strong>${h(avg.toFixed(1).replace('.', ','))}</strong> · ${h(reviews.length)} avis</span></div>`
+    ? `<div class="rating-line">${starsHtml(avg)}<span><strong>${h(avg.toFixed(1).replace('.', ','))}</strong> · ${h(reviewTotal)} avis</span></div>`
     : '';
 
   return `<!doctype html>
@@ -416,7 +417,7 @@ ${sp?.bonusBlurb || bonusTitle ? `<section class="bonus">
     <span class="kicker">Avis des lecteurs</span>
     <h2>${reviews.length ? 'Ce qu’en disent les lecteurs' : 'Les premiers avis arrivent'}</h2>
     ${reviews.length
-      ? `<div class="rating-big"><strong>${h(avg.toFixed(1).replace('.', ','))}</strong>${starsHtml(avg, 22)}<span>${h(reviews.length)} avis vérifiés</span></div><div class="review-grid">${reviews.slice(0, 6).map(reviewCard).join('')}</div>`
+      ? `<div class="rating-big"><strong>${h(avg.toFixed(1).replace('.', ','))}</strong>${starsHtml(avg, 22)}<span>${h(reviewTotal)} avis vérifiés</span></div><div class="review-grid">${reviews.slice(0, 6).map(reviewCard).join('')}</div>`
       : '<p class="no-review">Ce guide vient de sortir : aucun avis pour l’instant. Nous n’affichons jamais de faux témoignages.</p>'}
   </div>
 </section>

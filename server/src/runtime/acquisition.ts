@@ -11,7 +11,7 @@ import { acceptance, CHANNELS, channelOf } from '../shared.js';
 import { productPnls } from './accounting.js';
 import { CHANNEL_POLICY } from './channelPolicy.js';
 import { adsHold } from './holds.js';
-import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, isUpsellProduct, productMetrics } from './metrics.js';
+import { activeCampaigns, averageRating, campaignMetrics, committedAdBudget, currentBudget, isUpsellProduct, productMetrics, recentReviews, reviewCount } from './metrics.js';
 import { learning, sim } from './modules.js';
 import { isOpen } from './tasks.js';
 import { clamp, dec, eur, pct, sum } from './util.js';
@@ -61,9 +61,9 @@ export const ACQUISITION_KINDS = ['write_ad_hooks', 'produce_ad', 'launch_campai
 
 // ───────────────────────────── product health ─────────────────────────────
 
-/** Day the current version of a product went (back) online. */
+/** Day the current version of a product went (back) online: `versionDay` holds what compaction took away. */
 export function versionSince(world: WorldState, p: Product): number {
-  let since = p.launchedDay ?? world.day;
+  let since = Math.max(p.launchedDay ?? world.day, p.versionDay ?? 0);
   for (const t of world.company.tasks) {
     if (t.kind === 'publish_product' && t.status === 'done' && t.input.productId === p.id && t.input.republish === true && t.dayDone) since = Math.max(since, t.dayDone);
   }
@@ -79,6 +79,9 @@ export interface ProductHealth {
   /** French reason why the current version must not be sold any more (rating / refunds), or null. */
   severe: string | null;
 }
+
+/** Days a version's sales, refunds and spend are read on. Before: orders of its whole life against 90 days of spend, so an old guide's ROAS only rose. */
+export const HEALTH_WINDOW_DAYS = 90;
 
 /** Lower bound of the Wilson interval (z = 1,28 → 90 % one-sided): "the true rate is at least this". */
 export function wilsonLower(k: number, n: number, z = 1.28): number {
@@ -96,16 +99,17 @@ export function refundsTooHigh(refunds: number, sales: number): boolean {
 export function productHealth(world: WorldState, p: Product): ProductHealth {
   const since = versionSince(world, p);
   // A reworked version is judged on its own reviews and sales (the old ones described the old guide)…
-  const reviews = p.version > 1 ? p.stats.reviews.filter((r) => r.day >= since) : p.stats.reviews;
-  const rating = reviews.length ? reviews.reduce((s, r) => s + r.rating, 0) / reviews.length : 0;
-  const m = productMetrics(world, p.id, p.version > 1 ? since : 1);
+  const kept = recentReviews(p);
+  const reviews = p.version > 1 ? kept.filter((r) => r.day >= since) : kept;
+  const rating = p.version > 1 ? (reviews.length ? reviews.reduce((s, r) => s + r.rating, 0) / reviews.length : 0) : averageRating(p);
+  const m = productMetrics(world, p.id, Math.max(p.version > 1 ? since : 1, world.day - HEALTH_WINDOW_DAYS + 1));
   // …but only for a while: buyers see the store rating, so after FRESH_VERSION_DAYS without enough reviews of
   // its own, a reworked version is judged on the rating displayed in the store.
   const fresh = p.version > 1 && reviews.length < MIN_REVIEWS_FOR_RATING && world.day - since < FRESH_VERSION_DAYS;
-  const shown = p.stats.reviews;
+  const shown = reviewCount(p);
   let severe: string | null = null;
-  if (reviews.length >= MIN_REVIEWS_FOR_RATING && rating < MIN_RATING) severe = `note ${dec(rating, 1)}/5 sur ${reviews.length} avis`;
-  else if (!fresh && shown.length >= MIN_REVIEWS_FOR_RATING && p.stats.rating > 0 && p.stats.rating < MIN_RATING) severe = `note affichée ${dec(p.stats.rating, 1)}/5 sur ${shown.length} avis`;
+  if (reviews.length >= MIN_REVIEWS_FOR_RATING && rating < MIN_RATING) severe = `note ${dec(rating, 1)}/5 sur ${p.version > 1 ? reviews.length : shown} avis`;
+  else if (!fresh && shown >= MIN_REVIEWS_FOR_RATING && p.stats.rating > 0 && p.stats.rating < MIN_RATING) severe = `note affichée ${dec(p.stats.rating, 1)}/5 sur ${shown} avis`;
   // Refunds stop a version only when they are significant AND they make it lose money (or are extreme): in a
   // market full of refund hunters (cauchemar: 10-17 % of orders) a guide that still pays back its ads net of refunds
   // is worth selling — pausing, then killing it at v3 threw away the best product of the run.

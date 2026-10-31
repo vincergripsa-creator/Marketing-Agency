@@ -312,10 +312,10 @@ export function closeMissions(world: WorldState): Mission[] {
       if (m.nicheId || world.company.products.find((p) => p.id === m.productId)?.status !== 'killed') continue;
     }
     const tasks = m.taskIds.map((id) => taskById(world, id)).filter((t): t is Task => !!t);
-    if (!tasks.length || tasks.some(isOpen)) continue;
+    if ((!tasks.length && !m.gone?.tasks) || tasks.some(isOpen)) continue;
     // The founder asked for a product, the research ended without choosing any niche.
     if (m.wantsProduct) m.outcome = 'Aucun produit n’a été créé : la recherche n’a retenu aucune niche.';
-    m.status = !m.wantsProduct && tasks.some((t) => t.status === 'done') ? 'done' : 'failed';
+    m.status = !m.wantsProduct && (tasks.some((t) => t.status === 'done') || !!m.gone?.done) ? 'done' : 'failed';
     closed.push(m);
   }
   return closed;

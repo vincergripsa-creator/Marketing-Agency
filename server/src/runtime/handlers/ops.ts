@@ -48,11 +48,11 @@ function stillSettled(ctx: RuntimeCtx, e: Experiment, product: Product | undefin
   return !now || now.n < concluded.n * 0.5 || now.value >= concluded.value * EXPERIMENT_DRIFT_RATIO;
 }
 
-/** Same dimension, same variants, same niche: running, or already answered and still valid. */
+/** Same dimension, same variants, same niche: its latest test is running, or answered and still valid. An older one says nothing the latest does not, and compaction lets it go. */
 function alreadyAnswered(ctx: RuntimeCtx, dimension: Experiment['dimension'], variants: string[], nicheId: string | null, product?: Product): boolean {
   const key = [...variants].sort().join('|');
-  return ctx.world.company.experiments.some((e) => e.dimension === dimension && [...e.variants].sort().join('|') === key
-    && (e.nicheId ?? null) === nicheId && (e.status === 'running' || stillSettled(ctx, e, product)));
+  const last = ctx.world.company.experiments.filter((e) => e.dimension === dimension && [...e.variants].sort().join('|') === key && (e.nicheId ?? null) === nicheId).at(-1);
+  return !!last && (last.status === 'running' || stillSettled(ctx, last, product));
 }
 
 /** Which experiment is worth starting now (one variable at a time, enough arms in play, never a settled question). */

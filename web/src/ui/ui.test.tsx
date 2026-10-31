@@ -191,6 +191,10 @@ describe('the founder\'s missions', () => {
   it('its progress is counted on all its tasks, not on those left in the snapshot', () => {
     expect(html).toContain('2/3 tâches');
   });
+  it('once compaction took its rows, the server\'s total stands for the ids that left', () => {
+    const open = { ...dept(6), taskIds: ['tsk_1'], doneTasks: 40, totalTasks: 41 };
+    expect(render({ ...base, company: { ...base.company, missions: [open] } }, <TasksTab onClose={noop} />)).toContain('40/41 tâches');
+  });
 });
 
 describe('Pub TikTok: a creative tells its whole life', () => {

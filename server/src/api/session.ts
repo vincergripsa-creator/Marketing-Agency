@@ -8,15 +8,20 @@ import { emit, round2, runPaths } from '../core/index.js';
 import { createBrainVault } from '../learning/index.js';
 import { createContentEngine } from '../minds/index.js';
 import { Company, createWorld, defaultScenario } from '../runtime/index.js';
+import { logDecision } from '../runtime/digest.js';
 import { LEAN_ORG } from '../runtime/org/constants.js';
 import { minRunCash } from '../runtime/org/payroll.js';
-import type { BrainNote, BrainVault, CompanyApi, ContentEngine, RunPaths, StepResult, UsageEvent } from '../contracts.js';
-import type { AdRatio, CreativeVideo, LiveAgent, MissionResponse, RunInfo, ScenarioConfig, SessionInfo, VideoIndex, WorldState } from '../shared.js';
+import type { ArchiveBatch, BrainNote, BrainVault, CompanyApi, ContentEngine, RunPaths, StepResult, UsageEvent } from '../contracts.js';
+import type { AdCreative, AdRatio, CreativeVideo, LiveAgent, MissionResponse, RunInfo, ScenarioConfig, SessionInfo, VideoIndex, WorldState } from '../shared.js';
 import { TICKS_PER_DAY } from '../shared.js';
 import type { VideoDirector } from '../video/index.js';
+import { runArchive } from './archive.js';
 import { config, type ConfigMindMode } from './env.js';
 import { errorStatus, HttpError, type ControlAction, type Speed } from './http.js';
-import { flushSaves, isValidRunId, listRuns, loadWorld, newRunId, runsDir, saveWorld, scheduleSave } from './persist.js';
+import {
+  closeSessionRecord, flushSaves, isValidRunId, listRuns, loadWorldSafe, newRunId, openSessionRecord, readCurrentRun, runsDir, saveCheckpoint, saveWorld,
+  scheduleSave, writeCurrentRun, type SafeLoad, type SessionRecord,
+} from './persist.js';
 import { liveSnapshotJson, safeFinance, snapshotJson } from './snapshot.js';
 import { LIVE_LIMITS } from './trim.js';
 
@@ -37,6 +42,8 @@ export interface MountOptions {
   /** Overrides the env mind mode (CLI --mind). */
   mindMode?: ConfigMindMode;
   onUsage?: (u: UsageEvent) => void;
+  /** Once a batch of compaction is on disk. */
+  onArchive?: (batch: ArchiveBatch) => Promise<void>;
 }
 
 /** Only 'finished' stops the agency: a bankrupt company keeps working in survival mode and may recover. */
@@ -92,7 +99,12 @@ export async function mountWorld(world: WorldState, opts: MountOptions = {}): Pr
 
   const brain = createBrainVault(paths);
   await brain.init();
-  const company: CompanyApi = new Company(world, { paths, engine, brain });
+  const sink = runArchive(paths.root);
+  const archive = async (batch: ArchiveBatch) => {
+    await sink(batch);
+    await opts.onArchive?.(batch);
+  };
+  const company: CompanyApi = new Company(world, { paths, engine, brain, archive });
   syncMind();
   return { world, company, engine, brain, paths, syncMind };
 }
@@ -104,7 +116,7 @@ export type LiveSessionInfo = Required<SessionInfo>;
 type SessionEventName = 'tick' | 'run' | 'state';
 
 /** What the session asks of whoever renders a run's videos. */
-export type VideoDirectorLike = Pick<VideoDirector, 'sync' | 'request' | 'index' | 'stop'>;
+export type VideoDirectorLike = Pick<VideoDirector, 'sync' | 'request' | 'index' | 'stop'> & Partial<Pick<VideoDirector, 'retireCreativeFiles'>>;
 export type VideoListener = (creativeId: string, video: CreativeVideo) => void;
 
 export interface SessionOptions {
@@ -113,16 +125,29 @@ export interface SessionOptions {
 }
 
 const BASE_INTERVAL_MS = 2000;
+/** With nobody watching for this long, a week away is a simulated year: at ×1 it would be 69 of them (scale D2). */
+const AWAY_AFTER_MS = 300_000;
+const WEEK_MS = 604_800_000;
+const AWAY_DAYS_PER_WEEK = 365;
+/** From 3 and from 6 consecutive errors. */
+const BACKOFF_MS = [30_000, 300_000] as const;
+/** Failures on one tick before the clock moves on without it. */
+const SKIP_AFTER = 8;
 const RUN_FINISHED = 'Ce run est terminé (horizon atteint) : lance une nouvelle simulation.';
-const MAX_CONSECUTIVE_ERRORS = 3;
 const NO_DIRECTOR = 'Rendu vidéo indisponible sur ce serveur';
 /** D52: the stream carries the videos of what it shows, no more. GET /api/state and GET /api/videos keep them all. */
 const LIVE_VIDEOS = 30;
 
-/** Up to LIVE_VIDEOS of the creatives LIVE_LIMITS keeps: those of a running campaign first, then the latest. */
+/** One tick of the away pace. AGENCY_AWAY_DAYS_PER_WEEK overrides the simulated year per real week. */
+function awayTickMs(): number {
+  const days = Number(process.env.AGENCY_AWAY_DAYS_PER_WEEK);
+  return Math.round(WEEK_MS / ((Number.isFinite(days) && days > 0 ? days : AWAY_DAYS_PER_WEEK) * TICKS_PER_DAY));
+}
+
+/** Up to LIVE_VIDEOS of the creatives the live view keeps: those of a running campaign first, then the latest. */
 export function liveVideos(world: WorldState, items: Record<string, CreativeVideo>): Record<string, CreativeVideo> {
   const { creatives, campaigns } = world.company;
-  const running = new Set(campaigns.filter((k) => k.status !== 'ended').flatMap((k) => k.creativeIds));
+  const running = new Set(campaigns.filter((k) => k.status === 'active').flatMap((k) => k.creativeIds));
   const start = Math.max(0, creatives.length - LIVE_LIMITS.creatives);
   const kept = creatives.filter((c, i) => items[c.id] && (i >= start || running.has(c.id)));
   const picked = [...kept.filter((c) => running.has(c.id)).reverse(), ...kept.filter((c) => !running.has(c.id)).reverse()].slice(0, LIVE_VIDEOS);
@@ -145,7 +170,14 @@ export class AgencySession {
   private queue: Promise<unknown> = Promise.resolve();
   private switching: Promise<void> = Promise.resolve();
   private errors = 0;
+  /** Failures in a row on one (day, tick), and that tick. */
+  private sameTick = 0;
+  private failedAt = '';
+  private backoffMs: number | null = null;
   private lastError: string | null = null;
+  private watchers = 0;
+  private lastWatchedAt = Date.now();
+  private readonly awayTickMs = awayTickMs();
   private readonly events = new EventEmitter();
 
   constructor(options: SessionOptions = {}) {
@@ -196,7 +228,7 @@ export class AgencySession {
       runId: this.run?.world.runId ?? '',
       playing: this._playing,
       speed: this._speed,
-      intervalMs: Math.round(BASE_INTERVAL_MS / this._speed),
+      intervalMs: Math.round(this.tickMs()),
       busy: this.busy,
       mindMode: this.run?.engine.mode ?? 'heuristic',
       status: this.run?.world.status ?? null,
@@ -204,32 +236,37 @@ export class AgencySession {
       tick: this.run?.world.tick ?? 0,
       lastError: this.lastError,
       minStartingCash: minRunCash({ org: LEAN_ORG }),
-      pace: 'live',
-      watchers: 0,
-      backoffMs: null,
+      pace: this.pace(),
+      watchers: this.watchers,
+      backoffMs: this.backoffMs,
     };
   }
 
   // ───────────────────────────── lifecycle ─────────────────────────────
 
   /**
-   * Resumes the most recent unfinished run (or creates the default one) and starts playing at speed 1:
-   * the agency works alone. Finished runs stay available through /api/runs + /api/load.
+   * Opens the run the app last played, even finished, so that a founder's history stays in one run: the end banner offers
+   * to go on. Without one, the most recent unfinished run, or a new one. It plays at once: the agency works alone.
    */
   async start(): Promise<void> {
-    const runs = await listRuns();
-    for (const r of runs) {
-      if (r.status === 'finished') continue;
-      const world = await loadWorld(r.runId);
-      if (!world || isTerminal(world.status)) continue;
-      try {
-        await this.switchRun(() => world, true);
-        return;
-      } catch (err) {
-        console.error(`[session] impossible de reprendre ${r.runId} :`, (err as Error).message);
-      }
+    const current = await readCurrentRun();
+    if (current && await this.resume(current)) return;
+    for (const r of await listRuns()) {
+      if (r.status !== 'finished' && await this.resume(r.runId, true)) return;
     }
     await this.newRun({}, true);
+  }
+
+  private async resume(runId: string, skipFinished = false): Promise<boolean> {
+    const loaded = await loadWorldSafe(runId);
+    if (!loaded || (skipFinished && isTerminal(loaded.world.status))) return false;
+    try {
+      await this.switchRun(() => loaded.world, true, loaded);
+      return true;
+    } catch (err) {
+      console.error(`[session] impossible de reprendre ${runId} :`, (err as Error).message);
+      return false;
+    }
   }
 
   async newRun(partial: Partial<ScenarioConfig> = {}, play = true): Promise<WorldState> {
@@ -241,30 +278,41 @@ export class AgencySession {
 
   async loadRun(runId: string): Promise<WorldState> {
     if (!isValidRunId(runId)) throw new HttpError(400, 'Identifiant de run invalide.');
-    const world = await loadWorld(runId);
-    if (!world) throw new HttpError(404, `Run introuvable : ${runId}`);
-    return this.switchRun(() => world, this._playing || !this.run);
+    const loaded = await loadWorldSafe(runId);
+    if (!loaded) throw new HttpError(404, `Run introuvable : ${runId}`);
+    return this.switchRun(() => loaded.world, this._playing || !this.run, loaded);
   }
 
-  private async switchRun(make: () => WorldState | Promise<WorldState>, play: boolean): Promise<WorldState> {
+  private async switchRun(make: () => WorldState | Promise<WorldState>, play: boolean, loaded?: SafeLoad): Promise<WorldState> {
     this.generation += 1;
     this.stopLoop();
     const wasPlaying = this._playing;
     this._playing = false;
     const job = this.lock(async () => {
-      if (this.run) {
-        if (this.run.world.status === 'running') this.run.world.status = 'paused';
+      const previous = this.run?.world;
+      if (previous) {
+        if (previous.status === 'running') previous.status = 'paused';
         await this.saveNow();
       }
       const world = await make();
-      const mounted = await mountWorld(world);
+      const mounted = await mountWorld(world, { onArchive: (batch) => this.retireVideos(batch) });
       if (world.status === 'running') world.status = 'paused';
       await this.closeDirector();
       this.run = mounted;
       this.errors = 0;
+      this.sameTick = 0;
+      this.backoffMs = null;
       this.lastError = null;
       this.director = await this.openDirector(mounted);
+      const recovered = loaded && loaded.from !== 'world' ? { from: loaded.from, lostTicks: loaded.lostTicks ?? 0 } : undefined;
+      if (recovered) recordRecovery(world, recovered);
+      // Before the save below, which would hide when the disk last heard from a crashed stay.
+      await keepBooks(async () => {
+        if (previous) await closeSessionRecord(previous.runId, previous.day);
+        await openSessionRecord(world.runId, world.day, recovered);
+      });
       await this.saveNow();
+      await keepBooks(() => writeCurrentRun(world.runId));
       return world;
     });
     this.switching = job.then(() => undefined, () => undefined);
@@ -285,11 +333,50 @@ export class AgencySession {
     this.stopLoop();
     this._playing = false;
     await this.lock(async () => {
-      if (this.run && this.run.world.status === 'running') this.run.world.status = 'paused';
+      const world = this.run?.world;
+      if (world && world.status === 'running') world.status = 'paused';
       await this.saveNow();
+      if (world) await keepBooks(() => closeSessionRecord(world.runId, world.day));
       await this.closeDirector();
     }).catch(() => undefined);
     await flushSaves();
+  }
+
+  /** What an uncaught exception still saves: behind the tick in flight, so never half of it. */
+  saveAfterCrash(): Promise<void> {
+    return this.lock(() => this.saveNow());
+  }
+
+  /** The end banner's « Continuer sans fin »: the same run goes on, and no horizon ends it any more. */
+  async extendRun(): Promise<LiveSessionInfo> {
+    await this.switching;
+    const { world } = this.mounted();
+    await this.lock(async () => {
+      world.scenario.openEnded = true;
+      if (isTerminal(world.status)) world.status = 'paused';
+      safeEmit(world, "Le fondateur prolonge l'agence : elle continue sans fin.");
+      await this.saveNow();
+    });
+    this.play();
+    return this.info();
+  }
+
+  /** Wired from SseHub.onClients. The last viewer leaving starts the five minutes, a viewer ends them. */
+  setWatchers(n: number): void {
+    const wasAway = this.pace() === 'away';
+    if (n > 0 || this.watchers > 0) this.lastWatchedAt = Date.now();
+    this.watchers = n;
+    // The founder is back: not at the end of a 138 s wait. An incident's wait stays.
+    if (wasAway && n > 0 && this._playing && this.timer && this.backoffMs === null) this.startLoop(Math.min(250, BASE_INTERVAL_MS / this._speed));
+    this.events.emit('state');
+  }
+
+  private pace(): 'live' | 'away' {
+    return this.watchers === 0 && Date.now() - this.lastWatchedAt >= AWAY_AFTER_MS ? 'away' : 'live';
+  }
+
+  private tickMs(): number {
+    return this.pace() === 'away' ? this.awayTickMs : BASE_INTERVAL_MS / this._speed;
   }
 
   /** Dynamic import: a CLI run or a bench never loads video/. A director that cannot open costs the videos, never the run. */
@@ -309,6 +396,13 @@ export class AgencySession {
     const director = this.director;
     this.director = null;
     await director?.stop().catch((err: Error) => console.error('[video] arrêt :', err.message));
+  }
+
+  /** The videos of a creative that compaction archived leave the disk with it. They cost disk space, never the tick. */
+  private async retireVideos(batch: ArchiveBatch): Promise<void> {
+    for (const row of batch.rows.creatives ?? []) {
+      await this.director?.retireCreativeFiles?.((row as AdCreative).id).catch((err: Error) => console.error('[video] retrait :', err.message));
+    }
   }
 
   // ───────────────────────────── ticker ─────────────────────────────
@@ -366,7 +460,7 @@ export class AgencySession {
     this.loopRunning = false;
   }
 
-  /** One ticker iteration: tick, then schedule the next one 2000/speed ms after this one started. */
+  /** One ticker iteration: tick, then schedule the next one a tick of the pace after this one started, or after an incident's wait. */
   private async loopTick(token: number): Promise<void> {
     if (token !== this.loopToken) return;
     this.timer = null;
@@ -375,7 +469,7 @@ export class AgencySession {
       return;
     }
     const t0 = performance.now();
-    await this.step();
+    await this.step().catch((err: unknown) => console.error('[tick] la boucle continue :', err)); // only the founder stops it
     if (token !== this.loopToken) return; // superseded by pause / restart / run switch
     const run = this.run;
     if (!this._playing || !run || isTerminal(run.world.status)) {
@@ -386,8 +480,7 @@ export class AgencySession {
       }
       return;
     }
-    const interval = BASE_INTERVAL_MS / this._speed;
-    const delay = Math.max(30, interval - (performance.now() - t0));
+    const delay = Math.max(30, this.backoffMs ?? 0, this.tickMs() - (performance.now() - t0));
     this.timer = setTimeout(() => { void this.loopTick(token); }, delay);
   }
 
@@ -404,33 +497,60 @@ export class AgencySession {
     const w = run.world;
     if (isTerminal(w.status)) return null;
     const dayBefore = w.day;
+    const statusBefore = w.status;
+    const at = `${w.day}:${w.tick}`;
     if (w.status === 'paused') w.status = 'running';
     this.busy = true;
     try {
       const res = await run.company.step();
       this.errors = 0;
+      this.sameTick = 0;
+      this.backoffMs = null;
       this.lastError = null;
       run.syncMind();
       if (!this._playing && w.status === 'running') w.status = 'paused';
-      if (res.phase === 'evening' || w.day !== dayBefore || isTerminal(w.status) || w.status === 'goal_reached') await this.saveNow();
+      // The goal is saved the tick it falls, not every tick after: an open-ended run lives past it, and world.prev.json must stay a day old.
+      if (res.phase === 'evening' || w.day !== dayBefore || isTerminal(w.status) || (w.status === 'goal_reached' && statusBefore !== 'goal_reached')) await this.saveNow();
+      if (res.phase === 'evening' && dayBefore % 7 === 0) await this.checkpoint(w);
       return res;
     } catch (err) {
-      this.errors += 1;
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
       console.error(`[tick] incident au jour ${w.day}, tick ${w.tick} :`, err);
       safeEmit(w, `Incident technique pendant le travail (${msg.slice(0, 120)}). L'agence réessaie au prochain créneau.`);
-      if (this.errors >= MAX_CONSECUTIVE_ERRORS) {
-        this._playing = false;
-        this.stopLoop();
-        safeEmit(w, `${MAX_CONSECUTIVE_ERRORS} incidents d'affilée : l'agence se met en pause. Relance la lecture quand tu veux.`);
-        this.events.emit('state');
-      }
+      await this.afterError(run, at, msg);
       if (!this._playing && w.status === 'running') w.status = 'paused';
       return null;
     } finally {
       this.busy = false;
       this.events.emit('tick');
+    }
+  }
+
+  /** Errors never stop the agency, only the founder does: they wait, then the clock moves on without the tick (scale D4). */
+  private async afterError(run: MountedRun, at: string, msg: string): Promise<void> {
+    this.errors += 1;
+    this.sameTick = at === this.failedAt ? this.sameTick + 1 : 1;
+    this.failedAt = at;
+    this.backoffMs = this.errors >= 6 ? BACKOFF_MS[1] : this.errors >= 3 ? BACKOFF_MS[0] : null;
+    if (this.sameTick < SKIP_AFTER) return;
+    try {
+      run.company.skipTick(msg);
+    } catch (err) {
+      console.error(`[tick] impossible de sauter le créneau ${at} :`, err);
+      return;
+    }
+    this.errors = 0;
+    this.sameTick = 0;
+    this.backoffMs = null;
+    await this.saveNow();
+  }
+
+  private async checkpoint(world: WorldState): Promise<void> {
+    try {
+      await saveCheckpoint(world);
+    } catch (err) {
+      console.error(`[sauvegarde] point de contrôle de ${world.runId} :`, (err as Error).message);
     }
   }
 
@@ -618,5 +738,22 @@ function safeEmit(world: WorldState, text: string): void {
     emit(world, { agentId: null, kind: 'event', text });
   } catch {
     /* never let the feed break error handling */
+  }
+}
+
+/** A save could not be read and an older one took over: the founder hears it, the digest keeps it. */
+function recordRecovery(world: WorldState, { from, lostTicks }: NonNullable<SessionRecord['recovered']>): void {
+  const source = from === 'prev' ? 'la sauvegarde précédente' : 'le dernier point de contrôle';
+  const text = `Sauvegarde illisible : reprise depuis ${source}, au jour ${world.day}`;
+  logDecision(world, { kind: 'incident', who: 'system', text, why: `${lostTicks} créneau(x) de travail à refaire` });
+  safeEmit(world, `${text} (${lostTicks} créneau(x) à refaire).`);
+}
+
+/** The session log and runs/current.json are bookkeeping: they must never cost a run. */
+async function keepBooks(job: () => Promise<void>): Promise<void> {
+  try {
+    await job();
+  } catch (err) {
+    console.error('[session] journal :', (err as Error).message);
   }
 }

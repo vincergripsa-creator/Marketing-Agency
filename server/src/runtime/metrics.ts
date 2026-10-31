@@ -3,7 +3,9 @@
  * Only reads data the company can legitimately see — never the market's hidden truth.
  */
 import { CHANNEL_IDS, channelOf } from '../shared.js';
-import type { Campaign, ChannelId, DailyAdStats, Product, WorldState } from '../shared.js';
+import type { Campaign, ChannelId, DailyAdStats, Product, Task, WorldState } from '../shared.js';
+import { recentReviews } from '../sim/feedback.js';
+import { COMPACT } from './compaction.js';
 import { sim } from './modules.js';
 import { ORG } from './org/constants.js';
 import { payrollToday, SURVIVAL_CASH } from './org/payroll.js';
@@ -17,9 +19,11 @@ export interface WindowMetrics {
 
 /**
  * Product metrics from `sinceDay` (inclusive). ROAS = all revenue (net of refunds) / ad spend; Infinity when no spend
- * but sales. Announced outage days are left out of the ad figures: nothing could sell, they measure nothing.
+ * but sales. Announced outage days are left out of the ad figures: nothing could sell, they measure nothing. A window
+ * reaches back as far as the orders the world keeps, compacted or not: the whole life of a guide is on `p.stats`.
  */
-export function productMetrics(world: WorldState, productId: string, sinceDay = 1): WindowMetrics {
+export function productMetrics(world: WorldState, productId: string, from = 1): WindowMetrics {
+  const sinceDay = Math.max(from, world.day - COMPACT.orderDays + 1);
   const outage = sim.announcedOutageDays(world);
   const ads = world.market.adStats.filter((s) => s.productId === productId && s.day >= sinceDay && !outage.includes(s.day));
   const orders = world.market.orders.filter((o) => o.productId === productId && o.day >= sinceDay);
@@ -98,15 +102,55 @@ export function fromBuyer(world: WorldState, messageId: unknown, productId: stri
   return !!msg?.orderId && world.market.orders.some((o) => o.id === msg.orderId && o.productId === productId);
 }
 
+/** Most complaints a product remembers. */
+const FEEDBACK_KEPT = 30;
+
+type Feedback = NonNullable<Product['feedback']>;
+
+/** What the buyers of a finished reply task said about one product. Whether they bought is read now: their message leaves the inbox. */
+function feedbackIn(world: WorldState, t: Task, productId: string): Feedback {
+  const replies = Array.isArray(t.output?.replies) ? (t.output.replies as Record<string, unknown>[]) : [];
+  return replies.flatMap((r) => {
+    const quality = r.detected === 'plainte_qualite';
+    const text = typeof r.complaint === 'string' ? r.complaint : '';
+    return r.productId === productId && (quality || text) && fromBuyer(world, r.messageId, productId) ? [{ day: t.dayDone ?? 0, text, quality }] : [];
+  });
+}
+
+/** What support heard about a product: kept on it once a reply closed, or read off the tasks of a world that has none yet. */
+export function feedbackOf(world: WorldState, productId: string): Feedback {
+  const kept = world.company.products.find((p) => p.id === productId)?.feedback;
+  return kept ?? world.company.tasks.filter((t) => t.kind === 'reply_inbox' && t.status === 'done').flatMap((t) => feedbackIn(world, t, productId));
+}
+
+/** The moment a reply task closes: its row leaves the world in three weeks, a complaint counts as long as the version it is about. */
+export function recordFeedback(world: WorldState, task: Task): void {
+  const replies = Array.isArray(task.output?.replies) ? (task.output.replies as Record<string, unknown>[]) : [];
+  for (const p of world.company.products) {
+    if (!replies.some((r) => r.productId === p.id)) continue;
+    const said = p.feedback ? [...p.feedback, ...feedbackIn(world, task, p.id)] : feedbackOf(world, p.id);
+    p.feedback = said.slice(-FEEDBACK_KEPT);
+  }
+}
+
 /** Quality complaints as DETECTED by our support agents, from real buyers (not the hidden ground truth). */
 export function detectedComplaints(world: WorldState, productId: string, sinceDay = 1): number {
-  let n = 0;
-  for (const t of world.company.tasks) {
-    if (t.kind !== 'reply_inbox' || t.status !== 'done' || !t.output || (t.dayDone ?? 0) < sinceDay) continue;
-    const replies = Array.isArray(t.output.replies) ? (t.output.replies as Record<string, unknown>[]) : [];
-    for (const r of replies) if (r.productId === productId && r.detected === 'plainte_qualite' && fromBuyer(world, r.messageId, productId)) n++;
-  }
-  return n;
+  return feedbackOf(world, productId).filter((f) => f.quality && f.day >= sinceDay).length;
+}
+
+export { recentReviews };
+
+/** Every review a product ever had: its list keeps the latest only. */
+export function reviewCount(p: Product): number {
+  return Math.max(p.stats.ratingCount ?? 0, p.stats.reviews.length);
+}
+
+/** Its true average, unrounded: 0 without a review. */
+export function averageRating(p: Product): number {
+  const { stats } = p;
+  const count = reviewCount(p);
+  const total = count > stats.reviews.length ? stats.ratingSum! : stats.reviews.reduce((s, r) => s + r.rating, 0);
+  return count ? total / count : 0;
 }
 
 /** Message ids already claimed by an open reply task. */

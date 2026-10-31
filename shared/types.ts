@@ -194,7 +194,9 @@ export interface Mission {
   productId?: string | null; // the resulting product
   outcome?: string | null;  // French, where it stands, written for the founder
   relaunches?: number;      // chains restarted by the chief of staff after a dead end
+  gone?: { tasks: number; done: number }; // rows compaction took: their ids leave taskIds, and a reader adds these to what it finds there
   doneTasks?: number;       // snapshot only: its done tasks, counted on the whole task list
+  totalTasks?: number;      // snapshot only: same, every task it ever held
 }
 
 export interface ChatMessage { id: string; day: number; from: 'founder' | AgentId; text: string; at: number }
@@ -744,6 +746,8 @@ export interface CompanyState {
   lastDone?: Record<string, number>; // `${kind}:${productId}` → day: compaction keeps lastScan, lastScout, lastPage
   taskTotals?: TaskTotals;
   archive?: ArchiveCounters;
+  archivePending?: { day: number; rows: Record<string, unknown[]>; dropFiles: string[] }[]; // batches the disk refused: they go first next Sunday
+  goalReachedDay?: number;           // set once: market.events keeps 200 rows and an open-ended run outlives them
   cashOnlyCreators?: string[];
 }
 
@@ -1307,8 +1311,12 @@ export interface AudienceView {
   unsubscribed: number; dailyCost: number; recent: Omit<Broadcast, 'body'>[]; sequences: { nicheId: string; productId: string; status: string }[];
 }
 export interface Rival { id: string; nicheId: string; day: number; pressure: number; price: number }
-export interface ArchiveCounters { throughDay: number; tasks: number; missions: number; orders: number; customers: number; ledger: number; creatives: number; campaigns: number; deliverables: number }
-export interface TaskTotals { days: DayTaskCounts[]; depts: Partial<Record<DeptId, { done: number; delaySum: number }>> }
+export interface ArchiveCounters { throughDay: number; tasks: number; missions: number; orders: number; customers: number; ledger: number; creatives: number; campaigns: number; deliverables: number; deliverableKinds?: Partial<Record<Deliverable['kind'], number>> }
+export interface TaskTotals {
+  days: DayTaskCounts[];
+  depts: Partial<Record<DeptId, { done: number; delaySum: number; failed?: number }>>;
+  agents?: Record<AgentId, { done: number; approved: number; rejected: number; failed: number }>; // the HR review of someone with no perf counters reads the whole history
+}
 
 // ───────────────────────────── What the interface reads ─────────────────────────────
 

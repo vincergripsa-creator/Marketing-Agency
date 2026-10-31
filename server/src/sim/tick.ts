@@ -204,7 +204,10 @@ function ratingEffect(r: number): number {
 export function storeRating(world: WorldState): number {
   let total = 0;
   let count = 0;
-  for (const p of world.company.products) for (const r of p.stats.reviews) { total += r.rating; count++; }
+  for (const { stats } of world.company.products) {
+    total += stats.ratingSum ?? stats.reviews.reduce((s, r) => s + r.rating, 0);
+    count += stats.ratingCount ?? stats.reviews.length;
+  }
   return count >= CONVERSION.storeMinReviews ? total / count : 0;
 }
 
@@ -275,7 +278,7 @@ function runAds(d: Day): void {
     const creatives = camp.creativeIds.map((id) => creativeById(world, id)).filter((c): c is AdCreative => !!c && approvedOn(c, ch) && c.productId === p.id);
     if (!creatives.length) continue;
     if (accountBanned(m, ch, d.day)) { blocked.set(ch, (blocked.get(ch) ?? 0) + 1); continue; }
-    const rng = d.focus(key, index);
+    const rng = d.focus(key, camp.seq ?? index);
     const wanted = Math.max(0, camp.dailyBudget) * uniform(rng, ADS.deliveryMin, ADS.deliveryMax);
     const spendTotal = round2(Math.min(wanted, Math.max(0, d.cash)));
     if (spendTotal < wanted - 0.01) capped = true;
@@ -628,8 +631,9 @@ export function reviewMean(d: Day, p: Product, c: Customer | undefined, o: Pick<
 
 function runReviews(d: Day): void {
   const { world, rng } = d;
+  // Only an order of the last maxAge days can leave a review, and compaction keeps those days whole.
   const reviewed = new Set<string>();
-  for (const p of world.company.products) for (const r of p.stats.reviews) reviewed.add(`${r.customerId}|${p.id}`);
+  for (const p of world.company.products) for (const r of p.stats.reviews) if (d.day - r.day <= REVIEWS.maxAge) reviewed.add(`${r.customerId}|${p.id}`);
   const orders = world.market.orders;
   for (let i = orders.length - 1; i >= 0; i--) {
     const o = orders[i]!;

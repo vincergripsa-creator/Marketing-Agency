@@ -310,6 +310,7 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
       ...(ch === 'tiktok' ? {} : { channel: ch }),
       ...(CHANNELS[ch].learning ? { learning: { events: 0, exitedDay: null } } : {}),
       ...(input.test ? { test: true } : {}),
+      ...(world.company.archive ? { seq: world.company.archive.campaigns + world.company.campaigns.length } : {}), // D50: its index, had nothing left
     };
     world.company.campaigns.push(campaign);
     const dropped = (input.creativeIds?.length ?? 0) - creativeIds.length;

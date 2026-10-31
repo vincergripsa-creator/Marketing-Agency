@@ -4,8 +4,8 @@
  */
 import { summarizeLedger } from '../core/index.js';
 import type {
-  AdCreative, AdTotals, AgentId, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, FinanceSnapshot,
-  InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, TalentTruthView, Task, TaskKind, TaskStats, VisualReport, WorldState,
+  AdCreative, AdTotals, AgentId, ArchiveCounters, Campaign, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DailyKpi, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, FinanceSnapshot,
+  InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, TalentTruthView, Task, TaskKind, TaskStats, TaskTotals, VisualReport, WorldState,
 } from '../shared.js';
 import { addAdTotals } from '../sim/adTotals.js';
 import { announcedOutageDays } from '../sim/outage.js';
@@ -19,6 +19,8 @@ export interface SnapshotLimits {
   chatsPerAgent: number;
   missions: number;
   creatives: number;
+  campaigns: number;          // besides the running ones
+  pnl: number;                // weekly reports, latest first read
   experiments: number;
   kpis: number;
   reviewsPerProduct: number;
@@ -35,31 +37,40 @@ export interface SnapshotLimits {
   activity: number;
   vocKnowledge: boolean;      // keep the raw VoC knowledge arrays
   stringMax: number;          // max length of free strings inside task input/output
-  live: boolean;              // live view: finished tasks without their payload, products and ads without what only their files show
+  light: boolean;             // products and ads without what only their files show, daily figures without their channels
+  live: boolean;              // live view: finished tasks without their payload
 }
 
 export const DEFAULT_LIMITS: SnapshotLimits = {
   doneTasks: 200, openTasks: 400, taskLog: 10, deliverables: 250, lessons: 150, chatsPerAgent: 30, missions: 80,
-  creatives: 120, experiments: 60, kpis: 400, reviewsPerProduct: 25, inbox: 80, threadPerMessage: 12, adStatsDays: 14,
+  creatives: 120, campaigns: 400, pnl: 8, experiments: 60, kpis: 400, reviewsPerProduct: 25, inbox: 80, threadPerMessage: 12, adStatsDays: 14,
   commentsPerStat: 6, organicPosts: 30, creators: 80, partnerships: 120, events: 40, orders: 100, ledger: 150, activity: 200,
-  vocKnowledge: true, stringMax: 400, live: false,
+  vocKnowledge: true, stringMax: 400, light: false, live: false,
 };
 
 /** Fallback when the default snapshot would exceed the size budget. */
 export const TIGHT_LIMITS: SnapshotLimits = {
-  doneTasks: 80, openTasks: 150, taskLog: 4, deliverables: 120, lessons: 60, chatsPerAgent: 12, missions: 30,
-  creatives: 60, experiments: 25, kpis: 120, reviewsPerProduct: 8, inbox: 50, threadPerMessage: 6, adStatsDays: 7,
+  doneTasks: 60, openTasks: 150, taskLog: 4, deliverables: 120, lessons: 60, chatsPerAgent: 12, missions: 30,
+  creatives: 60, campaigns: 40, pnl: 4, experiments: 25, kpis: 120, reviewsPerProduct: 8, inbox: 40, threadPerMessage: 6, adStatsDays: 7,
   commentsPerStat: 2, organicPosts: 20, creators: 40, partnerships: 50, events: 25, orders: 60, ledger: 100, activity: 120,
-  vocKnowledge: false, stringMax: 200, live: false,
+  vocKnowledge: false, stringMax: 200, light: true, live: false,
 };
 
 /**
  * What the SSE stream carries during play, about once per second: the UI's panels read neither the text of a guide
- * or an ad nor the payload of a finished task (GET /api/state still has them).
+ * or an ad nor the payload of a finished task (GET /api/state keeps the payloads, and the texts while DEFAULT_LIMITS fit).
  */
-export const LIVE_LIMITS: SnapshotLimits = { ...TIGHT_LIMITS, activity: 60, reviewsPerProduct: 5, live: true };
+export const LIVE_LIMITS: SnapshotLimits = {
+  ...TIGHT_LIMITS, activity: 60, reviewsPerProduct: 5, live: true,
+  creatives: 30, campaigns: 20, pnl: 1, doneTasks: 40, deliverables: 60, lessons: 30, inbox: 30, commentsPerStat: 1, adStatsDays: 3, kpis: 60,
+};
+export const LIVE_TIGHT_LIMITS: SnapshotLimits = {
+  ...LIVE_LIMITS, creatives: 15, campaigns: 10, doneTasks: 20, deliverables: 30, lessons: 15, inbox: 20, activity: 40,
+};
 
 export const SNAPSHOT_BUDGET_BYTES = 700_000;
+/** Scale D16. ui §3.1's wall of 500 000 bytes stands behind it. */
+export const LIVE_BUDGET_BYTES = 400_000;
 
 const FINISHED: ReadonlySet<Task['status']> = new Set(['done', 'failed', 'cancelled']);
 
@@ -132,17 +143,17 @@ function trimChapter(ch: ChapterContent | null | undefined, full: boolean): Chap
   };
 }
 
-/** Content light enough for the UI: titles + intros, full text only for the first chapter (live view: none of the text). */
-export function trimContent(content: PdfContent | null | undefined, live = false): PdfContent | null {
+/** Content light enough for the UI: titles + intros, full text only for the first chapter (light limits: none of the text). */
+export function trimContent(content: PdfContent | null | undefined, light = false): PdfContent | null {
   if (!content) return null;
   return {
     title: content.title ?? '',
     subtitle: content.subtitle ?? '',
     audience: content.audience ?? '',
     promise: content.promise ?? '',
-    introduction: live ? [] : arr(content.introduction).slice(0, 3),
-    chapters: live ? [] : arr(content.chapters).map((ch, i) => trimChapter(ch, i === 0)),
-    bonus: trimChapter(live ? null : content.bonus, false),
+    introduction: light ? [] : arr(content.introduction).slice(0, 3),
+    chapters: light ? [] : arr(content.chapters).map((ch, i) => trimChapter(ch, i === 0)),
+    bonus: trimChapter(light ? null : content.bonus, false),
     nextStep: content.nextStep ?? { title: '', text: '', upsellProductId: null },
     wordCount: content.wordCount ?? 0,
   };
@@ -154,24 +165,46 @@ function publicVisual(visual: VisualReport): VisualReport {
   return shown as VisualReport;
 }
 
+/** A stopped guide under light limits: what the catalogue shows of it. Its text and scores weigh more than a live guide's figures. */
+function stubProduct({ brief: _brief, pagePrint: _pagePrint, visual: _visual, ...p }: Product): Product {
+  return {
+    ...p, subtitle: '', audience: '', problem: '', content: null, design: null, salesPage: null, quality: null, salesQuality: null, priceHistory: [],
+    files: { pdf: p.files?.pdf ?? null, cover: p.files?.cover ?? null, salesPage: p.files?.salesPage ?? null }, stats: { ...p.stats, reviews: [] },
+  };
+}
+
 export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS): Product {
   const stats = p.stats ?? { views: 0, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, rating: 0, reviews: [], upsellSales: 0 };
   // What compaction leaves the company to read (scale §7.2): no panel reads it, and at its caps it weighs 9 KB a product.
   const { hooks: _hooks, feedback: _feedback, artExplored: _artExplored, ...kept } = p;
-  return {
+  const trimmed: Product = {
     ...kept,
     ...(p.visual ? { visual: publicVisual(p.visual) } : {}),
-    content: trimContent(p.content, limits.live),
-    salesPage: limits.live ? null : p.salesPage,
+    content: trimContent(p.content, limits.light),
+    salesPage: limits.light ? null : p.salesPage,
     stats: { ...stats, reviews: lastN(stats.reviews, limits.reviewsPerProduct) },
-    priceHistory: lastN(p.priceHistory, 60),
+    priceHistory: lastN(p.priceHistory, limits.live ? 14 : 60),
   };
+  return limits.light && (p.status === 'paused' || p.status === 'killed') ? stubProduct(trimmed) : trimmed;
 }
 
-/** An ad of the live view: its figures and preview, without the script they hold. */
-function lightCreative(c: AdCreative): AdCreative {
+/** Killed guides that light limits still show. */
+const SHOWN_KILLED = 12;
+
+/** Light limits drop the killed guides past the latest ones (scale §7.2): the catalogue only grows. */
+function shownProducts(products: Product[], limits: SnapshotLimits): Product[] {
+  const all = arr(products);
+  if (!limits.light) return all;
+  const killed = all.filter((p) => p.status === 'killed');
+  const shown = new Set(killed.slice(-SHOWN_KILLED));
+  return all.filter((p) => p.status !== 'killed' || shown.has(p));
+}
+
+/** A light ad: its figures, its preview and what its cut measured (video §13), without the script, the beats or the detail of its score. */
+function lightCreative({ search: _search, ...c }: AdCreative): AdCreative {
   return {
-    ...c, caption: '', hashtags: [],
+    ...c, caption: '', hashtags: [], ...(c.cut ? { cut: { ...c.cut, beats: [] } } : {}),
+    quality: c.quality ? { overall: c.quality.overall } as AdCreative['quality'] : c.quality,
     scenes: arr(c.scenes).map((s) => ({ visual: '', onScreenText: '', voiceover: '', durationSec: s.durationSec })),
     files: { storyboard: (c.files?.storyboard ?? []).slice(0, 1), preview: c.files?.preview ?? null },
   };
@@ -181,7 +214,13 @@ function trimCreatives(creatives: AdCreative[], keepIds: Set<string>, limits: Sn
   const all = arr(creatives);
   const start = Math.max(0, all.length - limits.creatives);
   const kept = all.filter((c, i) => i >= start || keepIds.has(c.id));
-  return limits.live ? kept.map(lightCreative) : kept;
+  return limits.light ? kept.map(lightCreative) : kept;
+}
+
+/** The running campaigns and the latest others: paused ones pile up for ever. */
+function trimCampaigns(campaigns: Campaign[], limit: number): Campaign[] {
+  const start = Math.max(0, campaigns.length - limit);
+  return campaigns.filter((k, i) => i >= start || k.status === 'active');
 }
 
 /** The latest missions, the open ones and every mission of the founder; their progress is counted on the whole task list. */
@@ -191,22 +230,32 @@ function trimMissions(missions: Mission[], tasks: Task[], limit: number): Missio
   const done = new Set(arr(tasks).filter((t) => t.status === 'done').map((t) => t.id));
   return all
     .filter((m, i) => i >= start || m.status === 'open' || m.from === 'founder')
-    .map((m) => ({ ...m, doneTasks: arr(m.taskIds).filter((id) => done.has(id)).length }));
+    .map((m) => ({ ...m, doneTasks: (m.gone?.done ?? 0) + arr(m.taskIds).filter((id) => done.has(id)).length, totalTasks: (m.gone?.tasks ?? 0) + arr(m.taskIds).length }));
 }
 
 const isAdFrame = (d: Deliverable) => d.kind === 'ad_storyboard' || d.kind === 'ad_preview';
 
+/** The live view stops here too: the gallery reads the whole run elsewhere, and guides, covers and reports only grow. */
+const LIVE_DELIVERABLES = 120;
+
 /** Guides, covers, pages and reports stay: only ad frames, by far the most numerous, are cut to the latest ones. */
-function trimDeliverables(deliverables: Deliverable[], limit: number): Deliverable[] {
+function trimDeliverables(deliverables: Deliverable[], limits: SnapshotLimits): Deliverable[] {
   const all = arr(deliverables);
-  const firstAd = Math.max(0, all.filter(isAdFrame).length - limit);
+  const firstAd = Math.max(0, all.filter(isAdFrame).length - limits.deliverables);
   let seen = 0;
-  return all.filter((d) => !isAdFrame(d) || seen++ >= firstAd);
+  const kept = all.filter((d) => !isAdFrame(d) || seen++ >= firstAd);
+  return limits.live ? kept.slice(-LIVE_DELIVERABLES) : kept;
+}
+
+/** Light rows: the channels of a day are read on the server (ui §3.2), and they are three quarters of a row. */
+function trimKpis(kpis: DailyKpi[], limits: SnapshotLimits): DailyKpi[] {
+  const rows = lastN(kpis, limits.kpis);
+  return limits.light ? rows.map(({ channels: _channels, ...k }) => k) : rows;
 }
 
 export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LIMITS): CompanyState {
   const campaigns = arr(c.campaigns);
-  const liveCreativeIds = new Set(campaigns.filter((k) => k.status !== 'ended').flatMap((k) => arr(k.creativeIds)));
+  const liveCreativeIds = new Set(campaigns.filter((k) => (limits.light ? k.status === 'active' : k.status !== 'ended')).flatMap((k) => arr(k.creativeIds)));
   const chats: CompanyState['chats'] = {};
   for (const [agentId, msgs] of Object.entries(c.chats ?? {})) chats[agentId] = lastN(msgs, limits.chatsPerAgent);
   const experiments = arr(c.experiments);
@@ -222,20 +271,20 @@ export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LI
     departments: arr(c.departments),
     tasks: trimTasks(c.tasks, limits),
     missions: trimMissions(c.missions, c.tasks, limits.missions),
-    products: arr(c.products).map((p) => trimProduct(p, limits)),
+    products: shownProducts(c.products, limits).map((p) => trimProduct(p, limits)),
     creatives: trimCreatives(c.creatives, liveCreativeIds, limits),
-    campaigns,
-    deliverables: trimDeliverables(c.deliverables, limits.deliverables),
+    campaigns: trimCampaigns(campaigns, limits.campaigns),
+    deliverables: trimDeliverables(c.deliverables, limits),
     research: { trends: arr(research.trends), voc, competitors: limits.live ? {} : research.competitors ?? {}, shortlist: arr(research.shortlist) },
     lessons: lastN(c.lessons, limits.lessons),
     experiments: experiments.filter((e, i) => i >= expStart || e.status === 'running'),
     bandits: c.bandits ?? {},
     playbooks: c.playbooks ?? {},
-    kpis: lastN(c.kpis, limits.kpis),
+    kpis: trimKpis(c.kpis, limits),
     chats,
     pendingApprovals: arr(c.pendingApprovals),
     budget: c.budget ?? null,
-    pnl: lastN(c.pnl, 8),
+    pnl: lastN(c.pnl, limits.pnl),
   };
 }
 
@@ -282,8 +331,9 @@ export function adTotalsOf(market: WorldState['market'] | undefined, creatives: 
   return { days: [...days.values()].sort((a, b) => a.day - b.day), creatives: totals };
 }
 
-function deliverableCountsOf(deliverables: Deliverable[]): CompanySnapshot['deliverableCounts'] {
-  const counts: NonNullable<CompanySnapshot['deliverableCounts']> = {};
+/** The whole run: what the world still holds plus what compaction counted on its way out. */
+function deliverableCountsOf(deliverables: Deliverable[], archived: ArchiveCounters['deliverableKinds']): CompanySnapshot['deliverableCounts'] {
+  const counts: NonNullable<CompanySnapshot['deliverableCounts']> = { ...archived };
   for (const d of arr(deliverables)) counts[d.kind] = (counts[d.kind] ?? 0) + 1;
   return counts;
 }
@@ -335,8 +385,8 @@ function dayRow(rows: Map<number, DayTaskCounts>, day: number): DayTaskCounts {
 
 const oldestFirst = (rows: Map<number, DayTaskCounts>): DayTaskCounts[] => [...rows.values()].sort((a, b) => a.day - b.day);
 
-/** Counts of the WHOLE task list: the task list of a snapshot is trimmed, these numbers never are. */
-export function taskStatsOf(tasks: Task[] | null | undefined, day: number): TaskStats {
+/** Counts of the WHOLE task list: the task list of a snapshot is trimmed, these numbers never are. `totals` holds the rows compaction took away. */
+export function taskStatsOf(tasks: Task[] | null | undefined, day: number, totals?: TaskTotals): TaskStats {
   const days = new Map<number, DayTaskCounts>();
   const depts = new Map<DeptId, { rows: Map<number, DayTaskCounts>; kinds7d: Partial<Record<TaskKind, number>>; done: number; failed: number; delay: number }>();
   const recent = day - DEPT_HISTORY_DAYS;
@@ -353,6 +403,15 @@ export function taskStatsOf(tasks: Task[] | null | undefined, day: number): Task
     if (t.status !== 'done' && t.status !== 'failed' && t.status !== 'cancelled') continue;
     dayRow(days, t.dayDone)[t.status] += 1;
     if (t.dayDone > recent) dayRow(d.rows, t.dayDone)[t.status] += 1;
+  }
+  for (const row of totals?.days ?? []) {
+    const merged = dayRow(days, row.day);
+    merged.created += row.created; merged.done += row.done; merged.failed += row.failed; merged.cancelled += row.cancelled;
+  }
+  for (const [id, gone] of Object.entries(totals?.depts ?? {}) as [DeptId, NonNullable<TaskTotals['depts'][DeptId]>][]) {
+    let d = depts.get(id);
+    if (!d) depts.set(id, d = { rows: new Map(), kinds7d: {}, done: 0, failed: 0, delay: 0 });
+    d.done += gone.done; d.delay += gone.delaySum; d.failed += gone.failed ?? 0;
   }
   const out: Partial<Record<DeptId, DeptTaskCounts>> = {};
   for (const [id, d] of depts) out[id] = { days: oldestFirst(d.rows), kinds7d: d.kinds7d, done: d.done, failed: d.failed, avgDelayDays: d.done ? r2(d.delay / d.done) : null };
@@ -382,15 +441,16 @@ export function buildSnapshot(world: WorldState, finance: FinanceSnapshot, god =
       events: lastN(m?.events, limits.events),
       orders: lastN(m?.orders, limits.orders),
       adAccount: m?.adAccount ?? { strikes: 0, banned: false, bannedUntilDay: 0 },
-      customersCount: arr(m?.customers).length,
+      customersCount: arr(m?.customers).length + (world.company?.archive?.customers ?? 0),
     },
     finance,
     ledger: lastN(world.ledger, limits.ledger),
     activity: lastN(world.activity, limits.activity),
-    taskStats: taskStatsOf(world.company?.tasks, world.day),
+    taskStats: taskStatsOf(world.company?.tasks, world.day, world.company?.taskTotals),
     adTotals: adTotalsOf(m, company.creatives),
-    deliverableCounts: deliverableCountsOf(world.company?.deliverables),
-    goalReachedDay: arr(m?.events).find((e) => e.kind === 'goal_reached')?.day ?? null,
+    deliverableCounts: deliverableCountsOf(world.company?.deliverables, world.company?.archive?.deliverableKinds),
+    goalReachedDay: world.company?.goalReachedDay ?? arr(m?.events).find((e) => e.kind === 'goal_reached')?.day ?? null,
+    ...(world.company?.archive ? { archive: world.company.archive } : {}),
   };
   if (god) snap.godMode = godModeOf(world, limits);
   return snap;
@@ -411,7 +471,12 @@ export function serializeSnapshot(
   return json;
 }
 
-/** The light snapshot of the live stream. */
+/** The light snapshot of the live stream, tighter when a big company would not fit. */
 export function serializeLiveSnapshot(world: WorldState, finance: FinanceSnapshot, god = false, extra: Record<string, unknown> = {}): string {
-  return JSON.stringify({ ...buildSnapshot(world, finance, god, LIVE_LIMITS), ...extra });
+  let json = '';
+  for (const limits of [LIVE_LIMITS, LIVE_TIGHT_LIMITS]) {
+    json = JSON.stringify({ ...buildSnapshot(world, finance, god, limits), ...extra });
+    if (json.length <= LIVE_BUDGET_BYTES) break;
+  }
+  return json;
 }

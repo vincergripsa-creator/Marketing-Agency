@@ -74,6 +74,7 @@ vi.mock('../src/runtime/index.js', () => {
       }
     }
     async runDays(n: number) { for (let i = 0; i < n * 12; i++) await this.step(); }
+    skipTick() { this.world.tick += 1; }
     async giveMission(text: string) { fake.missions.push(text); return 'mis_42'; }
     async chat(_agentId: string, text: string) { return `Bien reçu : ${text}`; }
     approve(taskId: string, ok: boolean) { fake.approvals.push(`${taskId}:${ok}`); }
@@ -1113,6 +1114,12 @@ describe('cli', () => {
     expect(parseCliArgs(['-h']).help).toBe(true);
   });
 
+  it('runs for ten years, with no end, and without the growth decisions', () => {
+    expect(parseCliArgs([])).toMatchObject({ open: false, scaling: true });
+    expect(parseCliArgs(['--days', '3650', '--open', '--no-scaling'])).toMatchObject({ days: 3650, open: true, scaling: false });
+    expect(() => parseCliArgs(['--days', '3651'])).toThrow(/3650/);
+  });
+
   it('picks the team, the same flags as the benchmark', () => {
     expect(parseCliArgs([]).org).toEqual(LEAN_ORG);
     expect(parseCliArgs(['--team', 'legacy31']).org).toEqual({ team: 'legacy31', autoHire: true, payroll: true });
@@ -1248,20 +1255,19 @@ describe('live session', () => {
     await s.shutdown();
   });
 
-  it('contains tick errors, pauses after three in a row, survives bankruptcy, stops when finished', async () => {
+  it('contains tick errors and plays on, survives bankruptcy, stops when finished', async () => {
     const { AgencySession } = await import('../src/api/session.js');
     const s = new AgencySession();
-    await s.start(); // resumes the most recently saved run
+    await s.start(); // resumes the run the app last played
     s.setSpeed(8);
-    fake.failSteps = 3;
-    await until(() => !s.playing);
+    fake.failSteps = 2; // the wait starts at three: alwaysOn.test.ts
+    await until(() => s.info().lastError !== null);
     expect(s.info().lastError).toBe('panne simulée');
-    expect(s.world.status).toBe('paused');
     expect(s.world.activity.some((a) => a.text.includes('Incident technique'))).toBe(true);
-    expect(s.world.activity.at(-1)!.text).toContain("l'agence se met en pause");
     const before = fake.steps;
-    s.play(8);
     await until(() => fake.steps > before + 1);
+    expect(s.playing).toBe(true);
+    expect(s.world.status).toBe('running');
     expect(s.info().lastError).toBeNull();
     // bankruptcy is a state the company works through (survival mode), not a stop
     s.world.status = 'bankrupt';
@@ -1291,12 +1297,27 @@ describe('live session', () => {
     expect(fake.maxInFlight).toBe(1);
     const finishedId = s.world.runId;
     await s.shutdown();
-    // next boot skips the finished run and resumes the other unfinished one
+    // next boot opens the run the app last played, finished or not: its end banner offers to go on
     const next = new AgencySession();
     await next.start();
-    expect(next.world.runId).not.toBe(finishedId);
-    expect(next.playing).toBe(true);
+    expect(next.world.runId).toBe(finishedId);
+    expect(next.playing).toBe(false);
     await next.shutdown();
+    // with no current run the scan applies: it skips the finished run and resumes the other unfinished one
+    await rm(join(fake.tmp, 'runs', 'current.json'));
+    const scan = new AgencySession();
+    await scan.start();
+    expect(scan.world.runId).not.toBe(finishedId);
+    expect(scan.playing).toBe(true);
+    // « Continuer sans fin »: the same run, no end, playing
+    await scan.loadRun(finishedId);
+    expect(scan.playing).toBe(false);
+    const stepsBefore = fake.steps;
+    expect(await scan.extendRun()).toMatchObject({ runId: finishedId, playing: true, status: 'running' });
+    expect(scan.world.scenario.openEnded).toBe(true);
+    expect(scan.world.activity.at(-1)!.text).toContain('sans fin');
+    await until(() => fake.steps > stepsBefore + 1);
+    await scan.shutdown();
   });
 });
 

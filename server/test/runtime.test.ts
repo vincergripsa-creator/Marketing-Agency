@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DailyKpi, ScenarioConfig, TaskKind } from '../src/shared.js';
+import type { DailyKpi, ScenarioConfig, Task, TaskKind } from '../src/shared.js';
 import type { BrainVault, ContentEngine, RunPaths } from '../src/contracts.js';
 import { buildTeam } from '../src/runtime/org/catalog.js';
 import { LEGACY_ORG } from '../src/runtime/org/constants.js';
@@ -1136,22 +1136,26 @@ describe.skipIf(!modulesPresent)('the company obeys the founder and reacts to in
   it('over 45 days all 31 agents do real work; Alice and Hugo on their own tasks, nobody above the top level', async () => {
     const { world, company, root } = await setup(13);
     try {
-      await company.runDays(30);
+      // every task of the run: compaction lets the finished ones go after 21 days
+      const seen = new Map<string, Task>();
+      const remember = () => { for (const t of world.company.tasks) seen.set(t.id, t); };
+      await company.runDays(30, remember);
       // an outage inside the run, whatever the seed drew
       const announced = world.day + 1;
       if (!world.market.events.some((e) => e.kind === 'platform_outage')) announceOutage(world, announced);
-      await company.runDays(15);
+      await company.runDays(15, remember);
+      const tasks = [...seen.values()];
       const done = new Map<string, number>();
-      for (const t of world.company.tasks) if (t.status === 'done' && t.assignee) done.set(t.assignee, (done.get(t.assignee) ?? 0) + 1);
+      for (const t of tasks) if (t.status === 'done' && t.assignee) done.set(t.assignee, (done.get(t.assignee) ?? 0) + 1);
       for (const a of world.company.agents) expect(done.get(a.id) ?? 0, a.id).toBeGreaterThan(0);
-      const count = (kind: TaskKind) => world.company.tasks.filter((t) => t.kind === kind && t.status === 'done').length;
-      expect(world.company.tasks.filter((t) => t.kind === 'reconcile_ledger' && t.status === 'done').every((t) => t.assignee === 'alice')).toBe(true);
+      const count = (kind: TaskKind) => tasks.filter((t) => t.kind === kind && t.status === 'done').length;
+      expect(tasks.filter((t) => t.kind === 'reconcile_ledger' && t.status === 'done').every((t) => t.assignee === 'alice')).toBe(true);
       expect(count('reconcile_ledger')).toBeGreaterThanOrEqual(43);
-      expect(world.company.tasks.filter((t) => t.kind === 'follow_missions' && t.status === 'done').every((t) => t.assignee === 'hugo')).toBe(true);
+      expect(tasks.filter((t) => t.kind === 'follow_missions' && t.status === 'done').every((t) => t.assignee === 'hugo')).toBe(true);
       expect(count('follow_missions')).toBeGreaterThanOrEqual(43);
       expect(count('weekly_pnl')).toBe(6);
       expect(world.company.pnl!.length).toBe(6);
-      expect(world.company.tasks.filter((t) => t.kind === 'reconcile_ledger').flatMap((t) => (t.output?.gaps as string[]) ?? [])).toEqual([]);
+      expect(tasks.filter((t) => t.kind === 'reconcile_ledger').flatMap((t) => (t.output?.gaps as string[]) ?? [])).toEqual([]);
       for (const a of world.company.agents) expect(a.level, a.id).toBeLessThanOrEqual(10);
       // Every announced outage of the run cost nothing in ads.
       const { sim } = await import('../src/runtime/modules.js');

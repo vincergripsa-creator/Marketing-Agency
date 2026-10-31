@@ -59,13 +59,20 @@ function vars(rng: Rng, product: Product, niche?: NicheTruth): Record<string, st
 
 export type ReviewKind = 'product' | 'support_bad' | 'support_good' | 'troll';
 
+/** Reviews a product keeps: compaction cuts the older ones, so nothing that decides reads past them, cut or not. */
+export const REVIEWS_KEPT = 60;
+
+export function recentReviews(product: Product): Review[] {
+  return (product.stats?.reviews ?? []).slice(-REVIEWS_KEPT);
+}
+
 export function reviewText(rng: Rng, rating: number, product: Product, niche: NicheTruth | undefined, kind: ReviewKind = 'product'): string {
   if (kind === 'support_bad') return rng.pick(ANGRY_SUPPORT);
   if (kind === 'support_good') return rng.pick(GOOD_SUPPORT);
   if (kind === 'troll') return rng.pick(TROLL_REVIEWS);
   const pool = rating >= 4 ? GOOD : rating === 3 ? MID : BAD;
   // two buyers do not write the same sentence: a template already on this product waits for the others
-  const seen = (product.stats?.reviews ?? []).map((r) => r.text);
+  const seen = recentReviews(product).map((r) => r.text);
   const fresh = pool.filter((t) => !seen.some((text) => text.startsWith(t.split('{')[0]!)));
   return fill(rng.pick(fresh.length ? fresh : pool), vars(rng, product, niche));
 }
@@ -74,9 +81,11 @@ export function reviewText(rng: Rng, rating: number, product: Product, niche: Ni
 export function addReview(world: WorldState, rng: Rng, product: Product, customerId: string, rating: number, niche: NicheTruth | undefined, kind: ReviewKind = 'product'): Review {
   const r = Math.max(1, Math.min(5, Math.round(rating))) as Review['rating'];
   const review: Review = { id: nextId(world, 'rev'), day: world.day, customerId, rating: r, text: reviewText(rng, r, product, niche, kind) };
-  product.stats.reviews.push(review);
-  const reviews = product.stats.reviews;
-  product.stats.rating = Math.round((reviews.reduce((s, x) => s + x.rating, 0) / reviews.length) * 100) / 100;
+  const { stats } = product;
+  stats.ratingSum = (stats.ratingSum ?? stats.reviews.reduce((s, x) => s + x.rating, 0)) + r;
+  stats.ratingCount = (stats.ratingCount ?? stats.reviews.length) + 1;
+  stats.reviews.push(review);
+  stats.rating = Math.round((stats.ratingSum / stats.ratingCount) * 100) / 100;
   return review;
 }
 

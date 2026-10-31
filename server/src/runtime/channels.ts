@@ -16,7 +16,7 @@ import type { RuntimeCtx } from './ctx.js';
 import { incident, nicheBriefOf, nicheName, say, speak } from './ctx.js';
 import { logDecision } from './digest.js';
 import { addHold, adsHold, REFUSAL_COOLDOWN_DAYS } from './holds.js';
-import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, type CampaignMetrics } from './metrics.js';
+import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, reviewCount, type CampaignMetrics } from './metrics.js';
 import { learning, sim } from './modules.js';
 import { requestRole } from './org/hiring.js';
 import { officerId, ownersOfAny, roleHolders } from './org/officers.js';
@@ -97,7 +97,7 @@ function isMaster(c: AdCreative): boolean {
 function bestLanding(w: WorldState): Product | undefined {
   const { google } = CHANNEL_POLICY.unlock;
   const page = (p: Product) => p.salesQuality?.overall ?? 0;
-  const reviews = (p: Product) => p.stats.reviews.length;
+  const reviews = reviewCount;
   const score = (p: Product) => Number(reviews(p) >= google.reviews) + Number(p.stats.rating >= google.rating) + Number(page(p) >= google.pageQuality);
   return [...w.company.products.filter((p) => p.status === 'live')].sort((a, b) => score(b) - score(a) || reviews(b) - reviews(a) || a.id.localeCompare(b.id))[0];
 }
@@ -115,7 +115,7 @@ function unlockSteps(w: WorldState, ch: ChannelId): UnlockStep[] {
     case 'pinterest': return [step('Trésorerie', cash, unlock.pinterest.cash, '€'), step('Autonomie', runwayDays ?? unlock.pinterest.minRunwayDays, unlock.pinterest.minRunwayDays, 'jours')];
     case 'google': {
       const p = bestLanding(w);
-      return [step('Avis', p?.stats.reviews.length ?? 0, unlock.google.reviews, 'avis'), step('Note', p?.stats.rating ?? 0, unlock.google.rating, '/5'), step('Page de vente', p?.salesQuality?.overall ?? 0, unlock.google.pageQuality, '/100')];
+      return [step('Avis', p ? reviewCount(p) : 0, unlock.google.reviews, 'avis'), step('Note', p?.stats.rating ?? 0, unlock.google.rating, '/5'), step('Page de vente', p?.salesQuality?.overall ?? 0, unlock.google.pageQuality, '/100')];
     }
   }
 }

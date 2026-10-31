@@ -3,7 +3,7 @@ import type { AgentId, InboxMessage, Order, ReplyOutcome, SupportReplyInput, Tas
 import type { RuntimeCtx } from '../ctx.js';
 import { incident, productOf, say } from '../ctx.js';
 import { learning, sim } from '../modules.js';
-import { claimedMessageIds } from '../metrics.js';
+import { claimedMessageIds, recordFeedback } from '../metrics.js';
 import { directivesOf, SUPPORT_TONES, withTone } from '../playbook.js';
 import { TALENT } from '../talent/constants.js';
 import { armSharp } from '../talent/craft.js';
@@ -187,6 +187,9 @@ export const supportHandlers: HandlerMap = {
       }
       const avg = Math.round(scoreSum / batch.length);
       return { summary: `${batch.length} message(s) traité(s), score moyen ${avg}/100.`, output: { replies, avgScore: avg } };
+    },
+    async onDone(ctx, task) {
+      recordFeedback(ctx.world, task);
     },
   },
 

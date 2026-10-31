@@ -155,7 +155,7 @@ function MissionsList({ missions }: { missions: Mission[] }) {
         const ts = m.taskIds.map((id) => lookups.tasks.get(id)).filter((t): t is Task => !!t);
         // the server counts on every task: the snapshot only holds the latest ones
         const done = m.doneTasks ?? ts.filter((t) => t.status === 'done').length;
-        const total = m.doneTasks === undefined ? ts.length : m.taskIds.length;
+        const total = m.totalTasks ?? (m.doneTasks === undefined ? ts.length : m.taskIds.length);
         const owner = lookups.agents.get(m.ownerId);
         const product = m.productId ? lookups.products.get(m.productId) : undefined;
         return (

@@ -1,8 +1,11 @@
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { gunzip, gzip } from 'node:zlib';
 import { repoRoot, summarizeLedger } from '../core/index.js';
 import type { HookStyle, Product, RunInfo, WorldState } from '../shared.js';
+import { TICKS_PER_DAY } from '../shared.js';
 import { HOOK_STYLES } from '../minds/playbook.js';
 import { versionSince } from '../runtime/acquisition.js';
 import { doneOutputs } from '../runtime/ctx.js';
@@ -25,9 +28,34 @@ export interface SaveOptions {
 
 export interface SavedFinance { cash: number; profit: number }
 
+/**
+ * One stay of the agency in a run, in runs/<id>/session.log.json: outside the world, so replay stays pure. No `stopAt`: the
+ * stay in progress. `clean: false` with one: a crash, closed at the next boot on the last save the disk saw. `recovered`: its
+ * save could not be read.
+ */
+export interface SessionRecord {
+  startAt: string; stopAt?: string; clean: boolean; day: number;
+  recovered?: { from: 'prev' | 'checkpoint'; lostTicks: number };
+}
+
+/** A save, and how far it had to fall back to find one. */
+export interface SafeLoad { world: WorldState; from: 'world' | 'prev' | 'checkpoint'; lostTicks?: number }
+
 const WORLD_FILE = 'world.json';
+const PREV_FILE = 'world.prev.json';
+/** Where an unreadable world.json goes, or the next save would rotate it over the good world.prev.json. */
+const BAD_FILE = 'world.bad.json';
 const META_FILE = 'meta.json';
+const CURRENT_FILE = 'current.json';
+const SESSION_LOG = 'session.log.json';
+const CHECKPOINTS = 'checkpoints';
+const CHECKPOINT_RE = /^day-(\d+)\.json\.gz$/;
+const CHECKPOINT = { weekly: 4, monthDays: 30, max: 12 };
+const SESSION_LOG_MAX = 500;
 const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
 
 export function runsDir(): string {
   return join(repoRoot(), 'runs');
@@ -102,12 +130,22 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
   }
 }
 
-/** Atomic write: tmp file in the same folder + rename. */
-export async function writeFileAtomic(file: string, data: string): Promise<void> {
+/** Losing the previous save must never cost the new one. */
+async function keepPrevious(file: string, prev: string): Promise<void> {
+  try {
+    await renameWithRetry(file, prev);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.error(`[sauvegarde] ${prev} :`, (err as Error).message);
+  }
+}
+
+/** Atomic write: tmp file in the same folder + rename. With `prev`, what `file` held moves there first. */
+export async function writeFileAtomic(file: string, data: string | Uint8Array, prev?: string): Promise<void> {
   tmpCounter += 1;
   const tmp = `${file}.tmp-${process.pid}-${tmpCounter}`;
   await writeFile(tmp, data, 'utf8');
   try {
+    if (prev) await keepPrevious(file, prev);
     await renameWithRetry(tmp, file);
   } catch (err) {
     await unlink(tmp).catch(() => undefined);
@@ -115,7 +153,7 @@ export async function writeFileAtomic(file: string, data: string): Promise<void>
   }
 }
 
-/** Writes runs/<runId>/world.json (+ a small meta.json used by listRuns). Returns the world file path. */
+/** Writes runs/<runId>/world.json, keeps the save before it as world.prev.json (+ a small meta.json used by listRuns). Returns the world file path. */
 export function saveWorld(world: WorldState, opts: SaveOptions = {}): Promise<string> {
   const dir = opts.dir ?? runsDir();
   if (!isValidRunId(world.runId)) return Promise.reject(new Error(`Identifiant de run invalide : ${String(world.runId)}`));
@@ -124,11 +162,11 @@ export function saveWorld(world: WorldState, opts: SaveOptions = {}): Promise<st
   // Serialise synchronously so the saved state is the one at call time.
   const json = JSON.stringify(world);
   const finance = typeof opts.finance === 'function' ? opts.finance() : opts.finance;
-  const meta = JSON.stringify(runInfoOf(world, new Date().toISOString(), finance), null, 2);
+  const meta = JSON.stringify({ ...runInfoOf(world, new Date().toISOString(), finance), tick: world.tick }, null, 2);
   const prev = chains.get(world.runId) ?? Promise.resolve();
   const job = prev.catch(() => undefined).then(async () => {
     await mkdir(root, { recursive: true });
-    await writeFileAtomic(file, json);
+    await writeFileAtomic(file, json, join(root, PREV_FILE));
     await writeFileAtomic(join(root, META_FILE), meta);
     return file;
   });
@@ -168,14 +206,20 @@ export function worldFile(runId: string, dir = runsDir()): string {
   return join(dir, runId, WORLD_FILE);
 }
 
+/** A crash between the two renames of a save leaves only world.prev.json: that run still exists. */
 export function runExists(runId: string, dir = runsDir()): boolean {
-  return isValidRunId(runId) && existsSync(worldFile(runId, dir));
+  return isValidRunId(runId) && (existsSync(worldFile(runId, dir)) || existsSync(join(dir, runId, PREV_FILE)));
 }
 
 function looksLikeWorld(v: unknown): v is WorldState {
   if (!v || typeof v !== 'object') return false;
   const w = v as Partial<WorldState>;
   return typeof w.runId === 'string' && typeof w.day === 'number' && !!w.company && !!w.market && !!w.scenario && Array.isArray(w.ledger);
+}
+
+/** A save worth resuming from. JSON writes NaN as null, so a sum alone would not see it. */
+function isValidSave(v: unknown): v is WorldState {
+  return looksLikeWorld(v) && v.ledger.every((e) => Number.isFinite(e.amount));
 }
 
 /** What compaction will ask of a product once its old tasks are gone (scale §7.2): read from them while they are all here. */
@@ -206,6 +250,8 @@ function backfillProduct(w: WorldState, p: Product): void {
  * run goes on as it was. What a pillar owns (`company.org`, `company.growth`…) is filled by its `mount`.
  */
 export function migrateWorld(w: WorldState): WorldState {
+  const goal = w.market.events.find((e) => e.kind === 'goal_reached');
+  if (goal) w.company.goalReachedDay ??= goal.day; // version 2 saves too: the field came after them
   if (w.version >= 2) return w;
   const s = w.scenario;
   s.org ??= { ...LEGACY_ORG };
@@ -233,19 +279,156 @@ export function migrateWorld(w: WorldState): WorldState {
   return w;
 }
 
-/** Loads runs/<runId>/world.json; null when missing or unreadable. */
-export async function loadWorld(runId: string, opts: { dir?: string } = {}): Promise<WorldState | null> {
-  if (!isValidRunId(runId)) return null;
+async function readSave(file: string, runId: string): Promise<WorldState | null> {
   try {
-    const raw = await readFile(worldFile(runId, opts.dir), 'utf8');
-    const parsed: unknown = JSON.parse(raw);
-    if (!looksLikeWorld(parsed)) return null;
+    const raw = await readFile(file);
+    const text = file.endsWith('.gz') ? await gunzipAsync(raw) : raw;
+    const parsed: unknown = JSON.parse(text.toString('utf8'));
+    if (!isValidSave(parsed)) return null;
     if (!Array.isArray(parsed.activity)) parsed.activity = [];
     parsed.runId = runId;
     return migrateWorld(parsed);
   } catch {
     return null;
   }
+}
+
+/** Loads runs/<runId>/world.json; null when missing or unreadable. */
+export async function loadWorld(runId: string, opts: { dir?: string } = {}): Promise<WorldState | null> {
+  if (!isValidRunId(runId)) return null;
+  return readSave(worldFile(runId, opts.dir), runId);
+}
+
+async function checkpointDays(folder: string): Promise<number[]> {
+  const names = await readdir(folder).catch(() => [] as string[]);
+  return names.flatMap((n) => { const m = CHECKPOINT_RE.exec(n); return m ? [Number(m[1])] : []; }).sort((a, b) => b - a);
+}
+
+const checkpointFile = (day: number) => `day-${String(day).padStart(4, '0')}.json.gz`;
+
+/** The days worth keeping, newest first: the last 4 weeks, then one per 30 days, 12 files at most. */
+export function keptCheckpoints(days: readonly number[]): number[] {
+  const newest = [...days].sort((a, b) => b - a);
+  const kept = newest.slice(0, CHECKPOINT.weekly);
+  const months = new Set<number>();
+  for (const day of newest.slice(CHECKPOINT.weekly)) {
+    const month = Math.floor(day / CHECKPOINT.monthDays);
+    if (months.has(month)) continue;
+    months.add(month);
+    kept.push(day);
+  }
+  return kept.slice(0, CHECKPOINT.max);
+}
+
+/** runs/<runId>/checkpoints/day-0007.json.gz, for the day that just closed. The world is read now: a later tick never lands in it. */
+export async function saveCheckpoint(world: WorldState, dir = runsDir()): Promise<void> {
+  const folder = join(dir, world.runId, CHECKPOINTS);
+  const closed = world.tick === 0 ? world.day - 1 : world.day;
+  const gz = await gzipAsync(JSON.stringify(world));
+  await mkdir(folder, { recursive: true });
+  await writeFileAtomic(join(folder, checkpointFile(closed)), gz);
+  const days = await checkpointDays(folder);
+  const kept = new Set(keptCheckpoints(days));
+  await Promise.all(days.filter((d) => !kept.has(d)).map((d) => unlink(join(folder, checkpointFile(d))).catch(() => undefined)));
+}
+
+/** Ticks between what meta.json last saw and this older save. */
+async function ticksLost(root: string, world: WorldState): Promise<number> {
+  try {
+    const meta = JSON.parse(await readFile(join(root, META_FILE), 'utf8')) as { day?: unknown; tick?: unknown };
+    const day = Number(meta.day);
+    const tick = Number(meta.tick ?? 0);
+    if (!Number.isFinite(day) || !Number.isFinite(tick)) return 0;
+    return Math.max(0, (day - world.day) * TICKS_PER_DAY + tick - world.tick);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * world.json, then world.prev.json, then the checkpoints from the newest. Null only when none of them can be read: the
+ * agency must not start a new run over a life it could still resume.
+ */
+export async function loadWorldSafe(runId: string, opts: { dir?: string } = {}): Promise<SafeLoad | null> {
+  if (!isValidRunId(runId)) return null;
+  const root = join(opts.dir ?? runsDir(), runId);
+  const world = await readSave(join(root, WORLD_FILE), runId);
+  if (world) return { world, from: 'world' };
+  const folder = join(root, CHECKPOINTS);
+  const older: [string, 'prev' | 'checkpoint'][] = [
+    [join(root, PREV_FILE), 'prev'],
+    ...(await checkpointDays(folder)).map((d): [string, 'checkpoint'] => [join(folder, checkpointFile(d)), 'checkpoint']),
+  ];
+  for (const [file, from] of older) {
+    const found = await readSave(file, runId);
+    if (!found) continue;
+    await renameWithRetry(join(root, WORLD_FILE), join(root, BAD_FILE)).catch(() => undefined);
+    return { world: found, from, lostTicks: await ticksLost(root, found) };
+  }
+  return null;
+}
+
+/** The run the app last played. */
+export async function readCurrentRun(dir = runsDir()): Promise<string | null> {
+  try {
+    const { runId } = JSON.parse(await readFile(join(dir, CURRENT_FILE), 'utf8')) as { runId?: unknown };
+    return isValidRunId(runId) ? runId : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeCurrentRun(runId: string, dir = runsDir()): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await writeFileAtomic(join(dir, CURRENT_FILE), JSON.stringify({ runId }));
+}
+
+export async function readSessionLog(runId: string, dir = runsDir()): Promise<SessionRecord[]> {
+  try {
+    const log: unknown = JSON.parse(await readFile(join(dir, runId, SESSION_LOG), 'utf8'));
+    return Array.isArray(log) ? log as SessionRecord[] : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeSessionLog(runId: string, log: SessionRecord[], dir: string): Promise<void> {
+  await mkdir(join(dir, runId), { recursive: true });
+  await writeFileAtomic(join(dir, runId, SESSION_LOG), JSON.stringify(log.slice(-SESSION_LOG_MAX), null, 1));
+}
+
+/**
+ * The app opens a run. A record left without `stopAt` means the last stay ended in a crash: it closes as such, at the last
+ * save the disk saw.
+ */
+export async function openSessionRecord(runId: string, day: number, recovered?: SessionRecord['recovered'], dir = runsDir()): Promise<void> {
+  const log = await readSessionLog(runId, dir);
+  const last = log.at(-1);
+  if (last && !last.stopAt) {
+    const saved = await stat(join(dir, runId, META_FILE)).catch(() => null);
+    Object.assign(last, { stopAt: (saved?.mtime ?? new Date()).toISOString(), clean: false, day });
+  }
+  log.push({ startAt: new Date().toISOString(), clean: false, day, ...(recovered ? { recovered } : {}) });
+  await writeSessionLog(runId, log, dir);
+}
+
+/** The app leaves a run on purpose. */
+export async function closeSessionRecord(runId: string, day: number, dir = runsDir()): Promise<void> {
+  const log = await readSessionLog(runId, dir);
+  const last = log.at(-1);
+  if (!last || last.stopAt) return;
+  Object.assign(last, { stopAt: new Date().toISOString(), clean: true, day });
+  await writeSessionLog(runId, log, dir);
+}
+
+async function savedAtMs(root: string): Promise<number | null> {
+  for (const name of [WORLD_FILE, PREV_FILE]) {
+    try {
+      const st = await stat(join(root, name));
+      if (st.isFile()) return st.mtimeMs;
+    } catch { /* next */ }
+  }
+  return null;
 }
 
 /** Saved runs, most recently saved first. */
@@ -260,15 +443,8 @@ export async function listRuns(opts: { dir?: string } = {}): Promise<RunInfo[]> 
   const runs: (RunInfo & { mtimeMs: number })[] = [];
   for (const name of entries) {
     if (!isValidRunId(name)) continue;
-    const wf = join(dir, name, WORLD_FILE);
-    let mtimeMs: number;
-    try {
-      const st = await stat(wf);
-      if (!st.isFile()) continue;
-      mtimeMs = st.mtimeMs;
-    } catch {
-      continue;
-    }
+    const mtimeMs = await savedAtMs(join(dir, name));
+    if (mtimeMs === null) continue;
     const mtime = new Date(mtimeMs).toISOString();
     let info: RunInfo | null = null;
     try {

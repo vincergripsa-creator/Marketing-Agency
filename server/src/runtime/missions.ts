@@ -533,13 +533,14 @@ export function missionStatusLine(ctx: RuntimeCtx, m: Mission): string {
   const head = `Mission du fondateur (jour ${m.day}) « ${short(oneLine(m.text), 110)} »`;
   const product = world.company.products.find((p) => p.id === m.productId) ?? (m.nicheId ? world.company.products.find((p) => p.nicheId === m.nicheId && p.status !== 'killed') : undefined);
   const tasks = m.taskIds.map((id) => taskById(world, id)).filter((t): t is Task => !!t);
-  const done = tasks.filter((t) => t.status === 'done').length;
+  const done = (m.gone?.done ?? 0) + tasks.filter((t) => t.status === 'done').length;
+  const total = (m.gone?.tasks ?? 0) + tasks.length;
   const stage = tasks.find((t) => t.status === 'in_progress' || t.status === 'review') ?? tasks.find((t) => t.status === 'awaiting_founder' || t.status === 'pending');
   if (m.status === 'failed') return `${head} : échouée, ${oneLine((m.outcome ?? 'aucun résultat').split(/(?<=[.!?])\s/)[0]!)}`;
   if (m.status === 'done') return `${head} : terminée${product ? `, résultat « ${short(product.title, 60)} » ${STATUS_FR[product.status]}` : ''}${m.outcome && !product ? `, ${oneLine(m.outcome)}` : ''}`;
   const facts = [
     product ? `produit « ${short(product.title, 60)} » ${STATUS_FR[product.status]}` : m.nicheId ? `niche « ${short(nicheName(ctx, m.nicheId), 60)} », produit pas encore créé` : '',
-    tasks.length ? `${done}/${tasks.length} tâches terminées` : '',
+    total ? `${done}/${total} tâches terminées` : '',
     stage ? `étape en cours « ${short(stage.title, 70)} »` : '',
   ].filter(Boolean);
   return `${head} : en cours${facts.length ? `, ${facts.join(', ')}` : ''}`;

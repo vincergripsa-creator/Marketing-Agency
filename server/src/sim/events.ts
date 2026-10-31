@@ -4,6 +4,7 @@ import type { DifficultyProfile, Rng } from '../contracts.js';
 import type { Customer, Product, WorldEvent, WorldEventKind, WorldState } from '../shared.js';
 import { CONVERSION, EVENTS, FEES } from './balance.js';
 import { createCustomer, senderArchetype } from './customers.js';
+import { recentReviews } from './feedback.js';
 import { HOLD_REF, cashOf, heldAmount, recordLedger, revenueSince } from './finance.js';
 import { createMessage } from './inbox.js';
 import { difficultyProfile, markScammer, rollCreator } from './market.js';
@@ -97,13 +98,17 @@ const trendShift: Roll = (world, rng) => {
     { nicheId: niche.id, productId: (picked ?? affected)?.id ?? null });
 };
 
-/** Most recent buyer of the product with a hostile profile who has not rated it yet. */
+/** Orders the world keeps (COMPACT.orderDays): a reader that goes further back would differ once they leave. */
+const HOT_ORDER_DAYS = 120;
+
+/** Most recent buyer of the product with a hostile profile who has not rated it yet, in the orders and reviews compaction keeps. */
 function hostileBuyer(world: WorldState, p: Product): Customer | undefined {
-  const reviewed = new Set(p.stats.reviews.map((r) => r.customerId));
+  const reviewed = new Set(recentReviews(p).map((r) => r.customerId));
   const hostile = new Map(world.market.customers.filter((c) => c.archetype === 'troll' || c.archetype === 'karen').map((c) => [c.id, c]));
   const orders = world.market.orders;
   for (let i = orders.length - 1; i >= 0; i--) {
     const o = orders[i]!;
+    if (world.day - o.day >= HOT_ORDER_DAYS) break;
     if (o.productId === p.id && !reviewed.has(o.customerId) && hostile.has(o.customerId)) return hostile.get(o.customerId);
   }
   return undefined;

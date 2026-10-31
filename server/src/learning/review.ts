@@ -85,7 +85,8 @@ export async function performanceReview(world: WorldState, brain: BrainVault): P
     const p = a.perf ?? { done: 0, approved: 0, rejected: 0, failed: 0, score: 0 };
     const hasPerf = p.done + p.approved + p.rejected + p.failed > 0;
     const l = lifetime.get(a.id) ?? empty();
-    totals.set(a.id, hasPerf ? { done: p.done, approved: p.approved, rejected: p.rejected, failed: p.failed } : { done: l.done, approved: l.approved, rejected: l.rejected, failed: l.failed });
+    const gone = world.company.taskTotals?.agents?.[a.id]; // the tasks compaction took away
+    totals.set(a.id, hasPerf ? { done: p.done, approved: p.approved, rejected: p.rejected, failed: p.failed } : { done: l.done + (gone?.done ?? 0), approved: l.approved + (gone?.approved ?? 0), rejected: l.rejected + (gone?.rejected ?? 0), failed: l.failed + (gone?.failed ?? 0) });
   }
   const activeIds = agents.filter((a) => {
     const t = totals.get(a.id)!;

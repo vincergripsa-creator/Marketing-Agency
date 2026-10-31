@@ -6,13 +6,14 @@ import { hashString } from '../../core/ids.js';
 import type { AdDraft, MindContext } from '../../contracts.js';
 import { EDIT_BASELINE, planCut, TEMPOS } from '../../deliverables/videoCut.js';
 import type { RuntimeCtx } from '../ctx.js';
-import { addDeliverable, incident, nameOf, nicheBriefOf, nicheName, productOf, say, vocOf, writeRunFile, doneOutputs } from '../ctx.js';
+import { addDeliverable, incident, nameOf, nicheBriefOf, nicheName, productOf, say, vocOf, writeRunFile } from '../ctx.js';
 import { deliverables, learning, sim } from '../modules.js';
 import { addPlaybookRule, AD_FORMATS, bannedHits, directivesOf, HOOK_STYLES } from '../playbook.js';
 import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, type CampaignMetrics } from '../metrics.js';
 import { adHistory, companyPaidBlock, cooldownDays, launchableCreatives, MIN_CAMPAIGN_BUDGET, NO_TRACTION_ROAS, productHealth, productPaidBlock, promotionBlock, scalingRoom, STOP_LOSS_DAYS, STOP_LOSS_ROAS, TEST_CAMPAIGN_BUDGET, versionSince } from '../acquisition.js';
 import { planNote, planTarget } from '../allocator.js';
 import { adjusted, creditOf } from '../channels.js';
+import { COMPACT } from '../compaction.js';
 import { adsHold, REFUSAL_COOLDOWN_DAYS } from '../holds.js';
 import { officerId, ownersOfAny, roleHolders } from '../org/officers.js';
 import { dropTask } from '../pipeline.js';
@@ -66,17 +67,26 @@ function cutOf(ctx: RuntimeCtx, task: Task, agent: AgentState, input: { creative
   return { ...cut, craft: sim.scoreCut(cut).craft };
 }
 
-/** Every hook written for a product, newest first. */
+/** The hooks a product remembers. */
+const HOOKS_KEPT = 60;
+
+function hooksIn(output: Record<string, unknown> | null): HookItem[] {
+  const hooks = Array.isArray(output?.hooks) ? (output.hooks as Partial<HookItem>[]) : [];
+  return hooks.flatMap((r) => (r && typeof r.hook === 'string' && isHookStyle(r.hookStyle) ? [{ hook: r.hook, hookStyle: r.hookStyle }] : []));
+}
+
+/**
+ * The hooks written for a product, newest first: kept on it, or read off the tasks of a world that has none yet. Next to what
+ * is kept, only tasks every world still holds are read, or a hook past the cap would come back once its row is compacted away.
+ */
 export function hookPool(ctx: RuntimeCtx, productId: string): HookItem[] {
-  const out: HookItem[] = [];
-  for (const o of doneOutputs(ctx.world, 'write_ad_hooks', productId).reverse()) {
-    const hooks = Array.isArray(o.hooks) ? (o.hooks as unknown[]) : [];
-    for (const h of hooks) {
-      const r = h as Partial<HookItem>;
-      if (r && typeof r.hook === 'string' && isHookStyle(r.hookStyle)) out.push({ hook: r.hook, hookStyle: r.hookStyle });
-    }
-  }
-  return out;
+  const w = ctx.world;
+  const kept = productOf(ctx, productId)?.hooks;
+  const rows = w.company.tasks.filter((t) => t.kind === 'write_ad_hooks' && t.status === 'done' && t.input.productId === productId && (!kept || w.day - (t.dayDone ?? 0) < COMPACT.taskDays));
+  const written = rows.reverse().flatMap((t) => hooksIn(t.output));
+  if (!kept) return written;
+  const known = new Set(kept.map((h) => h.hook));
+  return [...kept, ...written.filter((h) => !known.has(h.hook))];
 }
 
 function bannedFor(ctx: RuntimeCtx, product: Product, agentId: string): string[] {
@@ -279,6 +289,7 @@ export const growthHandlers: HandlerMap = {
     async onDone(ctx, task) {
       const n = Math.max(0, Math.min(3, Math.round(numOf(task.input.produce) ?? 0)));
       const product = productOf(ctx, task.input.productId);
+      if (product) product.hooks = (product.hooks ? [...hooksIn(task.output), ...product.hooks] : hookPool(ctx, product.id)).slice(0, HOOKS_KEPT);
       if (!n || !product || product.status === 'killed' || task.output?.skipped === true) return;
       const used = ctx.world.company.creatives.filter((c) => c.productId === product.id).length;
       const forced = Array.isArray(task.input.experimentVariants) ? (task.input.experimentVariants as string[]) : [];
@@ -468,7 +479,7 @@ export const growthHandlers: HandlerMap = {
         return { summary: `Campagne prête (${eur(daily)}/jour, ${ready.length} créas) : en attente du fondateur.`, awaitFounder: `Lancer une campagne ${label} à ${eur(daily)}/jour pour « ${product.title} »` };
       }
       const creatives = ready.slice(0, 3);
-      const n = ctx.world.company.campaigns.filter((c) => c.productId === product.id).length + 1;
+      const n = (product.campaignCount ?? 0) + ctx.world.company.campaigns.filter((c) => c.productId === product.id).length + 1;
       // Only a channel's own test counts as one: the CEO's watchdog test stays a plain TikTok campaign.
       const placement = ch === 'tiktok' ? {} : { channel: ch, ...(task.input.test === true ? { test: true } : {}) };
       const input = { productId: product.id, name: `${short(product.title, 40)} — ${ch === 'tiktok' ? '' : `${label}, `}campagne ${n}`, creativeIds: creatives.map((c) => c.id), dailyBudget: daily, targeting: targetingFor(ctx, product), createdBy: agent.id, ...placement };

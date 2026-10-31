@@ -93,6 +93,23 @@ beforeAll(async () => {
 afterAll(() => { if (root) rmSync(root, { recursive: true, force: true }); });
 afterEach(() => setFontDir());
 
+describe('the reviews of a page', () => {
+  const review = (i: number) => ({ id: `rev_${i}`, day: i, rating: 5, text: 'Très utile.', customerId: 'cus_1', orderId: 'ord_1' });
+
+  it('count every buyer who wrote one, not the 60 the product keeps', () => {
+    const reviews = Array.from({ length: 60 }, (_, i) => review(i)) as Product['stats']['reviews'];
+    const html = plain(shop({}, { stats: { ...demoProduct.stats, reviews, rating: 4.8, ratingCount: 241 } }));
+    expect(html).toContain('241 avis vérifiés');
+    expect(html).toContain('241 avis</span>');
+    expect(html).not.toContain('60 avis');
+  });
+
+  it('a product with no count yet shows what it holds', () => {
+    const reviews = [review(1), review(2)] as Product['stats']['reviews'];
+    expect(plain(shop({}, { stats: { ...demoProduct.stats, reviews, rating: 5 } }))).toContain('2 avis vérifiés');
+  });
+});
+
 describe('nothing leaves the file', () => {
   it('no Google Fonts, no external URL, no resource loaded from anywhere', () => {
     const html = noFonts(htmlOf(page));

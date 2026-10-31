@@ -40,6 +40,14 @@ export function safeResolve(base: string, requested: string): string | null {
   return full;
 }
 
+/** What a run folder holds of the hidden truth: saves and checkpoints are whole worlds, the archive keeps customers with their archetype (D51). */
+const SERVER_ONLY = /^(world[^/]*\.json|checkpoints\/|archive\/)/i;
+
+/** `rel`: a path inside a run folder. */
+export function isServerOnlyFile(rel: string): boolean {
+  return SERVER_ONLY.test(rel.replace(/\\/g, '/'));
+}
+
 /** Relative note path accepted by the brain endpoints ("lecons/ads.md"). */
 export function isSafeRelativePath(p: unknown): p is string {
   if (typeof p !== 'string' || !p || p.length > 300 || p.includes('\0')) return false;

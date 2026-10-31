@@ -3,7 +3,7 @@
  * The HTTP layer only talks to a `SessionLike`, so it can be tested with a fake session.
  */
 import { randomInt } from 'node:crypto';
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, realpathSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { basename, extname, join, relative } from 'node:path';
@@ -12,7 +12,7 @@ import type { AdRatio, ApproveResponse, ChatResponse, ControlResponse, CreativeV
 import { isEntryPoint } from './entry.js';
 import { config, mindModeLabel } from './env.js';
 import {
-  applyCors, errorStatus, HttpError, isSafeRelativePath, mimeFor, parseControl, readJsonBody, requireText, safeResolve,
+  applyCors, errorStatus, HttpError, isSafeRelativePath, isServerOnlyFile, mimeFor, parseControl, readJsonBody, requireText, safeResolve,
   sanitizeScenario, sendError, sendJson, sendRawJson, type ControlAction, type Speed,
 } from './http.js';
 import { flushSaves, isValidRunId, runsDir } from './persist.js';
@@ -41,6 +41,8 @@ export interface SessionLike {
   listRuns(): Promise<unknown[]>;
   videoIndex?(): VideoIndex;
   requestVideo?(creativeId: string, ratio?: AdRatio): Promise<CreativeVideo>;
+  extendRun?(): Promise<SessionInfoLike>;
+  setWatchers?(n: number): void;
 }
 
 export interface AgencyServerOptions {
@@ -55,6 +57,9 @@ export interface AgencyServer {
   hub: SseHub;
   close(): Promise<void>;
 }
+
+/** Exit code of a server whose port is taken: `scripts/forever.mjs` stops on it, since trying again would change nothing. */
+export const PORT_BUSY_EXIT = 78;
 
 const RUN_PREFIX = '/runs/';
 const VIDEO_RATIOS: readonly unknown[] = ['9:16', '4:5', '1:1', '2:3'] satisfies Exclude<AdRatio, 'text'>[];
@@ -104,6 +109,15 @@ function serveFile(req: IncomingMessage, res: ServerResponse, file: string, cach
   return true;
 }
 
+/** The path as the disk knows it: Windows also opens `WORLD~1.JSO` and `CHECKP~1/x`, short names no pattern on the URL can see. */
+function diskPath(base: string, file: string): string {
+  try {
+    return relative(realpathSync.native(base), realpathSync.native(file));
+  } catch {
+    return relative(base, file); // nothing there: the 404 further down
+  }
+}
+
 /** Shown on / when the UI has not been built (dev mode: Vite serves it on :5173). */
 export function devLandingPage(port: number): string {
   return `<!doctype html>
@@ -130,6 +144,7 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
   const runsRoot = opts.runsRoot ?? runsDir();
   const webDist = opts.webDist ?? join(repoRoot(), 'web', 'dist');
   const hub = new SseHub(session, opts.sse);
+  hub.onClients((n) => session.setWatchers?.(n));
 
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = req.method ?? 'GET';
@@ -157,6 +172,14 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           const info = await session.control(action, speed);
           hub.snapshotSoon(true);
           const body: ControlResponse = { ok: true, status: session.status(), speed: info.speed, playing: info.playing, message: controlMessage(action, info), session: info };
+          return sendJson(res, 200, body);
+        }
+        case '/api/run/extend': {
+          if (!isPost) break;
+          if (!session.extendRun) throw new HttpError(503, "Prolongation indisponible sur ce serveur.");
+          const info = await session.extendRun();
+          hub.snapshotSoon(true);
+          const body: ControlResponse = { ok: true, status: session.status(), speed: info.speed, playing: info.playing, message: "L'agence continue, sans fin.", session: info };
           return sendJson(res, 200, body);
         }
         case '/api/scenario': {
@@ -252,8 +275,8 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
       const base = join(runsRoot, runId);
       const file = safeResolve(base, filePart);
       if (!file) throw new HttpError(403, 'Chemin refusé.');
-      // world.json holds the hidden market truth: never served.
-      if (/^world\.json/i.test(relative(base, file).replace(/\\/g, '/'))) throw new HttpError(403, 'Fichier réservé au serveur.');
+      // Saves, checkpoints and the archive hold the hidden truth: never served.
+      if (isServerOnlyFile(relative(base, file)) || isServerOnlyFile(diskPath(base, file))) throw new HttpError(403, 'Fichier réservé au serveur.');
       if (!serveFile(req, res, file, 'no-cache')) throw new HttpError(404, 'Fichier introuvable.');
       return;
     }
@@ -288,7 +311,7 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
     route(req, res).catch((err: unknown) => {
       const status = errorStatus(err);
       const msg = err instanceof Error ? err.message : String(err);
-      if (status < 500) return sendError(res, status, msg);
+      if (status < 500 || status === 503) return sendError(res, status, msg); // 503: the agency is not up yet, or could not start
       console.error(`[api] ${req.method} ${req.url} :`, err);
       sendError(res, 500, `Erreur interne du serveur : ${msg}`);
     }).catch(() => {
@@ -320,7 +343,11 @@ function safeDecode(s: string): string | null {
 
 /** Placeholder used when the agency itself could not start: the API answers 503 with the reason. */
 export function unavailableSession(reason: string): SessionLike {
-  const fail = (): never => { throw new HttpError(503, `L'agence n'a pas pu démarrer : ${reason}`); };
+  return closedSession(`L'agence n'a pas pu démarrer : ${reason}`);
+}
+
+function closedSession(message: string): SessionLike {
+  const fail = (): never => { throw new HttpError(503, message); };
   return {
     info: () => ({ runId: '', playing: false, speed: 1, mindMode: 'heuristic' }),
     status: () => 'paused',
@@ -338,15 +365,23 @@ export function unavailableSession(reason: string): SessionLike {
     listRuns: async () => fail(),
     videoIndex: fail,
     requestVideo: async () => fail(),
+    extendRun: async () => fail(),
   };
 }
 
-let guardsInstalled = false;
-function installCrashGuards(): void {
-  if (guardsInstalled) return;
-  guardsInstalled = true;
-  process.on('unhandledRejection', (reason) => console.error('[agence] promesse rejetée non gérée :', reason));
-  process.on('uncaughtException', (err) => console.error('[agence] exception non gérée (le serveur continue) :', err));
+const guarded = new WeakSet<NodeJS.EventEmitter>();
+let crashSave: (() => Promise<void>) | null = null;
+
+/** The server outlives what escapes it. `save` keeps the run of the moment on an uncaught exception. */
+export function installCrashGuards(save?: () => Promise<void>, bus: NodeJS.EventEmitter = process): void {
+  if (save) crashSave = save;
+  if (guarded.has(bus)) return;
+  guarded.add(bus);
+  bus.on('unhandledRejection', (reason) => console.error('[agence] promesse rejetée non gérée :', reason));
+  bus.on('uncaughtException', (err) => {
+    console.error('[agence] exception non gérée (le serveur continue) :', err);
+    crashSave?.().catch((e) => console.error('[agence] sauvegarde de secours :', e));
+  });
 }
 
 function listen(server: Server, port: number): Promise<void> {
@@ -359,18 +394,48 @@ function listen(server: Server, port: number): Promise<void> {
   });
 }
 
-/** Entry point: boots the session (most recent run, or a new one), the HTTP server and the SSE bridge. */
+/**
+ * Entry point: the port first, then the session (most recent run, or a new one) and the SSE bridge. Opening a run writes to it, so a
+ * server that cannot have the port must not get that far: it would take over the run of the one that has it.
+ */
 export async function startServer(port = config.port): Promise<AgencyServer> {
   installCrashGuards();
-  let session: SessionLike;
+  const session = closedSession("L'agence démarre encore : réessaie dans un instant.");
   let shutdownSession: () => Promise<void> = async () => { await flushSaves(); };
-  let bindEvents: (hub: SseHub) => void = () => undefined;
+  const app = createAgencyServer({ session });
+  onActivity((a) => app.hub.pushActivity(a));
+
+  try {
+    await listen(app.server, port);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    console.error(code === 'EADDRINUSE'
+      ? `Le port ${port} est déjà utilisé : arrête l'autre serveur ou change PORT dans .env.`
+      : `Impossible d'écouter sur le port ${port} : ${(err as Error).message}`);
+    await shutdownSession().catch(() => undefined);
+    process.exit(code === 'EADDRINUSE' ? PORT_BUSY_EXIT : 1);
+  }
+
+  let stopping = false;
+  const stop = async (signal: string) => {
+    if (stopping) process.exit(0);
+    stopping = true;
+    console.log(`\n${signal} reçu : sauvegarde du run et arrêt du serveur…`);
+    const force = setTimeout(() => process.exit(0), 5000);
+    force.unref();
+    await shutdownSession().catch((e) => console.error('[agence] sauvegarde finale :', e));
+    await app.close().catch(() => undefined);
+    process.exit(0);
+  };
+  process.once('SIGINT', () => void stop('SIGINT'));
+  process.once('SIGTERM', () => void stop('SIGTERM'));
+
   let degraded = false;
   try {
     const { AgencySession } = await import('./session.js');
     const live = new AgencySession();
     await live.start();
-    session = {
+    Object.assign(session, {
       info: () => live.info(),
       status: () => live.world.status,
       snapshotJson: (god) => live.snapshotJson(god),
@@ -389,34 +454,22 @@ export async function startServer(port = config.port): Promise<AgencyServer> {
       listRuns: () => live.listRuns(),
       videoIndex: () => live.videoIndex(),
       requestVideo: (id, ratio) => live.requestVideo(id, ratio),
-    };
+      extendRun: () => live.extendRun(),
+      setWatchers: (n) => live.setWatchers(n),
+    } satisfies SessionLike);
+    installCrashGuards(() => live.saveAfterCrash());
     shutdownSession = () => live.shutdown();
-    bindEvents = (hub) => {
-      live.on('tick', () => hub.tick());
-      live.on('run', () => hub.snapshotSoon(true));
-      live.on('state', () => hub.snapshotSoon());
-      live.onVideo((id, video) => hub.video(id, video));
-    };
+    live.on('tick', () => app.hub.tick());
+    live.on('run', () => app.hub.snapshotSoon(true));
+    live.on('state', () => app.hub.snapshotSoon());
+    live.onVideo((id, video) => app.hub.video(id, video));
+    live.setWatchers(app.hub.size);
+    app.hub.snapshotSoon(true); // whoever connected during the boot
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     console.error("[agence] démarrage de l'agence impossible :", err);
-    session = unavailableSession(reason);
+    Object.assign(session, unavailableSession(reason));
     degraded = true;
-  }
-
-  const app = createAgencyServer({ session });
-  onActivity((a) => app.hub.pushActivity(a));
-  bindEvents(app.hub);
-
-  try {
-    await listen(app.server, port);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    console.error(code === 'EADDRINUSE'
-      ? `Le port ${port} est déjà utilisé : arrête l'autre serveur ou change PORT dans .env.`
-      : `Impossible d'écouter sur le port ${port} : ${(err as Error).message}`);
-    await shutdownSession().catch(() => undefined);
-    process.exit(1);
   }
 
   const info = session.info();
@@ -424,20 +477,6 @@ export async function startServer(port = config.port): Promise<AgencyServer> {
   console.log(degraded
     ? `Pixel Agency : serveur en ligne sur http://localhost:${port}, mais l'agence n'a pas pu démarrer (voir l'erreur ci-dessus) · cerveau : ${mindModeLabel(config.mindMode)}`
     : `Pixel Agency en ligne sur http://localhost:${port} · cerveau : ${mindModeLabel(info.mindMode)}${runLabel}${info.playing ? ` · l'agence travaille (×${info.speed})` : ''}`);
-
-  let stopping = false;
-  const stop = async (signal: string) => {
-    if (stopping) process.exit(0);
-    stopping = true;
-    console.log(`\n${signal} reçu : sauvegarde du run et arrêt du serveur…`);
-    const force = setTimeout(() => process.exit(0), 5000);
-    force.unref();
-    await shutdownSession().catch((e) => console.error('[agence] sauvegarde finale :', e));
-    await app.close().catch(() => undefined);
-    process.exit(0);
-  };
-  process.once('SIGINT', () => void stop('SIGINT'));
-  process.once('SIGTERM', () => void stop('SIGTERM'));
   return app;
 }
 

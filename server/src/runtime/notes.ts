@@ -5,8 +5,8 @@
 import type { AgentId, Product } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { addDeliverable, appendNote, nicheName, writeNote } from './ctx.js';
-import { productMetrics } from './metrics.js';
-import { dec, eur, pct, slugify, uniq } from './util.js';
+import { productMetrics, reviewCount } from './metrics.js';
+import { dec, eur, pct, round2, slugify, uniq } from './util.js';
 
 export function nicheSlug(ctx: RuntimeCtx, nicheId: string): string {
   return slugify(nicheName(ctx, nicheId));
@@ -112,13 +112,13 @@ export async function writePostMortem(ctx: RuntimeCtx, product: Product, reason:
     '## Les chiffres',
     `| Indicateur | Valeur |`, `|---|---|`,
     `| Jours en ligne | ${daysLive} |`,
-    `| Ventes | ${m.sales} |`,
-    `| Chiffre d'affaires net | ${eur(m.revenue)} |`,
+    `| Ventes | ${product.stats.sales} |`,
+    `| Chiffre d'affaires net | ${eur(round2(product.stats.revenue - product.stats.refundAmount))} |`,
     `| Dépense pub | ${eur(m.spend)} |`,
     `| ROAS | ${roas} |`,
     `| CTR des pubs | ${pct(m.ctr, 2)} |`,
-    `| Remboursements | ${m.refunds} (${pct(m.refundRate)}) |`,
-    `| Note moyenne | ${product.stats.rating ? dec(product.stats.rating, 1) : '—'} (${product.stats.reviews.length} avis) |`,
+    `| Remboursements | ${product.stats.refunds} (${pct(product.stats.sales ? product.stats.refunds / product.stats.sales : 0)}) |`,
+    `| Note moyenne | ${product.stats.rating ? dec(product.stats.rating, 1) : '—'} (${reviewCount(product)} avis) |`,
     `| Qualité PDF / page de vente | ${product.quality?.overall ?? '—'} / ${product.salesQuality?.overall ?? '—'} |`,
     '',
     '## Ce qu’on retient',

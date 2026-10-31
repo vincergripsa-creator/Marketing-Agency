@@ -32,6 +32,7 @@ import { CANDIDATES } from './org/catalog.js';
 import { isLegacyOrg } from './org/constants.js';
 import { officerId, officerOf } from './org/officers.js';
 import { speedFor } from './org/reconcile.js';
+import { logDecision } from './digest.js';
 import { activeCampaigns, currentBudget } from './metrics.js';
 import { PILLARS, type Worked } from './pillars.js';
 import { STREAM } from './streams.js';
@@ -151,9 +152,13 @@ export class Company implements CompanyApi {
     this.ctx.channelRng = streamRng(world.scenario.seed, STREAM.channels, day, tick);
   }
 
-  /** The session loop's last resort lands with its loop (P9.1). */
-  skipTick(_reason: string): void {
-    throw new Error('not landed');
+  /** Last resort of the session loop: this tick will not run, the clock moves on and the digest says so. */
+  skipTick(reason: string): void {
+    const w = this.world;
+    if (w.status === 'finished') return;
+    logDecision(w, { kind: 'incident', who: 'system', text: `Créneau ${w.tick} du jour ${w.day} sauté après des pannes répétées`, why: short(reason, 160) });
+    emit(w, { agentId: null, kind: 'event', text: `Le créneau ${w.tick} du jour ${w.day} est sauté, l'agence reprend au suivant (${short(reason, 100)}).` });
+    this.advance();
   }
 
   async runDays(days: number, onDay?: (kpi: DailyKpi) => void): Promise<void> {
@@ -959,10 +964,11 @@ export class Company implements CompanyApi {
         speak(this.ctx, 'cfo', `trésorerie à ${eur(fin.cash)}, toutes les pubs sont coupées`, 'finance');
       }
     } else if (w.status === 'bankrupt') {
-      w.status = w.market.events.some((e) => e.kind === 'goal_reached') ? 'goal_reached' : 'running';
+      w.status = w.company.goalReachedDay !== undefined ? 'goal_reached' : 'running';
       speak(this.ctx, 'cfo', `la trésorerie redevient positive (${eur(fin.cash)})`, 'finance');
     }
-    if (fin.profit >= w.scenario.goal.targetProfit && !w.market.events.some((e) => e.kind === 'goal_reached')) {
+    if (fin.profit >= w.scenario.goal.targetProfit && w.company.goalReachedDay === undefined) {
+      w.company.goalReachedDay = w.day;
       const { targetProfit, byDay } = w.scenario.goal;
       const late = w.day > byDay;
       if (late) this.pushEvent('goal_reached', "Objectif atteint après l'échéance", `${eur(fin.profit)} de profit cumulé au jour ${w.day}, pour ${eur(targetProfit)} visés avant le jour ${byDay}. L'agence continue de tourner.`, 'info');
@@ -1013,7 +1019,7 @@ export class Company implements CompanyApi {
     if (w.tick >= TICKS_PER_DAY) {
       w.tick = 0;
       w.day += 1;
-      if (w.day > w.scenario.horizonDays) {
+      if (!w.scenario.openEnded && w.day > w.scenario.horizonDays) {
         w.status = 'finished';
         const fin = sim.financeSnapshot(w);
         emit(w, { agentId: officerId(w, 'ceo'), kind: 'event', text: `Fin de la simulation après ${w.scenario.horizonDays} jours : profit cumulé ${eur(fin.profit)}, trésorerie ${eur(fin.cash)}.` });

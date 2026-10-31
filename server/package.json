@@ -8,6 +8,7 @@
     "start": "tsx src/api/server.ts",
     "sim": "tsx src/cli.ts",
     "test": "vitest run",
+    "test:long": "vitest run --mode long test/longrun.test.ts",
     "test:web": "vitest run --root ../web/src",
     "typecheck": "tsc -p tsconfig.json",
     "balance": "tsx scripts/balance.ts",
