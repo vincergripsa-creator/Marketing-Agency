@@ -1,29 +1,33 @@
-import type { DesignSpec } from '../shared.js';
-import { isDark, safePalette, type Palette } from './color.js';
+import type { DesignSpec, InkSet } from '../shared.js';
+import { isDark, isHex, safeColor, safePalette, type Palette } from './color.js';
 import { hashString, normalizeKey } from './text.js';
+import { isVoice, voiceFor } from './voices.js';
 
 export type Motif = DesignSpec['motif'];
 export type CoverLayout = DesignSpec['coverLayout'];
 
-interface PaletteDef { name: string; family: string; palette: Palette }
+interface PaletteDef { name: string; family: string; palette: Palette; inks: InkSet }
 
-/** Curated, harmonious palettes (bg = cover/hero background, soft = light tint for boxes). */
+/**
+ * Curated, harmonious palettes (bg = cover/hero background, soft = light tint for boxes), each with its print inks.
+ * Paper is never pure white; `ink` carries text, `a` carries display text on paper. Smaller text in `a` or `b` goes through `ensureContrast(c, paper, 4.5)`.
+ */
 export const PALETTES: readonly PaletteDef[] = [
-  { name: 'Nuit douce', family: 'parentalite', palette: { bg: '#1f2a4d', primary: '#2e4272', secondary: '#8fa8d8', accent: '#f6b48f', ink: '#1b2238', soft: '#eef2fb' } },
-  { name: 'Pêche tendre', family: 'parentalite', palette: { bg: '#fff1e8', primary: '#d9735a', secondary: '#7fa7c9', accent: '#f4c95d', ink: '#3a2e39', soft: '#fff6f1' } },
-  { name: 'Forêt chaleureuse', family: 'animaux', palette: { bg: '#f3efe0', primary: '#3f7d58', secondary: '#a4c686', accent: '#e8a33d', ink: '#1f3326', soft: '#f1f6ec' } },
-  { name: 'Prairie', family: 'animaux', palette: { bg: '#e6f2df', primary: '#4e8d3a', secondary: '#f2c14e', accent: '#d9643a', ink: '#233021', soft: '#f4faf1' } },
-  { name: 'Marine & or', family: 'argent', palette: { bg: '#0f1d3a', primary: '#1b2f5c', secondary: '#3c5a99', accent: '#d4af37', ink: '#121a2e', soft: '#f4f2ea' } },
-  { name: 'Émeraude', family: 'argent', palette: { bg: '#0e3b34', primary: '#136f5e', secondary: '#5fb49c', accent: '#f2c14e', ink: '#0f2a25', soft: '#edf7f3' } },
-  { name: 'Corail vitalité', family: 'sante', palette: { bg: '#fff0ec', primary: '#e05a47', secondary: '#1fa2a0', accent: '#ffb347', ink: '#2c2a2e', soft: '#fff5f2' } },
-  { name: 'Lagon', family: 'sante', palette: { bg: '#e3f5f4', primary: '#12807f', secondary: '#ff7a6b', accent: '#ffd166', ink: '#16302f', soft: '#f0faf9' } },
-  { name: 'Indigo studieux', family: 'etudes', palette: { bg: '#262a6b', primary: '#3b3f9e', secondary: '#7c83e8', accent: '#ffd23f', ink: '#1c1f4a', soft: '#f0f1fd' } },
-  { name: 'Sauge & terracotta', family: 'maison', palette: { bg: '#eef0e6', primary: '#5f8466', secondary: '#c9d6c3', accent: '#c8664a', ink: '#2b3428', soft: '#f5f7f1' } },
-  { name: 'Coucher de soleil', family: 'voyage', palette: { bg: '#ffe0c2', primary: '#e4572e', secondary: '#6a4c93', accent: '#ffc857', ink: '#2d1e2f', soft: '#fff4ea' } },
-  { name: 'Blush & or', family: 'mariage', palette: { bg: '#fbeced', primary: '#b9606d', secondary: '#e8c4c8', accent: '#c9a15b', ink: '#3b2a2e', soft: '#fdf5f6' } },
-  { name: 'Lavande', family: 'mental', palette: { bg: '#efeaf8', primary: '#6c5aa8', secondary: '#b9a7e3', accent: '#f29e8e', ink: '#2a2440', soft: '#f7f4fc' } },
-  { name: 'Électrique', family: 'tech', palette: { bg: '#111827', primary: '#4f46e5', secondary: '#22d3ee', accent: '#facc15', ink: '#111827', soft: '#eef2ff' } },
-  { name: 'Cuisine gourmande', family: 'cuisine', palette: { bg: '#fff4e0', primary: '#c8501a', secondary: '#7fa650', accent: '#f1c40f', ink: '#3a2a1a', soft: '#fff9ef' } },
+  { name: 'Nuit douce', family: 'parentalite', palette: { bg: '#1f2a4d', primary: '#2e4272', secondary: '#8fa8d8', accent: '#f6b48f', ink: '#1b2238', soft: '#eef2fb' }, inks: { paper: '#f4ecdf', ink: '#131a3b', a: '#27357a', b: '#ee7a5b', c: '#f5c971' } },
+  { name: 'Pêche tendre', family: 'parentalite', palette: { bg: '#fff1e8', primary: '#d9735a', secondary: '#7fa7c9', accent: '#f4c95d', ink: '#3a2e39', soft: '#fff6f1' }, inks: { paper: '#fbf0e6', ink: '#2e2236', a: '#b5483a', b: '#6f97be', c: '#f3c65c' } },
+  { name: 'Forêt chaleureuse', family: 'animaux', palette: { bg: '#f3efe0', primary: '#3f7d58', secondary: '#a4c686', accent: '#e8a33d', ink: '#1f3326', soft: '#f1f6ec' }, inks: { paper: '#f6efe2', ink: '#17352b', a: '#2c6a4c', b: '#e25f36', c: '#f3b846' } },
+  { name: 'Prairie', family: 'animaux', palette: { bg: '#e6f2df', primary: '#4e8d3a', secondary: '#f2c14e', accent: '#d9643a', ink: '#233021', soft: '#f4faf1' }, inks: { paper: '#f4f3e1', ink: '#1f3019', a: '#44802f', b: '#d9572f', c: '#f2c14e' } },
+  { name: 'Marine & or', family: 'argent', palette: { bg: '#0f1d3a', primary: '#1b2f5c', secondary: '#3c5a99', accent: '#d4af37', ink: '#121a2e', soft: '#f4f2ea' }, inks: { paper: '#f2eee3', ink: '#0b1b36', a: '#12505c', b: '#c9962e', c: '#d9502f' } },
+  { name: 'Émeraude', family: 'argent', palette: { bg: '#0e3b34', primary: '#136f5e', secondary: '#5fb49c', accent: '#f2c14e', ink: '#0f2a25', soft: '#edf7f3' }, inks: { paper: '#f2f0e4', ink: '#0c2b26', a: '#0f6b5a', b: '#e3b23c', c: '#e0634a' } },
+  { name: 'Corail vitalité', family: 'sante', palette: { bg: '#fff0ec', primary: '#e05a47', secondary: '#1fa2a0', accent: '#ffb347', ink: '#2c2a2e', soft: '#fff5f2' }, inks: { paper: '#faf0e8', ink: '#24222c', a: '#c8402e', b: '#14807e', c: '#ffb347' } },
+  { name: 'Lagon', family: 'sante', palette: { bg: '#e3f5f4', primary: '#12807f', secondary: '#ff7a6b', accent: '#ffd166', ink: '#16302f', soft: '#f0faf9' }, inks: { paper: '#eff5ee', ink: '#0f2f33', a: '#0e7c7b', b: '#f2643d', c: '#f9c74f' } },
+  { name: 'Indigo studieux', family: 'etudes', palette: { bg: '#262a6b', primary: '#3b3f9e', secondary: '#7c83e8', accent: '#ffd23f', ink: '#1c1f4a', soft: '#f0f1fd' }, inks: { paper: '#f5f2ea', ink: '#1b1d52', a: '#3d3fb0', b: '#e4572e', c: '#ffc83d' } },
+  { name: 'Sauge & terracotta', family: 'maison', palette: { bg: '#eef0e6', primary: '#5f8466', secondary: '#c9d6c3', accent: '#c8664a', ink: '#2b3428', soft: '#f5f7f1' }, inks: { paper: '#f3eee1', ink: '#26342a', a: '#5b8b65', b: '#c75f3c', c: '#e9be68' } },
+  { name: 'Coucher de soleil', family: 'voyage', palette: { bg: '#ffe0c2', primary: '#e4572e', secondary: '#6a4c93', accent: '#ffc857', ink: '#2d1e2f', soft: '#fff4ea' }, inks: { paper: '#fbeedd', ink: '#2d1e2f', a: '#6a4c93', b: '#e4572e', c: '#ffc857' } },
+  { name: 'Blush & or', family: 'mariage', palette: { bg: '#fbeced', primary: '#b9606d', secondary: '#e8c4c8', accent: '#c9a15b', ink: '#3b2a2e', soft: '#fdf5f6' }, inks: { paper: '#fbf3ee', ink: '#3b2a2e', a: '#a84e5e', b: '#c9a15b', c: '#e8c4c8' } },
+  { name: 'Lavande', family: 'mental', palette: { bg: '#efeaf8', primary: '#6c5aa8', secondary: '#b9a7e3', accent: '#f29e8e', ink: '#2a2440', soft: '#f7f4fc' }, inks: { paper: '#f5f1f8', ink: '#2a2440', a: '#6c5aa8', b: '#f0907e', c: '#f4ce7c' } },
+  { name: 'Électrique', family: 'tech', palette: { bg: '#111827', primary: '#4f46e5', secondary: '#22d3ee', accent: '#facc15', ink: '#111827', soft: '#eef2ff' }, inks: { paper: '#eef0f7', ink: '#111827', a: '#4338ca', b: '#06b6d4', c: '#facc15' } },
+  { name: 'Cuisine gourmande', family: 'cuisine', palette: { bg: '#fff4e0', primary: '#c8501a', secondary: '#7fa650', accent: '#f1c40f', ink: '#3a2a1a', soft: '#fff9ef' }, inks: { paper: '#fbf1e0', ink: '#3a2a1a', a: '#b84a16', b: '#6f9a3f', c: '#f1c40f' } },
 ];
 
 /** Accent-free words between spaces, so that a key is matched from the start of a word. */
@@ -178,20 +182,34 @@ export function designFor(input: { nicheName: string; category: string; seed: nu
     : elegant ? 'Times-Bold' : 'Helvetica-Bold';
   const bodyFont: DesignSpec['bodyFont'] = family === 'mariage' || /litter|roman|poesie/.test(hint) ? 'Times-Roman' : 'Helvetica';
 
-  return { palette: { ...def.palette }, motif, coverLayout, titleFont, bodyFont, seed, ...(family ? { family } : {}) };
+  return { palette: { ...def.palette }, motif, coverLayout, titleFont, bodyFont, seed, ...(family ? { family } : {}), voice: voiceFor(family, hint), inks: { ...def.inks } };
+}
+
+/** Saved inks, as #rrggbb, when all five are colours. */
+function safeInks(s: InkSet | undefined): InkSet | null {
+  if (!s || ![s.paper, s.ink, s.a, s.b, s.c].every(isHex)) return null;
+  const hex = (c: string) => safeColor(c, c);
+  return { paper: hex(s.paper), ink: hex(s.ink), a: hex(s.a), b: hex(s.b), c: hex(s.c) };
 }
 
 /** Defensive copy of a DesignSpec coming from elsewhere (LLM, old saves): every field valid. */
 export function normalizeDesign(design: Partial<DesignSpec> | null | undefined): DesignSpec {
   const d = design ?? {};
+  const palette = safePalette(d.palette);
+  const family = typeof d.family === 'string' && d.family ? d.family : undefined;
+  // an old save names neither: the palette it wears tells, so it re-renders in the new look
+  const worn = PALETTES.find((p) => p.palette.bg === palette.bg && p.palette.primary === palette.primary);
   return {
-    palette: safePalette(d.palette),
+    palette,
     motif: MOTIFS.includes(d.motif as Motif) ? (d.motif as Motif) : 'sparkle',
     coverLayout: LAYOUTS.includes(d.coverLayout as CoverLayout) ? (d.coverLayout as CoverLayout) : 'centered',
     titleFont: d.titleFont === 'Times-Bold' || d.titleFont === 'Courier-Bold' ? d.titleFont : 'Helvetica-Bold',
     bodyFont: d.bodyFont === 'Times-Roman' ? 'Times-Roman' : 'Helvetica',
     seed: Number.isFinite(d.seed) ? Number(d.seed) : 0,
-    ...(typeof d.family === 'string' && d.family ? { family: d.family } : {}),
+    ...(family ? { family } : {}),
+    voice: isVoice(d.voice) ? d.voice : voiceFor(family ?? worn?.family),
+    inks: safeInks(d.inks) ?? { ...(worn ?? PALETTES.find((p) => p.family === family) ?? PALETTES[0]).inks },
+    ...(Number.isFinite(d.artSeed) ? { artSeed: Number(d.artSeed) } : {}),
   };
 }
 

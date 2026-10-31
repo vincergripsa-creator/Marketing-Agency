@@ -802,7 +802,7 @@ describe('a whole run', () => {
     expect(reloaded.text === straight.text).toBe(true);
   }, 240_000);
 
-  it.each([7, 1, 5])('hiring never reaches the market, seed %i: auto and frozen see the same events on the same days (org test 8)', async (seed) => {
+  it.each([7, 1, 3])('hiring never reaches the market, seed %i: auto and frozen see the same events on the same days (org test 8)', async (seed) => {
     const days = 40;
     const auto = await lab({ seed });
     const frozen = await lab({ seed, org: { team: 'lean', autoHire: false, payroll: true } });

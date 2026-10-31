@@ -10,10 +10,10 @@ import { repayableLeft } from './ops.js';
 import { GENERIC_PHRASES, guideSubstance, scoreCreative, scorePdf, scoreSalesPage, scoreSupportReply } from './quality.js';
 import { tickMarket } from './tick.js';
 import { createMarketTools } from './tools.js';
+import { scoreCut } from './videoCraft.js';
 
-/** Land with sim/videoCraft.ts (P6.1) and sim/audience.ts (P10.2). Nothing calls them before. */
+/** Lands with sim/audience.ts (P10.2). Nothing calls it before. */
 const notLanded = (): never => { throw new Error('not landed'); };
-const scoreCut: SimModule['scoreCut'] = notLanded;
 const scoreEmail: SimModule['scoreEmail'] = notLanded;
 
 export {

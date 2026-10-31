@@ -547,7 +547,7 @@ describe('a reload with every lever live', () => {
   }
 
   it('ends like an uninterrupted run, a pruned campaign included', async () => {
-    const ticks = 18 * 12;
+    const ticks = 21 * 12;
     const straight = await play(ticks, 0);
     const pruned = straight.world.company.tasks.flatMap((t) => (t.kind === 'optimize_ads' ? (t.output?.actions as string[] | undefined) ?? [] : [])).filter((a) => /perdante/.test(a));
     expect(pruned.length).toBeGreaterThan(0);

@@ -222,11 +222,11 @@ export function heuristicHooks(
 
 const VISUALS: Record<AdFormat, string[]> = {
   faceless_voiceover: [
-    'Plan serré, lumière tamisée, texte blanc en gros au centre',
-    'B-roll du quotidien du problème, filmé en plongée, sans visage',
-    'Mains qui écrivent dans un carnet, texte animé par-dessus',
-    'Capture du guide PDF qui défile, une page à la fois',
-    'Gros plan sur la checklist du guide, cochée au feutre',
+    'Fond sombre animé, l’accroche claque mot par mot au centre',
+    'Plaque claire, les mots des clients en bulles de commentaires',
+    'Vraie page du guide, zoom sur la ligne surlignée au marqueur',
+    'Vraie page du guide, deuxième repère surligné au marqueur',
+    'Pages du guide en éventail derrière le livre, sticker du bonus',
     'Couverture du guide en plein écran, flèche vers la bio',
   ],
   text_slideshow: [
@@ -238,12 +238,12 @@ const VISUALS: Record<AdFormat, string[]> = {
     'Slide finale : couverture du guide + « lien en bio »',
   ],
   ugc_avatar: [
-    'Avatar face caméra, cadrage poitrine, regard direct, lumière naturelle',
-    'Avatar qui soupire puis sourit, sous-titres dynamiques',
-    'Avatar montre le guide ouvert sur son téléphone',
-    'Avatar en voix off sur une capture du chapitre concerné',
-    'Avatar qui coche une checklist à l’écran',
-    'Avatar pointe vers le bas : « lien en bio »',
+    'Narrateur illustré en carte, regard direct, accroche à côté de lui',
+    'Narrateur illustré qui soupire, sous-titres dynamiques',
+    'Narrateur illustré, une vraie page du guide en incrustation',
+    'Vraie page du guide, zoom sur la ligne surlignée au marqueur',
+    'Pages du guide en éventail derrière le livre, sticker du bonus',
+    'Couverture du guide, le narrateur pointe : « lien en bio »',
   ],
   carousel: [
     'Carte 1 : accroche en gros sur fond clair',

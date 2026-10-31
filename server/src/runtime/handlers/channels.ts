@@ -132,11 +132,11 @@ export const channelHandlers: HandlerMap = {
       const voc = vocOf(ctx, product.nicheId);
       const ratio = str(task.input.ratio) as Exclude<AdRatio, 'text'>;
       // Pinterest has no script to cut: one image, drawn over the guide's cover. Anywhere else the script stays the master's.
-      const script: Pick<AdCreative, 'hook' | 'hookStyle' | 'format' | 'scenes' | 'caption' | 'hashtags' | 'cta'> = { hook: master.hook, hookStyle: master.hookStyle, format: master.format, scenes: master.scenes, caption: master.caption, hashtags: master.hashtags, cta: master.cta };
+      const script: Pick<AdCreative, 'hook' | 'hookStyle' | 'format' | 'scenes' | 'caption' | 'hashtags' | 'cta' | 'cut'> = { hook: master.hook, hookStyle: master.hookStyle, format: master.format, scenes: master.scenes, caption: master.caption, hashtags: master.hashtags, cta: master.cta, ...(master.cut ? { cut: master.cut } : {}) };
       if (ratio === '2:3') {
         const bannedClaims = bannedFor(ctx, product.nicheId, agent.id);
         const ad = await ctx.engine.writeAd({ product, voc, hook: master.hook, hookStyle: master.hookStyle, format: 'static_image', bannedClaims, upsellOf: upsellContextOf(w, product) }, reworkCraft(task, mindWith(mind, reviewNotes(ctx, task))));
-        Object.assign(script, { hook: ad.hook || master.hook, format: 'static_image', scenes: Array.isArray(ad.scenes) ? ad.scenes : [], caption: ad.caption ?? '', hashtags: Array.isArray(ad.hashtags) ? ad.hashtags : [], cta: ad.cta ?? '' });
+        Object.assign(script, { hook: ad.hook || master.hook, format: 'static_image', scenes: Array.isArray(ad.scenes) ? ad.scenes : [], caption: ad.caption ?? '', hashtags: Array.isArray(ad.hashtags) ? ad.hashtags : [], cta: ad.cta ?? '', cut: null });
       }
       const creative = ownCreative(ctx, task) ?? newCreative(ctx, agent.id, ch, { productId: product.id, ...script });
       Object.assign(creative, script, { ratio, masterId: master.id, createdBy: agent.id });

@@ -9,6 +9,7 @@ import type {
 } from '../shared.js';
 import { countHype, findBannedClaims, findPageClaims } from './compliance.js';
 import { countPhrase, countWords, hasPhrase, keyTokens, norm, overlap, stemSet } from './text.js';
+import { scoreCut } from './videoCraft.js';
 
 /** French AI clichés: each occurrence costs human tone. */
 export const GENERIC_PHRASES: readonly string[] = [
@@ -767,6 +768,7 @@ export function scoreCreative(c: AdCreative, product: Product, voc?: VoiceOfCust
   if (c?.format === 'search_text') return scoreSearchAd(c, product, voc);
   const issues = new IssueList();
   const scenes = c?.scenes ?? [];
+  const cut = c?.cut ? scoreCut(c.cut) : null; // absent on old saves: the old formulas below
   const hook = (c?.hook ?? '').trim();
   const normHook = norm(hook);
   const audTok = keyTokens(product.audience);
@@ -807,13 +809,19 @@ export function scoreCreative(c: AdCreative, product: Product, voc?: VoiceOfCust
   const last = norm(`${scenes[scenes.length - 1]?.onScreenText ?? ''} ${scenes[scenes.length - 1]?.voiceover ?? ''} ${c?.cta ?? ''}`);
   const ctaOk = CTA_RE.test(last);
   if (ctaOk) struct += 15; else issues.block('Pas d\'appel à l\'action à la fin (« lien en bio », « télécharge le guide »).');
-  struct += scenes.length >= 3 && scenes.length <= 7 ? 20 : scenes.length === 2 || scenes.length === 8 || scenes.length === 9 ? 8 : 0;
-  if (scenes.length < 3 || scenes.length > 7) issues.push(`${scenes.length} scène(s) : visez 3 à 7 scènes.`);
+  if (cut) {
+    struct += 20 * cut.pace;
+    for (const note of cut.notes) issues.push(note);
+  } else {
+    struct += scenes.length >= 3 && scenes.length <= 7 ? 20 : scenes.length === 2 || scenes.length === 8 || scenes.length === 9 ? 8 : 0;
+    if (scenes.length < 3 || scenes.length > 7) issues.push(`${scenes.length} scène(s) : visez 3 à 7 scènes.`);
+  }
 
   issues.section('actionability');
   let action = 0;
   if ((c?.cta ?? '').length > 3 && CTA_RE.test(norm(c.cta))) action += 60; else if ((c?.cta ?? '').length > 3) action += 30;
-  const duration = scenes.reduce((s, x) => s + (Number.isFinite(x.durationSec) ? x.durationSec : 0), 0);
+  // `durationSec` is fiction: a cut knows what the voice really takes
+  const duration = c?.cut ? c.cut.metrics.estSec : scenes.reduce((s, x) => s + (Number.isFinite(x.durationSec) ? x.durationSec : 0), 0);
   if (duration >= 12 && duration <= 30) action += 40;
   else if (duration >= 9 && duration <= 40) { action += 20; issues.push(`Durée ${Math.round(duration)} s : le format idéal est 12 à 30 secondes.`); }
   else issues.push(`Durée ${Math.round(duration)} s hors format (12 à 30 secondes).`);
@@ -827,14 +835,16 @@ export function scoreCreative(c: AdCreative, product: Product, voc?: VoiceOfCust
   issues.section('design');
   let design = 0;
   if (scenes.length) {
-    const shortText = scenes.filter((s) => (s.onScreenText ?? '').length > 0 && (s.onScreenText ?? '').length <= 70 && countWords(s.onScreenText) <= 12).length / scenes.length;
-    design += 50 * shortText;
-    if (shortText < 0.7) issues.push('Textes à l\'écran trop longs : 12 mots maximum par scène.');
-    design += 30 * (scenes.filter((s) => (s.visual ?? '').length >= 10).length / scenes.length);
+    if (!cut) {
+      const shortText = scenes.filter((s) => (s.onScreenText ?? '').length > 0 && (s.onScreenText ?? '').length <= 70 && countWords(s.onScreenText) <= 12).length / scenes.length;
+      design += 50 * shortText;
+      if (shortText < 0.7) issues.push('Textes à l\'écran trop longs : 12 mots maximum par scène.');
+      design += 30 * (scenes.filter((s) => (s.visual ?? '').length >= 10).length / scenes.length);
+    }
     const fmtOk = c.format === 'text_slideshow' ? scenes.every((s) => (s.onScreenText ?? '').length > 0)
       : c.format === 'carousel' ? scenes.length >= 4
         : scenes.every((s) => (s.voiceover ?? '').length > 0);
-    design += fmtOk ? 20 : 0;
+    design = cut ? 100 * cut.look : design + (fmtOk ? 20 : 0);
     if (!fmtOk) issues.block(`Les scènes ne respectent pas le format « ${c.format} » (voix off / texte / nombre de slides).`);
   }
 

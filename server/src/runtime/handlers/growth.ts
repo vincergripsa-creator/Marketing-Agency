@@ -1,8 +1,10 @@
 /** Pub TikTok: hooks (bandit + exploration), 9:16 creatives, compliance submission, campaigns, stop-loss/scale, organic. */
 import { CHANNELS, acceptance, channelOf } from '../../shared.js';
-import type { AdCreative, AdFormat, AgentState, Campaign, ChannelId, HookStyle, Product, Task, TaskKind } from '../../shared.js';
-import { nextId } from '../../core/index.js';
+import type { AdCreative, AdFormat, AgentState, Campaign, ChannelId, HookStyle, Product, Task, TaskKind, VideoCut, VideoTempo, VoiceOfCustomer } from '../../shared.js';
+import { nextId, streamRng } from '../../core/index.js';
+import { hashString } from '../../core/ids.js';
 import type { AdDraft, MindContext } from '../../contracts.js';
+import { EDIT_BASELINE, planCut, TEMPOS } from '../../deliverables/videoCut.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { addDeliverable, incident, nameOf, nicheBriefOf, nicheName, productOf, say, vocOf, writeRunFile, doneOutputs } from '../ctx.js';
 import { deliverables, learning, sim } from '../modules.js';
@@ -15,7 +17,8 @@ import { adsHold, REFUSAL_COOLDOWN_DAYS } from '../holds.js';
 import { officerId, ownersOfAny, roleHolders } from '../org/officers.js';
 import { dropTask } from '../pipeline.js';
 import { growthOn } from '../stages.js';
-import { armSharp, bestDraft, pruneRead, shrunkRoas } from '../talent/craft.js';
+import { STREAM } from '../streams.js';
+import { armSharp, bestDraft, effectiveT, pruneRead, shrunkRoas } from '../talent/craft.js';
 import { onStrike } from '../talent/evidence.js';
 import { createTask, isOpen, openTasks, taskChannel } from '../tasks.js';
 import { upsellContextOf } from '../upsell.js';
@@ -44,6 +47,23 @@ function isFormat(v: unknown): v is AdFormat {
 /** A rework halves the flaws: the reviewer's notes help (talent §4.2). */
 export function reworkCraft(task: Task, mind: MindContext): MindContext {
   return task.attempts > 0 && mind.craft ? { ...mind, craft: { ...mind.craft, flaw: mind.craft.flaw / 2 } } : mind;
+}
+
+/** The tempo of a cut is an editorial choice the market answers: a bandit per niche, on a stream of its own (video §3.6). */
+function pickTempo(ctx: RuntimeCtx, agent: AgentState, mind: MindContext, nicheId: string, variant: number): VideoTempo {
+  const w = ctx.world;
+  const rng = streamRng(w.scenario.seed, STREAM.videoTempo, w.day, w.tick, variant);
+  return learning.chooseArm(w, `video_tempo:${nicheId}`, TEMPOS, rng, armSharp(ctx, agent, mind, 'tempo')) as VideoTempo;
+}
+
+/** Keyed on the text, never on a generated id: paired runs keep the same cut for the same script, and `draw` tells a draft from the next (video §3.1). */
+function cutOf(ctx: RuntimeCtx, task: Task, agent: AgentState, input: { creative: AdCreative; product: Product; voc: VoiceOfCustomer; tempo: VideoTempo; draw: number }): VideoCut {
+  const w = ctx.world;
+  const { creative, draw } = input;
+  const skill = w.scenario.control?.videoSkill ?? effectiveT(w, agent, 'video') ?? EDIT_BASELINE;
+  const key = hashString(`${creative.hook}|${creative.format}|${task.attempts}|${draw}`);
+  const cut = planCut({ ...input, skill, rng: streamRng(w.scenario.seed, STREAM.videoCut, key) });
+  return { ...cut, craft: sim.scoreCut(cut).craft };
 }
 
 /** Every hook written for a product, newest first. */
@@ -339,12 +359,17 @@ export const growthHandlers: HandlerMap = {
         format: isFormat(ad.format) ? ad.format : format, scenes: Array.isArray(ad.scenes) ? ad.scenes : [],
         caption: ad.caption ?? '', hashtags: Array.isArray(ad.hashtags) ? ad.hashtags : [], cta: ad.cta ?? '',
       });
-      // Each draft is read as a creative with the company's own VoC: no id is spent on the ones left in the drawer.
+      const video = ctx.world.scenario.videoModel === 'on';
+      const tempo = video ? ctx.world.scenario.control?.videoTempo ?? pickTempo(ctx, agent, mind, product.nicheId, variant) : 'standard';
+      // Each draft is read as a creative with the company's own VoC, with its cut (D31): no id is spent on the ones left in the drawer.
       const { draft } = await bestDraft(ctx, agent, reworkCraft(task, mindWith(mind, notes)), 'ad',
-        (m) => ctx.engine.writeAd({ product, voc, hook: angle.hook, hookStyle: angle.hookStyle, format, bannedClaims, upsellOf }, m),
-        (ad) => sim.scoreCreative({ ...shell('draft'), ...written(ad) }, product, voc).overall);
+        async (m) => {
+          const ad = written(await ctx.engine.writeAd({ product, voc, hook: angle.hook, hookStyle: angle.hookStyle, format, bannedClaims, upsellOf }, m));
+          return video ? { ...ad, cut: cutOf(ctx, task, agent, { creative: { ...shell('draft'), ...ad }, product, voc, tempo, draw: m.draw ?? 0 }) } : ad;
+        },
+        (d) => sim.scoreCreative({ ...shell('draft'), ...d }, product, voc).overall);
       const creative: AdCreative = existing ?? shell(nextId(ctx.world, 'cre'));
-      Object.assign(creative, { ...written(draft), review: { status: 'pending', reason: null, day: null }, createdBy: agent.id });
+      Object.assign(creative, { ...draft, review: { status: 'pending', reason: null, day: null }, createdBy: agent.id });
       if (!existing) ctx.world.company.creatives.push(creative);
       const design = ensureDesign(ctx, product);
       const board = deliverables.renderAdStoryboard({ creative, product, design, brand: ctx.world.company.name });

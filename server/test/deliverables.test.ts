@@ -1,7 +1,6 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { inflateSync } from 'node:zlib';
 import PDFDocument from 'pdfkit';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AdCreative, ChapterContent, DesignSpec, PdfContent, Product, SalesPage, VisualSpec } from '../src/shared.js';
@@ -10,6 +9,7 @@ import { sanitizePdfText, wholeClause } from '../src/deliverables/text.js';
 import { titleBlock } from '../src/deliverables/cover.js';
 import { finalWording, MIN_PAGE_FILL, planIntro } from '../src/deliverables/pdf.js';
 import { gridWidths, splitDoDont, type PdfTheme } from '../src/deliverables/pdfVisuals.js';
+import { pdfPagesText, pdfPageStreams } from './pdfText.js';
 
 // ───────────────────────────── fixture ─────────────────────────────
 
@@ -346,32 +346,6 @@ describe('PDF layout regressions', () => {
 
 // ───────────────────────────── page-level checks on the real PDF bytes ─────────────────────────────
 
-const WIN_ANSI: Record<number, string> = { 0x80: '€', 0x85: '…', 0x91: '‘', 0x92: '’', 0x93: '“', 0x94: '”', 0x96: '–', 0x97: '—', 0x9c: 'œ', 0x8c: 'Œ', 0xa0: ' ' };
-
-/** Text of each page, in drawing order (pdfkit: one deflated content stream per page, hex TJ strings). */
-async function pdfPagesText(file: string): Promise<string[]> {
-  const buf = await readFile(file);
-  const s = buf.toString('latin1');
-  const pages: string[] = [];
-  const re = /stream\r?\n/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s))) {
-    const start = m.index + m[0].length;
-    const end = s.indexOf('endstream', start);
-    if (end < 0) break;
-    let txt = '';
-    try { txt = inflateSync(buf.subarray(start, end)).toString('latin1'); } catch { continue; }
-    if (!/\bBT\b/.test(txt)) continue;
-    const parts: string[] = [];
-    for (const t of txt.matchAll(/\[([^\]]*)\]\s*TJ|<([0-9a-fA-F]+)>\s*Tj/g)) {
-      const hexes = t[1] !== undefined ? [...t[1].matchAll(/<([0-9a-fA-F]+)>/g)].map((h) => h[1]!) : [t[2]!];
-      parts.push(hexes.map((h) => h.match(/../g)!.map((b) => WIN_ANSI[parseInt(b, 16)] ?? String.fromCharCode(parseInt(b, 16))).join('')).join(''));
-    }
-    pages.push(parts.join(' ').replace(/\s+/g, ' '));
-  }
-  return pages;
-}
-
 /** Body of a page: what comes before the running footer (« PIXEL AGENCY · title · n »). */
 const bodyOf = (page: string) => page.slice(0, Math.max(0, page.lastIndexOf('PIXEL AGENCY'))).trim();
 
@@ -419,25 +393,6 @@ describe('PDF pages read like the founder reads them', () => {
 
 // ───────────────────────────── printable sheets, last page, niche fit ─────────────────────────────
 
-/** Inflated page streams: what is really drawn, for what the text alone cannot show. */
-async function pageStreams(file: string): Promise<string[]> {
-  const buf = await readFile(file);
-  const s = buf.toString('latin1');
-  const out: string[] = [];
-  const re = /stream\r?\n/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s))) {
-    const start = m.index + m[0].length;
-    const end = s.indexOf('endstream', start);
-    if (end < 0) break;
-    try {
-      const txt = inflateSync(buf.subarray(start, end)).toString('latin1');
-      if (/\bBT\b/.test(txt)) out.push(txt);
-    } catch { /* not a deflated stream */ }
-  }
-  return out;
-}
-
 const sheet = (grid: NonNullable<VisualSpec['grid']>, title = 'Votre carnet de 14 jours'): VisualSpec => ({ type: 'grid', title, labels: [], values: [], grid });
 const withSheet = (visual: VisualSpec): PdfContent => ({ ...content, chapters: [{ ...chapter(0), visual }] });
 const days = (n: number) => Array.from({ length: n }, (_, i) => `Jour ${i + 1}`);
@@ -467,7 +422,7 @@ describe('fillable grid', () => {
     expect(pages[at]).toContain('Fait');
     expect(pages[at]).toContain('Priorité : sortir le chiot, Jour 7');
     // drawCheckbox strokes its tick at 1.8 pt: the page has boxes, and no tick
-    expect((await pageStreams(file))[at]).not.toMatch(/\b1\.8 w\b/);
+    expect(pdfPageStreams(file)[at]).not.toMatch(/\b1\.8 w\b/);
   });
 
   it('holds 21 rows, 7 columns and a 250-character plan cell, every word printed', async () => {

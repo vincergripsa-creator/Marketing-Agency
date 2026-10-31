@@ -27,6 +27,7 @@ import { difficultyProfile, isScammer } from './market.js';
 import { chargebackOrder, creativeById, nicheOf, orderById, productById, pushEvent, refundOrder, repayableLeft, reviewProduct, type EventRefs } from './ops.js';
 import { genericPhraseHits, guideOverlap, scoreCreative, scorePdf, scoreSalesPage, vocPhraseHits } from './quality.js';
 import { fmtEur, fmtInt, fmtNum, fmtPct, keyTokens, lognormal, norm, overlap, pickWeighted, plural, short, stemSet, uniform } from './text.js';
+import { tempoFit } from './videoCraft.js';
 
 interface Traffic {
   productId: string;
@@ -300,7 +301,7 @@ function runAds(d: Day): void {
       const fatigue = 1 / (1 + prior / spec.fatigue);
       const ctrRaw = ADS.baseCtr * Math.pow(Math.max(1, q.overall) / ADS.qualityRef, ADS.qualityExp)
         * Math.pow((n.hookAffinity[c.hookStyle] ?? 1) * spec.formatFit(c), spec.affinityExp) * (0.6 + 0.8 * spec.fit)
-        * spec.ctrScale * spec.ratioFit(c) * spec.learningCtr * fatigue * d.noise(ADS.ctrNoiseSd);
+        * spec.ctrScale * spec.ratioFit(c) * spec.learningCtr * fatigue * tempoFit(n, c) * d.noise(ADS.ctrNoiseSd);
       const ctr = clamp(ctrRaw, ADS.minCtr, ADS.maxCtr);
       const clicks = rng.binomial(impressions, ctr);
       const landingViews = rng.binomial(clicks, spec.landingRate);

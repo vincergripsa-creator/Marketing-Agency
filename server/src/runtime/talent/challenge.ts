@@ -5,7 +5,9 @@
  */
 import type { AdCreative, AdFormat, AgentId, AgentState, Candidate, ChallengeEntry, HireReport, HookStyle, InboxMessage, Order, PdfContent, ProbationPlan, Product, RoleId, Skill, Task, TaskKind, VoiceOfCustomer, WorldState } from '../../shared.js';
 import type { MindContext } from '../../contracts.js';
+import { streamRng } from '../../core/index.js';
 import { hashString } from '../../core/ids.js';
+import { EDIT_BASELINE, planCut } from '../../deliverables/videoCut.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { emptyVoc, nameOf, productBrief, speak } from '../ctx.js';
 import { genericPhrases } from '../handlers/common.js';
@@ -15,6 +17,7 @@ import { addHold, firingHold, pinHold } from '../holds.js';
 import { computeBudget } from '../metrics.js';
 import { sim } from '../modules.js';
 import { ROLES } from '../org/catalog.js';
+import { STREAM } from '../streams.js';
 import { ORG } from '../org/constants.js';
 import { agentFrom, drawCandidates, hireAgent, openPosition, rankCandidates } from '../org/hiring.js';
 import { officerId } from '../org/officers.js';
@@ -98,6 +101,24 @@ async function copyTest(b: Bench, sitter: AgentState): Promise<TestResult | null
     work.push((await bestDraft(ctx, sitter, mind, `test:ad:${i}`, write, score)).draft);
   }
   return { score: round1(mean(work.map(score))), deliverable: `Deux pubs : ${work.map((c) => `« ${short(c.hook, 40)} »`).join(' et ')}`, work };
+}
+
+/** The bench product's best script with film in it: a card for Pinterest or a search ad has nothing to edit. */
+function bestScript(w: WorldState, product: Product): AdCreative | null {
+  const filmed = w.company.creatives.filter((c) => c.productId === product.id && c.scenes.length > 1);
+  return [...filmed].sort((a, b) => (b.quality?.overall ?? 0) - (a.quality?.overall ?? 0) || idNum(a.id) - idNum(b.id))[0] ?? null;
+}
+
+/** The same script, tempo and day's luck for everyone: only the editor differs (D16). */
+async function videoTest(b: Bench, sitter: AgentState): Promise<TestResult | null> {
+  const { ctx, product, voc } = b;
+  const w = ctx.world;
+  const creative = product && bestScript(w, product);
+  if (!product || !creative) return null;
+  const rng = streamRng(w.scenario.seed, STREAM.videoCut, hashString(`test|${creative.id}`));
+  const cut = planCut({ creative, product, voc, skill: effectiveT(w, sitter, 'video') ?? EDIT_BASELINE, tempo: 'standard', rng });
+  const { craft } = sim.scoreCut(cut);
+  return { score: craft, deliverable: `Montage de « ${short(creative.hook, 40)} » : ${cut.beats.length} séquences, ${dec(cut.metrics.estSec, 0)} s`, work: [{ ...cut, craft }] };
 }
 
 const pdfScore = (b: Bench, product: Product, content: PdfContent): number =>
@@ -235,9 +256,10 @@ async function researchTest(b: Bench, sitter: AgentState): Promise<TestResult | 
 
 const parOf = (key: string) => (): number => TALENT.par[key]!;
 
-/** One row per skill. `video` and `design` have none yet: P6.1 and P7.3 add them, and until then their score is 50 (D16). */
+/** One row per skill. `design` has none yet: P7.3 adds it, and until then its score is 50 (D16). */
 export const TEST_BY_SKILL: Partial<Record<Skill, SkillTest>> = {
   copy: { par: parOf('copy:qa'), sit: copyTest },
+  video: { par: parOf('video:cut'), sit: videoTest },
   longform: { par: parOf('longform:qa'), sit: longformTest },
   polish: { par: parOf('longform:qa'), sit: polishTest },
   page: { par: parOf('page:qa'), sit: pageTest },

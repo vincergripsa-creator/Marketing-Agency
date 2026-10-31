@@ -11,7 +11,7 @@ import { adRows } from '../../learning/data.js';
 import { productPnls } from '../accounting.js';
 import { versionSince } from '../acquisition.js';
 import { creditOf } from '../channels.js';
-import type { RuntimeCtx } from '../ctx.js';
+import { productOf, vocOf, type RuntimeCtx } from '../ctx.js';
 import { learning, sim } from '../modules.js';
 import { clamp, dec, mean, pct, round2, short, sum } from '../util.js';
 import { TALENT } from './constants.js';
@@ -110,11 +110,21 @@ export function recordScore(w: WorldState, agentId: AgentId, skill: Skill, sourc
   recordEvidence(w, agentId, skill, source, phi((x - TALENT.par[key]!) / TALENT.sd[key]!), weight ?? TALENT.weight[key]!, label, undefined, x);
 }
 
-/** First review only: a rework says nothing more about the author, whose first shot is the one the scorer judged. */
+/**
+ * First review only: a rework says nothing more about the author, whose first shot is the one the scorer judged. An ad is
+ * two works by one person (D12), and the review's `overall` holds both: `copy` reads the script as `copyTest` does, with no
+ * cut, or a writer would answer for an edit their skill has no part in, and `cut.craft` alone goes to `video`.
+ */
 export function onReviewed(ctx: RuntimeCtx, task: Task, res: { verdict: string; score: number | null }): void {
   const skill = QA_SKILL[task.kind];
   if (!skill || task.attempts !== 0 || res.score === null || !task.assignee) return;
-  recordScore(ctx.world, task.assignee, skill, 'qa', res.score, `« ${short(task.title, 50)} » : ${Math.round(res.score)}/100 en relecture`);
+  const w = ctx.world;
+  const creative = task.kind === 'produce_ad' ? w.company.creatives.find((c) => c.id === task.output?.creativeId) : undefined;
+  const cut = creative?.cut;
+  const product = cut ? productOf(ctx, task.input.productId) : null;
+  const score = creative && product ? sim.scoreCreative({ ...creative, cut: null }, product, vocOf(ctx, product.nicheId)).overall : res.score;
+  recordScore(w, task.assignee, skill, 'qa', score, `« ${short(task.title, 50)} » : ${Math.round(score)}/100 en relecture`);
+  if (cut) recordScore(w, task.assignee, 'video', 'cut', cut.craft, `« ${short(task.title, 50)} » : montage ${cut.craft}/100`);
 }
 
 /** A refusal with a strike is the author's. A false positive has no strike: it says nothing about them. */
