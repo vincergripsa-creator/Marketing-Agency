@@ -13,7 +13,7 @@ import { INTENT_LABELS, SUPPORT_POLICY } from './phrases.js';
 
 const URGENT_WORDS = ['chargeback', 'banque', 'litige', 'avocat', 'arnaque', 'escroquerie', 'rembours', 'jamais reçu', 'pas reçu', 'scandale'];
 
-/** Visible scam signals (Fatou's checklist): payment requests, transfers, suspicious links, security codes… */
+/** Visible scam signals (the anti-fraud checklist): payment requests, transfers, suspicious links, security codes… */
 const SCAM_PATTERNS: readonly RegExp[] = [
   /hxxp|\[\.\]/i, /\bpayez\b|\bréglez\b|à régler|frais d['’]inscription/i, /virement/i, /rembourser(?:ez)?\s+(?:simplement\s+)?la différence/i,
   /code à \d+ chiffres|code de sécurité/i, /\biban\b|\bfr76\b/i, /badge (?:bleu|vérifié|certifié)/i, /carte[- ]cadeau/i, /sur ce compte/i,

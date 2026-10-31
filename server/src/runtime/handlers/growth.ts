@@ -1,5 +1,5 @@
 /** Pub TikTok: hooks (bandit + exploration), 9:16 creatives, compliance submission, campaigns, stop-loss/scale, organic. */
-import type { AdCreative, AdFormat, Campaign, HookStyle, Product, Task } from '../../shared.js';
+import type { AdCreative, AdFormat, Campaign, HookStyle, Product, Task, TaskKind } from '../../shared.js';
 import { nextId } from '../../core/index.js';
 import type { MindContext } from '../../contracts.js';
 import type { RuntimeCtx } from '../ctx.js';
@@ -9,6 +9,7 @@ import { addPlaybookRule, AD_FORMATS, bannedHits, directivesOf, HOOK_STYLES } fr
 import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, type CampaignMetrics } from '../metrics.js';
 import { adHistory, companyPaidBlock, cooldownDays, launchableCreatives, MIN_CAMPAIGN_BUDGET, NO_TRACTION_ROAS, productHealth, productPaidBlock, promotionBlock, scalingRoom, STOP_LOSS_DAYS, STOP_LOSS_ROAS, STOP_LOSS_SPEND, TEST_CAMPAIGN_BUDGET, versionSince } from '../acquisition.js';
 import { adsHold, REFUSAL_COOLDOWN_DAYS } from '../holds.js';
+import { officerId, ownersOfAny, roleHolders } from '../org/officers.js';
 import { dropTask } from '../pipeline.js';
 import { createTask, isOpen, openTasks } from '../tasks.js';
 import { upsellContextOf } from '../upsell.js';
@@ -20,7 +21,7 @@ import { ensureDesign } from './creation.js';
 
 interface HookItem { hookStyle: HookStyle; hook: string }
 
-const GROWTH_WRITERS = ['sarah', 'chloe', 'tom', 'leo'];
+const GROWTH_WRITER_KINDS: readonly TaskKind[] = ['write_ad_hooks', 'produce_ad', 'post_organic'];
 
 /** The test running on this dimension for this niche: a test on one guide says nothing about another's creatives. */
 function runningExperiment(ctx: RuntimeCtx, dimension: string, nicheId: string) {
@@ -49,7 +50,7 @@ export function hookPool(ctx: RuntimeCtx, productId: string): HookItem[] {
 
 function bannedFor(ctx: RuntimeCtx, product: Product, agentId: string): string[] {
   const voc = vocOf(ctx, product.nicheId);
-  return uniq([...voc.bannedClaims, ...directivesOf(ctx.world, agentId).banned, ...directivesOf(ctx.world, 'leo').banned]);
+  return uniq([...voc.bannedClaims, ...directivesOf(ctx.world, agentId).banned, ...directivesOf(ctx.world, officerId(ctx.world, 'growth')).banned]);
 }
 
 export function creativeText(c: AdCreative): string {
@@ -60,7 +61,7 @@ export function creativeText(c: AdCreative): string {
 function learnFromRejection(ctx: RuntimeCtx, c: AdCreative, product: Product): string[] {
   const voc = vocOf(ctx, product.nicheId);
   const hits = uniq([...bannedHits(creativeText(c), voc.bannedClaims), ...bannedHits(creativeText(c), COMPLIANCE_WORDS)]).slice(0, 3);
-  for (const h of hits) for (const id of GROWTH_WRITERS) addPlaybookRule(ctx.world, id, `Ne jamais écrire « ${h} »`);
+  for (const h of hits) for (const writer of ownersOfAny(ctx.world, GROWTH_WRITER_KINDS)) addPlaybookRule(ctx.world, writer.id, `Ne jamais écrire « ${h} »`);
   return hits;
 }
 
@@ -153,7 +154,7 @@ async function pickOrganicHook(ctx: RuntimeCtx, product: Product, agentId: strin
   ].filter(usable);
   const fromKnown = choose(known);
   if (fromKnown) return fromKnown;
-  // Nothing fresh in stock: Tom asks for new hooks in the next styles of the rotation (two attempts at most).
+  // Nothing fresh in stock: the poster asks for new hooks in the next styles of the rotation (two attempts at most).
   const voc = vocOf(ctx, product.nicheId);
   const bannedMind = mindWith(mind, banned.map((b) => `Ne jamais écrire « ${b} »`));
   for (const styles of [order, [...order].reverse()]) {
@@ -171,7 +172,7 @@ function askRaise(ctx: RuntimeCtx, task: Task, c: Campaign, raiseTo: number, roa
   const w = ctx.world;
   if (openTasks(w, (t) => t.kind === 'optimize_ads' && t.input.raiseTo !== undefined && t.input.campaignId === c.id).length) return;
   if (c.raiseRefusedDay !== undefined && w.day <= c.raiseRefusedDay + REFUSAL_COOLDOWN_DAYS) return;
-  createTask(w, { kind: 'optimize_ads', title: `Hausse de budget — ${short(c.name, 50)}`, input: { campaignId: c.id, productId: c.productId, raiseTo, roas }, createdBy: task.assignee ?? 'leo', missionId: task.missionId, priority: 2 });
+  createTask(w, { kind: 'optimize_ads', title: `Hausse de budget — ${short(c.name, 50)}`, input: { campaignId: c.id, productId: c.productId, raiseTo, roas }, createdBy: task.assignee ?? officerId(w, 'growth'), missionId: task.missionId, priority: 2 });
 }
 
 /** The founder's answer to a raise: nothing moves before his yes, and the amount he agreed to becomes the campaign's limit. */
@@ -197,12 +198,13 @@ function requestCreatives(ctx: RuntimeCtx, product: Product, task: Task, opts: {
   // Fresh = pending review, running, or approved but never shown: no point stacking more of those.
   const fresh = mine.filter((c) => c.review.status === 'pending' || inUse.has(c.id) || (c.review.status === 'approved' && !(ctx.world.market.creativeImpressions[c.id] > 0)));
   if (open || fresh.length >= 6 || mine.length >= 80) return false;
+  const by = task.assignee ?? officerId(ctx.world, 'growth');
   createTask(ctx.world, {
     kind: 'write_ad_hooks', title: `Nouveaux hooks — « ${short(product.title, 42)} »`,
     input: { productId: product.id, nicheId: product.nicheId, produce: opts.produce, ...(opts.attachTo ? { attachTo: opts.attachTo } : {}), ...(opts.launch ? { launch: true, ...(opts.flags ?? {}) } : {}) },
-    createdBy: task.assignee ?? 'leo', missionId: task.missionId, priority: 2,
+    createdBy: by, missionId: task.missionId, priority: 2,
   });
-  say(ctx, task.assignee ?? 'leo', `${nameOf(ctx, task.assignee ?? 'leo')} demande ${opts.produce} nouvelle(s) créa(s) : ${opts.why}`, 'thought', { productId: product.id });
+  say(ctx, by, `${nameOf(ctx, by)} demande ${opts.produce} nouvelle(s) créa(s) : ${opts.why}`, 'thought', { productId: product.id });
   return true;
 }
 
@@ -245,13 +247,14 @@ export const growthHandlers: HandlerMap = {
       if (!n || !product || product.status === 'killed' || task.output?.skipped === true) return;
       const used = ctx.world.company.creatives.filter((c) => c.productId === product.id).length;
       const forced = Array.isArray(task.input.experimentVariants) ? (task.input.experimentVariants as string[]) : [];
+      const by = task.assignee ?? officerId(ctx.world, 'growth');
       const ads = Array.from({ length: n }, (_, i) => createTask(ctx.world, {
         kind: 'produce_ad', title: `Produire une pub TikTok n° ${used + i + 1} — « ${short(product.title, 40)} »`,
         input: { productId: product.id, nicheId: product.nicheId, variant: used + i, ...(forced[i] ? { experimentVariant: forced[i] } : {}), ...(str(task.input.attachTo) ? { attachTo: str(task.input.attachTo) } : {}) },
-        dependsOn: [], createdBy: task.assignee ?? 'leo', missionId: task.missionId, priority: task.priority,
+        dependsOn: [], createdBy: by, missionId: task.missionId, priority: task.priority,
       }));
       if (task.input.launch === true) {
-        createTask(ctx.world, { kind: 'launch_campaign', title: `Relancer une campagne — « ${short(product.title, 42)} »`, input: { productId: product.id, nicheId: product.nicheId, ...launchFlags(task.input) }, dependsOn: ads.map((a) => a.id), createdBy: task.createdBy === 'founder' ? 'founder' : task.assignee ?? 'leo', missionId: task.missionId, priority: task.priority });
+        createTask(ctx.world, { kind: 'launch_campaign', title: `Relancer une campagne — « ${short(product.title, 42)} »`, input: { productId: product.id, nicheId: product.nicheId, ...launchFlags(task.input) }, dependsOn: ads.map((a) => a.id), createdBy: task.createdBy === 'founder' ? 'founder' : by, missionId: task.missionId, priority: task.priority });
       }
     },
   },
@@ -279,7 +282,7 @@ export const growthHandlers: HandlerMap = {
       const forced = str(task.input.experimentVariant);
       const wanted = hookExp && hookExp.variants.length ? (forced && hookExp.variants.includes(forced) ? forced : hookExp.variants[variant % hookExp.variants.length]) : null;
       const unused = pool.filter((h) => !used.has(h.hook));
-      // Once Léo sent a hook back on this guide, the team only keeps those that talk about the problem or the audience.
+      // Once the head of growth sent a hook back on this guide, the team only keeps those that talk about the problem or the audience.
       const subject = keywords(`${product.title} ${product.problem} ${product.audience}`);
       const onTopic = (h: HookItem) => keywords(h.hook).some((w) => subject.includes(w));
       const sentBack = task.attempts > 0 || ctx.world.company.tasks.some((t) => t.kind === 'produce_ad' && t.input.productId === product.id && t.reviews.some((r) => r.verdict === 'changes'));
@@ -309,7 +312,7 @@ export const growthHandlers: HandlerMap = {
       else if (d.format && variant === 0) format = d.format;
       else { const f = learning.chooseArm(ctx.world, `ad_format:${product.nicheId}`, AD_FORMATS, ctx.rng); format = isFormat(f) ? f : 'text_slideshow'; }
       const bannedClaims = uniq([...bannedFor(ctx, product, agent.id), ...COMPLIANCE_WORDS]);
-      const notes = reworkNotes(task).map((n) => `Correction demandée par Léo : ${n}`);
+      const notes = reworkNotes(task).map((n) => `Correction demandée par ${nameOf(ctx, officerId(ctx.world, 'growth'))} : ${n}`);
       const draft = await ctx.engine.writeAd({ product, voc, hook: hook.hook, hookStyle: hook.hookStyle, format, bannedClaims, upsellOf: upsellContextOf(ctx.world, product) }, mindWith(mind, notes));
       const creative: AdCreative = existing ?? {
         id: nextId(ctx.world, 'cre'), productId: product.id, hook: '', hookStyle: hook.hookStyle, format, scenes: [], caption: '', hashtags: [], cta: '',
@@ -348,8 +351,9 @@ export const growthHandlers: HandlerMap = {
       if (!creative || !product || product.status === 'killed' || task.output?.dropped === true) return;
       const res = ctx.tools.submitCreative(creative.id);
       creative.review = { status: res.status, reason: res.reason, day: ctx.world.day };
+      const growth = officerId(ctx.world, 'growth');
       if (res.status === 'approved') {
-        say(ctx, 'leo', `TikTok valide la pub « ${short(creative.hook, 60)} »`, 'ad', { creativeId: creative.id, productId: product.id });
+        say(ctx, growth, `TikTok valide la pub « ${short(creative.hook, 60)} »`, 'ad', { creativeId: creative.id, productId: product.id });
         const attach = ctx.world.company.campaigns.find((c) => c.id === task.input.attachTo && c.status === 'active');
         if (attach && !attach.creativeIds.includes(creative.id)) {
           const ids = [...attach.creativeIds, creative.id];
@@ -360,8 +364,8 @@ export const growthHandlers: HandlerMap = {
         const hits = learnFromRejection(ctx, creative, product);
         const reason = res.reason ?? 'non conforme';
         incident(ctx, `Pub refusée par TikTok (« ${short(creative.hook, 50)} ») : ${reason}${hits.length ? ` — mots en cause : ${hits.join(', ')}` : ''}`);
-        say(ctx, 'leo', `TikTok refuse la pub « ${short(creative.hook, 50)} » : ${short(reason, 70)}${res.strike ? ' — avertissement sur le compte !' : ''}`, 'ad', { creativeId: creative.id, productId: product.id });
-        if (hits.length) say(ctx, 'nora', `Leçon immédiate : l'équipe pub n'écrira plus jamais « ${hits.join(' », « ')} »`, 'lesson');
+        say(ctx, growth, `TikTok refuse la pub « ${short(creative.hook, 50)} » : ${short(reason, 70)}${res.strike ? ' — avertissement sur le compte !' : ''}`, 'ad', { creativeId: creative.id, productId: product.id });
+        if (hits.length) say(ctx, officerId(ctx.world, 'hr'), `Leçon immédiate : l'équipe pub n'écrira plus jamais « ${hits.join(' », « ')} »`, 'lesson');
       }
     },
   },
@@ -394,8 +398,9 @@ export const growthHandlers: HandlerMap = {
       if (productBlock && !overrides) return skip(productBlock.reason, productBlock.hard ? 'blocked' : 'cooldown');
       const ready = launchableCreatives(ctx.world, product.id);
       if (!ready.length) {
+        const writer = roleHolders(ctx.world, 'hook_writer')[0]?.id ?? officerId(ctx.world, 'growth');
         const asked = requestCreatives(ctx, product, task, { produce: 2, launch: true, flags: { ...launchFlags(task.input), ...(overrides ? { force: true } : {}) }, why: 'aucune créa fraîche validée par TikTok' });
-        return skip(asked ? 'aucune créa fraîche validée — Sarah écrit de nouveaux hooks, la campagne suivra' : 'aucune créa fraîche validée (des créas sont déjà en production)', 'no_creative');
+        return skip(asked ? `aucune créa fraîche validée — ${nameOf(ctx, writer)} écrit de nouveaux hooks, la campagne suivra` : 'aucune créa fraîche validée (des créas sont déjà en production)', 'no_creative');
       }
       const losers = adHistory(ctx.world, product.id, versionSince(ctx.world, product)).losers;
       const envelope = launchBudget(ctx, losers);
@@ -554,7 +559,7 @@ export const growthHandlers: HandlerMap = {
       })[0]!;
       const res = ctx.tools.postOrganic({ productId: product.id, hook: pick.hook, hookStyle: pick.hookStyle, format });
       if (!res.ok) {
-        // A throttled/limited post is not a failure of Tom's work: it is postponed.
+        // A throttled/limited post is not a failure of the poster's work: it is postponed.
         if (/aujourd|limite|portée|quota|trop de posts/i.test(res.message)) {
           say(ctx, agent.id, `${agent.name} garde son post pour demain : ${short(res.message, 70)}`, 'thought', { productId: product.id });
           return { summary: `Post reporté : ${res.message}`, skipReview: true, output: { skipped: true, reason: res.message } };

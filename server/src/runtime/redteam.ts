@@ -4,15 +4,16 @@
  *   fix   targeted pass (humanize → render), then a new Red Team on the new file;
  *   kill  structural rewrite (plan → draft → … → render, new sales page), then a new Red Team.
  * A correction that leaves the file as it was changes nothing: the gate stays closed and the next cycle rebuilds the
- * guide from its plan, one cycle more if it was the last. After MAX_REWORK_CYCLES, Camille decides on a file that did
+ * guide from its plan, one cycle more if it was the last. After MAX_REWORK_CYCLES, the CEO decides on a file that did
  * change: ship with a logged waiver, or kill. A guide even the rebuild leaves as it was is held for the founder: no
  * waiver on a correction nobody made. Nothing waits forever.
  */
 import type { PdfContent, Product, Task, VoiceOfCustomer, WorldState } from '../shared.js';
 import type { GuideGaps, RedTeamFacts } from '../contracts.js';
 import type { RuntimeCtx } from './ctx.js';
-import { incident, nameOf, say } from './ctx.js';
+import { incident, nameOf, say, speak } from './ctx.js';
 import { productNote } from './notes.js';
+import { officerId } from './org/officers.js';
 import { killProduct, productTitleFor, reworkRedTeam, shelveProduct } from './pipeline.js';
 import { isOpen, logTask, refreshAgentScore } from './tasks.js';
 import { median, mean, numOf, short, str, strArr, uniq } from './util.js';
@@ -94,7 +95,7 @@ export function redTeamGate(world: WorldState, product: Product): RedTeamGate {
 function blameAuthor(ctx: RuntimeCtx, product: Product, notes: string[]): void {
   const author = [...ctx.world.company.tasks].reverse().find((t) => t.kind === 'write_pdf' && t.status === 'done' && t.input.productId === product.id);
   if (!author) return;
-  author.reviews.push({ by: 'camille', day: ctx.world.day, verdict: 'changes', notes: notes.slice(0, 3).map((n) => `Red Team : ${n}`) });
+  author.reviews.push({ by: officerId(ctx.world, 'ceo'), day: ctx.world.day, verdict: 'changes', notes: notes.slice(0, 3).map((n) => `Red Team : ${n}`) });
   const agent = ctx.world.company.agents.find((a) => a.id === author.assignee);
   if (agent) { agent.perf.rejected += 1; refreshAgentScore(agent); }
 }
@@ -102,15 +103,16 @@ function blameAuthor(ctx: RuntimeCtx, product: Product, notes: string[]): void {
 /** The end of the loop: a guide the Red Team still wants dead dies; a guide it only wants corrected ships on a logged waiver. */
 async function decide(ctx: RuntimeCtx, task: Task, product: Product, verdict: string, reasons: string[]): Promise<void> {
   const why = short(reasons[0] ?? 'risque trop élevé', 120);
+  const ceo = officerId(ctx.world, 'ceo');
   if (verdict === 'kill' || (product.quality?.compliance ?? 100) < WAIVER_MIN_COMPLIANCE) {
-    await killProduct(ctx, product, `la Red Team le refuse encore après ${MAX_REWORK_CYCLES} reprises (${why})`, 'camille');
+    await killProduct(ctx, product, `la Red Team le refuse encore après ${MAX_REWORK_CYCLES} reprises (${why})`);
     return;
   }
-  task.output = { ...(task.output ?? {}), waiver: { day: ctx.world.day, by: 'camille', reasons: reasons.slice(0, 3) } };
-  logTask(task, `Jour ${ctx.world.day} : dérogation de Camille — ${why}`);
+  task.output = { ...(task.output ?? {}), waiver: { day: ctx.world.day, by: ceo, reasons: reasons.slice(0, 3) } };
+  logTask(task, `Jour ${ctx.world.day} : dérogation de ${nameOf(ctx, ceo)} — ${why}`);
   incident(ctx, `Dérogation : « ${product.title} » sort malgré les réserves de la Red Team (${why})`);
-  say(ctx, 'camille', `Camille signe une dérogation : « ${short(product.title, 50)} » sort après ${MAX_REWORK_CYCLES} reprises, réserve notée pour la prochaine version (${short(why, 70)})`, 'thought', { productId: product.id, taskId: task.id });
-  await productNote(ctx, product, 'camille', 'Dérogation de mise en ligne', [`- Décision du jour ${ctx.world.day} après ${MAX_REWORK_CYCLES} reprises.`, ...reasons.slice(0, 3).map((r) => `- ${r}`)].join('\n'));
+  say(ctx, ceo, `${nameOf(ctx, ceo)} signe une dérogation : « ${short(product.title, 50)} » sort après ${MAX_REWORK_CYCLES} reprises, réserve notée pour la prochaine version (${short(why, 70)})`, 'thought', { productId: product.id, taskId: task.id });
+  await productNote(ctx, product, ceo, 'Dérogation de mise en ligne', [`- Décision du jour ${ctx.world.day} après ${MAX_REWORK_CYCLES} reprises.`, ...reasons.slice(0, 3).map((r) => `- ${r}`)].join('\n'));
 }
 
 /** What follows the verdict on a guide: nothing (go), the next rework cycle, or the CEO's decision. */
@@ -118,8 +120,9 @@ export async function settleRedTeam(ctx: RuntimeCtx, task: Task, product: Produc
   const out = task.output ?? {};
   const verdict = str(out.finalVerdict) ?? 'fix';
   const cycle = numOf(task.input.cycle) ?? 0;
+  const ceo = officerId(ctx.world, 'ceo');
   if (verdict === 'go') {
-    if (cycle > 0) say(ctx, 'camille', `Camille : la Red Team valide la reprise de « ${short(product.title, 50)} », la mise en ligne peut suivre`, 'thought', { productId: product.id, taskId: task.id });
+    if (cycle > 0) speak(ctx, 'ceo', `la Red Team valide la reprise de « ${short(product.title, 50)} », la mise en ligne peut suivre`, 'thought', { productId: product.id, taskId: task.id });
     return;
   }
   const reasons = strArr(out.reasons);
@@ -134,7 +137,7 @@ export async function settleRedTeam(ctx: RuntimeCtx, task: Task, product: Produc
   if (cycle > MAX_REWORK_CYCLES) {
     const why = `la Red Team le bloque et même la reprise depuis le plan n'a rien changé (${short(reasons[1] ?? reasons[0] ?? 'à corriger', 100)})`;
     shelveProduct(ctx, product, why);
-    say(ctx, 'camille', `Camille au fondateur : je ne signe pas de dérogation pour « ${short(product.title, 50)} », ${why}. Il reste hors ligne : dis « remets le guide en ligne » si tu prends le risque.`, 'founder', { productId: product.id, taskId: task.id });
+    say(ctx, ceo, `${nameOf(ctx, ceo)} au fondateur : je ne signe pas de dérogation pour « ${short(product.title, 50)} », ${why}. Il reste hors ligne : dis « remets le guide en ligne » si tu prends le risque.`, 'founder', { productId: product.id, taskId: task.id });
     return;
   }
   const structural = verdict === 'kill' || unchanged;
@@ -142,7 +145,7 @@ export async function settleRedTeam(ctx: RuntimeCtx, task: Task, product: Produc
   reworkRedTeam(ctx, product, { structural, fixes, gaps, cycle: cycle + 1, previousPrint: str(out.fingerprint) ?? '', previousVerdict: verdict, missionId: task.missionId });
   const turn = `reprise ${cycle + 1}/${Math.max(cycle + 1, MAX_REWORK_CYCLES)}`;
   incident(ctx, `La Red Team renvoie « ${product.title} » (${structural ? 'réécriture structurelle' : 'correction ciblée'}, ${turn}) : ${short(reasons[0] ?? 'promesse trop large', 100)}`);
-  say(ctx, 'camille', `Camille bloque la mise en ligne de « ${short(product.title, 40)} » : ${structural ? 'réécriture depuis le plan' : 'corrections'} (${turn}), puis nouvelle revue de ${nameOf(ctx, 'axel')}.`, 'thought', { productId: product.id, taskId: task.id });
+  say(ctx, ceo, `${nameOf(ctx, ceo)} bloque la mise en ligne de « ${short(product.title, 40)} » : ${structural ? 'réécriture depuis le plan' : 'corrections'} (${turn}), puis nouvelle revue de ${nameOf(ctx, officerId(ctx.world, 'red_team'))}.`, 'thought', { productId: product.id, taskId: task.id });
 }
 
 /** A gate that closed with no rework left in flight (a step failed): one more Red Team run settles it. */

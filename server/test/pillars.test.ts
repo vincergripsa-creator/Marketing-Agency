@@ -397,6 +397,7 @@ describe('stubs answer like today (D47)', () => {
 
   it('offices fall back on the legacy holders, and speak says who talks', () => {
     const bare = legacyWorld();
+    delete bare.company.org; // createWorld fills it: only a hand-built world goes without
     expect(bare.company.org).toBeUndefined();
     expect(officerId(bare, 'cfo')).toBe('gabriel');
     for (const o of Object.keys(LEGACY_OFFICES) as (keyof typeof LEGACY_OFFICES)[]) expect(officerOf(bare, o).id).toBe(LEGACY_OFFICES[o]);

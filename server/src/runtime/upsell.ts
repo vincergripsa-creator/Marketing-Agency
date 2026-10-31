@@ -7,6 +7,7 @@ import { bare, firstPerson, nextStepFor, norm, upsellTopics, withArticle } from 
 import type { Product, Task, VoiceOfCustomer, WorldState } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { parentOf } from './metrics.js';
+import { officerId } from './org/officers.js';
 import { createTask } from './tasks.js';
 import { capitalize, short } from './util.js';
 
@@ -78,7 +79,7 @@ export function upsellContextOf(world: WorldState, product: Product): UpsellCont
 }
 
 function reprintParent(ctx: RuntimeCtx, parent: Product, title: string, missionId: Task['missionId']): void {
-  createTask(ctx.world, { kind: 'render_pdf', title, input: { productId: parent.id, nicheId: parent.nicheId, reason: 'upsell_link' }, createdBy: 'paul', missionId, priority: 2 });
+  createTask(ctx.world, { kind: 'render_pdf', title, input: { productId: parent.id, nicheId: parent.nicheId, reason: 'upsell_link' }, createdBy: officerId(ctx.world, 'pricing'), missionId, priority: 2 });
 }
 
 /** The upsell is on sale: the parent's last page says so, in words that name it. */

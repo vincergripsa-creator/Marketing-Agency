@@ -6,6 +6,7 @@ import { advancesHold } from '../holds.js';
 import { currentBudget, type Budget } from '../metrics.js';
 import { learning, sim } from '../modules.js';
 import { productNote } from '../notes.js';
+import { officerId } from '../org/officers.js';
 import { createTask } from '../tasks.js';
 import { clamp, eur, pct, round2, short, str, strArr } from '../util.js';
 import type { HandlerMap } from './common.js';
@@ -121,7 +122,7 @@ export const partnerHandlers: HandlerMap = {
         const c = ctx.world.market.creators.find((x) => x.id === creatorId);
         createTask(ctx.world, {
           kind: 'negotiate_deal', title: `Négocier avec @${c?.handle ?? creatorId} — « ${short(product.title, 36)} »`,
-          input: { productId: product.id, nicheId: product.nicheId, creatorId }, createdBy: 'rayan', missionId: task.missionId, priority: 2,
+          input: { productId: product.id, nicheId: product.nicheId, creatorId }, createdBy: officerId(ctx.world, 'partners'), missionId: task.missionId, priority: 2,
         });
       }
     },

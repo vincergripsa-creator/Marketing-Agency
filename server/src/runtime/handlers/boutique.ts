@@ -2,12 +2,13 @@
 import type { Product } from '../../shared.js';
 import { nextId } from '../../core/index.js';
 import type { RuntimeCtx } from '../ctx.js';
-import { addDeliverable, incident, latestOutput, nicheName, productOf, runFileExists, say, versionDir, vocOf, writeRunFile } from '../ctx.js';
+import { addDeliverable, incident, latestOutput, nicheName, productOf, runFileExists, say, speak, versionDir, vocOf, writeRunFile } from '../ctx.js';
 import { deliverables, learning, sim } from '../modules.js';
 import { directivesOf, HYPE_ARMS, PRICE_ARMS } from '../playbook.js';
 import { createUpsellPipeline, killProduct } from '../pipeline.js';
 import { redTeamGate, reopenGate } from '../redteam.js';
 import { productNote } from '../notes.js';
+import { officerId } from '../org/officers.js';
 import { followUpLimit, parentOf, priceCeiling } from '../metrics.js';
 import { linkUpsell, nicheCollision, pickUpsellSubject, upsellContextOf } from '../upsell.js';
 import { eur, median, numOf, round2, short, str } from '../util.js';
@@ -185,7 +186,7 @@ export const boutiqueHandlers: HandlerMap = {
       const clash = nicheCollision(ctx.world, product);
       if (clash) {
         const reason = `Mise en ligne refusée : ${clash}`;
-        if (product.status !== 'live') await killProduct(ctx, product, reason, task.assignee ?? 'clara');
+        if (product.status !== 'live') await killProduct(ctx, product, reason, task.assignee ?? officerId(ctx.world, 'shop'));
         return { fail: reason, summary: reason };
       }
       // The Red Team's verdict is a gate: no « go » (or signed waiver) on this version, no publication.
@@ -209,15 +210,16 @@ export const boutiqueHandlers: HandlerMap = {
       if (!res.ok && !wasLive) {
         product.status = 'ready';
         incident(ctx, `La boutique a refusé la mise en ligne de « ${product.title} » : ${res.message}`);
-        say(ctx, 'clara', `Clara : la boutique refuse la mise en ligne (${short(res.message, 80)})`, 'task_failed', { productId: product.id, taskId: task.id });
+        speak(ctx, 'shop', `la boutique refuse la mise en ligne (${short(res.message, 80)})`, 'task_failed', { productId: product.id, taskId: task.id });
         return;
       }
       product.status = 'live';
       if (product.launchedDay === null) product.launchedDay = ctx.world.day;
-      say(ctx, 'clara', wasLive || republish
+      const shop = officerId(ctx.world, 'shop');
+      say(ctx, shop, wasLive || republish
         ? `La v${product.version} de « ${short(product.title, 50)} » remplace l'ancienne en boutique`
         : `« ${short(product.title, 50)} » est en ligne à ${eur(product.price)} !`, 'deliverable', { productId: product.id, taskId: task.id });
-      await productNote(ctx, product, 'clara', wasLive || republish ? `Version ${product.version} en ligne` : 'Mise en ligne', [
+      await productNote(ctx, product, shop, wasLive || republish ? `Version ${product.version} en ligne` : 'Mise en ligne', [
         `- Prix : ${eur(product.price)} · qualité PDF ${product.quality?.overall ?? '—'}/100 · page ${product.salesQuality?.overall ?? '—'}/100`,
         `- Fichiers : \`${product.files.pdf}\` · \`${product.files.salesPage}\``,
       ].join('\n'));
@@ -257,7 +259,7 @@ export const boutiqueHandlers: HandlerMap = {
     async onDone(ctx, task) {
       if (task.output?.existing === true || task.output?.noSubject === true) return;
       const upsell = productOf(ctx, task.output?.upsellProductId);
-      if (upsell && upsell.status !== 'killed') createUpsellPipeline(ctx, upsell, { createdBy: 'clara', missionId: task.missionId, priority: 2 });
+      if (upsell && upsell.status !== 'killed') createUpsellPipeline(ctx, upsell, { createdBy: officerId(ctx.world, 'shop'), missionId: task.missionId, priority: 2 });
     },
   },
 };

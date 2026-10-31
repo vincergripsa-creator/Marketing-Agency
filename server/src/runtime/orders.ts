@@ -8,6 +8,7 @@ import { addHold, liftHolds } from './holds.js';
 import { committedAdBudget, currentBudget } from './metrics.js';
 import type { FounderOrder, OrderAction } from './missions.js';
 import { tellFounder } from './missions.js';
+import { officerId } from './org/officers.js';
 import { closeProductMissions, dropTask, killProduct, shelveProduct, stopPaidAds } from './pipeline.js';
 import { redTeamGate } from './redteam.js';
 import { resumeCampaigns } from './strategy.js';
@@ -31,8 +32,9 @@ function stopAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'stop_ads' }, 
 
 export async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): Promise<void> {
   const w = ctx.world;
-  const done = (text: string): void => { m.status = 'done'; tellFounder(ctx, 'camille', m, text); };
-  const refuse = (text: string): void => { m.status = 'failed'; tellFounder(ctx, 'camille', m, text); };
+  const ceo = officerId(w, 'ceo');
+  const done = (text: string): void => { m.status = 'done'; tellFounder(ctx, ceo, m, text); };
+  const refuse = (text: string): void => { m.status = 'failed'; tellFounder(ctx, ceo, m, text); };
   switch (order.action) {
     case 'no_target': {
       const titles = w.company.products.filter((p) => p.status !== 'killed').slice(-4).map((p) => `« ${short(p.title, 50)} »`);
@@ -65,7 +67,7 @@ export async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOr
     case 'kill_product': {
       const p = order.product!;
       closeProductMissions(ctx, p, `le fondateur l'a arrêté le jour ${w.day}`);
-      await killProduct(ctx, p, `décision du fondateur du jour ${w.day}`, 'camille');
+      await killProduct(ctx, p, `décision du fondateur du jour ${w.day}`);
       done(`C'est fait : « ${short(p.title, 60)} » est arrêté définitivement.`);
       return;
     }
@@ -96,7 +98,7 @@ export async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOr
       p.status = p.launchedDay === null && !complete ? 'writing' : 'ready';
       if (complete || p.launchedDay !== null) createTask(w, { kind: 'publish_product', title: `Remettre en ligne — « ${short(p.title, 42)} »`, input: { productId: p.id, nicheId: p.nicheId, founderApproved: true, ...(p.launchedDay !== null ? { republish: true } : {}) }, createdBy: 'founder', missionId: m.id, priority: 1 });
       m.productId = p.id;
-      tellFounder(ctx, 'camille', m, complete ? `C'est reparti : « ${short(p.title, 60)} » retourne en ligne.` : `C'est reparti : la production de « ${short(p.title, 60)} » reprend au prochain stand-up.`);
+      tellFounder(ctx, ceo, m, complete ? `C'est reparti : « ${short(p.title, 60)} » retourne en ligne.` : `C'est reparti : la production de « ${short(p.title, 60)} » reprend au prochain stand-up.`);
       if (!complete) m.status = 'done';
       return;
     }

@@ -493,8 +493,9 @@ export function unblockStaleTasks(ctx: RuntimeCtx, agent: AgentState): string[] 
       const reviewer = agentById(w, t.reviewer);
       const backup = chiefOf(w, t.dept);
       if (!reviewer && backup) {
-        t.reviewer = backup.id === t.assignee ? 'camille' : backup.id;
-        lines.push(`${agent.name} débloque la relecture de « ${short(t.title, 60)} » : ${backup.name} s'en charge`);
+        t.reviewer = backup.id;
+        fixSelfReview(w, t);
+        lines.push(`${agent.name} débloque la relecture de « ${short(t.title, 60)} » : ${nameOf(ctx, t.reviewer)} s'en charge`);
       }
       continue;
     }

@@ -7,8 +7,11 @@ import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import type { WorldState } from '../src/shared.js';
 import { acceptance, CHANNEL_IDS, CHANNELS, channelOf, PIER_CELL, SAFE_ZONES, tierFor } from '../src/shared.js';
-import { AGENTS } from '../src/runtime/roster.js';
+import { buildTeam } from '../src/runtime/org/catalog.js';
+import { LEGACY_ORG } from '../src/runtime/org/constants.js';
 import { FIXTURE_FILE, GOLDEN, goldenRecord, goldenRun, recordedGolden } from '../scripts/golden.js';
+
+const AGENTS = buildTeam(LEGACY_ORG);
 
 describe('golden run', () => {
   let world: WorldState;

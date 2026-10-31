@@ -1,4 +1,4 @@
-/** The org state and its invariants (org §7). Stub until P1.1 and P2.1: one team, every kind at full speed, in its home department. */
+/** The org state and its invariants (org §7). `legacyOrgState` stands, the rest is a stub until P2.1: one team, every kind at full speed, in its home department. */
 import type { AgentState, DeptId, OrgState, TaskKind, WorldState } from '../../shared.js';
 import { DEPARTMENTS } from '../roster.js';
 import { KIND_META } from '../tasks.js';
@@ -12,7 +12,7 @@ export function auditOrg(_w: WorldState): string[] {
   return [];
 }
 
-/** What a save from before the org pillar stands for: the legacy team, nothing open, nothing owed. */
+/** What a new world starts from, and what a save from before the org pillar stands for: the legacy offices, nothing open, nothing owed. */
 export function legacyOrgState(w: WorldState): OrgState {
   return {
     offices: { ...LEGACY_OFFICES }, deptHost: {},

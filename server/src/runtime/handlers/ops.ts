@@ -8,6 +8,7 @@ import { versionSince } from '../acquisition.js';
 import { activeCampaigns, computeBudget, priceCeiling, productMetrics } from '../metrics.js';
 import { createTask, isOpen } from '../tasks.js';
 import { followFounderMissions, unblockStaleTasks } from '../missions.js';
+import { officerId } from '../org/officers.js';
 import { PRICE_ARMS } from '../playbook.js';
 import { dec, eur, numOf, pad3, pct, short } from '../util.js';
 import type { HandlerMap } from './common.js';
@@ -225,7 +226,7 @@ export const opsHandlers: HandlerMap = {
       const day = Math.min(sim.lastClosedDay(ctx.world), Math.max(1, Math.round(numOf(task.input.day) ?? sim.lastClosedDay(ctx.world))));
       const r = reconcileDay(ctx.world, day);
       for (const gap of r.gaps.slice(0, 3)) incident(ctx, `Écart comptable du jour ${day} : ${gap}`);
-      if (r.gaps.length) say(ctx, agent.id, `${agent.name} signale ${r.gaps.length} écart(s) au grand livre du jour ${day} : ${short(r.gaps[0]!, 90)}`, 'finance', undefined, { toAgentId: 'gabriel' });
+      if (r.gaps.length) say(ctx, agent.id, `${agent.name} signale ${r.gaps.length} écart(s) au grand livre du jour ${day} : ${short(r.gaps[0]!, 90)}`, 'finance', undefined, { toAgentId: officerId(ctx.world, 'cfo') });
       else say(ctx, agent.id, `${agent.name} rapproche le jour ${day} : ${r.entries} écritures, ${r.checks} contrôles, aucun écart (résultat ${eur(r.net)})`, 'finance');
       return {
         summary: `Jour ${day} : ${eur(r.revenue)} de ventes, ${eur(r.refunds)} remboursés, ${eur(r.adSpend)} de pub, ${eur(r.fees + r.fixed + r.creators)} de frais, résultat ${eur(r.net)}${r.gaps.length ? ` — ${r.gaps.length} écart(s)` : ', aucun écart'}.`,
@@ -258,7 +259,7 @@ export const opsHandlers: HandlerMap = {
       });
       addDeliverable(ctx, { kind: 'report', title: `P&L de la semaine ${report.week}`, productId: null, creativeId: null, path: `brain/${path}`, createdBy: agent.id, quality: null }, task);
       const best = report.products[0];
-      say(ctx, agent.id, `${agent.name} boucle le P&L de la semaine ${report.week} : résultat ${eur(report.total)}${best ? `, meilleur produit « ${short(best.title, 40)} » (${eur(best.profit)})` : ''}${losers.length ? `, ${losers.length} en perte` : ''}`, 'finance', undefined, { toAgentId: 'gabriel' });
+      say(ctx, agent.id, `${agent.name} boucle le P&L de la semaine ${report.week} : résultat ${eur(report.total)}${best ? `, meilleur produit « ${short(best.title, 40)} » (${eur(best.profit)})` : ''}${losers.length ? `, ${losers.length} en perte` : ''}`, 'finance', undefined, { toAgentId: officerId(ctx.world, 'cfo') });
       for (const p of losers.slice(0, 3)) incident(ctx, `P&L semaine ${report.week} : « ${p.title} » perd ${eur(-p.profit)} (ROAS ${roas(p.roas)})`);
       return {
         summary: `P&L semaine ${report.week} : résultat ${eur(report.total)}, ${report.products.length} produit(s), ${losers.length} en perte.`,

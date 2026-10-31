@@ -7,10 +7,11 @@
 import type { DayPlanItem, DayPlan } from '../contracts.js';
 import type { Lesson, Product, Task, TaskKind } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
-import { incident, latestOutput, nameOf, productOf, say, vocOf } from './ctx.js';
+import { incident, latestOutput, nameOf, productOf, speak, vocOf } from './ctx.js';
 import { learning, sim } from './modules.js';
 import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, fromBuyer, isProductFeedback, isUpsellProduct, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO } from './metrics.js';
 import { adsHeldSince, launchHold, productHold } from './holds.js';
+import { officerId } from './org/officers.js';
 import { createProductPipeline, createUpsellPipeline, createV2Pipeline, excludedNiches, killProduct, openTasksForProduct, pauseProduct, resumePipeline } from './pipeline.js';
 import { guideGaps } from './redteam.js';
 import { createTask, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, PRODUCT_KINDS } from './tasks.js';
@@ -111,18 +112,18 @@ async function ceoDecisions(ctx: RuntimeCtx, notes: string[], items: DayPlanItem
     if (!h.severe || isReworking(w, p.id)) continue;
     handled.add(p.id);
     if (p.version >= 3) {
-      await killProduct(ctx, p, `même la v${p.version} reste inacceptable pour les acheteurs (${h.severe})`, 'camille');
+      await killProduct(ctx, p, `même la v${p.version} reste inacceptable pour les acheteurs (${h.severe})`);
       notes.push(`« ${p.title} » arrêté : ${h.severe} malgré ${p.version - 1} réécriture(s).`);
       continue;
     }
-    await pauseProduct(ctx, p, h.severe, 'camille');
+    await pauseProduct(ctx, p, h.severe);
     items.push(reworkItem(ctx, p, `Produit mis en pause (${h.severe}) : on le retravaille avant de le revendre.`));
     notes.push(`« ${p.title} » mis en pause (${h.severe}) → v${p.version + 1}.`);
   }
   for (const p of w.company.products.filter((x) => x.status === 'paused')) {
     if (handled.has(p.id) || productHold(w, p.id) || openTasksForProduct(ctx, p.id).length) continue;
     if (p.version >= 3) {
-      await killProduct(ctx, p, `en pause depuis la v${p.version} sans version acceptable`, 'camille');
+      await killProduct(ctx, p, `en pause depuis la v${p.version} sans version acceptable`);
       notes.push(`« ${p.title} » arrêté après ${p.version - 1} réécriture(s).`);
       continue;
     }
@@ -157,7 +158,7 @@ async function ceoDecisions(ctx: RuntimeCtx, notes: string[], items: DayPlanItem
       const reason = hopeless
         ? `même la v${p.version} reste notée ${dec(h.rating, 1)}/5 par ses acheteurs (${h.reviews.length} avis)`
         : `${Math.min(online, KILL_WINDOW_DAYS)} derniers jours de la v${p.version} : ${m.sales} vente(s), ROAS ${roas} pour ${eur(m.spend)} de pub`;
-      await killProduct(ctx, p, reason, 'camille');
+      await killProduct(ctx, p, reason);
       notes.push(`« ${p.title} » arrêté (${hopeless ? 'qualité perçue trop basse' : `${m.sales} ventes en ${Math.min(online, KILL_WINDOW_DAYS)} jours`}).`);
       continue;
     }
@@ -171,7 +172,7 @@ async function ceoDecisions(ctx: RuntimeCtx, notes: string[], items: DayPlanItem
       notes.push(`« ${p.title} » ${verdict} → v${p.version + 1}, sans budget d'ici là.`);
       continue;
     }
-    await killProduct(ctx, p, verdict, 'camille');
+    await killProduct(ctx, p, verdict);
     notes.push(`« ${p.title} » arrêté : ${verdict}.`);
   }
 }
@@ -281,13 +282,13 @@ export function reactToOutage(ctx: RuntimeCtx): boolean {
       c.pausedFor = 'outage';
     }
     const paused = w.company.campaigns.filter((c) => c.pausedFor === 'outage').length;
-    say(ctx, 'camille', `Camille : panne de paiement annoncée aujourd'hui, aucune vente possible. ${paused ? `${paused} campagne(s) en pause` : 'Aucune campagne à couper'}, enveloppe pub à 0, ni lancement ni hausse de budget. On reprend demain matin.`, 'meeting');
+    speak(ctx, 'ceo', `panne de paiement annoncée aujourd'hui, aucune vente possible. ${paused ? `${paused} campagne(s) en pause` : 'Aucune campagne à couper'}, enveloppe pub à 0, ni lancement ni hausse de budget. On reprend demain matin.`, 'meeting');
     incident(ctx, `Panne de paiement du jour ${w.day} : pubs en pause, aucune vente possible`);
     return true;
   }
   const { resumed, left } = resumeCampaigns(ctx, 'outage');
-  if (resumed.length) say(ctx, 'leo', `Léo : la panne est passée, ${resumed.length} campagne(s) reprennent ce matin`, 'ad');
-  if (left.length) say(ctx, 'leo', `Léo : ${left.length} campagne(s) restent en pause après la panne (produit, budget ou compte) : ${short(left.join(', '), 90)}`, 'ad');
+  if (resumed.length) speak(ctx, 'growth', `la panne est passée, ${resumed.length} campagne(s) reprennent ce matin`, 'ad');
+  if (left.length) speak(ctx, 'growth', `${left.length} campagne(s) restent en pause après la panne (produit, budget ou compte) : ${short(left.join(', '), 90)}`, 'ad');
   return false;
 }
 
@@ -346,7 +347,7 @@ function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
     if (inFlight.length && idle >= MAX_IDLE_DAYS && !companyBlock && (!cand.block || !cand.block.hard)
       && inFlight.every((t) => t.status !== 'awaiting_founder' && t.input.founderApproved !== true && t.status !== 'in_progress' && t.dayCreated <= w.day - MAX_IDLE_DAYS)) {
       for (const t of inFlight) { t.status = 'cancelled'; t.dayDone = w.day; logTask(t, `Jour ${w.day} : annulée — bloquée depuis le jour ${t.dayCreated}, on repart de zéro.`); }
-      say(ctx, 'camille', `Camille : ${idle} jours sans pub et ${inFlight.length} tâche(s) d'acquisition bloquée(s) sur « ${short(p.title, 40)} » — on repart de zéro`, 'thought', { productId: p.id });
+      speak(ctx, 'ceo', `${idle} jours sans pub et ${inFlight.length} tâche(s) d'acquisition bloquée(s) sur « ${short(p.title, 40)} » — on repart de zéro`, 'thought', { productId: p.id });
       inFlight = [];
     }
     if (inFlight.length) {
@@ -358,7 +359,7 @@ function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
       if (!launching && !cand.block) {
         const hooks = inFlight.find((t) => t.kind === 'write_ad_hooks');
         if (hooks) hooks.input = { ...hooks.input, launch: true };
-        else createTask(w, { kind: 'launch_campaign', title: titled('launch_campaign', p), input: { productId: p.id, nicheId: p.nicheId }, dependsOn: inFlight.map((t) => t.id), createdBy: 'camille', priority: 2 });
+        else createTask(w, { kind: 'launch_campaign', title: titled('launch_campaign', p), input: { productId: p.id, nicheId: p.nicheId }, dependsOn: inFlight.map((t) => t.id), createdBy: officerId(w, 'ceo'), priority: 2 });
       }
       if (!cand.block) launchedFor ??= p;
       continue;
@@ -399,8 +400,8 @@ function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
   if (!launchedFor && !running && waiting.length) blocked = companyBlock ?? reasons[0] ?? null;
   else if (!launchedFor && !running && !candidates.length && w.company.products.some((p) => p.status === 'live' || p.status === 'paused')) blocked = 'aucun produit en ligne ne passe les critères de qualité pour la pub';
   // Say why nothing is launched (the founder must never wonder why the agency is idle).
-  if (!launchedFor && waiting.length && companyBlock) say(ctx, 'leo', `Léo : pas de nouvelle campagne aujourd'hui — ${companyBlock}`, 'ad');
-  for (const r of reasons.slice(0, 2)) say(ctx, 'leo', `Léo : pas de pub aujourd'hui pour ${r}`, 'ad');
+  if (!launchedFor && waiting.length && companyBlock) speak(ctx, 'growth', `pas de nouvelle campagne aujourd'hui — ${companyBlock}`, 'ad');
+  for (const r of reasons.slice(0, 2)) speak(ctx, 'growth', `pas de pub aujourd'hui pour ${r}`, 'ad');
   if (blocked && !launchedFor) notes.push(`Acquisition payante bloquée : ${blocked}.`);
   return { launchedFor, blocked };
 }
@@ -483,7 +484,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   }
 
   // 3. Live products: acquisition, quality loop, pricing, upsell.
-  // Organic first: TikTok throttles reach beyond ~5 posts a day, so Tom gets 4 slots: a guide just launched first (it
+  // Organic first: TikTok throttles reach beyond ~5 posts a day, so the community manager gets 4 slots: a guide just launched first (it
   // has no numbers yet), then by what each product earned over two weeks, at most 2 per product. A product that fails
   // the quality gate (bad rating, refunds) or loses money is never promoted.
   const promotable = live.filter((p) => !promotionBlock(w, p));
@@ -782,5 +783,5 @@ export function prepareFounderItem(ctx: RuntimeCtx, it: DayPlanItem, wantsProduc
 }
 
 export function describePlan(ctx: RuntimeCtx, plan: DayPlan): string {
-  return `${nameOf(ctx, 'camille')} : ${plan.focus}`;
+  return `${nameOf(ctx, officerId(ctx.world, 'ceo'))} : ${plan.focus}`;
 }

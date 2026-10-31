@@ -5,6 +5,7 @@ import type { RuntimeCtx } from '../ctx.js';
 import { incident, latestOutput, productBrief, productOf, say, vocOf } from '../ctx.js';
 import { sim } from '../modules.js';
 import { productNote } from '../notes.js';
+import { officerId } from '../org/officers.js';
 import { addPlaybookRule, directivesOf } from '../playbook.js';
 import { titleTaken, upsellContextOf } from '../upsell.js';
 import { capitalize, includesCI, keywords, numOf, short, splitSentences, uniq } from '../util.js';
@@ -207,7 +208,7 @@ export const studioHandlers: HandlerMap = {
       say(ctx, agent.id, res.issues.length
         ? `${agent.name} corrige ${res.issues.length} point(s) : ${short(res.issues[0]!, 70)}`
         : `${agent.name} : aucune affirmation douteuse, tout est sourcé.`, 'thought', { productId: product.id });
-      if (learned) say(ctx, 'nora', `Leçon immédiate : ${learned} affirmation(s) inventée(s) rejoignent les « Ne jamais écrire » des rédacteurs`, 'lesson', { productId: product.id });
+      if (learned) say(ctx, officerId(ctx.world, 'hr'), `Leçon immédiate : ${learned} affirmation(s) inventée(s) rejoignent les « Ne jamais écrire » des rédacteurs`, 'lesson', { productId: product.id });
       return { summary: `${res.issues.length} point(s) corrigé(s) — qualité ${q.overall}/100, conformité ${q.compliance}/100.`, output: { issues: res.issues, claims: res.claims ?? [], learned, score: q.overall } };
     },
   },

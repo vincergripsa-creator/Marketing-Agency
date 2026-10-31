@@ -2,8 +2,9 @@
  * Task system: kind metadata, creation helper, dependency resolution, assignment by department chiefs
  * and reviewer routing. Pure functions over WorldState (activities are emitted through core/emit).
  */
-import type { AgentId, AgentState, DeptId, Lesson, Mission, Task, TaskKind, WorldState } from '../shared.js';
+import type { AgentId, AgentState, DeptId, Lesson, Mission, Office, Task, TaskKind, WorldState } from '../shared.js';
 import { emit, nextId } from '../core/index.js';
+import { officerId, reviewerFor } from './org/officers.js';
 import { short, idNum } from './util.js';
 
 export interface KindMeta {
@@ -82,18 +83,6 @@ export const PRODUCT_KINDS: TaskKind[] = [
   'post_organic', 'find_creators',
 ];
 
-const DEFAULT_REVIEWER: Partial<Record<TaskKind, AgentId>> = {
-  write_pdf: 'samuel',
-  render_pdf: 'samuel',
-  fact_check: 'elise',
-  design_cover: 'zoe',
-  red_team: 'camille',
-  produce_ad: 'leo',
-  write_sales_page: 'clara',
-  publish_product: 'camille',
-  weekly_pnl: 'gabriel',
-};
-
 export const OPEN_STATUSES: Task['status'][] = ['pending', 'in_progress', 'review', 'awaiting_founder'];
 
 export function isOpen(t: Task): boolean {
@@ -131,7 +120,7 @@ export function createTask(world: WorldState, spec: TaskSpec): Task {
     progress: 0,
     workLeft: Math.max(0, spec.workLeft ?? meta.work),
     attempts: 0,
-    reviewer: spec.reviewer !== undefined ? spec.reviewer : (DEFAULT_REVIEWER[spec.kind] ?? null),
+    reviewer: spec.reviewer !== undefined ? spec.reviewer : reviewerFor(world, spec.kind),
     reviews: [],
     input: { ...(spec.input ?? {}) },
     output: null,
@@ -209,12 +198,14 @@ export function agentLoad(world: WorldState, agentId: AgentId): number {
   return load;
 }
 
-/** Never let an agent review their own work: fall back to the chief, then the CEO, then the chief of staff. */
+/** Who steps in when a reviewer cannot read their own work, after the chief. On a lean team the chief of staff is the CEO: the next offices keep the pair distinct. */
+const REVIEW_WALK: readonly Office[] = ['ceo', 'chief_of_staff', 'hr', 'cfo'];
+
+/** Never let an agent review their own work: the first of the chief and the walk who is someone else. */
 export function fixSelfReview(world: WorldState, task: Task): void {
   if (!task.reviewer || task.reviewer !== task.assignee) return;
-  const chief = chiefOf(world, task.dept);
-  if (chief && chief.id !== task.assignee) task.reviewer = chief.id;
-  else task.reviewer = task.assignee === 'camille' ? 'hugo' : 'camille';
+  const walk = [chiefOf(world, task.dept)?.id, ...REVIEW_WALK.map((o) => officerId(world, o))];
+  task.reviewer = walk.find((id) => id && id !== task.assignee) ?? null;
 }
 
 /** Candidates able to do a kind: department members first, then anyone with the skill. */
@@ -273,13 +264,9 @@ export function assignReady(world: WorldState): number {
   return assigned;
 }
 
-/** "lui-même" / "elle-même" from a small list of the roster's female first names. */
-const FEMININE = new Set(['camille', 'nadia', 'yasmine', 'elise', 'lina', 'zoe', 'maelle', 'sarah', 'chloe', 'clara', 'ines', 'fatou', 'emma', 'alice', 'nora', 'louise']);
+/** "lui-même" / "elle-même". */
 export function selfWord(agent: AgentState): string {
-  return FEMININE.has(agent.id) ? 'elle-même' : 'lui-même';
-}
-export function isFeminine(agentId: AgentId): boolean {
-  return FEMININE.has(agentId);
+  return agent.gender === 'f' ? 'elle-même' : 'lui-même';
 }
 
 export function closeMissions(world: WorldState): Mission[] {

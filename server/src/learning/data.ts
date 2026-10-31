@@ -206,18 +206,14 @@ export function findNoteLink(notes: readonly BrainNote[], folder: string, candid
   return null;
 }
 
-/** Agent that signs retro / HR lines: Nora when she exists, else the RH chief, else anyone in RH. */
+/** Agent that signs retro / HR lines: the holder of the HR office, else the RH chief, else anyone in RH. */
 export function retroAgent(world: WorldState): AgentState | null {
   const agents = world.company.agents ?? [];
+  const hr = world.company.org?.offices.hr;
   return (
-    agents.find((a) => a.id === 'nora') ??
-    agents.find((a) => fold(a.name) === 'nora') ??
+    agents.find((a) => a.id === hr) ??
     agents.find((a) => a.dept === 'rh' && a.isChief) ??
     agents.find((a) => a.dept === 'rh') ??
     null
   );
-}
-
-export function retroAgentId(world: WorldState): string {
-  return retroAgent(world)?.id ?? 'nora';
 }

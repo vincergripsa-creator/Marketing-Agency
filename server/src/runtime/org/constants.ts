@@ -1,8 +1,13 @@
 /** The org pillar's numbers (org §5). sim/balance.ts stays frozen: each pillar keeps its own. */
-import type { ModelTier, OrgConfig } from '../../shared.js';
+import type { ModelTier, OrgConfig, WorldState } from '../../shared.js';
 
 export const LEGACY_ORG: OrgConfig = { team: 'legacy31', autoHire: false, payroll: false };
 export const LEAN_ORG: OrgConfig = { team: 'lean', autoHire: true, payroll: true };
+
+/** An absent `scenario.org` is an older save, which is the legacy team (§2.8). */
+export function isLegacyOrg(w: WorldState): boolean {
+  return (w.scenario.org ?? LEGACY_ORG).team === 'legacy31';
+}
 
 export const ORG = {
   workTicksPerDay: 9, maxHeadcount: 60,

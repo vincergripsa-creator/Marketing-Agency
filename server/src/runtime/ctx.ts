@@ -51,8 +51,9 @@ export function agentOf(ctx: RuntimeCtx, id: AgentId | null | undefined): AgentS
   return id ? ctx.world.company.agents.find((a) => a.id === id) : undefined;
 }
 
+/** Someone who left keeps their name in the feed (org §10). */
 export function nameOf(ctx: RuntimeCtx, id: AgentId | null | undefined): string {
-  return agentOf(ctx, id)?.name ?? 'Quelqu’un';
+  return agentOf(ctx, id)?.name ?? ctx.world.company.org?.alumni.find((a) => a.id === id)?.name ?? 'Quelqu’un';
 }
 
 export function productOf(ctx: RuntimeCtx, id: unknown): Product | undefined {

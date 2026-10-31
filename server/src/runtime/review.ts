@@ -1,13 +1,14 @@
 /**
  * Quality gates before anything ships. Reviewers use the sim's heuristic scorers (the same ones the market
- * uses to convert) plus the playbooks: Samuel relit tout, Élise signe le fact-check, Zoé la couverture,
- * Léo les pubs, Clara les pages de vente, Camille les verdicts de la Red Team et la mise en ligne.
+ * uses to convert) plus the playbooks: the fact-checker reads everything, the editor signs the fact-check, the art
+ * director the cover, growth the ads, the shop the sales pages, the CEO the Red Team's verdicts and the publication.
  */
 import type { AgentState, QualityReport, ReviewNote, Task } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
-import { incident, productOf, runFileExists, say, vocOf } from './ctx.js';
+import { incident, nameOf, productOf, runFileExists, say, vocOf } from './ctx.js';
 import { sim } from './modules.js';
 import { productNote } from './notes.js';
+import { officerId } from './org/officers.js';
 import { bannedHits, directivesOf } from './playbook.js';
 import { excludedNiches, killProduct, pauseProduct } from './pipeline.js';
 import { productPnls } from './accounting.js';
@@ -52,17 +53,17 @@ export async function closeLoop(ctx: RuntimeCtx, task: Task, res: ReviewResult):
     return { verdict: 'approve', notes: [...res.notes, 'Créa abandonnée, le compte pub ne prend pas ce risque.'], score: res.score };
   }
   if (res.noWaiver && product && product.status !== 'live' && product.status !== 'killed') {
-    await killProduct(ctx, product, `impossible de le rendre conforme en ${MAX_ATTEMPTS} tentatives (${first})`, 'camille');
+    await killProduct(ctx, product, `impossible de le rendre conforme en ${MAX_ATTEMPTS} tentatives (${first})`);
     return { verdict: 'approve', notes: [...res.notes, 'Produit arrêté : il ne peut pas sortir en l’état.'], score: res.score };
   }
   // Already on sale with a page that breaks the rules: it leaves the store until the CEO's rework gives it a clean one.
   if (res.noWaiver && product?.status === 'live' && task.kind === 'write_sales_page') {
-    await pauseProduct(ctx, product, `page de vente non conforme après ${MAX_ATTEMPTS} tentatives (${first})`, 'camille');
+    await pauseProduct(ctx, product, `page de vente non conforme après ${MAX_ATTEMPTS} tentatives (${first})`);
     return { verdict: 'approve', notes: [...res.notes, 'Produit retiré de la vente : la page ne peut pas rester en l’état.'], score: res.score };
   }
   task.output = { ...(task.output ?? {}), waiver: { day: ctx.world.day, by: task.reviewer, notes: res.notes.slice(0, 3) } };
   incident(ctx, `Dérogation : « ${task.title} » validé après ${MAX_ATTEMPTS} tentatives sans atteindre le niveau attendu${res.score !== null ? ` (${res.score}/100)` : ''} : ${first}`);
-  if (product) await productNote(ctx, product, task.reviewer ?? 'camille', 'Dérogation de relecture', `- ${task.title} (jour ${ctx.world.day}) : ${res.notes.slice(0, 3).join(' ; ')}`);
+  if (product) await productNote(ctx, product, task.reviewer ?? officerId(ctx.world, 'ceo'), 'Dérogation de relecture', `- ${task.title} (jour ${ctx.world.day}) : ${res.notes.slice(0, 3).join(' ; ')}`);
   return { verdict: 'approve', notes: [...res.notes, `Dérogation après ${MAX_ATTEMPTS} tentatives : les défauts restants iront dans la prochaine version.`], score: res.score };
 }
 
@@ -156,7 +157,8 @@ export async function reviewTask(ctx: RuntimeCtx, task: Task, reviewer: AgentSta
         const mission = ctx.world.company.missions.find((m) => m.id === task.missionId);
         if (mission?.wantsProduct && mission.nicheId === product.nicheId) {
           task.output = { ...out, finalVerdict: 'fix' };
-          say(ctx, 'camille', `Camille au fondateur : la Red Team déconseille « ${short(product.title, 50)} » (${short(strArr(out.reasons)[0] ?? 'risque élevé', 90)}). C'est ta demande : on corrige l'angle au lieu de changer de sujet.`, 'founder', { productId: product.id, taskId: task.id });
+          const ceo = officerId(ctx.world, 'ceo');
+          say(ctx, ceo, `${nameOf(ctx, ceo)} au fondateur : la Red Team déconseille « ${short(product.title, 50)} » (${short(strArr(out.reasons)[0] ?? 'risque élevé', 90)}). C'est ta demande : on corrige l'angle au lieu de changer de sujet.`, 'founder', { productId: product.id, taskId: task.id });
           return approve(['Niche demandée par le fondateur : on corrige l’angle, le risque lui est signalé.']);
         }
         const excluded = new Set([...excludedNiches(ctx, { includeActive: true }), product.nicheId]);
@@ -167,7 +169,7 @@ export async function reviewTask(ctx: RuntimeCtx, task: Task, reviewer: AgentSta
         }
         return approve([`Verdict « tuer » validé : ${short(strArr(out.reasons)[0] ?? 'risque trop élevé', 80)}.`]);
       }
-      // Camille confirms the Red Team, she never softens it: its verdict on a guide is what the gate reads.
+      // The CEO confirms the Red Team and never softens it: its verdict on a guide is what the gate reads.
       if (out.subject !== 'idea' && verdict === 'kill') return approve(['Verdict « tuer » validé : on repart du plan avant toute mise en ligne.']);
       if (out.subject !== 'idea' && verdict === 'fix') return approve(['Correctifs de la Red Team validés : nouvelle revue après correction.']);
       return approve([`Verdict « ${verdict === 'fix' ? 'corriger' : 'go'} » validé.`]);

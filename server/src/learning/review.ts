@@ -72,8 +72,8 @@ export async function performanceReview(world: WorldState, brain: BrainVault): P
   const day = world.day;
   const week = Math.max(1, Math.ceil(day / 7));
   const agents = world.company.agents ?? [];
-  const nora = retroAgent(world);
-  const noraId = nora?.id ?? 'nora';
+  const hr = retroAgent(world);
+  const hrId = hr?.id ?? null;
   if (agents.length === 0) return [`Revue RH semaine ${week} : aucun agent à évaluer.`];
 
   const weekly = countersFromTasks(world, day - 6, day);
@@ -141,7 +141,7 @@ export async function performanceReview(world: WorldState, brain: BrainVault): P
     lines.push(line);
     promotionLines.push(line);
     changed.add(a.id);
-    emit(world, { agentId: noraId, kind: 'meeting', toAgentId: a.id, text: `Félicitations ${a.name} : promotion au niveau ${a.level} !` });
+    emit(world, { agentId: hrId, kind: 'meeting', toAgentId: a.id, text: `Félicitations ${a.name} : promotion au niveau ${a.level} !` });
   }
 
   // XP levels for everyone else
@@ -178,7 +178,7 @@ export async function performanceReview(world: WorldState, brain: BrainVault): P
       lines.push(line);
       coachingLines.push(line);
       changed.add(a.id);
-      emit(world, { agentId: noraId, kind: 'review', toAgentId: a.id, text: `Point coaching avec ${a.name} : ${failHeavy ? 'découper et lire le cerveau avant d’agir' : 'relire les retours de revue avant de rendre'}.` });
+      emit(world, { agentId: hrId, kind: 'review', toAgentId: a.id, text: `Point coaching avec ${a.name} : ${failHeavy ? 'découper et lire le cerveau avant d’agir' : 'relire les retours de revue avant de rendre'}.` });
     } else if (score >= 70 && pb.some((r) => r.startsWith(COACHING_PREFIX))) {
       world.company.playbooks[a.id] = pb.filter((r) => !r.startsWith(COACHING_PREFIX));
       const line = `Coaching levé : ${a.name} est remonté à ${score}/100.`;
@@ -245,14 +245,14 @@ export async function performanceReview(world: WorldState, brain: BrainVault): P
     '',
     [week > 1 ? `Semaine précédente : [[revue-semaine-${week - 1}]]` : null, '[[Playbook RH]]', '[[00 - Accueil]]'].filter(Boolean).join(' · '),
   ].join('\n');
-  emit(world, { agentId: noraId, kind: 'meeting', text: shorten(lines[0]!, 140) });
+  emit(world, { agentId: hrId, kind: 'meeting', text: shorten(lines[0]!, 140) });
   try {
     await brain.write({ path: `rh/revue-semaine-${week}.md`, title: `Revue RH — semaine ${week}`, tags: ['rh', 'revue'], body, day });
     if (changed.size) await writePlaybookNotes(world, brain, changed, day);
-    emit(world, { agentId: noraId, kind: 'brain_write', text: `${nora?.name ?? 'Nora'} écrit la revue RH de la semaine ${week} dans le cerveau.` });
+    emit(world, { agentId: hrId, kind: 'brain_write', text: `${hr?.name ?? 'La RH'} écrit la revue RH de la semaine ${week} dans le cerveau.` });
   } catch (err) {
     // scores, levels and coaching rules are already applied to the world: a disk error only loses the note
-    emit(world, { agentId: noraId, kind: 'thought', text: shorten(`${nora?.name ?? 'Nora'} n'arrive pas à écrire la revue RH (${err instanceof Error ? err.message : String(err)})`, 160) });
+    emit(world, { agentId: hrId, kind: 'thought', text: shorten(`${hr?.name ?? 'La RH'} n'arrive pas à écrire la revue RH (${err instanceof Error ? err.message : String(err)})`, 160) });
   }
   return lines;
 }

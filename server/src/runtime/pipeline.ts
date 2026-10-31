@@ -14,6 +14,7 @@ import type { RuntimeCtx } from './ctx.js';
 import { incident, latestOutput, nameOf, runFileExists, say } from './ctx.js';
 import type { GuideGaps } from '../contracts.js';
 import { addHold } from './holds.js';
+import { officerId } from './org/officers.js';
 import { createTask, isOpen, KIND_META, logTask, openTasks, type TaskSpec } from './tasks.js';
 import { activeCampaigns } from './metrics.js';
 import { productNote, writePostMortem } from './notes.js';
@@ -65,7 +66,8 @@ export function createProductPipeline(ctx: RuntimeCtx, product: Product, opts: P
   const ads = [0, 1, 2].map((variant) => T('produce_ad', [hooks], { variant }, { title: productTitleFor('produce_ad', product, ` n° ${variant + 1}`) }));
   const launch = T('launch_campaign', [publish, ...ads]);
   const all = [...pre, red, titles, outline, pdf, human, fact, cover, price, render, redPdf, sales, publish, hooks, ...ads, launch];
-  say(ctx, 'camille', `Camille lance la chaîne de production de « ${short(product.title, 50)} » (${all.length} tâches)`, 'thought', { productId: product.id });
+  const ceo = officerId(ctx.world, 'ceo');
+  say(ctx, ceo, `${nameOf(ctx, ceo)} lance la chaîne de production de « ${short(product.title, 50)} » (${all.length} tâches)`, 'thought', { productId: product.id });
   return all;
 }
 
@@ -98,7 +100,7 @@ export interface RedTeamRework {
 
 /** The rework ordered by the Red Team, ending with its new review; the publish waits for that review. */
 export function reworkRedTeam(ctx: RuntimeCtx, product: Product, r: RedTeamRework): Task {
-  const T = maker(ctx, product, { createdBy: 'axel', missionId: r.missionId, priority: 1 });
+  const T = maker(ctx, product, { createdBy: officerId(ctx.world, 'red_team'), missionId: r.missionId, priority: 1 });
   const fixes = r.fixes ?? [];
   const tag = ` (reprise ${r.cycle})`;
   let last: Task[] = [];
@@ -135,7 +137,8 @@ export function createV2Pipeline(ctx: RuntimeCtx, product: Product, feedback: st
   const render = T('render_pdf', [fact], {}, { title: productTitleFor('render_pdf', product, v) });
   const sales = T('write_sales_page', [render], { hypeDelta: -1 }, { title: productTitleFor('write_sales_page', product, v) });
   const publish = T('publish_product', [sales], { republish: true }, { title: `Remettre en ligne${v} — « ${short(product.title, 42)} »` });
-  say(ctx, 'elise', `Élise lance la v${product.version} de « ${short(product.title, 50)} » : ${feedback.slice(0, 2).join(' ; ') || 'retours clients'}`, 'thought', { productId: product.id });
+  const editor = officerId(ctx.world, 'editor');
+  say(ctx, editor, `${nameOf(ctx, editor)} lance la v${product.version} de « ${short(product.title, 50)} » : ${feedback.slice(0, 2).join(' ; ') || 'retours clients'}`, 'thought', { productId: product.id });
   return [pdf, human, fact, render, sales, publish];
 }
 
@@ -167,7 +170,8 @@ export function resumePipeline(ctx: RuntimeCtx, product: Product, opts: Pipeline
   if (!product.salesPage || !runFileExists(ctx, product.files.salesPage) || renderDeps.length) salesDeps = [add(T('write_sales_page', [...renderDeps, ...priceDeps]))];
   else salesDeps = priceDeps;
   if (product.status !== 'live') add(T('publish_product', salesDeps));
-  if (created.length) say(ctx, 'hugo', `Hugo relance la chaîne bloquée de « ${short(product.title, 50)} » (${created.length} tâches)`, 'thought', { productId: product.id });
+  const chief = officerId(ctx.world, 'chief_of_staff');
+  if (created.length) say(ctx, chief, `${nameOf(ctx, chief)} relance la chaîne bloquée de « ${short(product.title, 50)} » (${created.length} tâches)`, 'thought', { productId: product.id });
   return created;
 }
 
@@ -219,7 +223,7 @@ export function stopPaidAds(ctx: RuntimeCtx, productId: string | null, reason: s
  * The founder takes a product off the shelf: off sale, out of production, nobody reworks it until he says so.
  * The missions that were waiting for it end here: it will not ship by itself.
  */
-export function shelveProduct(ctx: RuntimeCtx, product: Product, reason: string, by: AgentId = 'camille'): number {
+export function shelveProduct(ctx: RuntimeCtx, product: Product, reason: string, by: AgentId = officerId(ctx.world, 'ceo')): number {
   const w = ctx.world;
   if (product.status === 'killed') return 0;
   if (product.status === 'live') {
@@ -249,7 +253,7 @@ export function closeProductMissions(ctx: RuntimeCtx, product: Product, reason: 
  * CEO decision: take a product off sale until its next version is ready (bad rating / refunds).
  * The store stops selling it, its campaigns are paused and the tasks that promote it are cancelled.
  */
-export async function pauseProduct(ctx: RuntimeCtx, product: Product, reason: string, by: AgentId = 'camille'): Promise<void> {
+export async function pauseProduct(ctx: RuntimeCtx, product: Product, reason: string, by: AgentId = officerId(ctx.world, 'ceo')): Promise<void> {
   if (product.status !== 'live') return;
   try { ctx.tools.setProductStatus(product.id, 'paused'); } catch { /* the runtime status below is authoritative */ }
   product.status = 'paused';
@@ -269,7 +273,7 @@ export async function pauseProduct(ctx: RuntimeCtx, product: Product, reason: st
 }
 
 /** CEO decision: stop a product, pause its ads, write the post-mortem. */
-export async function killProduct(ctx: RuntimeCtx, product: Product, reason: string, by: AgentId = 'camille'): Promise<void> {
+export async function killProduct(ctx: RuntimeCtx, product: Product, reason: string, by: AgentId = officerId(ctx.world, 'ceo')): Promise<void> {
   if (product.status === 'killed') return;
   const wasPublished = product.launchedDay !== null;
   product.status = 'killed';

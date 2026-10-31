@@ -5,7 +5,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DailyKpi, TaskKind } from '../src/shared.js';
 import type { BrainVault, ContentEngine, RunPaths } from '../src/contracts.js';
-import { AGENTS, DEPARTMENTS, PLAYBOOK_NOTES, SEED_PLAYBOOKS } from '../src/runtime/roster.js';
+import { buildTeam } from '../src/runtime/org/catalog.js';
+import { LEGACY_ORG } from '../src/runtime/org/constants.js';
+import { DEPARTMENTS as CATALOG_DEPARTMENTS, PLAYBOOK_NOTES, SEED_PLAYBOOKS } from '../src/runtime/roster.js';
 import { KIND_META, PLAN_KINDS, createTask, depState } from '../src/runtime/tasks.js';
 import { addPlaybookRule, parsePlaybook, withTone } from '../src/runtime/playbook.js';
 import { LEGACY } from './legacy.js';
@@ -17,6 +19,9 @@ const has = (mod: string) => existsSync(join(src, mod, 'index.ts'));
 const simPresent = has('sim');
 const modulesPresent = simPresent && has('deliverables') && has('learning') && has('minds');
 const ALL_KINDS = Object.keys(KIND_META) as TaskKind[];
+/** The legacy team and its 11 departments: video and crm stay closed on it. catalog.test.ts reads the 13 of the catalog. */
+const AGENTS = buildTeam(LEGACY_ORG);
+const DEPARTMENTS = CATALOG_DEPARTMENTS.filter((d) => AGENTS.some((a) => a.dept === d.id));
 /** Kinds of V1 with no owner in the legacy team: they get theirs with reconcileOrg (P2.1). */
 const V1_KINDS: TaskKind[] = [
   'headcount_review', 'recruit', 'league_review', 'open_channel', 'adapt_creative', 'write_search_ads', 'reconcile_channels', 'allocate_channels',

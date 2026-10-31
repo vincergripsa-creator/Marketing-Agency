@@ -1,9 +1,13 @@
-/** Fresh world: market, roster (31 agents in 11 departments), starting capital, seed playbooks. */
+/** Fresh world: market, the team of the scenario with its open departments, starting capital, seed playbooks. */
 import type { AgentState, ScenarioConfig, WorldState } from '../shared.js';
 import { createRng, emit } from '../core/index.js';
 import { sim } from './modules.js';
-import { AGENTS, DEPARTMENTS, SEED_PLAYBOOKS } from './roster.js';
-import { eur } from './util.js';
+import { buildTeam } from './org/catalog.js';
+import { LEGACY_ORG } from './org/constants.js';
+import { officerOf } from './org/officers.js';
+import { legacyOrgState, reconcileOrg } from './org/reconcile.js';
+import { DEPARTMENTS, SEED_PLAYBOOKS } from './roster.js';
+import { eur, uniq } from './util.js';
 
 export function defaultScenario(overrides: Partial<ScenarioConfig> = {}): ScenarioConfig {
   const base: ScenarioConfig = {
@@ -39,7 +43,8 @@ export function defaultScenario(overrides: Partial<ScenarioConfig> = {}): Scenar
 export function createWorld(scenario: ScenarioConfig, runId: string): WorldState {
   const sc = defaultScenario(scenario);
   const rng = createRng(sc.seed);
-  const agents: AgentState[] = AGENTS.map((def) => ({
+  const org = sc.org ?? LEGACY_ORG;
+  const agents: AgentState[] = buildTeam(org).map((def) => ({
     ...def,
     skills: [...def.skills],
     tools: [...def.tools],
@@ -59,8 +64,6 @@ export function createWorld(scenario: ScenarioConfig, runId: string): WorldState
     rampUntilDay: 0,
     notice: null,
   }));
-  const playbooks: Record<string, string[]> = {};
-  for (const a of agents) playbooks[a.id] = [...SEED_PLAYBOOKS[a.dept]];
 
   const world: WorldState = {
     version: 2,
@@ -77,7 +80,7 @@ export function createWorld(scenario: ScenarioConfig, runId: string): WorldState
     company: {
       name: sc.companyName,
       agents,
-      departments: DEPARTMENTS.map((d) => ({ ...d, grid: { ...d.grid } })),
+      departments: DEPARTMENTS.filter((d) => d.id === 'direction' || agents.some((a) => a.dept === d.id)).map((d) => ({ ...d, grid: { ...d.grid } })),
       tasks: [],
       missions: [],
       products: [],
@@ -88,7 +91,7 @@ export function createWorld(scenario: ScenarioConfig, runId: string): WorldState
       lessons: [],
       experiments: [],
       bandits: {},
-      playbooks,
+      playbooks: {},
       kpis: [],
       chats: {},
       pendingApprovals: [],
@@ -99,9 +102,13 @@ export function createWorld(scenario: ScenarioConfig, runId: string): WorldState
   };
   world.market = sim.createMarketState(sc, rng);
   world.rngState = rng.state();
+  world.company.org = legacyOrgState(world);
+  if (org.team === 'lean') reconcileOrg(world);
+  // Own department, plus the departments of the hats: a founder starts with the rules of what they carry.
+  for (const a of world.company.agents) world.company.playbooks[a.id] = uniq([a.dept, ...a.hatDepts]).flatMap((d) => SEED_PLAYBOOKS[d]);
   sim.recordLedger(world, { type: 'capital', amount: sc.startingCash, memo: 'Capital de départ apporté par le fondateur', ref: null });
   emit(world, {
-    agentId: 'camille',
+    agentId: officerOf(world, 'ceo').id,
     kind: 'thought',
     text: `Bienvenue chez ${sc.companyName} ! ${agents.length} agents, ${eur(sc.startingCash)} en caisse. Objectif : ${eur(sc.goal.targetProfit)} de profit d'ici le jour ${sc.goal.byDay}. Au travail !`,
   });

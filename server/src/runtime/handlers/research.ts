@@ -2,10 +2,11 @@
 import type { Product, TaskKind, TrendSignal, VoiceOfCustomer } from '../../shared.js';
 import { nextId } from '../../core/index.js';
 import type { RuntimeCtx } from '../ctx.js';
-import { addDeliverable, nicheBriefOf, nicheName, productOf, say, vocOf, writeNote } from '../ctx.js';
+import { addDeliverable, nameOf, nicheBriefOf, nicheName, productOf, say, vocOf, writeNote } from '../ctx.js';
 import { learning } from '../modules.js';
 import { createTask, isOpen } from '../tasks.js';
 import { launchHold } from '../holds.js';
+import { officerId } from '../org/officers.js';
 import { createProductPipeline, excludedNiches, killProduct } from '../pipeline.js';
 import { guideGaps, pdfFingerprint, redTeamFacts, settleRedTeam } from '../redteam.js';
 import { productInNiche } from '../missions.js';
@@ -103,7 +104,7 @@ export const researchHandlers: HandlerMap = {
         if (hasOpen(ctx, 'mine_pains', (inp) => inp.nicheId === nicheId)) return;
         const t = createTask(ctx.world, {
           kind: 'mine_pains', title: `Écouter la voix du client — ${short(nicheName(ctx, nicheId), 40)}${depth === 'deep' ? ' (approfondi)' : ''}`,
-          input: { nicheId, depth }, workLeft: depth === 'deep' ? 2 : 1, createdBy: 'nadia', missionId: task.missionId, priority: task.priority,
+          input: { nicheId, depth }, workLeft: depth === 'deep' ? 2 : 1, createdBy: officerId(ctx.world, 'research'), missionId: task.missionId, priority: task.priority,
         });
         deps.push(t.id);
       });
@@ -112,12 +113,12 @@ export const researchHandlers: HandlerMap = {
       const watched = task.input.refresh === true ? uniq(ctx.world.company.products.filter((p) => p.status === 'live').map((p) => p.nicheId)) : [];
       const toScan = uniq([...missingComps, ...watched]);
       if (toScan.length && !hasOpen(ctx, 'scan_competitors', () => true)) {
-        const t = createTask(ctx.world, { kind: 'scan_competitors', input: { nicheIds: toScan }, createdBy: 'nadia', missionId: task.missionId, priority: task.priority });
+        const t = createTask(ctx.world, { kind: 'scan_competitors', input: { nicheIds: toScan }, createdBy: officerId(ctx.world, 'research'), missionId: task.missionId, priority: task.priority });
         deps.push(t.id);
       }
       // A pick forced on a founder's niche settles nothing for this scan.
       if (task.input.chain === 'opportunity' && !hasOpen(ctx, 'pick_opportunity', (inp) => !inp.nicheId)) {
-        createTask(ctx.world, { kind: 'pick_opportunity', dependsOn: deps, createdBy: 'nadia', missionId: task.missionId, priority: task.priority });
+        createTask(ctx.world, { kind: 'pick_opportunity', dependsOn: deps, createdBy: officerId(ctx.world, 'research'), missionId: task.missionId, priority: task.priority });
       }
     },
   },
@@ -222,13 +223,13 @@ export const researchHandlers: HandlerMap = {
       const out = task.output ?? {};
       if (out.rescan === true) {
         if (!ctx.world.company.tasks.some((t) => isOpen(t) && t.kind === 'scan_trends')) {
-          createTask(ctx.world, { kind: 'scan_trends', input: { chain: 'opportunity' }, createdBy: 'nadia', missionId: task.missionId, priority: task.priority });
+          createTask(ctx.world, { kind: 'scan_trends', input: { chain: 'opportunity' }, createdBy: officerId(ctx.world, 'research'), missionId: task.missionId, priority: task.priority });
         }
         return;
       }
       if (out.existing === true) return;
       const product = productOf(ctx, out.productId);
-      if (product && product.status !== 'killed') createProductPipeline(ctx, product, { createdBy: 'camille', missionId: task.missionId, priority: task.priority });
+      if (product && product.status !== 'killed') createProductPipeline(ctx, product, { createdBy: officerId(ctx.world, 'ceo'), missionId: task.missionId, priority: task.priority });
     },
   },
 
@@ -267,12 +268,13 @@ export const researchHandlers: HandlerMap = {
       if (subject === 'idea') {
         if (verdict === 'kill') {
           const reasons = strArr(out.reasons).slice(0, 2).join(' ; ') || 'idée jugée trop risquée';
-          await killProduct(ctx, product, `tuée par la Red Team avant production (${reasons})`, 'camille');
-          createTask(ctx.world, { kind: 'pick_opportunity', input: { excludeNicheIds: [product.nicheId] }, createdBy: 'camille', missionId: task.missionId, priority: task.priority });
+          await killProduct(ctx, product, `tuée par la Red Team avant production (${reasons})`);
+          createTask(ctx.world, { kind: 'pick_opportunity', input: { excludeNicheIds: [product.nicheId] }, createdBy: officerId(ctx.world, 'ceo'), missionId: task.missionId, priority: task.priority });
           return;
         }
         if (product.status === 'research' || product.status === 'idea') product.status = 'writing';
-        if (verdict === 'fix') say(ctx, 'elise', `Élise intègre les correctifs de la Red Team : ${short(strArr(out.fixes).join(' ; ') || 'resserrer la promesse', 90)}`, 'thought', { productId: product.id });
+        const editor = officerId(ctx.world, 'editor');
+        if (verdict === 'fix') say(ctx, editor, `${nameOf(ctx, editor)} intègre les correctifs de la Red Team : ${short(strArr(out.fixes).join(' ; ') || 'resserrer la promesse', 90)}`, 'thought', { productId: product.id });
         return;
       }
       await settleRedTeam(ctx, task, product);

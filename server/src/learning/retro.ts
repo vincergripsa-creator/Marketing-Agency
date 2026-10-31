@@ -266,7 +266,7 @@ function settleDirectiveSlots(world: WorldState, day: number, touched: ReadonlyS
 
 function placeholderAgent(): AgentState {
   return {
-    id: 'nora', name: 'Nora', role: 'Responsable RH et apprentissage', dept: 'rh', isChief: true, tier: 'haiku',
+    id: 'rh', name: 'La RH', role: 'Responsable RH et apprentissage', dept: 'rh', isChief: true, tier: 'haiku',
     persona: "Anime la rétro du soir et tient la mémoire de l'agence.", skills: ['rétro', 'playbooks'],
     tools: ['brain.read', 'brain.write'], taskKinds: ['retro', 'performance_review'],
     avatar: { skin: '#f1c27d', hair: '#3b2a1a', shirt: '#7c5cbf', pants: '#2f2f3a', hairStyle: 1, accessory: 'glasses' },
@@ -466,8 +466,8 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
   const heuristics = detectLessons({ world, day, kpi, ix, notes, concluded });
 
   // (e) the engine (heuristic or Claude) turns them into the final drafts
-  const nora = retroAgent(world) ?? placeholderAgent();
-  const ctx = await mindContext(world, brain, nora, `leçons rétro ${unique(heuristics.map((h) => TOPIC_TAGS[h.topic])).join(' ')}`);
+  const hr = retroAgent(world) ?? placeholderAgent();
+  const ctx = await mindContext(world, brain, hr, `leçons rétro ${unique(heuristics.map((h) => TOPIC_TAGS[h.topic])).join(' ')}`);
   let engineDrafts: unknown = null;
   try {
     engineDrafts = await engine.extractLessons(
@@ -542,7 +542,7 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
       insight: d.insight,
       evidence: d.evidence,
       confidence: round(clamp(d.confidence, 0.05, 0.99), 2),
-      source: nora.id,
+      source: hr.id,
       appliesTo: [],
       notePath: `lecons/jour-${pad3(day)}-${slugify(d.key, 50)}.md`,
     };
@@ -696,30 +696,30 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
 
   // (i) activity feed
   if (failures.length) {
-    emit(world, { agentId: nora.id, kind: 'thought', text: shorten(`${nora.name} n'arrive pas à écrire dans le cerveau : ${failures.join(' ; ')}`, 160) });
+    emit(world, { agentId: hr.id, kind: 'thought', text: shorten(`${hr.name} n'arrive pas à écrire dans le cerveau : ${failures.join(' ; ')}`, 160) });
   }
-  if (outage) emit(world, { agentId: nora.id, kind: 'brain_write', text: `${nora.name} classe le jour ${day} en incident externe : la panne ne compte pas dans les chiffres de performance.` });
-  for (const l of newLessons) emit(world, { agentId: nora.id, kind: 'lesson', text: `Nouvelle leçon : ${shorten(l.insight, 110)}` });
-  for (const { lesson } of retired) emit(world, { agentId: nora.id, kind: 'lesson', text: `Leçon retirée, une expérience ou un chiffre plus récent la remplace : ${shorten(lesson.insight, 90)}` });
+  if (outage) emit(world, { agentId: hr.id, kind: 'brain_write', text: `${hr.name} classe le jour ${day} en incident externe : la panne ne compte pas dans les chiffres de performance.` });
+  for (const l of newLessons) emit(world, { agentId: hr.id, kind: 'lesson', text: `Nouvelle leçon : ${shorten(l.insight, 110)}` });
+  for (const { lesson } of retired) emit(world, { agentId: hr.id, kind: 'lesson', text: `Leçon retirée, une expérience ou un chiffre plus récent la remplace : ${shorten(lesson.insight, 90)}` });
   for (const e of concluded) {
     emit(world, {
-      agentId: nora.id,
+      agentId: hr.id,
       kind: 'lesson',
       text: e.winner
         ? `Expérience conclue (${dimensionLabel(world, e.dimension)}) : « ${armLabel(world, e.dimension, e.winner)} » gagne.`
         : `Expérience conclue (${dimensionLabel(world, e.dimension)}) sans gagnant net.`,
     });
   }
-  if (updated.length) emit(world, { agentId: nora.id, kind: 'lesson', text: `${plural(updated.length, 'leçon confirmée', 'leçons confirmées')} par les chiffres du jour.` });
+  if (updated.length) emit(world, { agentId: hr.id, kind: 'lesson', text: `${plural(updated.length, 'leçon confirmée', 'leçons confirmées')} par les chiffres du jour.` });
   emit(world, {
-    agentId: nora.id,
+    agentId: hr.id,
     kind: 'brain_write',
-    text: `${nora.name} écrit le journal du jour ${day}${created.length ? ` et ${plural(created.length, 'leçon', 'leçons')}` : ''} dans le cerveau.`,
+    text: `${hr.name} écrit le journal du jour ${day}${created.length ? ` et ${plural(created.length, 'leçon', 'leçons')}` : ''} dans le cerveau.`,
   });
   if (changedAgents.size) {
     const names = (world.company.agents ?? []).filter((a) => changedAgents.has(a.id)).map((a) => a.name);
     emit(world, {
-      agentId: nora.id,
+      agentId: hr.id,
       kind: 'brain_write',
       text: `Playbooks mis à jour : ${names.length > 4 ? `${names.slice(0, 4).join(', ')} et ${plural(names.length - 4, 'autre', 'autres')}` : names.join(', ')}.`,
     });
