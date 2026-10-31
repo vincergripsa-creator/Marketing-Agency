@@ -5,22 +5,25 @@
 import { clamp, emit, nextId, round2, streamRng } from '../core/index.js';
 import type { AdReviewResult, ChannelAccountStatus, MarketTools, PlatformReportRow, Rng, ShopAttributionRow, ToolResult } from '../contracts.js';
 import type {
-  AdCreative, AdFormat, AudienceView, Campaign, CampaignInputShape, ChannelAccountState, ChannelId, ChannelMarketState, CompetitorProduct, CreatorProfile, HookStyle, InboxMessage, NicheBrief, Partnership,
-  ReplyOutcome, SupportReplyInput, TrendSignal, VoiceOfCustomer, WorldState,
+  AdCreative, AdFormat, Broadcast, Campaign, CampaignInputShape, ChannelAccountState, ChannelId, ChannelMarketState, CompetitorProduct, CreatorProfile, EmailSequence, EmailStep, HookStyle, InboxMessage, NicheBrief,
+  NicheTruth, Partnership, Product, ReplyOutcome, SupportReplyInput, TrendSignal, VoiceOfCustomer, WorldState,
 } from '../shared.js';
 import { CHANNELS, CHANNEL_IDS, acceptance, channelOf } from '../shared.js';
+import { audienceOf, audienceView } from './audience.js';
 import { ADS, ORGANIC, RESEARCH, SCAM } from './balance.js';
 import { CHANNEL_SIM, CHANNEL_STREAM, type PaidChannel } from './channelBalance.js';
 import { accountBanned, accountOf, approvedOn, channelSignals, learningAfterUpdate } from './channels.js';
 import { channelViolationWord, findBannedClaims, findChannelViolation } from './compliance.js';
 import { customerById, displayName } from './customers.js';
 import { cashOf, recordLedger } from './finance.js';
+import { GROWTH } from './growth.js';
 import { reaction, scamAmount, type ReactionKey } from './inbox.js';
 import { findNiche, isScammer } from './market.js';
 import {
   campaignById, chargebackOrder, creativeById, nicheOf, orderById, partialRefund, productById, pushEvent, refundOrder, reviewProduct,
 } from './ops.js';
-import { actionRule, scorePdf, scoreSupportReply } from './quality.js';
+import { actionRule, scoreEmail, scorePdf, scoreSupportReply } from './quality.js';
+import { refreshRivals } from './rivals.js';
 import { fmtEur, fmtPct, keyTokens, norm, short, subset, uniform } from './text.js';
 
 const fail = (message: string, id?: string): ToolResult => ({ ok: false, message, ...(id ? { id } : {}) });
@@ -103,6 +106,7 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     if (!p.files?.pdf) return fail(`Publication refusée : le PDF de « ${short(p.title)} » n'a pas encore été généré.`, p.id);
     if (!p.salesPage) return fail(`Publication refusée : « ${short(p.title)} » n'a pas de page de vente.`, p.id);
     if (!(p.price > 0)) return fail(`Publication refusée : fixez d'abord un prix pour « ${short(p.title)} ».`, p.id);
+    refreshRivals(world, p);
     if (p.status === 'live') return ok(`« ${short(p.title)} » est déjà en ligne.`, p.id);
     p.status = 'live';
     p.launchedDay = p.launchedDay ?? world.day;
@@ -653,10 +657,54 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     return [...rows.values()];
   }
 
-  // ───────────── audience: no list until P10.2 ─────────────
+  // ───────────── audience ─────────────
 
-  function listStats(): AudienceView {
-    return { size: 0, leads: 0, buyers: 0, byNiche: [], unsubscribed: 0, dailyCost: 0, recent: [], sequences: [] };
+  /** What every e-mail must pass before the tool takes it: a live guide of that niche, words, no banned claim. */
+  function emailBlock(nicheId: string, productId: string, texts: readonly string[]): { block: ToolResult } | { niche: NicheTruth; product: Product } {
+    const product = productById(world, productId);
+    if (!product) return { block: fail('Produit introuvable.') };
+    const niche = findNiche(world, nicheId);
+    if (!niche || product.nicheId !== niche.id) return { block: fail(`« ${short(product.title)} » n'appartient pas à cette niche.`, product.id) };
+    if (product.status !== 'live') return { block: fail(`« ${short(product.title)} » doit être en ligne avant d'écrire à la liste.`, product.id) };
+    if (texts.some((t) => !t.trim())) return { block: fail('Un e-mail a besoin d\'un objet et d\'un texte.', product.id) };
+    const banned = findBannedClaims(texts, niche.voc.bannedClaims);
+    if (banned.length) return { block: fail(`Envoi refusé : l'allégation « ${banned[0]} » est interdite.`, product.id) };
+    return { niche, product };
+  }
+
+  /** The niche's welcome sequence. It replaces the one before: a list follows one sequence at a time. */
+  function activateSequence(input: Omit<EmailSequence, 'id' | 'status' | 'day'>): ToolResult {
+    const steps = [...(input?.steps ?? [])].sort((a, b) => a.day - b.day);
+    if (!steps.length || new Set(steps.map((s) => s.day)).size < steps.length) return fail('Une séquence compte au moins une étape, une seule par jour.');
+    const seen = emailBlock(input.nicheId, input.productId, steps.flatMap((s) => [s.subject, s.body]));
+    if ('block' in seen) return seen.block;
+    const { niche } = seen;
+    const a = audienceOf(world);
+    const scored: EmailStep[] = steps.map((s) => ({ ...s, score: scoreEmail(s.subject, s.body, niche.voc, niche.voc.bannedClaims).score }));
+    const sequence: EmailSequence = { id: nextId(world, 'seq'), nicheId: niche.id, productId: input.productId, steps: scored, status: 'active', day: world.day, createdBy: input.createdBy };
+    a.sequences = [...a.sequences.filter((s) => s.nicheId !== niche.id), sequence];
+    return ok(`Séquence de bienvenue active sur « ${short(niche.name)} » : ${scored.length} e-mails.`, sequence.id);
+  }
+
+  /** Queues a mail for today's close. The market scores it itself, on what the list really reads. */
+  function sendBroadcast(input: Pick<Broadcast, 'nicheId' | 'productId' | 'audience' | 'subject' | 'body' | 'angle' | 'hasUnsubscribe'>): ToolResult {
+    const subject = (input?.subject ?? '').trim();
+    const body = (input?.body ?? '').trim();
+    const seen = emailBlock(input?.nicheId, input?.productId, [subject, body]);
+    if ('block' in seen) return seen.block;
+    const { niche } = seen;
+    const a = audienceOf(world);
+    const { maxSendsPerWeek } = GROWTH.email;
+    if ([...a.sent, ...a.queue].filter((b) => b.nicheId === niche.id && world.day - b.day < 7).length >= maxSendsPerWeek) {
+      return fail(`Déjà ${maxSendsPerWeek} e-mails cette semaine sur « ${short(niche.name)} » : au-delà, la liste décroche.`);
+    }
+    const broadcast: Broadcast = {
+      id: nextId(world, 'bcs'), day: world.day, nicheId: niche.id, productId: input.productId, audience: input.audience,
+      subject, body, angle: input.angle, score: scoreEmail(subject, body, niche.voc, niche.voc.bannedClaims).score, hasUnsubscribe: input.hasUnsubscribe === true,
+      status: 'queued', delivered: 0, opens: 0, clicks: 0, sales: 0, revenue: 0, unsubscribed: 0,
+    };
+    a.queue.push(broadcast);
+    return ok(`E-mail « ${short(subject, 50)} » programmé pour la clôture du jour.`, broadcast.id);
   }
 
   return {
@@ -666,6 +714,6 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     postOrganic, listCreators, proposePartnership,
     listInbox, replyToMessage, issueRefund,
     channelStatus, requestChannel, channelSignals: (nicheId) => channelSignals(world, nicheId), getPlatformReport, getShopAttribution,
-    listStats, activateSequence: () => fail('Aucune liste e-mail pour le moment.'), sendBroadcast: () => fail('Aucune liste e-mail pour le moment.'),
+    listStats: () => audienceView(world), activateSequence, sendBroadcast,
   };
 }

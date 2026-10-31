@@ -790,7 +790,7 @@ describe('launch_campaign on a channel', () => {
 
 describe('the CFO\'s envelope (D9)', () => {
   it('under growth, the envelope never reaches into the reserve: stricter, never looser', async () => {
-    const { world } = await lab({ startingCash: 1000 });
+    const { world } = await lab({ startingCash: 1000, scaling: false });
     const free = computeBudget(world).adCap;
     expect(free).toBeCloseTo((1000 - 7 * payrollToday(world)) * computeBudget(world).rate, 1);
     world.company.growth!.allocation = { reserve: 980 } as Allocation;

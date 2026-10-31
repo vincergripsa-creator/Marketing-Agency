@@ -9,6 +9,7 @@ import { HOLD_REF, cashOf, heldAmount, recordLedger, revenueSince } from './fina
 import { createMessage } from './inbox.js';
 import { difficultyProfile, markScammer, rollCreator } from './market.js';
 import { nicheOf, pushEvent, reviewProduct } from './ops.js';
+import { addRival } from './rivals.js';
 import { fmtEur, fmtPct, pickWeighted, short } from './text.js';
 
 export { announcedOutageDays, isAnnouncedOutage } from './outage.js';
@@ -49,16 +50,10 @@ const competitorClone: Roll = (world, rng) => {
   const p = rng.pick(live);
   const niche = nicheOf(world, p);
   if (niche.id === '_inconnue') return null;
-  niche.competition = round2(clamp(niche.competition + EVENTS.cloneCompetition, 0, 0.95));
-  const platform = rng.pick(['etsy', 'gumroad', 'stan'] as const);
-  niche.competitors.push({
-    id: `cmp_${niche.id}_clone_${world.day}`, nicheId: niche.id,
-    title: `${short(p.title, 40)} (édition express)`,
-    price: Math.max(5, Math.round(p.price * 0.6)), reviews: rng.int(3, 25), rating: 4.7, ageDays: 1, platform,
-    weaknesses: ["Copie quasi conforme d'un guide existant", 'Avis suspects publiés le même jour'],
-  });
+  const price = Math.max(5, Math.round(p.price * 0.6));
+  const { platform } = addRival(world, niche, p, rng, EVENTS.cloneCompetition, price);
   return pushEvent(world, 'competitor_clone', 'Un concurrent copie notre guide',
-    `Un vendeur ${platform} a publié une copie de « ${short(p.title, 50)} » à ${fmtEur(Math.max(5, Math.round(p.price * 0.6)))}. La concurrence monte dans la niche « ${niche.name} ».`, 'warn',
+    `Un vendeur ${platform} a publié une copie de « ${short(p.title, 50)} » à ${fmtEur(price)}. La concurrence monte dans la niche « ${niche.name} ».`, 'warn',
     { productId: p.id, nicheId: niche.id });
 };
 
@@ -99,7 +94,7 @@ const trendShift: Roll = (world, rng) => {
 };
 
 /** Orders the world keeps (COMPACT.orderDays): a reader that goes further back would differ once they leave. */
-const HOT_ORDER_DAYS = 120;
+export const HOT_ORDER_DAYS = 120;
 
 /** Most recent buyer of the product with a hostile profile who has not rated it yet, in the orders and reviews compaction keeps. */
 function hostileBuyer(world: WorldState, p: Product): Customer | undefined {

@@ -887,6 +887,50 @@ export function scoreCreative(c: AdCreative, product: Product, voc?: VoiceOfCust
   );
 }
 
+// ───────────────────────────── E-mail ─────────────────────────────
+
+/** Read on a phone, between two other mails. */
+const EMAIL = { subject: { min: 15, max: 60, tolerated: 90 }, words: { min: 40, max: 260 } } as const;
+
+/** An e-mail, as the list reads it: an object that gets it opened, a short text that sounds like someone, one thing to click. Same generic-phrase and banned-claim checks as the ads. */
+export function scoreEmail(subject: string, body: string, voc: VoiceOfCustomer | undefined, bannedClaims: readonly string[]): { score: number; issues: string[] } {
+  const issues: string[] = [];
+  const object = (subject ?? '').trim();
+  const text = (body ?? '').trim();
+  const all = norm(`${object}\n${text}`);
+  let score = 0;
+
+  if (object.length >= EMAIL.subject.min && object.length <= EMAIL.subject.max) score += 20;
+  else if (object.length > 0 && object.length <= EMAIL.subject.tolerated) { score += 8; issues.push(`Objet de ${object.length} caractères : visez entre ${EMAIL.subject.min} et ${EMAIL.subject.max}.`); }
+  else issues.push('Objet absent ou beaucoup trop long.');
+  if (/\d|\?/.test(object) || vocPhraseHits(norm(object), voc) > 0) score += 10;
+  else issues.push('Objet sans chiffre, sans question ni mot de client : rien ne donne envie d\'ouvrir.');
+
+  const words = countWords(text);
+  if (words >= EMAIL.words.min && words <= EMAIL.words.max) score += 20;
+  else if (words > 0) { score += 8; issues.push(`Texte de ${words} mots : visez entre ${EMAIL.words.min} et ${EMAIL.words.max}.`); }
+  else issues.push('E-mail vide.');
+  if (CTA_RE.test(norm(text))) score += 10;
+  else issues.push('Pas d\'appel à l\'action : le lecteur ne sait pas quoi faire ensuite.');
+
+  const hits = vocPhraseHits(all, voc);
+  score += voc ? Math.min(20, hits * 10) : 10;
+  if (voc && hits === 0) issues.push('Aucun mot de client repris : un e-mail vit de la phrase qu\'on reconnaît.');
+
+  const generic = genericPhraseHits(all);
+  const hype = countHype([object, text]);
+  score += 20 - Math.min(20, generic.total * 7 + hype * 5);
+  if (generic.total) issues.push(`Formules creuses : ${quote(generic.found)}.`);
+  if (hype >= 2) issues.push('Trop de superlatifs (« incroyable », « secret »…) : ça sonne arnaque et fait fuir la liste.');
+
+  const banned = findBannedClaims([object, text], bannedClaims);
+  if (banned.length) {
+    score = Math.min(score, 35 - banned.length * 5);
+    issues.unshift(`Allégation interdite : ${quote(banned, 4)}.`);
+  }
+  return { score: Math.round(clamp(score, 0, 100)), issues: issues.slice(0, 8) };
+}
+
 // ───────────────────────────── Support reply ─────────────────────────────
 
 type Action = SupportReplyInput['action'];

@@ -17,7 +17,7 @@ import { COMPACT } from '../compaction.js';
 import { adsHold, REFUSAL_COOLDOWN_DAYS } from '../holds.js';
 import { officerId, ownersOfAny, roleHolders } from '../org/officers.js';
 import { dropTask } from '../pipeline.js';
-import { growthOn } from '../stages.js';
+import { growthOn, policyOf } from '../stages.js';
 import { STREAM } from '../streams.js';
 import { armSharp, bestDraft, effectiveT, pruneRead, shrunkRoas } from '../talent/craft.js';
 import { onStrike } from '../talent/evidence.js';
@@ -122,7 +122,7 @@ function targetingFor(ctx: RuntimeCtx, product: Product): Campaign['targeting'] 
 function launchBudget(ctx: RuntimeCtx, losers = 0): { budget: number; remaining: number; cap: number } {
   const b = currentBudget(ctx.world);
   const remaining = round2(Math.max(0, b.adCap - committedAdBudget(ctx.world)));
-  const base = clamp(b.cash * 0.04 * (losers >= 2 ? 0.7 : 1), MIN_CAMPAIGN_BUDGET, 40);
+  const base = clamp(b.cash * 0.04 * (losers >= 2 ? 0.7 : 1), MIN_CAMPAIGN_BUDGET, policyOf(ctx.world).testDailyEur);
   return { budget: Math.floor(Math.min(remaining, base)), remaining, cap: b.adCap };
 }
 
@@ -478,7 +478,7 @@ export const growthHandlers: HandlerMap = {
         task.input.askedBudget = daily;
         return { summary: `Campagne prête (${eur(daily)}/jour, ${ready.length} créas) : en attente du fondateur.`, awaitFounder: `Lancer une campagne ${label} à ${eur(daily)}/jour pour « ${product.title} »` };
       }
-      const creatives = ready.slice(0, 3);
+      const creatives = ready.slice(0, policyOf(ctx.world).creativesPerCampaign);
       const n = (product.campaignCount ?? 0) + ctx.world.company.campaigns.filter((c) => c.productId === product.id).length + 1;
       // Only a channel's own test counts as one: the CEO's watchdog test stays a plain TikTok campaign.
       const placement = ch === 'tiktok' ? {} : { channel: ch, ...(task.input.test === true ? { test: true } : {}) };

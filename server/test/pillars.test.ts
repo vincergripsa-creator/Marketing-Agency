@@ -351,13 +351,13 @@ describe('stubs answer like today (D47)', () => {
   });
 
   it('no growth, and a decision is handed back unsaved, with no id spent', () => {
-    expect(growthOn(legacyWorld(7, { scaling: true }))).toBe(false);
+    expect(growthOn(legacyWorld(7))).toBe(false); // the flag itself reads true once P10.1 landed (D47)
     const counter = world.idCounter;
     const d = logDecision(world, { kind: 'stage', who: 'system', text: 'x', why: 'y' });
     expect(d).toMatchObject({ day: world.day, kind: 'stage', who: 'system' });
     expect(world.idCounter).toBe(counter);
     expect(world.company.growth?.decisions ?? []).toEqual([]);
-    expect(weekRollup(world, 1, 7)).toBeNull();
+    expect(weekRollup(world, 1, 7)).toMatchObject({ week: 1, profit: 0, stage: 'survie' }); // landed with P10.3: a rollup writes in both arms (D54)
   });
 
   it('the org changes nothing: full speed, home department, nobody hired, nobody leaves, nobody paid', async () => {

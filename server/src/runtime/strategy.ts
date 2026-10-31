@@ -5,7 +5,7 @@
  * Then the ContentEngine (Claude mode) may adjust it; the runtime materializes the plan into tasks.
  */
 import type { DayPlanItem, DayPlan } from '../contracts.js';
-import type { ChannelId, Lesson, Product, Task, TaskKind } from '../shared.js';
+import type { ChannelId, Lesson, Product, Task, TaskKind, WorldState } from '../shared.js';
 import { CHANNELS, channelOf } from '../shared.js';
 import { multiChannel, openChannels, planChannels } from './channels.js';
 import type { RuntimeCtx } from './ctx.js';
@@ -13,9 +13,10 @@ import { incident, latestOutput, nameOf, productOf, speak, vocOf } from './ctx.j
 import { learning, sim } from './modules.js';
 import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, feedbackOf, isProductFeedback, isUpsellProduct, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO, recentReviews, referenceChannel } from './metrics.js';
 import { adsHeldSince, launchHold, productHold } from './holds.js';
-import { officerId } from './org/officers.js';
+import { officerId, ownersOfAny } from './org/officers.js';
 import { createProductPipeline, createUpsellPipeline, createV2Pipeline, excludedNiches, killProduct, openTasksForProduct, pauseProduct, resumePipeline } from './pipeline.js';
 import { guideGaps } from './redteam.js';
+import { growthOn, policyOf } from './stages.js';
 import { createTask, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, PRODUCT_KINDS, taskChannel } from './tasks.js';
 import { openMessages, urgency } from './handlers/support.js';
 import { experimentCandidate } from './handlers/ops.js';
@@ -47,8 +48,6 @@ export const ORGANIC_POSTS_PER_PRODUCT = 2;
 
 /** A main product needs room in the CFO's daily envelope: one per this many euros of adCap. */
 export const AD_ROOM_PER_MAIN = 30;
-/** Portfolio size the team can run (ads, support, organic slots). */
-export const MAX_MAINS = 8;
 /** While cash is comfortable, a new niche every this many days, whatever the others do. */
 export const GROWTH_NICHE_DAYS = 7;
 /** With a main losing money and cash to spare, a new niche does not wait for the plateau rule. */
@@ -61,6 +60,19 @@ export const COMFORTABLE_RUNWAY_DAYS = 30;
 export const PAGE_REWORK_GAP_DAYS = 7;
 /** Guides waiting for the founder's word before the company stops starting new ones: enough to choose from. */
 export const MAX_AWAITED_PUBLISHES = 2;
+/** Client messages answered a day: this much at least, and this much per person who answers them. */
+const REPLIES_FLOOR = 24;
+const REPLIES_PER_OWNER = 12;
+
+/** Under growth, production grows with the people who write: a writer more, one guide more, or the second writer has nothing to write (D40). */
+export function chainSlots(w: WorldState): number {
+  return clamp(ownersOfAny(w, ['write_pdf']).filter((a) => !a.hatKinds.includes('write_pdf')).length + 1, 2, 6);
+}
+
+/** Under growth, support grows with the team that answers: a fixed cap turns into chargebacks past 100 sales a day (D40). */
+export function replyCap(w: WorldState): number {
+  return Math.max(REPLIES_FLOOR, REPLIES_PER_OWNER * ownersOfAny(w, ['reply_inbox']).length);
+}
 
 function planItem(kind: TaskKind, input: Record<string, unknown>, why: string, priority: 1 | 2 | 3 = 2, title?: string): DayPlanItem {
   return { kind, title: title ?? KIND_META[kind].label, dept: KIND_META[kind].dept, priority, input, why };
@@ -328,7 +340,7 @@ function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
   const idle = daysWithoutAds(w);
   const budget = currentBudget(w);
   let room = budget.adCap - committedAdBudget(w);
-  const perLaunch = clamp(budget.cash * 0.04, MIN_CAMPAIGN_BUDGET, 40);
+  const perLaunch = clamp(budget.cash * 0.04, MIN_CAMPAIGN_BUDGET, policyOf(w).testDailyEur);
   const reasons: string[] = [];
   let launchedFor: Product | null = null;
   let forced = false;
@@ -426,7 +438,9 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   // A guide waiting for the founder's word is out of the team's hands: the company does not stop for it.
   const awaited = (p: Product) => openTasks(w, (t) => t.kind === 'publish_product' && t.status === 'awaiting_founder' && t.input.productId === p.id).length > 0;
   const producing = building.filter((p) => !awaited(p));
-  const mayStart = !launchHold(w) && building.length - producing.length < MAX_AWAITED_PUBLISHES;
+  const growth = growthOn(w);
+  const chains = growth ? chainSlots(w) : MAX_AWAITED_PUBLISHES;
+  const mayStart = !launchHold(w) && building.length - producing.length < chains;
 
   // 1. Nothing to sell and nothing in the oven → find the next niche.
   if (mayStart && !live.length && !producing.length && !open('scan_trends') && !open('pick_opportunity') && !open('mine_pains')) {
@@ -443,9 +457,11 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   const profits7 = recentProfits(w, 7);
   const launchedLately = (p: Product) => (p.launchedDay ?? day) > day - 7;
   const earning = mains.filter((p) => launchedLately(p) || (profits14.get(p.id) ?? 0) > 0);
-  const capacity = clamp(Math.floor(budget.adCap / AD_ROOM_PER_MAIN), 1, MAX_MAINS);
+  const { maxMains } = policyOf(w);
+  const capacity = growth ? maxMains : clamp(Math.floor(budget.adCap / AD_ROOM_PER_MAIN), 1, maxMains);
   const comfortable = !budget.survival && !budget.bankrupt && budget.cash >= w.scenario.startingCash && (budget.runwayDays === null || budget.runwayDays >= COMFORTABLE_RUNWAY_DAYS);
-  const inProduction = producing.some((p) => !isUpsellProduct(w, p.id));
+  // One main in production at a time, under growth one per writer: more guides waiting alone would still leave a second writer idle.
+  const inProduction = producing.filter((p) => !isUpsellProduct(w, p.id)).length >= (growth ? chains - 1 : 1);
   if (mayStart && (live.length || products.some((p) => p.status === 'paused')) && !inProduction && earning.length < capacity && !open('scan_trends') && !open('pick_opportunity') && !budget.survival && w.status !== 'bankrupt') {
     const lastCreated = Math.max(0, ...products.filter((p) => !isUpsellProduct(w, p.id)).map((p) => p.createdDay));
     const sinceLast = day - lastCreated;
@@ -567,7 +583,8 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   // 5. Inbox: batches of 6, most urgent first.
   const claimed = claimedMessageIds(w);
   const inbox = openMessages(ctx).filter((m) => !claimed.has(m.id)).sort((a, b) => urgency(b, day) - urgency(a, day) || a.day - b.day);
-  for (let i = 0; i < inbox.length && i < 24; i += 6) {
+  const replies = growth ? replyCap(w) : REPLIES_FLOOR;
+  for (let i = 0; i < inbox.length && i < replies; i += 6) {
     const batch = inbox.slice(i, i + 6);
     items.push(planItem('reply_inbox', { messageIds: batch.map((m) => m.id) }, `${batch.length} message(s) en attente, réponse sous 24 h.`, batch.some((m) => urgency(m, day) >= 5) ? 1 : 2, `Répondre à ${batch.length} client(s)`));
   }

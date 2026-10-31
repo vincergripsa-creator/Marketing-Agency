@@ -553,6 +553,7 @@ export class Company implements CompanyApi {
       a.place = a.dept;
       a.bubble = null;
     }
+    this.syncMind(); // the evening's Claude cost is Sunday's: the rollup below closes the week on it
     for (const p of PILLARS) await p.eveningEnd?.(this.ctx);
   }
 

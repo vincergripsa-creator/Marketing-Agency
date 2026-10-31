@@ -1,14 +1,15 @@
 /**
- * Market close for world.day: paid ads → organic → creators → sales → upsells → refunds → reviews →
- * inbox → escalations → random events → fixed costs. Every money move goes through the ledger.
+ * Market close for world.day: paid ads → organic → creators → e-mails → sales → list capture → order bumps → upsells →
+ * refunds → reviews → inbox → escalations → random events → rivals → fixed costs. Every money move goes through the ledger.
  */
 import { clamp, emit, nextId, round2, streamRng } from '../core/index.js';
 import type { DifficultyProfile, MarketDayResult, Rng } from '../contracts.js';
 import { CHANNELS, CHANNEL_IDS, channelOf } from '../shared.js';
 import type {
-  AdCreative, Campaign, ChannelId, Customer, DailyAdStats, InboxMessage, MessageIntent, NicheTruth, Order, Product, QualityReport, WorldEvent, WorldEventKind, WorldState,
+  AdCreative, Broadcast, Campaign, ChannelId, Customer, DailyAdStats, InboxMessage, MessageIntent, NicheTruth, Order, Product, QualityReport, WorldEvent, WorldEventKind, WorldState,
 } from '../shared.js';
 import { addAdTotals } from './adTotals.js';
+import { addBuyers, addLeads, deliverEmails, recordEmailSales } from './audience.js';
 import { ADS, CONVERSION, CREATORS, ESCALATION, FEES, INBOX, ORGANIC, REFUNDS, REVIEWS, SCAM, STATS, UPSELL } from './balance.js';
 import { nichePool, poolSaturation } from './capacity.js';
 import { CHANNEL_STREAM } from './channelBalance.js';
@@ -19,13 +20,15 @@ import {
 import { runClaims } from './claims.js';
 import { findBannedClaims } from './compliance.js';
 import { buyerArchetype, createCustomer, customerById, senderArchetype } from './customers.js';
-import { releaseHolds, rollEvents, seasonalBoostActive } from './events.js';
+import { HOT_ORDER_DAYS, releaseHolds, rollEvents, seasonalBoostActive } from './events.js';
 import { adComments } from './feedback.js';
 import { SETUP_REF, cashOf, recordLedger } from './finance.js';
+import { GROWTH } from './growth.js';
 import { createMessage, followUpText } from './inbox.js';
 import { difficultyProfile, isScammer } from './market.js';
 import { chargebackOrder, creativeById, nicheOf, orderById, productById, pushEvent, refundOrder, repayableLeft, reviewProduct, type EventRefs } from './ops.js';
 import { genericPhraseHits, guideOverlap, scoreCreative, scorePdf, scoreSalesPage, vocPhraseHits } from './quality.js';
+import { rivalFactor, rollRivals } from './rivals.js';
 import { fmtEur, fmtInt, fmtNum, fmtPct, keyTokens, lognormal, norm, overlap, pickWeighted, plural, short, stemSet, uniform } from './text.js';
 import { tempoFit } from './videoCraft.js';
 import { visualCvr, visualRating, visualRefund, visualWtp } from './visual.js';
@@ -42,7 +45,12 @@ interface Traffic {
   postId: string | null;
   stat: DailyAdStats | null;
   channel: ChannelId;           // TikTok organic and creators sit in TikTok's pool
+  repeat?: string;              // these visitors are past buyers of this niche
+  broadcast?: Broadcast;        // the send they clicked
 }
+
+/** Where a purchase comes from when it is a stranger's: the visitors a list can still capture. */
+const COLD_SOURCES = ['ads', 'organic', 'creator'] as const;
 
 const NEUTRAL_REPORT: QualityReport = {
   overall: 35, specificity: 30, structure: 30, actionability: 30, humanTone: 50, design: 20, promiseMatch: 100, compliance: 100,
@@ -71,6 +79,7 @@ class Day {
   private creativeCache = new Map<string, QualityReport>();
   private echoCache = new Map<string, number>();
   private customers = new Map<string, Customer>();
+  private repeatPools = new Map<string, string[]>();
 
   constructor(readonly world: WorldState, public rng: Rng, readonly diff: DifficultyProfile) {
     this.day = world.day;
@@ -145,6 +154,29 @@ class Day {
     return e;
   }
 
+  /**
+   * Past buyers of the niche who do not own this guide yet, newest first. Orders of the last HOT_ORDER_DAYS only, kept or
+   * compacted alike: older rows would change who gets drawn. Each one buys once a day: the caller takes him out.
+   */
+  repeatPool(nicheId: string, p: Product): string[] {
+    const key = `${nicheId}|${p.id}`;
+    let pool = this.repeatPools.get(key);
+    if (!pool) {
+      const orders = this.world.market.orders;
+      const buyers = new Set<string>();
+      const owners = new Set<string>();
+      for (let i = orders.length - 1; i >= 0; i--) {
+        const o = orders[i]!;
+        if (this.day - o.day >= HOT_ORDER_DAYS) break;
+        if (o.productId === p.id) owners.add(o.customerId);
+        else if (o.day < this.day && productById(this.world, o.productId)?.nicheId === nicheId) buyers.add(o.customerId);
+      }
+      pool = [...buyers].filter((id) => !owners.has(id));
+      this.repeatPools.set(key, pool);
+    }
+    return pool;
+  }
+
   noise(sd: number): number { return Math.exp(this.rng.normal(0, sd)); }
 
   /** Moves the phase to the stream of one campaign or product: what happens to it does not depend on the ones before. */
@@ -194,6 +226,15 @@ export function upsellRate(qualityPct: number, price: number, wtp: { min: number
   return base * Math.pow(priceFactor(price, wtp), UPSELL.priceExp);
 }
 
+/**
+ * Chance that a buyer ticks the kit at checkout. The niche's price scale, at the share of it a kit asks: a kit priced by
+ * `kitPrice` near the sweet spot takes the plain rate, and it only moves away from it with the price.
+ */
+export function bumpRate(price: number, wtp: { min: number; sweet: number; max: number }): number {
+  const { rate, priceShare } = GROWTH.bump;
+  return clamp(rate * priceFactor(price, { min: wtp.min * priceShare, sweet: wtp.sweet * priceShare, max: wtp.max * priceShare }));
+}
+
 function ratingEffect(r: number): number {
   if (r >= 4.5) return CONVERSION.ratingHigh;
   if (r < 3.5) return CONVERSION.ratingLow;
@@ -228,7 +269,7 @@ function baseCvr(d: Day, p: Product): number {
   const compF = 1 - CONVERSION.competitionWeight * n.competition;
   const hypeF = 1 + CONVERSION.hypeBoost * clamp(p.salesPage?.hypeLevel ?? 0.5, 0, 1);
   const boost = d.boost ? CONVERSION.seasonalBoost : 1;
-  return CONVERSION.base * sqF * priceFactor(p.price, visualWtp(n.wtp, p.visual)) * trustFactor(p, d.storeRating) * specF * demandF * dow * compF * hypeF * boost * visualCvr(p.visual);
+  return CONVERSION.base * sqF * priceFactor(p.price, visualWtp(n.wtp, p.visual)) * trustFactor(p, d.storeRating) * specF * demandF * dow * compF * hypeF * boost * visualCvr(p.visual) * rivalFactor(d.world, n.id);
 }
 
 // ───────────────────────────── 1. paid ads ─────────────────────────────
@@ -422,7 +463,18 @@ function runCreators(d: Day): void {
   }
 }
 
-// ───────────────────────────── 4. sales ─────────────────────────────
+// ───────────────────────────── 4. e-mails ─────────────────────────────
+
+/** Comes after every other source: each product's stream sees the same draws for its earlier rows. */
+function runEmail(d: Day): void {
+  const { rows, notes } = deliverEmails(d.world, d.rng);
+  for (const { productId, clicks, cvrMult, repeat, broadcast } of rows) {
+    d.traffic.push({ productId, source: 'email', landingViews: clicks, cvrMult, campaignId: null, creativeId: null, creatorId: null, partnershipId: null, postId: null, stat: null, channel: 'tiktok', ...(repeat ? { repeat } : {}), ...(broadcast ? { broadcast } : {}) });
+  }
+  d.notes.push(...notes);
+}
+
+// ───────────────────────────── 5. sales ─────────────────────────────
 
 function newOrder(d: Day, p: Product, source: Order['source'], t: Pick<Traffic, 'campaignId' | 'creatorId'> & { channel?: ChannelId }, customer?: Customer): Order {
   const { world, rng } = d;
@@ -450,6 +502,13 @@ function bookRevenue(d: Day, p: Product, source: Order['source'], count: number,
   recordLedger(d.world, { type: 'revenue', amount, memo: `${count} vente${count > 1 ? 's' : ''} « ${short(p.title, 40)} » (${label})`, ref: p.id });
 }
 
+/** The past buyer behind a click of a buyers' e-mail. None left in the hot orders: someone the market has not met. */
+function repeatBuyer(d: Day, nicheId: string, p: Product, rng: Rng): Customer | undefined {
+  const pool = d.repeatPool(nicheId, p);
+  const id = pool.length ? pool.splice(rng.int(0, pool.length - 1), 1)[0] : undefined;
+  return id ? d.customer(id) : undefined;
+}
+
 function runSales(d: Day): void {
   const { world } = d;
   if (!d.traffic.length) return;
@@ -460,8 +519,9 @@ function runSales(d: Day): void {
     list.push(t);
     byProduct.set(t.productId, list);
   }
-  // niche saturation: each channel's daily buyer pool is finite (demand-scaled). Search is capped by its queries instead
-  const pooled = (t: Traffic) => CHANNELS[t.channel].buying === 'cpm';
+  // niche saturation: each channel's daily buyer pool is finite (demand-scaled). Search is capped by its queries instead,
+  // and a list is people the agency already owns: nobody else bids for them
+  const pooled = (t: Traffic) => t.source !== 'email' && CHANNELS[t.channel].buying === 'cpm';
   const nicheViews = new Map<string, { n: NicheTruth; views: Map<ChannelId, number> }>();
   for (const t of d.traffic) {
     const p = productById(world, t.productId);
@@ -492,12 +552,13 @@ function runSales(d: Day): void {
       const eff = Math.round(t.landingViews * sat);
       const n = rng.binomial(eff, Math.min(CONVERSION.maxCvr, cvr0 * t.cvrMult));
       if (n <= 0) continue;
-      for (let i = 0; i < n; i++) newOrder(d, p, t.source, t);
+      for (let i = 0; i < n; i++) newOrder(d, p, t.source, t, t.repeat ? repeatBuyer(d, t.repeat, p, rng) : undefined);
       const amount = round2(n * p.price);
       const slot = `${t.source}:${t.channel}`;
       const agg = bySource.get(slot) ?? { source: t.source, channel: t.channel, n: 0, amount: 0 };
       agg.n += n; agg.amount = round2(agg.amount + amount);
       bySource.set(slot, agg);
+      if (t.source === 'email') recordEmailSales(world, n, amount, t.broadcast);
       if (t.stat) {
         t.stat.purchases += n;
         t.stat.revenue = round2(t.stat.revenue + amount);
@@ -523,11 +584,51 @@ function runSales(d: Day): void {
   if (d.outage) d.notes.push('Panne de paiement de la boutique : aucune vente possible aujourd\'hui malgré le trafic.');
 }
 
-// ───────────────────────────── 5. upsells ─────────────────────────────
+// ───────────────────────────── 6. list capture ─────────────────────────────
+
+/** A guide with a lead magnet: the day's strangers who did not buy may leave an address, saturated visitors too, and most buyers do. */
+function runCapture(d: Day): void {
+  const { world, rng } = d;
+  const { optin, page, buyerOptin } = GROWTH.email;
+  for (const p of world.company.products) {
+    if (!p.leadMagnet || p.status !== 'live') continue;
+    const pageFactor = Math.min(page.max, d.pageQ(p).overall / page.ref);
+    const nicheId = d.niche(p).id;
+    let leads = 0;
+    let buyers = 0;
+    for (const source of COLD_SOURCES) {
+      const views = d.traffic.reduce((s, t) => s + (t.productId === p.id && t.source === source ? t.landingViews : 0), 0);
+      const bought = d.newOrders.filter((o) => o.productId === p.id && o.source === source).length;
+      leads += rng.binomial(Math.max(0, views - bought), optin[source] * pageFactor);
+      buyers += bought;
+    }
+    addLeads(world, nicheId, leads);
+    addBuyers(world, nicheId, rng.binomial(buyers, buyerOptin));
+  }
+}
+
+// ───────────────────────────── 7. order bumps ─────────────────────────────
+
+/** The kit offered at checkout. A product of its own, so the guide's price, pricing evidence and refunds keep their meaning. */
+function runBumps(d: Day): void {
+  const { world, rng } = d;
+  const agg = new Map<string, { kit: Product; n: number; amount: number }>();
+  for (const o of d.newOrders.slice()) {
+    const kit = productById(world, productById(world, o.productId)?.bumpProductId);
+    if (!kit || kit.status !== 'live' || !rng.chance(bumpRate(kit.price, d.niche(kit).wtp))) continue;
+    newOrder(d, kit, 'bump', { campaignId: o.campaignId, creatorId: o.creatorId, ...(o.channel ? { channel: o.channel } : {}) }, d.customer(o.customerId));
+    const a = agg.get(kit.id) ?? { kit, n: 0, amount: 0 };
+    a.n += 1; a.amount = round2(a.amount + kit.price);
+    agg.set(kit.id, a);
+  }
+  for (const { kit, n, amount } of agg.values()) bookRevenue(d, kit, 'bump', n, amount);
+}
+
+// ───────────────────────────── 8. upsells ─────────────────────────────
 
 function runUpsells(d: Day): void {
   const { world, rng } = d;
-  const base = d.newOrders.filter((o) => o.source !== 'upsell');
+  const base = d.newOrders.filter((o) => o.source !== 'upsell' && o.source !== 'bump');
   const agg = new Map<string, { n: number; amount: number }>();
   for (const o of base) {
     const p = productById(world, o.productId);
@@ -556,7 +657,7 @@ function runUpsells(d: Day): void {
   }
 }
 
-// ───────────────────────────── 6. refunds ─────────────────────────────
+// ───────────────────────────── 9. refunds ─────────────────────────────
 
 export { SETUP_REF };
 
@@ -618,7 +719,7 @@ function runRefunds(d: Day): void {
   }
 }
 
-// ───────────────────────────── 7. reviews ─────────────────────────────
+// ───────────────────────────── 10. reviews ─────────────────────────────
 
 const RATING_SHIFT: Partial<Record<Customer['archetype'], number>> = { karen: -1, troll: -2, sceptique: -0.5, superfan: 0.8, chasseur_de_remboursement: -0.7 };
 
@@ -653,7 +754,7 @@ function runReviews(d: Day): void {
   }
 }
 
-// ───────────────────────────── 8. inbox ─────────────────────────────
+// ───────────────────────────── 11. inbox ─────────────────────────────
 
 const BUYER_INTENTS: Record<Customer['archetype'], [MessageIntent, number][]> = {
   normal: [['question', 0.4], ['non_recu', 0.25], ['compliment', 0.15], ['bug_paiement', 0.1], ['plainte_qualite', 0.1]],
@@ -695,7 +796,7 @@ function runInbox(d: Day): void {
   const live = world.company.products.filter((p) => p.status === 'live');
 
   // a) buyers who write in
-  const buyers = d.newOrders.filter((o) => o.source !== 'upsell');
+  const buyers = d.newOrders.filter((o) => o.source !== 'upsell' && o.source !== 'bump');
   const k = rng.binomial(buyers.length, diff.inboxPerSale);
   for (const o of rng.shuffle(buyers.slice()).slice(0, k)) {
     const c = d.customer(o.customerId);
@@ -764,7 +865,7 @@ function runInbox(d: Day): void {
   }
 }
 
-// ───────────────────────────── 9. escalations ─────────────────────────────
+// ───────────────────────────── 12. escalations ─────────────────────────────
 
 function badSupportReview(d: Day, msg: InboxMessage, c: Customer | undefined): boolean {
   const p = productById(d.world, msg.productId);
@@ -902,17 +1003,9 @@ function summarize(d: Day, result: MarketDayResult): void {
   result.notes = d.notes.slice();
 }
 
-// ───────────────────────────── phases still empty ─────────────────────────────
-// Their place and stream are already fixed in DAY_PHASES: the package that fills one writes its body and shifts nothing.
-
-/** P10.2 */
-function runEmail(_d: Day): void { /* empty */ }
-/** P10.2 */
-function runCapture(_d: Day): void { /* empty */ }
-/** P10.2 */
-function runBumps(_d: Day): void { /* empty */ }
-/** P10.2 */
-function runRivals(_d: Day): void { /* empty */ }
+function runRivals(d: Day): void {
+  d.notes.push(...rollRivals(d.world, d.rng));
+}
 
 function rollDayEvents(d: Day): void {
   const before = d.world.market.events.length;

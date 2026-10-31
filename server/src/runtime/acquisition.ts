@@ -13,6 +13,7 @@ import { CHANNEL_POLICY } from './channelPolicy.js';
 import { adsHold } from './holds.js';
 import { activeCampaigns, averageRating, campaignMetrics, committedAdBudget, currentBudget, isUpsellProduct, productMetrics, recentReviews, reviewCount } from './metrics.js';
 import { learning, sim } from './modules.js';
+import { growthOn } from './stages.js';
 import { isOpen } from './tasks.js';
 import { clamp, dec, eur, pct, sum } from './util.js';
 
@@ -399,11 +400,15 @@ export function acquisitionCandidates(world: WorldState, opts: { includeUpsells?
 
 /**
  * The envelope a campaign of this product may grow into. A winner does not eat the whole of it while another guide
- * waits for a test: the budget would go to a saturating audience and the other guide would die untested.
+ * waits for a test: the budget would go to a saturating audience and the other guide would die untested. Under growth the
+ * CFO's Monday target sets it, tests' share out. A target is room, not an order: what already runs stays, inside the cap,
+ * and only what would grow waits for it (scale §4.3).
  */
 export function scalingRoom(world: WorldState, p: Product, adCap: number): number {
   const waiting = acquisitionCandidates(world).some((c) => c.product.id !== p.id && !c.block && !activeCampaigns(world, c.product.id).length);
-  return waiting ? adCap * (1 - EXPLORATION_SHARE) : adCap;
+  const allocation = growthOn(world) ? world.company.growth?.allocation : null;
+  if (allocation?.adTarget === undefined) return waiting ? adCap * (1 - EXPLORATION_SHARE) : adCap;
+  return Math.min(adCap, Math.max(allocation.adTarget - (waiting ? allocation.testWeek / 7 : 0), committedAdBudget(world)));
 }
 
 /** The best product to promote right now (paid candidates first), for vague instructions. */

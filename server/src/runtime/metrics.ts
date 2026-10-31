@@ -2,8 +2,9 @@
  * Observable metrics the managers reason with (ads stats, orders, inbox) and the CFO's daily budget.
  * Only reads data the company can legitimately see — never the market's hidden truth.
  */
+import { SETUP_REF, isHold } from '../core/index.js';
 import { CHANNEL_IDS, channelOf } from '../shared.js';
-import type { Campaign, ChannelId, DailyAdStats, Product, Task, WorldState } from '../shared.js';
+import type { Campaign, ChannelId, DailyAdStats, Order, Product, Task, WorldState } from '../shared.js';
 import { recentReviews } from '../sim/feedback.js';
 import { COMPACT } from './compaction.js';
 import { sim } from './modules.js';
@@ -246,7 +247,17 @@ function measuredCeiling(world: WorldState, p: Product): { ceiling: number; why:
 
 export interface Budget { adCap: number; survival: boolean; cash: number; runwayDays: number | null; rate: number; bankrupt: boolean; outage: boolean }
 
-/** Daily ad envelope: ≤ 15 % of the cash left once a week of pay is set aside, ≤ 8 % if runway < 14 days, never into the reserve once growth decides (D9), 0 when bankrupt or on an announced outage day; survival below 30 % of start. */
+/** What the day's rate allows on the cash left once a week of pay is set aside (D9). */
+export function adShare(world: WorldState, cash: number, rate: number): number {
+  return Math.max(0, cash - ORG.adReserveDays * payrollToday(world)) * rate;
+}
+
+/**
+ * Daily ad envelope: ≤ 15 % of the cash left once a week of pay is set aside, ≤ 8 % if runway < 14 days, never into the reserve
+ * once growth decides (D9), 0 when bankrupt or on an announced outage day; survival below 30 % of start. The reserve's floor is
+ * that same line, so under it the reserve would read 0 for good and stop the paying ads that are all that can refill the till:
+ * survival keeps its own rules instead, the control's, and nothing launches or grows until the cash is back.
+ */
 export function computeBudget(world: WorldState): Budget {
   const fin = sim.financeSnapshot(world);
   const start = Math.max(1, world.scenario.startingCash);
@@ -254,10 +265,11 @@ export function computeBudget(world: WorldState): Budget {
   const rate = lowRunway ? 0.08 : 0.15;
   const bankrupt = fin.bankrupt || fin.cash < 0 || world.status === 'bankrupt';
   const outage = sim.isAnnouncedOutage(world, world.day);
-  const reserve = growthOn(world) ? world.company.growth?.allocation?.reserve : undefined;
-  const share = Math.max(0, fin.cash - ORG.adReserveDays * payrollToday(world)) * rate;
+  const survival = fin.cash < SURVIVAL_CASH * start;
+  const reserve = growthOn(world) && !survival ? world.company.growth?.allocation?.reserve : undefined;
+  const share = adShare(world, fin.cash, rate);
   const adCap = bankrupt || outage || fin.cash <= 0 ? 0 : round2(reserve === undefined ? share : Math.min(share, Math.max(0, fin.cash - reserve)));
-  return { adCap, survival: fin.cash < SURVIVAL_CASH * start, cash: round2(fin.cash), runwayDays: fin.runwayDays, rate, bankrupt, outage };
+  return { adCap, survival, cash: round2(fin.cash), runwayDays: fin.runwayDays, rate, bankrupt, outage };
 }
 
 /** Today's budget as decided by the CFO this morning (falls back to a live computation). */
@@ -278,4 +290,48 @@ export function currentBudget(world: WorldState): Budget {
 /** Sum of the daily budgets of active campaigns (optionally excluding one). */
 export function committedAdBudget(world: WorldState, exceptCampaignId?: string): number {
   return round2(sum(activeCampaigns(world).filter((c) => c.id !== exceptCampaignId).map((c) => c.dailyBudget)));
+}
+
+// ───────────────────────────── what a Monday reads ─────────────────────────────
+
+export interface ClosedWindow { fromDay: number; toDay: number; days: number }
+
+/** The last `days` closed days: never the partial numbers of a day still open. */
+export function closedWindow(world: WorldState, days: number): ClosedWindow {
+  const toDay = sim.lastClosedDay(world);
+  const fromDay = Math.max(1, toDay - days + 1);
+  return { fromDay, toDay, days: Math.max(1, toDay - fromDay + 1) };
+}
+
+export interface LedgerWindow { revenue: number; refunds: number; fees: number; adSpend: number; fixed: number; profit: number }
+
+/** The books over [fromDay, toDay]: costs as positive euros, holds and capital out, the one-off setup out of the fixed costs. */
+export function ledgerWindow(world: WorldState, fromDay: number, toDay: number): LedgerWindow {
+  const w: LedgerWindow = { revenue: 0, refunds: 0, fees: 0, adSpend: 0, fixed: 0, profit: 0 };
+  for (const e of world.ledger) {
+    if (e.day < fromDay || e.day > toDay || e.type === 'capital' || isHold(e)) continue;
+    w.profit += e.amount;
+    switch (e.type) {
+      case 'revenue': w.revenue += e.amount; break;
+      case 'refund': case 'chargeback': case 'discount': case 'scam_loss': w.refunds -= e.amount; break;
+      case 'payment_fee': w.fees -= e.amount; break;
+      case 'ad_spend': w.adSpend -= e.amount; break;
+      case 'platform_fee': case 'tool_subscription': case 'compute': if (e.ref !== SETUP_REF) w.fixed -= e.amount; break;
+      default: break;
+    }
+  }
+  return { revenue: round2(w.revenue), refunds: round2(w.refunds), fees: round2(w.fees), adSpend: round2(w.adSpend), fixed: round2(w.fixed), profit: round2(w.profit) };
+}
+
+/** What a buyer we already have spends again. Everything else is a first order, the one ads paid for. */
+const FOLLOW_ON: readonly Order['source'][] = ['upsell', 'email', 'bump'];
+
+/** What buyers kept paying over [fromDay, toDay], first orders apart from follow-on ones. */
+export function orderRevenue(world: WorldState, fromDay: number, toDay: number): { first: number; followOn: number } {
+  let first = 0, followOn = 0;
+  for (const o of world.market.orders) {
+    if (o.day < fromDay || o.day > toDay || o.refunded || o.chargeback) continue;
+    if (FOLLOW_ON.includes(o.source)) followOn += o.price; else first += o.price;
+  }
+  return { first: round2(first), followOn: round2(followOn) };
 }

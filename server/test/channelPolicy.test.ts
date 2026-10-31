@@ -185,8 +185,9 @@ describe('a full run is a TikTok run until a buyer is asked for', () => {
   const asked = (w: WorldState): boolean => w.company.org!.positions.some((p) => p.reason === 'channel') || w.company.org!.decisions.some((d) => d.kind === 'refused' && !!d.roleId?.startsWith('media_buyer'));
 
   it('until the first requestRole for a channel, full and tiktok_only are the same run day by day', async () => {
-    const full = await lab({ channelControl: 'none', startingCash: 300 });
-    const only = await lab({ channelControl: 'tiktok_only', startingCash: 300 });
+    // Seed 7's road to the first request, set before the growth pillar: under it that request comes past D40, too long to compare tick by tick.
+    const full = await lab({ channelControl: 'none', startingCash: 300, scaling: false });
+    const only = await lab({ channelControl: 'tiktok_only', startingCash: 300, scaling: false });
     let ticks = 0;
     for (; ticks < 12 * 20; ticks++) {
       await full.company.step();

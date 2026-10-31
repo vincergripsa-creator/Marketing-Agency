@@ -1,10 +1,13 @@
-/** The growth pillar: what a week closes. Monday's CFO, stage and portfolio land with P10.1, behind growthOn. */
+/** The growth pillar: Monday's CFO, stage and portfolio behind growthOn, and what a week closes, in both arms. */
 import type { ArchiveBatch } from '../contracts.js';
 import type { CompanyState, GrowthState, WorldState } from '../shared.js';
+import { cfoMonday } from './cfo.js';
 import { compactWorld } from './compaction.js';
 import type { RuntimeCtx } from './ctx.js';
 import { weeklyNote, weekRollup } from './digest.js';
+import { officerId } from './org/officers.js';
 import type { Pillar } from './pillars.js';
+import { advanceStage, dropStage, growthOn } from './stages.js';
 
 export function emptyGrowth(w: WorldState): GrowthState {
   return {
@@ -32,17 +35,38 @@ async function archiveBatches({ world, archive }: RuntimeCtx, batch: ArchiveBatc
   }
 }
 
+/**
+ * The Sundays this evening rolls: today's, again if a failed tick plays it twice, and any whose evening never ran. The next evening
+ * closes those while their rows are still raw: past `COMPACT.ledgerDays` nothing could, and the week's money would leave every digest.
+ */
+function sundaysDue(w: WorldState): number[] {
+  const days: number[] = [];
+  for (let day = (w.company.growth?.weeks.at(-1)?.toDay ?? 0) + 7; day < w.day; day += 7) days.push(day);
+  return w.day % 7 === 0 ? [...days, w.day] : days;
+}
+
 export const growthPillar: Pillar = {
   // Every version 2 world, scaling or not: growthOn gates decisions, the rollup writes in both arms (D54).
   mount(w) {
     w.company.growth ??= emptyGrowth(w);
   },
+  async morning(ctx) {
+    const w = ctx.world;
+    if (!growthOn(w)) return;
+    // A tick that failed plays its morning again: the same Monday must not count as a second check of a gate.
+    if (w.day % 7 !== 1 || w.company.growth?.allocation?.day === w.day) {
+      dropStage(ctx);
+      return;
+    }
+    cfoMonday(ctx);
+    advanceStage(ctx);
+    await ctx.ritual('portfolio_review', officerId(w, 'ceo'), `Revue du portefeuille, semaine ${Math.ceil(w.day / 7)}`);
+  },
   async eveningEnd(ctx) {
     const w = ctx.world;
-    if (w.day % 7 !== 0) return;
-    const week = weekRollup(w, w.day - 6, w.day);
-    if (week) w.company.growth?.weeks.push(week);
-    await archiveBatches(ctx, compactWorld(w)); // outside the optional call, or a run with no archive would never compact
-    if (week) await weeklyNote(ctx, week);
+    const weeks = sundaysDue(w).map((day) => weekRollup(w, day - 6, day));
+    w.company.growth?.weeks.push(...weeks);
+    if (w.day % 7 === 0) await archiveBatches(ctx, compactWorld(w)); // outside the optional call, or a run with no archive would never compact
+    for (const week of weeks) await weeklyNote(ctx, week);
   },
 };

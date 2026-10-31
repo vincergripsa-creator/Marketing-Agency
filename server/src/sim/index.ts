@@ -7,14 +7,10 @@ import { announcedOutageDays, isAnnouncedOutage } from './events.js';
 import { financeSnapshot, lastClosedDay, recordLedger } from './finance.js';
 import { createMarketState, difficultyProfile, findNiche, isScamFlag } from './market.js';
 import { repayableLeft } from './ops.js';
-import { GENERIC_PHRASES, guideSubstance, scoreCreative, scorePdf, scoreSalesPage, scoreSupportReply } from './quality.js';
+import { GENERIC_PHRASES, guideSubstance, scoreCreative, scoreEmail, scorePdf, scoreSalesPage, scoreSupportReply } from './quality.js';
 import { tickMarket } from './tick.js';
 import { createMarketTools } from './tools.js';
 import { scoreCut } from './videoCraft.js';
-
-/** Lands with sim/audience.ts (P10.2). Nothing calls it before. */
-const notLanded = (): never => { throw new Error('not landed'); };
-const scoreEmail: SimModule['scoreEmail'] = notLanded;
 
 export {
   createMarketState, createMarketTools, tickMarket, recordLedger, financeSnapshot, lastClosedDay, announcedOutageDays, isAnnouncedOutage,

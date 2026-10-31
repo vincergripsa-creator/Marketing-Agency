@@ -350,6 +350,7 @@ export interface Product {
   bumpProductId?: string | null;
   leadMagnet?: { title: string; file: string; day: number } | null;
   versionDay?: number;         // compaction: replaces versionSince on tasks
+  publishedVersion?: number;   // last version that went on sale, absent = 1: a re-listing is not a new version
   feedback?: { day: number; text: string; quality: boolean }[]; // cap 30
   hooks?: { hook: string; hookStyle: HookStyle }[];             // cap 60
   campaignCount?: number;

@@ -100,6 +100,37 @@ Le run de référence (entreprise d'avant la V1, 25 jours, graine 7) ne se réen
 | Étape | Raison | Ancienne empreinte | Nouvelle empreinte | Ce qui a bougé |
 |---|---|---|---|---|
 | P8.1 | Texte des guides : détail des étapes sous son propre intertitre, plan sans lignes répétées, exemple pour chaque chapitre, citations et notes en marge | `dc93c9d2173be97aade7336c20a776dd70652baf` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `ledger` et `kpis` (le texte change la note de qualité, donc les ventes) ; `tasks` et `events` inchangés. Enregistrée sur `HEAD` plus les seuls fichiers de P8.1 |
+| P10.2 | Les rivaux remplacent la pénalité permanente des clones ; liste e-mail et kit côté marché | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` (identique) | Rien : en 25 jours, la graine 7 ne voit ni clone ni rival (0 événement `competitor_clone`, `market.rivals` vide) et l'entreprise n'a ni liste ni kit. `--record` réécrit le même fichier, sur `HEAD` plus les seuls fichiers de P10.2 |
+
+### Rivaux : à lire à S14
+
+Mesuré à la fin de P10.2, rien n'a été réglé dessus (`GROWTH.rivals` reste celui de scale §6).
+
+- **Un clone mord plus fort et plus tôt qu'avant.** Il coûtait environ 4 % de conversion pour de bon (`competition + 0,1`, poids 0,4). Il coûte maintenant 10 % d'un coup, puis s'efface (demi-vie 60 jours). En `normal`, un événement `competitor_clone` tombe environ tous les 33 jours et vise un guide en ligne au hasard : avec un seul guide en vente, ces clones seuls tiennent la niche vers −26 %, tout près du plafond de −30 %.
+- **Conséquence visible :** le test `sim.test.ts` « une politique compétente qui n'apprend pas » finissait la graine 3 à +1,45 €, il la finit à −23,30 € (2 clones d'ici J21). Pour cette seule graine, son assertion `bankrupt` est passée à `cash > −50 €`, décision D43. Les graines 1 et 2 ne bougent pas de statut et gardent la leur.
+- **La route de la graine 7 :** le premier licenciement du test `talent-league.test.ts` tombe à J127, après la borne de 110 jours du test : la borne est passée à 180, l'assertion n'a pas changé.
+- **Rivaux naturels :** sur cette même route, 7 rivaux ont paru d'ici J127 sans qu'aucun événement `competitor_clone` ne tombe : c'est la mécanique qui prend le relais quand les ventes montent.
+
+À S14 : lire d'abord la médiane `normal` avec un seul guide en ligne (les 30 premiers jours), avant d'y voir un défaut de `CONVERSION.base`.
+
+### Réserve et survie : à lire à S14
+
+Mesuré à la porte de S10, rien n'a été réglé dessus. D9 dit `adCap = min(part, trésorerie − réserve)`, et le plancher de la réserve (30 % du départ) est exactement la ligne de survie : sous cette ligne le plafond valait 0 pour de bon et coupait les pubs qui rapportaient. La porte y met une exception, la plus petite qui garde l'intention de D9 : en survie la réserve ne compte plus, et le mode survie suit ses propres règles, celles du témoin (rien de neuf ne se lance, une pub rentable continue).
+
+| Graine, 500 €, `normal` | Avant | Après | Témoin |
+|---|---|---|---|
+| 13, J120 | 114,55 €, retour à 60 % du départ à J103 | 1 970,37 €, retour à J60 | 1 171,40 €, retour à J63 |
+| 10, J175 | faillite à J175, 69 jours de suite à plafond 0 | 43,59 €, 3 jours de suite | 5 052,50 € |
+| 9, J175 | 48 jours de suite à plafond 0 | 40,18 €, 4 jours de suite | faillite à J112 |
+| 7, créneau 11 de J28 sauté | faillite à J106 | faillite à J106, plafond positif dès J68 | 14 879,42 € à J110 |
+
+Ce qui reste, et qui n'est pas ce défaut :
+
+- **Une pub qui rapporte s'arrête encore quand la trésorerie passe sous une réserve au-dessus du plancher.** Graine 7, créneau sauté : à J62, 214 € en caisse pour 227 € de réserve, plafond 0, et `cpg_13603` s'arrête à un ROAS de 2,5. C'est D9 à la lettre, et `allocator.test.ts` l'épingle.
+- **Le mode survie ne lance rien, dans les deux bras** (scale §4.3 : garde-fou inchangé). Une entreprise qui y entre sans pub qui tourne n'en sort que par l'organique. Graine 10 : ses pubs d'avant la chute ne vendaient presque rien, elle reste en survie, à faible dépense.
+- **La croissance dépense bien moins que le témoin.** Graine 7, créneau sauté, de J50 à J66 : 5 à 15 €/jour contre environ 180 €/jour. Sur 500 € de départ, avec 11 personnes, la réserve dépasse 45 % du départ.
+
+À S14 : lire ces trois points sur 30 graines, pas sur celles-ci, avant de toucher à `STAGE_POLICY.reserveDays` ou `CFO.reserveSpendShare`.
 
 ### Score visuel : à lire à S14, avant le contrôle apparié
 
