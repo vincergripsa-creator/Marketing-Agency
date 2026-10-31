@@ -7,6 +7,8 @@ import type { AdCreative, AdFormat, AgentId, AgentState, Candidate, ChallengeEnt
 import type { MindContext } from '../../contracts.js';
 import { streamRng } from '../../core/index.js';
 import { hashString } from '../../core/ids.js';
+import { coverScore } from '../../deliverables/art/evaluate.js';
+import { effortFor } from '../../deliverables/effort.js';
 import { EDIT_BASELINE, planCut } from '../../deliverables/videoCut.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { emptyVoc, nameOf, productBrief, speak } from '../ctx.js';
@@ -15,7 +17,7 @@ import { COMPLIANCE_WORDS, SUPPORT_POLICY } from '../handlers/phrases.js';
 import { flaggedSentences } from '../handlers/studio.js';
 import { addHold, firingHold, pinHold } from '../holds.js';
 import { computeBudget } from '../metrics.js';
-import { sim } from '../modules.js';
+import { deliverables, sim } from '../modules.js';
 import { ROLES } from '../org/catalog.js';
 import { STREAM } from '../streams.js';
 import { ORG } from '../org/constants.js';
@@ -43,6 +45,8 @@ const TEST_REVISION = 900;
 /** The editing test works on a draft nobody can claim: the same one for all, written at this talent. */
 const TEST_DRAFT_T = 0.4;
 const TEST_MESSAGES = 12;
+/** A designer with no truth to read: what `renderPdf` assumes of a guide with no effort given (pdf §13.1). */
+const DESIGN_BASELINE = 0.3;
 const MIN_NICHES = 3;
 const BUYING_SCALE = 1000;
 
@@ -165,6 +169,17 @@ async function polishTest(b: Bench, sitter: AgentState): Promise<TestResult | nu
   return { score: round1(score), deliverable: `Relecture d'un guide : ${flagged.length} phrases signalées`, work: [content] };
 }
 
+/** The bench product's cover, all over again: the art this eye would keep, then what the cover is worth with it (D16). */
+async function designTest(b: Bench, sitter: AgentState): Promise<TestResult | null> {
+  const { ctx, product } = b;
+  if (!product?.design) return null;
+  const w = ctx.world;
+  const art = deliverables.pickArt(product.design, effortFor(effectiveT(w, sitter, 'design') ?? DESIGN_BASELINE));
+  const audit = deliverables.coverAudit({ title: product.title, subtitle: product.content?.subtitle || product.subtitle || '', audience: product.audience, design: { ...product.design, artSeed: art.seed }, brand: w.company.name });
+  // `explored` stays out of the text: it is `effortFor(t).covers`, so printing it would read the hidden talent out.
+  return { score: coverScore(audit), deliverable: `Couverture de « ${short(product.title, 40)} » : art ${Math.round(audit.art)}/100`, work: [{ ...audit, seed: art.seed, explored: art.explored }] };
+}
+
 async function pageTest(b: Bench, sitter: AgentState): Promise<TestResult | null> {
   const { ctx, product, voc } = b;
   if (!product?.content) return null;
@@ -256,13 +271,14 @@ async function researchTest(b: Bench, sitter: AgentState): Promise<TestResult | 
 
 const parOf = (key: string) => (): number => TALENT.par[key]!;
 
-/** One row per skill. `design` has none yet: P7.3 adds it, and until then its score is 50 (D16). */
+/** One row per skill. */
 export const TEST_BY_SKILL: Partial<Record<Skill, SkillTest>> = {
   copy: { par: parOf('copy:qa'), sit: copyTest },
   video: { par: parOf('video:cut'), sit: videoTest },
   longform: { par: parOf('longform:qa'), sit: longformTest },
   polish: { par: parOf('longform:qa'), sit: polishTest },
   page: { par: parOf('page:qa'), sit: pageTest },
+  design: { par: parOf('design:visual'), sit: designTest },
   buying: { par: () => 20, sit: buyingTest },
   support: { par: parOf('support:reply'), sit: supportTest },
   research: { par: () => NO_TEST, sit: researchTest },

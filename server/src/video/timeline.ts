@@ -14,6 +14,7 @@ export const SETTLE_SEC = 0.2;  // QA reads a caption group this long after its 
 const CAPTION_CHARS = 16;       // at 3 words a group
 const HOOK_WORDS = 5;           // one screen per clause, 5 words at most
 const MIN_SHOT_SEC = 0.3;
+const BAR = 8;                  // 8th notes
 
 export const clamp01 = (x: number): number => Math.max(0, Math.min(1, x));
 export const eOut = (x: number): number => 1 - Math.pow(1 - clamp01(x), 3);
@@ -100,9 +101,10 @@ export function buildTimeline(cut: VideoCut, speech: readonly SpokenLine[], bpm:
     const line = speech[index];
     const words = line?.words ?? [];
     const voice = words.length ? line!.speechSec : 0;
+    const grid = beat.kind === 'slide' ? eighth * BAR : eighth; // a slide has no voice to follow: hard cuts on the bar
     const dur = beat.kind === 'end_card'
       ? (voice ? voice + cut.metrics.endHoldSec : beat.estSec)
-      : Math.ceil((t0 + (voice ? voice + BEAT_GAP : beat.estSec)) / eighth - 1e-9) * eighth - t0; // the cut lands on the music
+      : Math.ceil((t0 + (voice ? voice + BEAT_GAP : beat.estSec)) / grid - 1e-9) * grid - t0; // the cut lands on the music
     const groups = beat.kind === 'hook' ? hookScreens(words) : captionGroups(words, Math.max(3, cut.metrics.captionWords));
     const row = { ...beat, index, t0, dur, speech: voice, words, groups, shotAt: shotTimes(beat.shots, dur, groups) };
     t0 += dur;
@@ -117,7 +119,7 @@ export function buildTimeline(cut: VideoCut, speech: readonly SpokenLine[], bpm:
     beats,
     pill: cut.metrics.captionWords <= 2,
     bookSec: bookInHook(cut),
-    sfx: cut.sfx,
+    sfx: cut.sfx && !cut.beats.some((b) => b.kind === 'slide'), // a slideshow has the music at full level, nothing over it
   };
 }
 

@@ -9,8 +9,8 @@ const CTA_SIZE = 64;
 const PULSE = 0.035;
 const SUB = 'Lien en bio';
 
-/** « Télécharge le guide (lien en bio) »: the link has its own line. */
-const ctaLabel = (cta: string): string => cta.replace(/\s*\([^)]*\)\s*$/, '').trim().toLocaleUpperCase('fr-FR');
+/** « Télécharge le guide (lien en bio) »: the link has its own line. « Swipe jusqu’au bout et… » says nothing on the last card. */
+export const ctaLabel = (cta: string): string => cta.replace(/\s*\([^)]*\)\s*$/, '').replace(/^swipe\b.*?\bet\s+/i, '').trim().toLocaleUpperCase('fr-FR');
 
 export function drawEnd(s: SceneApi, _b: TimelineBeat, t: number): void {
   const { ctx, C, column: box } = s;

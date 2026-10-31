@@ -11,12 +11,14 @@ import { Company, createWorld, defaultScenario } from '../runtime/index.js';
 import { LEAN_ORG } from '../runtime/org/constants.js';
 import { minRunCash } from '../runtime/org/payroll.js';
 import type { BrainNote, BrainVault, CompanyApi, ContentEngine, RunPaths, StepResult, UsageEvent } from '../contracts.js';
-import type { LiveAgent, MissionResponse, RunInfo, ScenarioConfig, SessionInfo, WorldState } from '../shared.js';
+import type { AdRatio, CreativeVideo, LiveAgent, MissionResponse, RunInfo, ScenarioConfig, SessionInfo, VideoIndex, WorldState } from '../shared.js';
 import { TICKS_PER_DAY } from '../shared.js';
+import type { VideoDirector } from '../video/index.js';
 import { config, type ConfigMindMode } from './env.js';
 import { errorStatus, HttpError, type ControlAction, type Speed } from './http.js';
 import { flushSaves, isValidRunId, listRuns, loadWorld, newRunId, runsDir, saveWorld, scheduleSave } from './persist.js';
 import { liveSnapshotJson, safeFinance, snapshotJson } from './snapshot.js';
+import { LIVE_LIMITS } from './trim.js';
 
 export interface MountedRun {
   world: WorldState;
@@ -101,12 +103,36 @@ export type LiveSessionInfo = Required<SessionInfo>;
 
 type SessionEventName = 'tick' | 'run' | 'state';
 
+/** What the session asks of whoever renders a run's videos. */
+export type VideoDirectorLike = Pick<VideoDirector, 'sync' | 'request' | 'index' | 'stop'>;
+export type VideoListener = (creativeId: string, video: CreativeVideo) => void;
+
+export interface SessionOptions {
+  /** Who renders the videos of a mounted run. Absent: the real director, which reads VIDEO_MODE. */
+  director?: (paths: RunPaths, onChange: VideoListener) => VideoDirectorLike | Promise<VideoDirectorLike>;
+}
+
 const BASE_INTERVAL_MS = 2000;
 const RUN_FINISHED = 'Ce run est terminé (horizon atteint) : lance une nouvelle simulation.';
 const MAX_CONSECUTIVE_ERRORS = 3;
+const NO_DIRECTOR = 'Rendu vidéo indisponible sur ce serveur';
+/** D52: the stream carries the videos of what it shows, no more. GET /api/state and GET /api/videos keep them all. */
+const LIVE_VIDEOS = 30;
+
+/** Up to LIVE_VIDEOS of the creatives LIVE_LIMITS keeps: those of a running campaign first, then the latest. */
+export function liveVideos(world: WorldState, items: Record<string, CreativeVideo>): Record<string, CreativeVideo> {
+  const { creatives, campaigns } = world.company;
+  const running = new Set(campaigns.filter((k) => k.status !== 'ended').flatMap((k) => k.creativeIds));
+  const start = Math.max(0, creatives.length - LIVE_LIMITS.creatives);
+  const kept = creatives.filter((c, i) => items[c.id] && (i >= start || running.has(c.id)));
+  const picked = [...kept.filter((c) => running.has(c.id)).reverse(), ...kept.filter((c) => !running.has(c.id)).reverse()].slice(0, LIVE_VIDEOS);
+  return Object.fromEntries(picked.map((c) => [c.id, items[c.id]!]));
+}
 
 export class AgencySession {
   private run: MountedRun | null = null;
+  private director: VideoDirectorLike | null = null;
+  private readonly options: SessionOptions;
   private _playing = false;
   private _speed: Speed = 1;
   private busy = false;
@@ -122,7 +148,8 @@ export class AgencySession {
   private lastError: string | null = null;
   private readonly events = new EventEmitter();
 
-  constructor() {
+  constructor(options: SessionOptions = {}) {
+    this.options = options;
     this.events.setMaxListeners(100);
   }
 
@@ -145,6 +172,12 @@ export class AgencySession {
   on(event: SessionEventName, cb: () => void): () => void {
     this.events.on(event, cb);
     return () => { this.events.off(event, cb); };
+  }
+
+  /** A video changed status. */
+  onVideo(cb: VideoListener): () => void {
+    this.events.on('video', cb);
+    return () => { this.events.off('video', cb); };
   }
 
   private mounted(): MountedRun {
@@ -226,9 +259,11 @@ export class AgencySession {
       const world = await make();
       const mounted = await mountWorld(world);
       if (world.status === 'running') world.status = 'paused';
+      await this.closeDirector();
       this.run = mounted;
       this.errors = 0;
       this.lastError = null;
+      this.director = await this.openDirector(mounted);
       await this.saveNow();
       return world;
     });
@@ -252,8 +287,28 @@ export class AgencySession {
     await this.lock(async () => {
       if (this.run && this.run.world.status === 'running') this.run.world.status = 'paused';
       await this.saveNow();
+      await this.closeDirector();
     }).catch(() => undefined);
     await flushSaves();
+  }
+
+  /** Dynamic import: a CLI run or a bench never loads video/. A director that cannot open costs the videos, never the run. */
+  private async openDirector(run: MountedRun): Promise<VideoDirectorLike | null> {
+    const onChange: VideoListener = (id, video) => { this.events.emit('video', id, video); };
+    try {
+      if (this.options.director) return await this.options.director(run.paths, onChange);
+      const { openDirector } = await import('../video/index.js');
+      return await openDirector(run.paths, onChange);
+    } catch (err) {
+      console.error(`[video] ${run.world.runId} :`, (err as Error).message);
+      return null;
+    }
+  }
+
+  private async closeDirector(): Promise<void> {
+    const director = this.director;
+    this.director = null;
+    await director?.stop().catch((err: Error) => console.error('[video] arrêt :', err.message));
   }
 
   // ───────────────────────────── ticker ─────────────────────────────
@@ -425,6 +480,12 @@ export class AgencySession {
     } catch (err) {
       console.error(`[sauvegarde] ${run.world.runId} :`, (err as Error).message);
     }
+    // Reads only and never awaits a render: the tick loop pays for a look at the queue.
+    try {
+      this.director?.sync(run.world);
+    } catch (err) {
+      console.error(`[video] ${run.world.runId} :`, (err as Error).message);
+    }
   }
 
   private touch(): void {
@@ -496,17 +557,30 @@ export class AgencySession {
     this.touch();
   }
 
+  /** The founder wants to see this ad: his render goes first. */
+  async requestVideo(creativeId: string, ratio?: AdRatio): Promise<CreativeVideo> {
+    await this.switching;
+    const run = this.mounted();
+    if (!run.world.company.creatives.some((c) => c.id === creativeId)) throw new HttpError(404, `Pub inconnue : ${creativeId}`);
+    if (!this.director) throw new HttpError(503, NO_DIRECTOR);
+    return this.director.request(run.world, creativeId, ratio);
+  }
+
   // ───────────────────────────── reads ─────────────────────────────
+
+  videoIndex(): VideoIndex {
+    return this.director?.index() ?? { level: 'storyboard_only', reason: NO_DIRECTOR, items: {} };
+  }
 
   snapshotJson(god = false): string {
     const run = this.mounted();
-    return snapshotJson(run.world, god, { session: this.info() });
+    return snapshotJson(run.world, god, { session: this.info(), videos: this.videoIndex().items });
   }
 
   /** The snapshot of the live stream: lighter than the one of GET /api/state (see LIVE_LIMITS). */
   liveSnapshotJson(god = false): string {
     const run = this.mounted();
-    return liveSnapshotJson(run.world, god, { session: this.info() });
+    return liveSnapshotJson(run.world, god, { session: this.info(), videos: liveVideos(run.world, this.videoIndex().items) });
   }
 
   tickJson(): string {

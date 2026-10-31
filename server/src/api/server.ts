@@ -8,7 +8,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { basename, extname, join, relative } from 'node:path';
 import { onActivity, repoRoot } from '../core/index.js';
-import type { ApproveResponse, ChatResponse, ControlResponse, MissionResponse, ScenarioConfig, SessionInfo, WorldState } from '../shared.js';
+import type { AdRatio, ApproveResponse, ChatResponse, ControlResponse, CreativeVideo, MissionResponse, ScenarioConfig, SessionInfo, VideoIndex, WorldState } from '../shared.js';
 import { isEntryPoint } from './entry.js';
 import { config, mindModeLabel } from './env.js';
 import {
@@ -39,6 +39,8 @@ export interface SessionLike {
   brainNote(path: string): Promise<unknown | null>;
   brainGraph(): Promise<unknown>;
   listRuns(): Promise<unknown[]>;
+  videoIndex?(): VideoIndex;
+  requestVideo?(creativeId: string, ratio?: AdRatio): Promise<CreativeVideo>;
 }
 
 export interface AgencyServerOptions {
@@ -55,6 +57,8 @@ export interface AgencyServer {
 }
 
 const RUN_PREFIX = '/runs/';
+const VIDEO_RATIOS: readonly unknown[] = ['9:16', '4:5', '1:1', '2:3'] satisfies Exclude<AdRatio, 'text'>[];
+const NO_VIDEOS: VideoIndex = { level: 'storyboard_only', reason: null, items: {} };
 
 /** Raw path of the request (not dot-segment-normalised, so traversal attempts stay visible). */
 function rawPath(req: IncomingMessage): string {
@@ -218,6 +222,17 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           hub.snapshotSoon(true);
           return sendRawJson(res, 200, session.snapshotJson(false));
         }
+        case '/api/videos':
+          if (!isGet) break;
+          return sendJson(res, 200, session.videoIndex?.() ?? NO_VIDEOS);
+        case '/api/videos/render': {
+          if (!isPost) break;
+          const body = await readJsonBody(req);
+          const creativeId = requireText(body.creativeId, 'creativeId', 80);
+          if (body.ratio !== undefined && !VIDEO_RATIOS.includes(body.ratio)) throw new HttpError(400, 'Le champ « ratio » doit valoir 9:16, 4:5, 1:1 ou 2:3.');
+          if (!session.requestVideo) throw new HttpError(503, 'Rendu vidéo indisponible sur ce serveur.');
+          return sendJson(res, 200, await session.requestVideo(creativeId, body.ratio as AdRatio | undefined));
+        }
         default:
           throw new HttpError(404, `Route inconnue : ${method} ${path}`);
       }
@@ -321,6 +336,8 @@ export function unavailableSession(reason: string): SessionLike {
     brainNote: async () => fail(),
     brainGraph: async () => fail(),
     listRuns: async () => fail(),
+    videoIndex: fail,
+    requestVideo: async () => fail(),
   };
 }
 
@@ -370,12 +387,15 @@ export async function startServer(port = config.port): Promise<AgencyServer> {
       brainNote: (p) => live.brainNote(p),
       brainGraph: () => live.brainGraph(),
       listRuns: () => live.listRuns(),
+      videoIndex: () => live.videoIndex(),
+      requestVideo: (id, ratio) => live.requestVideo(id, ratio),
     };
     shutdownSession = () => live.shutdown();
     bindEvents = (hub) => {
       live.on('tick', () => hub.tick());
       live.on('run', () => hub.snapshotSoon(true));
       live.on('state', () => hub.snapshotSoon());
+      live.onVideo((id, video) => hub.video(id, video));
     };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);

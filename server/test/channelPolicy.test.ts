@@ -987,7 +987,7 @@ describe('creatives for a channel (channels §7.5)', () => {
     return { ...l, p, master: addCreative(w, p), agent: officerOf(w, 'growth') };
   }
 
-  it('a Meta cut keeps the script, gets its ratio and a new id, and lands on Meta alone with no file yet', async () => {
+  it('a Meta cut keeps the script, gets its ratio, a new id and its own frames, and lands on Meta alone', async () => {
     const l = await studio(['meta']);
     const { world: w, p, master, agent } = l;
     const before = master.review.status;
@@ -995,7 +995,7 @@ describe('creatives for a channel (channels §7.5)', () => {
     const outcome = await runTask(l, task, agent);
     const cut = w.company.creatives.find((c) => c.id === task.output!.creativeId)!;
     expect(cut.id).not.toBe(master.id);
-    expect(cut).toMatchObject({ masterId: master.id, ratio: '4:5', hook: master.hook, format: master.format, scenes: master.scenes, files: { storyboard: [], preview: null } });
+    expect(cut).toMatchObject({ masterId: master.id, ratio: '4:5', hook: master.hook, format: master.format, scenes: master.scenes, files: { storyboard: [`files/${p.id}/ads/${cut.id}/frame-1.svg`], preview: null } });
     expect(cut.quality?.overall).toBeGreaterThan(0);
     expect(outcome.summary).toMatch(/Facebook & Instagram/);
     expect(cut.channelReviews?.meta?.status).toBe('approved');

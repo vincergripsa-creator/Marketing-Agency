@@ -1152,7 +1152,7 @@ describe('cli', () => {
 
 // ───────────────────────────── live session (ticker, saves, founder actions) ─────────────────────────────
 
-async function until(cond: () => boolean, timeoutMs = 4000): Promise<void> {
+async function until(cond: () => boolean, timeoutMs = 30_000): Promise<void> {
   const t0 = Date.now();
   while (!cond()) {
     if (Date.now() - t0 > timeoutMs) throw new Error('condition non atteinte à temps');

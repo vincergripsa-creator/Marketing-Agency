@@ -1,403 +1,239 @@
 /**
- * Vector infographics for the PDF (pdfkit drawing calls only, no glyph icons):
- * timeline, bar_chart, checklist_card, quote, steps_diagram, icon_grid, do_dont, and the fillable grid.
- * Every visual is laid out first (height known) then drawn, so the caller can keep it on one page.
+ * What the older VisualSpec types look like in a guide: timeline, bar_chart, checklist_card, quote, steps_diagram, icon_grid,
+ * do_dont, and the fillable grid. Flat inks on a `Scene`, hairlines and numerals, no card. Each is laid out first, so its
+ * height is known to `paginate`, then drawn. The types of `diagrams.ts` come first: this file is what a save without them wears.
  */
-import type { VisualSpec } from '../shared.js';
-import { darken, ensureContrast, lighten, mix, readableOn, type Palette } from './color.js';
-import { normalizeKey, sanitizePdfText, type StdFont } from './text.js';
+import type { DesignSpec, InkSet, VisualSpec } from '../shared.js';
+import { ensureContrast, mix } from './color.js';
+import { diagramFor } from './diagrams.js';
+import { advance, sanitizeFor, type FaceName } from './fonts.js';
+import { GRID, wrapWords } from './layout/grid.js';
+import { n, type Scene } from './scene.js';
+import { sanitizePdfText } from './text.js';
+import type { Voice } from './voices.js';
 
 export interface PdfTheme {
-  p: Palette;
-  title: StdFont; body: StdFont; bold: StdFont; italic: StdFont;
-  ink: string; muted: string; primaryInk: string; accentInk: string; line: string; card: string;
+  v: Voice; inks: InkSet;
+  page: string;                 // the body pages' paper, sheets and openers keep inks.paper
+  aText: string; bText: string; // a and b for small text on that paper
+  muted: string; hair: string;
 }
 
-export interface VisualLayout { height: number; draw(x: number, y: number): void }
+export interface VisualLayout { height: number; draw(s: Scene, x: number, y: number): void }
 
-type Doc = PDFKit.PDFDocument;
+const H2 = { size: 19, leading: 21.6 };
+const TEXT = { size: 9.6, leading: 12.8 };
+const TINT = 0.22;
+const NODE = 11;              // radius of a numbered node on a timeline
 
-const NO_BREAK = 10_000; // `height` option: stops pdfkit from ever adding a page inside a measured box
-
-export function measure(doc: Doc, text: string, font: StdFont, size: number, width: number, lineGap = 2): number {
-  if (!text) return 0;
-  doc.font(font).fontSize(size);
-  return doc.heightOfString(text, { width, lineGap });
+export function themeFor(design: DesignSpec, voice: Voice): PdfTheme {
+  const inks = design.inks!;
+  const page = mix(inks.paper, '#ffffff', 0.72);
+  return { v: voice, inks, page, aText: ensureContrast(inks.a, page, 4.5), bText: ensureContrast(inks.b, page, 4.5), muted: mix(inks.ink, page, 0.32), hair: mix(inks.ink, page, 0.68) };
 }
 
-export function put(
-  doc: Doc, text: string, x: number, y: number,
-  o: { font: StdFont; size: number; color: string; width: number; align?: 'left' | 'center' | 'right' | 'justify'; lineGap?: number; spacing?: number },
-): void {
-  if (!text) return;
-  doc.font(o.font).fontSize(o.size).fillColor(o.color)
-    .text(text, x, y, { width: o.width, align: o.align ?? 'left', lineGap: o.lineGap ?? 2, height: NO_BREAK, characterSpacing: o.spacing ?? 0 });
+/** Sanitised for the face it will be set in, wrapped to the box. */
+export const linesOf = (text: string, face: FaceName, size: number, width: number): string[] => wrapWords(sanitizeFor(face, text), face, size, width);
+
+/** Sets lines from the top of their box, first baseline one size below it. Returns the height taken. */
+export function setLines(s: Scene, lines: string[], x: number, top: number, o: { face: FaceName; size: number; leading: number; fill: string; anchor?: 'middle' | 'end' }): number {
+  lines.forEach((l, k) => s.text(l, x, top + o.size + k * o.leading, o.face, o.size, o.fill, o.anchor ? { anchor: o.anchor } : {}));
+  return lines.length * o.leading;
 }
 
-// ───────────────────────────── small vector icons (24×24 box, stroked) ─────────────────────────────
-
-type IconName =
-  | 'clock' | 'heart' | 'check' | 'star' | 'bulb' | 'chat' | 'calendar' | 'shield' | 'leaf' | 'moon' | 'coin' | 'target'
-  | 'people' | 'phone' | 'bolt' | 'book' | 'home' | 'paw' | 'cup' | 'sun' | 'smile' | 'pin';
-
-const ICON_PATHS: Record<IconName, string[]> = {
-  clock: ['M12 3 A9 9 0 1 1 11.99 3Z', 'M12 7 V12 L15.5 14.5'],
-  heart: ['M12 20 C5 15 3 11.5 3 8.5 C3 6 5 4 7.5 4 C9.5 4 11 5.2 12 6.8 C13 5.2 14.5 4 16.5 4 C19 4 21 6 21 8.5 C21 11.5 19 15 12 20Z'],
-  check: ['M12 3 A9 9 0 1 1 11.99 3Z', 'M8 12.5 L11 15.5 L16.5 9'],
-  star: ['M12 3 L14.7 8.6 L20.8 9.4 L16.4 13.6 L17.5 19.7 L12 16.8 L6.5 19.7 L7.6 13.6 L3.2 9.4 L9.3 8.6Z'],
-  bulb: ['M9.5 18 H14.5 M10.5 21 H13.5', 'M12 3 C8.6 3 6 5.6 6 9 C6 11.3 7.3 12.8 8.5 14 C9.2 14.7 9.5 15.4 9.5 16 V18 H14.5 V16 C14.5 15.4 14.8 14.7 15.5 14 C16.7 12.8 18 11.3 18 9 C18 5.6 15.4 3 12 3Z'],
-  chat: ['M4 5 H20 V16 H10.5 L6 20 V16 H4Z', 'M8 9.5 H16 M8 12.5 H13'],
-  calendar: ['M4 6 H20 V20 H4Z', 'M4 10.5 H20 M8.5 3.5 V7.5 M15.5 3.5 V7.5', 'M8 14 H10 M14 14 H16 M8 17 H10'],
-  shield: ['M12 3 L19 6 V11 C19 15.5 16 19 12 21 C8 19 5 15.5 5 11 V6Z', 'M9 12 L11.2 14.2 L15.2 10'],
-  leaf: ['M5 19 C5 10 11 5 20 4 C19 13 14 19 5 19Z', 'M5 19 L13.5 10.5'],
-  moon: ['M19.5 14.5 A8 8 0 1 1 9.5 4.5 A6.5 6.5 0 0 0 19.5 14.5Z'],
-  coin: ['M12 3 A9 9 0 1 1 11.99 3Z', 'M15.3 8.6 A4.6 4.6 0 1 0 15.3 15.4', 'M7.5 11 H13 M7.5 13.4 H12.4'],
-  target: ['M12 3 A9 9 0 1 1 11.99 3Z', 'M12 7 A5 5 0 1 1 11.99 7Z', 'M12 10.5 A1.5 1.5 0 1 1 11.99 10.5Z'],
-  people: ['M9 5 A3 3 0 1 1 8.99 5Z', 'M3.5 19.5 C3.5 16 6 14 9 14 C12 14 14.5 16 14.5 19.5', 'M17 6.5 A2.5 2.5 0 1 1 16.99 6.5Z', 'M15.8 13.7 C18.6 13.5 20.5 15.5 20.5 18.5'],
-  phone: ['M8 3 H16 C16.8 3 17.5 3.7 17.5 4.5 V19.5 C17.5 20.3 16.8 21 16 21 H8 C7.2 21 6.5 20.3 6.5 19.5 V4.5 C6.5 3.7 7.2 3 8 3Z', 'M11 18 H13'],
-  bolt: ['M13 2.5 L5.5 13 H11 L10 21.5 L18.5 10 H13Z'],
-  book: ['M4 5.5 C6.5 4.5 9.5 4.5 12 6.5 C14.5 4.5 17.5 4.5 20 5.5 V19 C17.5 18 14.5 18 12 20 C9.5 18 6.5 18 4 19Z', 'M12 6.5 V20'],
-  home: ['M3.5 11 L12 4 L20.5 11', 'M6 9.5 V20 H18 V9.5', 'M10 20 V14.5 H14 V20'],
-  paw: ['M12 13 C15 13 17.5 16 16.5 18.3 C15.8 19.8 14 19.4 12 19.4 C10 19.4 8.2 19.8 7.5 18.3 C6.5 16 9 13 12 13Z', 'M6.5 9 A1.8 2.2 0 1 1 6.49 9Z', 'M10 6 A1.8 2.2 0 1 1 9.99 6Z', 'M14 6 A1.8 2.2 0 1 1 13.99 6Z', 'M17.5 9 A1.8 2.2 0 1 1 17.49 9Z'],
-  cup: ['M5 9 H16 V14 C16 17 13.5 19 10.5 19 C7.5 19 5 17 5 14Z', 'M16 10.5 H18 C19.4 10.5 20 11.4 20 12.5 C20 13.7 19.1 14.5 18 14.5 H16', 'M8.5 3.5 C8 4.5 9 5.5 8.5 6.5 M12 3.5 C11.5 4.5 12.5 5.5 12 6.5'],
-  sun: ['M12 8 A4 4 0 1 1 11.99 8Z', 'M12 2.5 V4.5 M12 19.5 V21.5 M2.5 12 H4.5 M19.5 12 H21.5 M5.3 5.3 L6.7 6.7 M17.3 17.3 L18.7 18.7 M5.3 18.7 L6.7 17.3 M17.3 6.7 L18.7 5.3'],
-  pin: ['M12 21 C8.2 16.6 5.5 13 5.5 9.6 A6.5 6.5 0 0 1 18.5 9.6 C18.5 13 15.8 16.6 12 21Z', 'M12 7.2 A2.4 2.4 0 1 1 11.99 7.2Z'],
-  smile: ['M12 3 A9 9 0 1 1 11.99 3Z', 'M8.5 14 C9.5 15.5 10.7 16.2 12 16.2 C13.3 16.2 14.5 15.5 15.5 14', 'M9 9.5 V10.2 M15 9.5 V10.2'],
+const mark = (s: Scene, cx: number, cy: number, r: number, color: string): void => {
+  s.path(`M${n(cx - r)} ${n(cy)}L${n(cx - r * 0.3)} ${n(cy + r * 0.7)}L${n(cx + r)} ${n(cy - r * 0.7)}`, undefined, { stroke: color, sw: 1.3, cap: 'round' });
 };
 
-const ICON_KEYWORDS: [IconName, string[]][] = [
-  ['pin', ['voyage', 'vacances', 'valise', 'trajet', 'sortie', 'deplacement', 'lieu']],
-  ['shield', ['rhume', 'malad', 'fievre', 'otite', 'vaccin']],
-  ['smile', ['dent', 'sourire']],
-  ['moon', ['sommeil', 'nuit', 'dormir', 'sieste', 'coucher', 'reveil', 'endorm']],
-  ['clock', ['heure', 'temps', 'minute', 'horaire', 'duree', 'rythme', 'attendre', 'chrono']],
-  ['cup', ['pause', 'cafe', 'boire', 'repas', 'manger', 'biberon', 'tetee', 'gouter', 'collation']],
-  ['calendar', ['jour', 'semaine', 'planning', 'calendrier', 'mois', 'date', 'agenda']],
-  ['chat', ['parler', 'dire', 'communic', 'message', 'mot', 'phrase', 'question', 'echange']],
-  ['people', ['famille', 'parent', 'equipe', 'enfant', 'couple', 'ensemble', 'groupe', 'client']],
-  ['heart', ['calme', 'amour', 'calin', 'tendresse', 'douceur', 'rassur', 'emotion', 'confiance']],
-  ['shield', ['securite', 'proteg', 'risque', 'garantie', 'prudence', 'sur ']],
-  ['coin', ['argent', 'prix', 'euro', 'budget', 'cout', 'econom', 'epargne', 'payer']],
-  ['target', ['objectif', 'but', 'cible', 'priorite', 'resultat']],
-  ['phone', ['ecran', 'telephone', 'appli', 'app ', 'notification', 'smartphone']],
-  ['bolt', ['energie', 'rapide', 'vite', 'motivation', 'boost']],
-  ['book', ['lire', 'livre', 'apprendre', 'histoire', 'lecture', 'cours', 'reviser']],
-  ['home', ['maison', 'chambre', 'piece', 'lit', 'environnement', 'rangement']],
-  ['paw', ['chien', 'chiot', 'chat', 'animal', 'laisse', 'croquette']],
-  ['sun', ['matin', 'lumiere', 'soleil', 'jour ', 'dehors']],
-  ['leaf', ['nature', 'plante', 'bio', 'naturel', 'jardin']],
-  ['bulb', ['astuce', 'idee', 'conseil', 'truc', 'secret']],
-  ['smile', ['bonheur', 'sourire', 'joie', 'plaisir', 'fierte']],
-  ['check', ['ok', 'valid', 'reussi', 'fait', 'termine']],
-];
+const cross = (s: Scene, cx: number, cy: number, r: number, color: string): void => {
+  s.path(`M${n(cx - r)} ${n(cy - r)}L${n(cx + r)} ${n(cy + r)}M${n(cx + r)} ${n(cy - r)}L${n(cx - r)} ${n(cy + r)}`, undefined, { stroke: color, sw: 1.3, cap: 'round' });
+};
 
-const ICON_FALLBACK: IconName[] = ['star', 'bulb', 'check', 'heart', 'target', 'clock'];
-
-export function iconFor(label: string, index: number): IconName {
-  const key = ` ${normalizeKey(label)} `;
-  for (const [icon, words] of ICON_KEYWORDS) if (words.some((w) => key.includes(w))) return icon;
-  return ICON_FALLBACK[index % ICON_FALLBACK.length];
-}
-
-/** Draws a stroked icon centred on (cx, cy) with the given box size. */
-export function drawIcon(doc: Doc, name: IconName, cx: number, cy: number, size: number, color: string, width = 1.8): void {
-  const k = size / 24;
-  doc.save();
-  doc.translate(cx - size / 2, cy - size / 2).scale(k);
-  doc.lineWidth(width / k).lineCap('round').lineJoin('round').strokeColor(color);
-  for (const d of ICON_PATHS[name] ?? ICON_PATHS.star) doc.path(d).stroke();
-  doc.restore();
-}
-
-export function drawCheckMark(doc: Doc, cx: number, cy: number, r: number, bg: string, fg = '#ffffff'): void {
-  doc.save();
-  doc.circle(cx, cy, r).fill(bg);
-  doc.lineWidth(Math.max(1.2, r * 0.28)).lineCap('round').lineJoin('round').strokeColor(fg)
-    .moveTo(cx - r * 0.45, cy + r * 0.02).lineTo(cx - r * 0.1, cy + r * 0.38).lineTo(cx + r * 0.48, cy - r * 0.35).stroke();
-  doc.restore();
-}
-
-export function drawCross(doc: Doc, cx: number, cy: number, r: number, bg: string, fg = '#ffffff'): void {
-  doc.save();
-  doc.circle(cx, cy, r).fill(bg);
-  const a = r * 0.36;
-  doc.lineWidth(Math.max(1.2, r * 0.26)).lineCap('round').strokeColor(fg)
-    .moveTo(cx - a, cy - a).lineTo(cx + a, cy + a).moveTo(cx + a, cy - a).lineTo(cx - a, cy + a).stroke();
-  doc.restore();
-}
-
-export function drawCheckbox(doc: Doc, x: number, y: number, s: number, color: string, checked = false): void {
-  doc.save();
-  doc.lineWidth(1.3).strokeColor(color).roundedRect(x, y, s, s, 2.5).stroke();
-  if (checked) {
-    doc.lineWidth(1.8).lineCap('round').lineJoin('round').strokeColor(color)
-      .moveTo(x + s * 0.22, y + s * 0.52).lineTo(x + s * 0.43, y + s * 0.74).lineTo(x + s * 0.8, y + s * 0.28).stroke();
-  }
-  doc.restore();
-}
-
-function arrow(doc: Doc, x1: number, y: number, x2: number, color: string): void {
-  doc.save();
-  doc.lineWidth(2).strokeColor(color).lineCap('round').moveTo(x1, y).lineTo(x2 - 5, y).stroke();
-  doc.polygon([x2 - 7, y - 4.5], [x2, y], [x2 - 7, y + 4.5]).fill(color);
-  doc.restore();
-}
+/** The box the reader ticks: left empty, the author never ticks it in advance. */
+export const tickBox = (s: Scene, x: number, y: number, size: number, color: string): void => { s.rect(x, y, size, size, undefined, { stroke: color, sw: 0.8 }); };
 
 // ───────────────────────────── frame shared by every visual ─────────────────────────────
 
-const PAD = 16;
-
-function frame(doc: Doc, t: PdfTheme, title: string, width: number, contentH: number, bodyDraw: (x: number, y: number) => void, kind: string): VisualLayout {
-  const titleText = sanitizePdfText(title);
-  const titleH = titleText ? measure(doc, titleText, t.bold, 11.5, width - PAD * 2 - 26) : 0;
-  const head = titleText ? Math.max(18, titleH) + 12 : 0;
-  const height = PAD + head + contentH + PAD;
+/** Title in the section-heading role, then the drawing: the heading of the figure is all the frame it needs. */
+function frame(t: PdfTheme, title: string, width: number, contentH: number, body: (s: Scene, x: number, y: number) => void): VisualLayout {
+  const lines = linesOf(title, t.v.deck, H2.size, width);
+  const head = lines.length ? lines.length * H2.leading + 7.2 : 0;
   return {
-    height,
-    draw(x, y) {
-      doc.save();
-      doc.roundedRect(x, y, width, height, 10).fill(t.card);
-      doc.roundedRect(x, y, width, height, 10).lineWidth(0.8).strokeColor(mix(t.card, t.p.primary, 0.25)).stroke();
-      doc.restore();
-      if (titleText) {
-        doc.save();
-        doc.circle(x + PAD + 9, y + PAD + 9, 9).fill(t.p.primary);
-        doc.restore();
-        drawIcon(doc, kindIcon(kind), x + PAD + 9, y + PAD + 9, 11, readableOn(t.p.primary, t.ink), 2);
-        put(doc, titleText, x + PAD + 26, y + PAD + 2 + (titleH < 18 ? (18 - titleH) / 2 - 2 : 0), { font: t.bold, size: 11.5, color: t.primaryInk, width: width - PAD * 2 - 26 });
-      }
-      bodyDraw(x + PAD, y + PAD + head);
+    height: head + contentH,
+    draw(s, x, y) {
+      setLines(s, lines, x, y, { face: t.v.deck, size: H2.size, leading: H2.leading, fill: t.inks.ink });
+      body(s, x, y + head);
     },
   };
 }
 
-function kindIcon(kind: string): IconName {
-  switch (kind) {
-    case 'timeline': return 'clock';
-    case 'bar_chart': return 'target';
-    case 'checklist_card': return 'check';
-    case 'quote': return 'chat';
-    case 'steps_diagram': return 'bolt';
-    case 'icon_grid': return 'bulb';
-    default: return 'star';
-  }
-}
-
 // ───────────────────────────── the 7 visual types ─────────────────────────────
 
-function timeline(doc: Doc, v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
-  const inner = width - PAD * 2;
-  const size = 9.5;
-  if (labels.length <= 5) {
-    const count = labels.length;
-    const seg = inner / count;
-    const labelW = seg - 8;
-    // « Phase : action » (VisualSpec convention): the phase in bold, the action under it
-    const parts = labels.map((l) => {
-      const m = /^(.{2,32}?)\s*:\s+(.+)$/u.exec(l);
-      return m ? { phase: m[1]!, action: m[2]!.charAt(0).toUpperCase() + m[2]!.slice(1) } : { phase: '', action: l };
-    });
-    const phaseH = parts.map((p) => (p.phase ? measure(doc, p.phase, t.bold, size, labelW) + 2 : 0));
-    const heights = parts.map((p, k) => phaseH[k]! + measure(doc, p.action, t.body, size, labelW));
-    const contentH = 24 + 14 + Math.max(...heights) + 4;
-    return frame(doc, t, v.title, width, contentH, (x, y) => {
-      const lineY = y + 12;
-      const xs = labels.map((_, k) => x + seg * k + seg / 2);
-      doc.save();
-      doc.lineWidth(3).strokeColor(lighten(t.p.primary, 0.55)).moveTo(xs[0], lineY).lineTo(xs[xs.length - 1], lineY).stroke();
-      doc.restore();
-      xs.forEach((cx, k) => {
-        doc.save();
-        doc.circle(cx, lineY, 12).fill(k === xs.length - 1 ? t.p.accent : t.p.primary);
-        doc.restore();
-        const numColor = readableOn(k === xs.length - 1 ? t.p.accent : t.p.primary, t.ink);
-        put(doc, String(k + 1), cx - 12, lineY - 5.5, { font: 'Helvetica-Bold', size: 10, color: numColor, width: 24, align: 'center' });
-        const p = parts[k]!;
-        if (p.phase) put(doc, p.phase, cx - labelW / 2, lineY + 22, { font: t.bold, size, color: t.primaryInk, width: labelW, align: 'center' });
-        put(doc, p.action, cx - labelW / 2, lineY + 22 + phaseH[k]!, { font: t.body, size, color: t.ink, width: labelW, align: 'center' });
-      });
-    }, 'timeline');
-  }
-  // vertical timeline for long sequences
-  const textW = inner - 34;
-  const heights = labels.map((l) => Math.max(16, measure(doc, l, t.body, size + 0.5, textW)));
-  const contentH = heights.reduce((s, h) => s + h + 12, 0);
-  return frame(doc, t, v.title, width, contentH, (x, y) => {
-    let cy = y;
-    const top = y + 8;
-    const bottom = y + contentH - heights[heights.length - 1] - 12 + 8;
-    doc.save();
-    doc.lineWidth(2.5).strokeColor(lighten(t.p.primary, 0.55)).moveTo(x + 10, top).lineTo(x + 10, bottom).stroke();
-    doc.restore();
-    labels.forEach((l, k) => {
-      doc.save();
-      doc.circle(x + 10, cy + 8, 9).fill(k === labels.length - 1 ? t.p.accent : t.p.primary);
-      doc.restore();
-      put(doc, String(k + 1), x + 1, cy + 3.5, { font: 'Helvetica-Bold', size: 8.5, color: readableOn(k === labels.length - 1 ? t.p.accent : t.p.primary, t.ink), width: 18, align: 'center' });
-      put(doc, l, x + 34, cy + 1, { font: t.body, size: size + 0.5, color: t.ink, width: textW });
-      cy += heights[k] + 12;
-    });
-  }, 'timeline');
+/** « Phase : action » (VisualSpec convention): the phase in bold, the action under it. */
+function phaseOf(label: string): { phase: string; action: string } {
+  const m = /^(.{2,32}?)[\s\u00a0]*:\s+(.+)$/u.exec(label);
+  return m ? { phase: m[1]!, action: m[2]!.charAt(0).toUpperCase() + m[2]!.slice(1) } : { phase: '', action: label };
 }
 
-function barChart(doc: Doc, v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
-  const inner = width - PAD * 2;
-  const labelW = Math.min(170, inner * 0.38);
+function timeline(v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
+  const { inks, v: voice } = t;
+  if (labels.length <= 5) {
+    const seg = width / labels.length;
+    const labelW = seg - 8;
+    const parts = labels.map(phaseOf).map((p) => ({ phase: linesOf(p.phase, voice.textB, TEXT.size, labelW), action: linesOf(p.action, voice.text, TEXT.size, labelW) }));
+    const textH = Math.max(...parts.map((p) => (p.phase.length + p.action.length) * TEXT.leading));
+    return frame(t, v.title, width, NODE * 2 + 10.8 + textH, (s, x, y) => {
+      const lineY = y + NODE;
+      const xs = labels.map((_, k) => x + seg * k + seg / 2);
+      s.line(xs[0]!, lineY, xs[xs.length - 1]!, lineY, inks.ink, 0.9);
+      xs.forEach((cx, k) => {
+        const last = k === xs.length - 1;
+        s.circle(cx, lineY, NODE, last ? inks.b : inks.a);
+        s.text(String(k + 1), cx, lineY + 3.8, voice.labelB, 10, last ? inks.ink : inks.paper, { anchor: 'middle' });
+        const p = parts[k]!;
+        const top = lineY + NODE + 10.8;
+        const h = setLines(s, p.phase, cx, top, { face: voice.textB, ...TEXT, fill: inks.ink, anchor: 'middle' });
+        setLines(s, p.action, cx, top + h, { face: voice.text, ...TEXT, fill: inks.ink, anchor: 'middle' });
+      });
+    });
+  }
+  // a long sequence runs down the page
+  const textW = width - 34;
+  const rows = labels.map((l) => linesOf(l, voice.text, TEXT.size, textW));
+  const heights = rows.map((r) => Math.max(21.6, r.length * TEXT.leading + 7.2));
+  const contentH = heights.reduce((a, h) => a + h, 0);
+  return frame(t, v.title, width, contentH, (s, x, y) => {
+    s.line(x + 10, y + 9, x + 10, y + contentH - heights[heights.length - 1]! + 9, inks.ink, 0.9);
+    let cy = y;
+    rows.forEach((r, k) => {
+      const last = k === rows.length - 1;
+      s.circle(x + 10, cy + 9, 9, last ? inks.b : inks.a);
+      s.text(String(k + 1), x + 10, cy + 12.2, voice.labelB, 8.5, last ? inks.ink : inks.paper, { anchor: 'middle' });
+      setLines(s, r, x + 34, cy + 1, { face: voice.text, ...TEXT, fill: inks.ink });
+      cy += heights[k]!;
+    });
+  });
+}
+
+function barChart(v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
+  const { inks, v: voice } = t;
+  const labelW = Math.min(170, width * 0.38);
   const trackX = labelW + 12;
-  const valueW = 40;
-  const trackW = inner - trackX - valueW;
+  const valueW = 34;
+  const trackW = width - trackX - valueW;
   const values = labels.map((_, k) => {
     const raw = Number(v.values?.[k]);
     return Number.isFinite(raw) ? Math.max(0, Math.min(100, raw)) : null;
   });
   const maxV = Math.max(0, ...values.map((x) => x ?? 0));
-  const rows = labels.map((l) => Math.max(16, measure(doc, l, t.body, 9.5, labelW)));
-  const contentH = 14 + rows.reduce((s, h) => s + h + 10, 0);
-  return frame(doc, t, v.title, width, contentH, (x, y) => {
-    // scale ticks
+  const rows = labels.map((l) => linesOf(l, voice.text, TEXT.size, labelW));
+  const heights = rows.map((r) => Math.max(21.6, r.length * TEXT.leading + 7.2));
+  const contentH = 14.4 + heights.reduce((a, h) => a + h, 0);
+  return frame(t, v.title, width, contentH, (s, x, y) => {
     [0, 50, 100].forEach((tick) => {
       const tx = x + trackX + (trackW * tick) / 100;
-      put(doc, `${tick}`, tx - 15, y - 1, { font: t.body, size: 7, color: t.muted, width: 30, align: 'center' });
-      doc.save();
-      doc.lineWidth(0.5).strokeColor(mix(t.card, t.p.primary, 0.25)).dash(2, { space: 3 }).moveTo(tx, y + 10).lineTo(tx, y + contentH - 4).stroke().undash();
-      doc.restore();
+      s.text(String(tick), tx, y + 7, voice.label, 7, t.muted, { anchor: 'middle' });
+      s.line(tx, y + 10, tx, y + contentH, t.hair, 0.5, { dash: [2, 3] });
     });
-    let cy = y + 14;
-    labels.forEach((l, k) => {
-      const h = rows[k];
-      put(doc, l, x, cy + (h > 16 ? 0 : 2), { font: t.body, size: 9.5, color: t.ink, width: labelW });
+    let cy = y + 14.4;
+    rows.forEach((r, k) => {
+      const h = heights[k]!;
+      setLines(s, r, x, cy + (h - r.length * TEXT.leading) / 2 - 1, { face: voice.text, ...TEXT, fill: inks.ink });
       const barY = cy + h / 2 - 6;
-      doc.save();
-      doc.roundedRect(x + trackX, barY, trackW, 12, 6).fill(mix(t.card, t.p.primary, 0.12));
+      s.rect(x + trackX, barY, trackW, 12, inks.c, { op: TINT });
       const val = values[k];
-      if (val !== null && val > 0) {
-        const isMax = val === maxV;
-        const grad = doc.linearGradient(x + trackX, 0, x + trackX + trackW, 0);
-        grad.stop(0, isMax ? t.p.accent : lighten(t.p.primary, 0.25)).stop(1, isMax ? darken(t.p.accent, 0.15) : t.p.primary);
-        doc.roundedRect(x + trackX, barY, Math.max(12, (trackW * val) / 100), 12, 6).fill(grad);
-      }
-      doc.restore();
+      if (val) s.rect(x + trackX, barY, Math.max(2, (trackW * val) / 100), 12, val === maxV ? inks.b : inks.a);
       // values are a 0..100 index (VisualSpec convention), not a percentage of anything
-      put(doc, val === null ? '–' : `${Math.round(val)}`, x + trackX + trackW + 6, barY + 1.5, { font: t.bold, size: 9.5, color: t.primaryInk, width: valueW - 6, align: 'right' });
-      cy += h + 10;
+      s.text(val === null ? '–' : String(Math.round(val ?? 0)), x + width, barY + 9.5, voice.labelB, 9.5, inks.ink, { anchor: 'end' });
+      cy += h;
     });
-  }, 'bar_chart');
+  });
 }
 
-function checklistCard(doc: Doc, v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
-  const inner = width - PAD * 2;
-  const cols = labels.length > 5 && inner > 380 ? 2 : 1;
-  const colW = (inner - (cols - 1) * 16) / cols;
-  const textW = colW - 22;
-  const heights = labels.map((l) => Math.max(13, measure(doc, l, t.body, 10, textW)));
+function checklistCard(v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
+  const { inks, v: voice } = t;
+  const cols = labels.length > 5 ? 2 : 1;
+  const colW = (width - (cols - 1) * GRID.gutter) / cols;
+  const rows = labels.map((l) => linesOf(l, voice.text, TEXT.size + 0.4, colW - 20));
+  const heights = rows.map((r) => Math.max(18, r.length * TEXT.leading + 7.2));
   const perCol = Math.ceil(labels.length / cols);
-  const colHeights = Array.from({ length: cols }, (_, c) => heights.slice(c * perCol, (c + 1) * perCol).reduce((s, h) => s + h + 9, 0));
-  const contentH = Math.max(...colHeights);
-  return frame(doc, t, v.title, width, contentH, (x, y) => {
+  const contentH = Math.max(...Array.from({ length: cols }, (_, c) => heights.slice(c * perCol, (c + 1) * perCol).reduce((a, h) => a + h, 0)));
+  return frame(t, v.title, width, contentH, (s, x, y) => {
     for (let c = 0; c < cols; c++) {
       let cy = y;
       for (let k = c * perCol; k < Math.min(labels.length, (c + 1) * perCol); k++) {
-        drawCheckbox(doc, x + c * (colW + 16), cy, 12, t.p.primary, false); // the reader ticks it, not the author
-        put(doc, labels[k], x + c * (colW + 16) + 22, cy + 0.5, { font: t.body, size: 10, color: t.ink, width: textW });
-        cy += heights[k] + 9;
+        tickBox(s, x + c * (colW + GRID.gutter), cy + 2.5, 9, inks.ink);
+        setLines(s, rows[k]!, x + c * (colW + GRID.gutter) + 20, cy, { face: voice.text, size: TEXT.size + 0.4, leading: TEXT.leading, fill: inks.ink });
+        cy += heights[k]!;
       }
     }
-  }, 'checklist_card');
+  });
 }
 
-function quote(doc: Doc, v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
-  const inner = width - PAD * 2;
-  const text = labels[0] ?? '';
-  const author = labels[1] ?? '';
-  const extra = labels.slice(2);
-  const textW = inner - 60;
-  const textH = measure(doc, text, t.italic, 13, textW, 3);
-  const authorH = author ? measure(doc, author, t.bold, 9.5, textW) + 8 : 0;
-  const extraH = extra.length ? 26 : 0;
-  const contentH = Math.max(40, textH) + authorH + extraH + 6;
-  return frame(doc, t, v.title, width, contentH, (x, y) => {
-    put(doc, '“', x, y - 10, { font: 'Times-Bold', size: 64, color: lighten(t.p.accent, 0.1), width: 50 });
-    put(doc, text, x + 44, y + 2, { font: t.italic, size: 13, color: t.ink, width: textW, lineGap: 3 });
-    let cy = y + Math.max(40, textH) + 6;
-    if (author) {
-      doc.save();
-      doc.rect(x + 44, cy + 5, 18, 1.5).fill(t.p.accent);
-      doc.restore();
-      put(doc, author, x + 68, cy, { font: t.bold, size: 9.5, color: t.muted, width: textW - 24 });
-      cy += authorH;
-    }
-    if (extra.length) {
-      let tx = x + 44;
-      doc.font(t.bold).fontSize(8.5);
-      for (const tag of extra.slice(0, 4)) {
-        const w = doc.widthOfString(tag) + 16;
-        if (tx + w > x + inner) break;
-        doc.save();
-        doc.roundedRect(tx, cy + 4, w, 17, 8.5).fill(mix(t.card, t.p.primary, 0.14));
-        doc.restore();
-        put(doc, tag, tx, cy + 8.5, { font: t.bold, size: 8.5, color: t.primaryInk, width: w, align: 'center' });
-        tx += w + 6;
-      }
-    }
-  }, 'quote');
+function quote(v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
+  const { inks, v: voice } = t;
+  const textW = width - 44;
+  const text = linesOf(`« ${labels[0] ?? ''} »`, voice.displayIt, 14.5, textW);
+  const author = labels[1] ? linesOf(labels[1], voice.label, 8.6, textW) : [];
+  const tags = labels.slice(2, 6).join(' · ');
+  const tagLines = tags ? linesOf(tags, voice.labelB, 8.2, textW) : [];
+  const contentH = text.length * 18 + (author.length ? 7.2 + author.length * 11 : 0) + (tagLines.length ? 7.2 + tagLines.length * 11 : 0) + 7.2;
+  return frame(t, v.title, width, contentH, (s, x, y) => {
+    s.line(x + 8, y + 3.6, x + 8, y + contentH - 7.2, inks.b, 2.4);
+    let cy = y;
+    cy += setLines(s, text, x + 44, cy, { face: voice.displayIt, size: 14.5, leading: 18, fill: t.aText });
+    if (author.length) cy += 7.2 + setLines(s, author, x + 44, cy + 7.2, { face: voice.label, size: 8.6, leading: 11, fill: t.muted });
+    if (tagLines.length) setLines(s, tagLines, x + 44, cy + 7.2, { face: voice.labelB, size: 8.2, leading: 11, fill: inks.ink });
+  });
 }
 
-function stepsDiagram(doc: Doc, v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
-  const inner = width - PAD * 2;
+function stepsDiagram(v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
+  const { inks, v: voice } = t;
   const perRow = labels.length <= 4 ? labels.length : labels.length <= 6 ? 3 : 4;
   const gap = 22;
-  const boxW = (inner - (perRow - 1) * gap) / perRow;
-  const rows: string[][] = [];
-  for (let k = 0; k < labels.length; k += perRow) rows.push(labels.slice(k, k + perRow));
-  const rowHeights = rows.map((r) => Math.max(...r.map((l) => measure(doc, l, t.body, 9.5, boxW - 16))) + 34);
-  const contentH = rowHeights.reduce((s, h) => s + h, 0) + (rows.length - 1) * 18 + 8;
-  return frame(doc, t, v.title, width, contentH, (x, y) => {
-    let cy = y + 8;
-    let idx = 0;
+  const cellW = (width - (perRow - 1) * gap) / perRow;
+  const rows: string[][][] = [];
+  for (let k = 0; k < labels.length; k += perRow) rows.push(labels.slice(k, k + perRow).map((l) => linesOf(l, voice.text, TEXT.size, cellW)));
+  const rowH = rows.map((r) => 27 + Math.max(...r.map((l) => l.length * TEXT.leading)) + 10.8);
+  return frame(t, v.title, width, rowH.reduce((a, h) => a + h, 0), (s, x, y) => {
+    let cy = y;
+    let at = 0;
     rows.forEach((row, r) => {
-      const h = rowHeights[r];
-      row.forEach((l, k) => {
-        const bx = x + k * (boxW + gap);
-        doc.save();
-        doc.roundedRect(bx, cy, boxW, h, 8).fill('#ffffff');
-        doc.roundedRect(bx, cy, boxW, h, 8).lineWidth(1.2).strokeColor(lighten(t.p.primary, 0.35)).stroke();
-        doc.circle(bx + boxW / 2, cy, 11).fill(idx === labels.length - 1 ? t.p.accent : t.p.primary);
-        doc.restore();
-        put(doc, String(idx + 1), bx + boxW / 2 - 11, cy - 5, { font: 'Helvetica-Bold', size: 10, color: readableOn(idx === labels.length - 1 ? t.p.accent : t.p.primary, t.ink), width: 22, align: 'center' });
-        put(doc, l, bx + 8, cy + 17, { font: t.body, size: 9.5, color: t.ink, width: boxW - 16, align: 'center' });
-        if (k < row.length - 1) arrow(doc, bx + boxW + 3, cy + h / 2, bx + boxW + gap - 3, t.p.accent);
-        idx++;
+      row.forEach((lines, k) => {
+        at += 1;
+        const cx = x + k * (cellW + gap);
+        s.line(cx, cy, cx + cellW, cy, inks.ink, 0.9);
+        s.text(String(at), cx, cy + 22, voice.display, 18, at === labels.length ? t.bText : t.aText);
+        if (k < row.length - 1) s.path(`M${n(cx + cellW + 6)} ${n(cy + 12)}l8 4l-8 4Z`, inks.b);
+        setLines(s, lines, cx, cy + 27, { face: voice.text, ...TEXT, fill: inks.ink });
       });
-      cy += h + 18;
+      cy += rowH[r]!;
     });
-  }, 'steps_diagram');
+  });
 }
 
-function iconGrid(doc: Doc, v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
-  const inner = width - PAD * 2;
-  const cols = labels.length <= 4 ? labels.length : labels.length % 4 === 0 ? 4 : 3;
-  const cellW = inner / cols;
-  const rows: string[][] = [];
-  for (let k = 0; k < labels.length; k += cols) rows.push(labels.slice(k, k + cols));
-  const rowHeights = rows.map((r) => 44 + Math.max(...r.map((l) => measure(doc, l, t.body, 9.5, cellW - 14))) + 10);
-  const contentH = rowHeights.reduce((s, h) => s + h, 0);
-  return frame(doc, t, v.title, width, contentH, (x, y) => {
+/** What the old icon grid said, without the keyword lottery of its icons: each label is a cell, a numeral gives it its place. */
+function labelGrid(v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
+  const { inks, v: voice } = t;
+  const cols = labels.length <= 4 ? Math.max(2, labels.length) : labels.length % 4 === 0 ? 4 : 3;
+  const cellW = (width - (cols - 1) * GRID.gutter) / cols;
+  const rows: string[][][] = [];
+  for (let k = 0; k < labels.length; k += cols) rows.push(labels.slice(k, k + cols).map((l) => linesOf(l, voice.text, TEXT.size, cellW)));
+  const rowH = rows.map((r) => 23.4 + Math.max(...r.map((l) => l.length * TEXT.leading)) + 10.8);
+  return frame(t, v.title, width, rowH.reduce((a, h) => a + h, 0), (s, x, y) => {
     let cy = y;
-    let idx = 0;
+    let at = 0;
     rows.forEach((row, r) => {
-      row.forEach((l, k) => {
-        const cx = x + k * cellW + cellW / 2;
-        const tint = [t.p.primary, t.p.accent, t.p.secondary][idx % 3];
-        doc.save();
-        doc.circle(cx, cy + 18, 18).fill(mix('#ffffff', tint, 0.2));
-        doc.restore();
-        drawIcon(doc, iconFor(l, idx), cx, cy + 18, 20, darken(tint, 0.25), 1.9);
-        put(doc, l, cx - cellW / 2 + 7, cy + 44, { font: t.body, size: 9.5, color: t.ink, width: cellW - 14, align: 'center' });
-        idx++;
+      row.forEach((lines, k) => {
+        at += 1;
+        const cx = x + k * (cellW + GRID.gutter);
+        s.line(cx, cy, cx + cellW, cy, inks.ink, 0.5);
+        s.text(String(at).padStart(2, '0'), cx, cy + 16, voice.deck, 11, t.aText);
+        setLines(s, lines, cx, cy + 23.4, { face: voice.text, ...TEXT, fill: inks.ink });
       });
-      cy += rowHeights[r];
+      cy += rowH[r]!;
     });
-  }, 'icon_grid');
+  });
 }
 
 // Symbols may stand alone; words need a separator ("À faire : …") so "Faire la sieste…" stays intact.
@@ -429,40 +265,31 @@ export function splitDoDont(labels: string[], values: number[] = []): { dos: str
   return { dos: clean(dos), donts: clean(donts) };
 }
 
-function doDont(doc: Doc, v: VisualSpec, rawLabels: string[], width: number, t: PdfTheme): VisualLayout {
-  const inner = width - PAD * 2;
+function doDont(v: VisualSpec, rawLabels: string[], width: number, t: PdfTheme): VisualLayout {
+  const { inks, v: voice } = t;
   const split = splitDoDont(rawLabels, v.values);
-  const dos = split.dos.map((l) => sanitizePdfText(l)).filter(Boolean);
-  const donts = split.donts.map((l) => sanitizePdfText(l)).filter(Boolean);
-  const colW = (inner - 14) / 2;
-  const textW = colW - 40;
-  const good = '#2f9e6e';
-  const bad = '#d9534f';
-  const hDo = dos.map((l) => Math.max(14, measure(doc, l, t.body, 9.8, textW)));
-  const hDont = donts.map((l) => Math.max(14, measure(doc, l, t.body, 9.8, textW)));
-  const colH = (hs: number[]) => hs.reduce((s, h) => s + h + 9, 0);
-  const contentH = 34 + Math.max(colH(hDo), colH(hDont), 14) + 10;
-  return frame(doc, t, v.title, width, contentH, (x, y) => {
-    const cols: [string, string[], number[], string, boolean][] = [
-      ['À faire', dos, hDo, good, true],
-      ['À éviter', donts, hDont, bad, false],
-    ];
-    cols.forEach(([label, items, hs, color, isDo], c) => {
-      const cx = x + c * (colW + 14);
-      doc.save();
-      doc.roundedRect(cx, y, colW, contentH, 8).fill(mix('#ffffff', color, 0.07));
-      doc.roundedRect(cx, y, colW, 26, 8).fill(mix('#ffffff', color, 0.18));
-      doc.restore();
-      if (isDo) drawCheckMark(doc, cx + 16, y + 13, 8, color); else drawCross(doc, cx + 16, y + 13, 8, color);
-      put(doc, label.toUpperCase(), cx + 30, y + 8.5, { font: 'Helvetica-Bold', size: 9.5, color: darken(color, 0.25), width: colW - 40, spacing: 1 });
-      let cy = y + 36;
-      items.forEach((it, k) => {
-        if (isDo) drawCheckMark(doc, cx + 16, cy + 6, 5.5, color); else drawCross(doc, cx + 16, cy + 6, 5.5, color);
-        put(doc, it, cx + 28, cy, { font: t.body, size: 9.8, color: t.ink, width: textW + 6 });
-        cy += hs[k] + 9;
+  const colW = (width - GRID.gutter) / 2;
+  const columns = [
+    { label: 'À FAIRE', items: split.dos, color: t.aText, drawMark: mark },
+    { label: 'À ÉVITER', items: split.donts, color: t.bText, drawMark: cross },
+  ].map((c) => {
+    const rows = c.items.map((l) => linesOf(l, voice.text, TEXT.size, colW - 18));
+    return { ...c, rows, heights: rows.map((r) => r.length * TEXT.leading + 7.2) };
+  });
+  const contentH = 21.6 + Math.max(14, ...columns.map((c) => c.heights.reduce((a, h) => a + h, 0)));
+  return frame(t, v.title, width, contentH, (s, x, y) => {
+    columns.forEach((c, k) => {
+      const cx = x + k * (colW + GRID.gutter);
+      s.line(cx, y, cx + colW, y, c.color, 1.6);
+      s.text(c.label, cx, y + 14, voice.labelB, 8.2, c.color, { track: 1.4 });
+      let cy = y + 21.6;
+      c.rows.forEach((r, i) => {
+        c.drawMark(s, cx + 5, cy + 6, 3.4, c.color);
+        setLines(s, r, cx + 18, cy, { face: voice.text, ...TEXT, fill: inks.ink });
+        cy += c.heights[i]!;
       });
     });
-  }, 'do_dont');
+  });
 }
 
 // ───────────────────────────── fillable grid ─────────────────────────────
@@ -471,33 +298,34 @@ const GRID_PAD_X = 6;
 const GRID_PAD_Y = 5;
 const GRID_TEXT = 9;
 const GRID_HEAD = 8.8;
-const GRID_LINE_GAP = 1.5;
+const GRID_LEADING = 11.7;
 /** A line one can really write on with a pen (≈ 8,5 mm); a printed line with a box to tick needs less. */
 export const GRID_WRITE_ROW = 24;
-const GRID_READ_ROW = 22;
+export const GRID_READ_ROW = 22;
 const GRID_BOX = 13;
 
 const TICK_COLUMN = /^(?:fait|fait \?|ok|coché|cochée|à cocher)$/iu;
 
-interface GridRow { label: string; cells: (string | null)[]; h: number; writable: boolean; opensGroup: boolean }
+interface GridRow { label: string[]; cells: (string[] | null)[]; h: number; writable: boolean; opensGroup: boolean }
 
 export interface GridModel {
   rows: GridRow[];
-  /** Height of rows [from, to[ with the header, and the title on the first part. */
-  heightOf(from: number, to: number, withTitle: boolean, extra?: number): number;
+  note: string;
+  /** Height of rows [from, to[ under the header. */
+  heightOf(from: number, to: number, extra?: number): number;
   /** Last row (exclusive) that fits under the header in `room` points, one row at least. */
-  fit(from: number, room: number, withTitle: boolean): number;
+  fit(from: number, room: number): number;
   /** Draws rows [from, to[, each writable row taller by `extra`, and returns the bottom y. */
-  draw(x: number, y: number, from: number, to: number, withTitle: boolean, extra: number): number;
+  draw(s: Scene, x: number, y: number, from: number, to: number, extra: number): number;
 }
 
 /** Share of the width per column: names and tick boxes take what they need, text columns twice the blank ones. */
-export function gridWidths(doc: Doc, columns: string[], labels: string[], boxes: boolean[], filled: boolean[], width: number, t: PdfTheme): number[] {
+export function gridWidths(columns: string[], labels: string[], boxes: boolean[], filled: boolean[], width: number, bold: FaceName): number[] {
   const pad = GRID_PAD_X * 2 + 2;
-  doc.font(t.bold).fontSize(GRID_HEAD);
-  const longestWord = (s: string): number => Math.max(0, ...s.split(/[\s ]+/).map((w) => doc.widthOfString(w)));
+  const wide = (s: string): number => advance(bold, s, GRID_HEAD);
+  const longestWord = (s: string): number => Math.max(0, ...s.split(/[\s\u00a0]+/).map(wide));
   const min = columns.map((c, i) => Math.max(i === 0 ? 46 : 38, longestWord(c) + pad));
-  const widest = Math.max(0, ...labels.map((l) => doc.widthOfString(l)));
+  const widest = Math.max(0, ...labels.map(wide));
   const fixed = columns.map((_, i) => {
     if (boxes[i]) return Math.max(min[i]!, GRID_BOX + pad);
     if (i === 0 && widest > 0) return Math.max(min[0]!, Math.min(widest + pad, width * 0.3));
@@ -520,136 +348,95 @@ export function gridWidths(doc: Doc, columns: string[], labels: string[], boxes:
 }
 
 /** Printable table of a VisualSpec of type `grid`: empty cells to fill by hand, unticked boxes, readable headers. */
-export function gridModel(doc: Doc, v: VisualSpec, width: number, t: PdfTheme): GridModel | null {
+export function gridModel(v: VisualSpec, width: number, t: PdfTheme): GridModel | null {
   const g = v.grid;
-  const columns = (g?.columns ?? []).map((c) => sanitizePdfText(c));
+  const { inks, v: voice } = t;
+  const clean = (s: string | null | undefined): string => sanitizeFor(voice.text, s ?? '');
+  const columns = (g?.columns ?? []).map(clean);
   const rawRows = g?.rows ?? [];
   if (columns.length < 2 || rawRows.length === 0) return null;
-  const labels = rawRows.map((l) => sanitizePdfText(l));
+  const labels = rawRows.map(clean);
   const cellsOf = (r: number): (string | null)[] => columns.slice(1).map((_, c) => {
-    const s = sanitizePdfText(g?.cells?.[r]?.[c] ?? '');
+    const s = clean(g?.cells?.[r]?.[c]);
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : null;
   });
   const grid = rawRows.map((_, r) => cellsOf(r));
   const filled = columns.map((_, i) => i > 0 && grid.some((row) => row[i - 1] !== null));
   const boxes = columns.map((c, i) => i > 0 && TICK_COLUMN.test(c) && !filled[i]);
-  const widths = gridWidths(doc, columns, labels, boxes, filled, width, t);
+  const widths = gridWidths(columns, labels, boxes, filled, width, voice.labelB);
   const textW = (i: number) => widths[i]! - GRID_PAD_X * 2;
 
-  const heads = columns.map((c, i) => measure(doc, c, t.bold, GRID_HEAD, textW(i), GRID_LINE_GAP));
-  const headH = Math.max(...heads) + GRID_PAD_Y * 2;
+  const heads = columns.map((c, i) => wrapWords(c, voice.labelB, GRID_HEAD, textW(i)));
+  const headH = Math.max(...heads.map((h) => h.length)) * GRID_LEADING + GRID_PAD_Y * 2;
   const grouped = labels.some((l) => !l);
   const rows: GridRow[] = grid.map((cells, r) => {
-    const texts = [measure(doc, labels[r]!, t.bold, GRID_TEXT, textW(0), GRID_LINE_GAP), ...cells.map((c, i) => (c ? measure(doc, c, t.body, GRID_TEXT, textW(i + 1), GRID_LINE_GAP) : 0))];
+    const label = wrapWords(labels[r]!, voice.textB, GRID_TEXT, textW(0));
+    const set = cells.map((c, i) => (c ? wrapWords(c, voice.text, GRID_TEXT, textW(i + 1)) : null));
+    const tallest = Math.max(label.length, ...set.map((c) => c?.length ?? 0));
     const writable = cells.some((c, i) => c === null && !boxes[i + 1]) || !labels[r];
-    return {
-      label: labels[r]!, cells, writable,
-      h: Math.max(writable ? GRID_WRITE_ROW : GRID_READ_ROW, Math.max(...texts) + GRID_PAD_Y * 2),
-      opensGroup: grouped && r > 0 && !!labels[r],
-    };
+    return { label, cells: set, writable, h: Math.max(writable ? GRID_WRITE_ROW : GRID_READ_ROW, tallest * GRID_LEADING + GRID_PAD_Y * 2), opensGroup: grouped && r > 0 && !!labels[r] };
   });
-
-  const title = sanitizePdfText(v.title ?? '');
   const note = rows.some((r) => r.writable) ? 'À imprimer et à remplir à la main.' : boxes.some(Boolean) ? 'Cochez chaque ligne une fois faite.' : '';
-  const titleW = width - 26;
-  const titleTextH = title ? measure(doc, title, t.bold, 11.5, titleW) : 0;
-  const noteH = note ? 12 : 0;
-  const titleH = title || note ? Math.max(18, titleTextH) + noteH + 10 : 0;
 
-  const lineColor = mix(t.p.primary, '#ffffff', 0.55);
-  const strongLine = mix(t.p.primary, '#ffffff', 0.2);
-  const headBg = mix('#ffffff', t.p.primary, 0.16);
-  const headInk = ensureContrast(t.primaryInk, headBg, 4.5);
-  const labelBg = mix('#ffffff', t.p.primary, 0.06);
-
-  const rowH = (r: GridRow, extra: number): number => r.h + (r.writable ? extra : 0);
-  const heightOf = (from: number, to: number, withTitle: boolean, extra = 0): number =>
-    (withTitle ? titleH : 0) + headH + rows.slice(from, to).reduce((s, r) => s + rowH(r, extra), 0);
+  // a sheet with nothing to write in spreads its printed rows instead
+  const roomy = (r: GridRow): boolean => r.writable || !rows.some((x) => x.writable);
+  const rowH = (r: GridRow, extra: number): number => r.h + (roomy(r) ? extra : 0);
+  const heightOf = (from: number, to: number, extra = 0): number => headH + rows.slice(from, to).reduce((s, r) => s + rowH(r, extra), 0);
 
   return {
     rows,
+    note,
     heightOf,
-    fit(from, room, withTitle) {
+    fit(from, room) {
       let to = from + 1;
-      while (to < rows.length && heightOf(from, to + 1, withTitle) <= room) to += 1;
+      while (to < rows.length && heightOf(from, to + 1) <= room) to += 1;
       return to;
     },
-    draw(x, y, from, to, withTitle, extra) {
-      let cy = y;
-      if (withTitle && titleH > 0) {
-        if (title) {
-          doc.save();
-          doc.circle(x + 9, cy + 9, 9).fill(t.p.primary);
-          doc.restore();
-          drawIcon(doc, 'calendar', x + 9, cy + 9, 11, readableOn(t.p.primary, t.ink), 2);
-          put(doc, title, x + 26, cy + 2, { font: t.bold, size: 11.5, color: t.primaryInk, width: titleW });
-        }
-        if (note) put(doc, note, x + 26, cy + Math.max(18, titleTextH) + 1, { font: t.italic, size: 8.4, color: t.muted, width: titleW });
-        cy += titleH;
-      }
+    draw(s, x, y, from, to, extra) {
       const xs = widths.reduce<number[]>((acc, w) => [...acc, acc[acc.length - 1]! + w], [x]);
       const part = rows.slice(from, to);
-      const totalH = headH + part.reduce((s, r) => s + rowH(r, extra), 0);
-      // header
-      doc.save();
-      doc.rect(x, cy, width, headH).fill(headBg);
-      doc.restore();
-      columns.forEach((c, i) => {
-        const align = boxes[i] ? 'center' : 'left';
-        put(doc, c, xs[i]! + GRID_PAD_X, cy + (headH - heads[i]!) / 2, { font: t.bold, size: GRID_HEAD, color: headInk, width: textW(i), align, lineGap: GRID_LINE_GAP });
+      const totalH = heightOf(from, to, extra);
+      columns.forEach((_, i) => {
+        setLines(s, heads[i]!, boxes[i] ? xs[i]! + widths[i]! / 2 : xs[i]! + GRID_PAD_X, y + GRID_PAD_Y - 1.5, { face: voice.labelB, size: GRID_HEAD, leading: GRID_LEADING, fill: inks.ink, ...(boxes[i] ? { anchor: 'middle' as const } : {}) });
       });
-      const top = cy;
-      cy += headH;
-      // rows
-      for (const r of part) {
+      let cy = y + headH;
+      s.line(x, cy, x + width, cy, inks.ink, 1.2);
+      part.forEach((r, k) => {
         const h = rowH(r, extra);
-        if (r.label) {
-          doc.save();
-          doc.rect(x, cy, widths[0]!, h).fill(labelBg);
-          doc.restore();
-          put(doc, r.label, x + GRID_PAD_X, cy + GRID_PAD_Y, { font: t.bold, size: GRID_TEXT, color: t.ink, width: textW(0), lineGap: GRID_LINE_GAP });
-        }
+        if (r.label.length) s.rect(x, cy, widths[0]!, h, inks.c, { op: TINT });
+        setLines(s, r.label, x + GRID_PAD_X, cy + GRID_PAD_Y - 1.5, { face: voice.textB, size: GRID_TEXT, leading: GRID_LEADING, fill: inks.ink });
         r.cells.forEach((cell, c) => {
           const i = c + 1;
-          if (boxes[i]) drawCheckbox(doc, xs[i]! + (widths[i]! - GRID_BOX) / 2, cy + (h - GRID_BOX) / 2, GRID_BOX, t.p.primary, false);
-          else if (cell) put(doc, cell, xs[i]! + GRID_PAD_X, cy + GRID_PAD_Y, { font: t.body, size: GRID_TEXT, color: t.ink, width: textW(i), lineGap: GRID_LINE_GAP });
+          if (boxes[i]) tickBox(s, xs[i]! + (widths[i]! - GRID_BOX) / 2, cy + (h - GRID_BOX) / 2, GRID_BOX, inks.ink);
+          else if (cell) setLines(s, cell, xs[i]! + GRID_PAD_X, cy + GRID_PAD_Y - 1.5, { face: voice.text, size: GRID_TEXT, leading: GRID_LEADING, fill: inks.ink });
         });
-        doc.save();
-        doc.lineWidth(r.opensGroup ? 1.2 : 0.7).strokeColor(r.opensGroup ? strongLine : lineColor).moveTo(x, cy).lineTo(x + width, cy).stroke();
-        doc.restore();
         cy += h;
-      }
-      // frame and column rules, drawn last so that no fill covers them
-      doc.save();
-      doc.lineWidth(0.7).strokeColor(lineColor);
-      for (const lx of xs.slice(1, -1)) doc.moveTo(lx, top).lineTo(lx, top + totalH).stroke();
-      doc.lineWidth(1).strokeColor(strongLine).rect(x, top, width, totalH).stroke();
-      doc.moveTo(x, top + headH).lineTo(x + width, top + headH).stroke();
-      doc.restore();
+        const closing = k === part.length - 1 || !!part[k + 1]!.opensGroup;
+        s.line(x, cy, x + width, cy, inks.ink, closing ? 0.9 : 0.3, closing ? {} : { dash: [1, 2.5] });
+      });
+      for (const lx of xs.slice(1, -1)) s.line(lx, y, lx, y + totalH, inks.ink, 0.3);
+      s.line(x, y, x + width, y, inks.ink, 1.2);
       return cy;
     },
   };
 }
 
-/** Lays out a VisualSpec as an infographic card; null when there is nothing to draw. */
-export function layoutVisual(doc: Doc, v: VisualSpec | null | undefined, width: number, t: PdfTheme): VisualLayout | null {
-  if (!v) return null;
-  if (v.type === 'grid') {
-    const m = gridModel(doc, v, width, t);
-    return m && { height: m.heightOf(0, m.rows.length, true), draw: (x, y) => { m.draw(x, y, 0, m.rows.length, true, 0); } };
-  }
+/** Lays out a visual, grid excepted (`gridModel`): its own diagram when it has one, else its older drawing. Null when there is nothing to draw. */
+export function layoutVisual(v: VisualSpec | null | undefined, width: number, t: PdfTheme): VisualLayout | null {
+  if (!v || v.type === 'grid') return null;
+  const diagram = diagramFor(v, width, { voice: t.v, inks: t.inks });
+  if (diagram) return { height: diagram.height, draw: (s, x, y) => { s.place(diagram.scene, x, y); } };
   const raw = (Array.isArray(v.labels) ? v.labels : []).map((l) => String(l ?? '')).filter((l) => sanitizePdfText(l).length > 0).slice(0, 12);
-  const labels = raw.map((l) => sanitizePdfText(l));
+  const labels = raw.map((l) => sanitizeFor(t.v.text, l));
   if (labels.length === 0) return null;
-  const spec: VisualSpec = { ...v, title: sanitizePdfText(v.title ?? ''), values: Array.isArray(v.values) ? v.values : [] };
+  const spec: VisualSpec = { ...v, title: sanitizeFor(t.v.deck, v.title ?? ''), values: Array.isArray(v.values) ? v.values : [] };
   switch (v.type) {
-    case 'timeline': return timeline(doc, spec, labels.slice(0, 8), width, t);
-    case 'bar_chart': return barChart(doc, spec, labels.slice(0, 8), width, t);
-    case 'checklist_card': return checklistCard(doc, spec, labels, width, t);
-    case 'quote': return quote(doc, spec, labels, width, t);
-    case 'steps_diagram': return stepsDiagram(doc, spec, labels.slice(0, 8), width, t);
-    case 'icon_grid': return iconGrid(doc, spec, labels.slice(0, 9), width, t);
-    case 'do_dont': return doDont(doc, spec, raw, width, t);
-    default: return checklistCard(doc, spec, labels, width, t);
+    case 'timeline': return timeline(spec, labels.slice(0, 8), width, t);
+    case 'bar_chart': return barChart(spec, labels.slice(0, 8), width, t);
+    case 'quote': return quote(spec, labels, width, t);
+    case 'steps_diagram': return stepsDiagram(spec, labels.slice(0, 8), width, t);
+    case 'icon_grid': return labelGrid(spec, labels.slice(0, 9), width, t);
+    case 'do_dont': return doDont(spec, labels, width, t);
+    default: return checklistCard(spec, labels, width, t);
   }
 }

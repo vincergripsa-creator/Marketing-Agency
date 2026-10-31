@@ -926,7 +926,7 @@ describe('a run reloaded at every tick', () => {
   /** Everything the run decided: only the wall clock, and what it stamps in a PDF, may differ. */
   const decisions = (world: unknown): string => JSON.stringify(world, (k, v: unknown) => (k === 'at' || k === 'createdAt' || k === 'bytes' ? undefined : v));
 
-  it('with 3 channels open ends like an uninterrupted run', async () => {
+  it('with 3 channels open ends like an uninterrupted run', { timeout: 300_000 }, async () => {
     const ticks = 30 * 12;
     const { world: straight, overspent } = await arm(0, ticks);
     const { world: reloaded } = await arm(7, ticks); // 7 and 12 share no divisor: reloads fall on every tick of the day

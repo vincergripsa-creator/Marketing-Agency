@@ -4,7 +4,7 @@
  */
 import { createHash } from 'node:crypto';
 import { normalizeDesign } from '../deliverables/design.js';
-import type { AdFormat, DesignSpec, HookStyle, VideoCut, WorldState } from '../shared.js';
+import type { AdCreative, AdFormat, DesignSpec, HookStyle, VideoCut, WorldState } from '../shared.js';
 import type { VideoRatio } from './stage.js';
 
 /** Bump it when the same spec should draw another file: every cached video renders again. */
@@ -28,10 +28,24 @@ export interface RenderSpec {
   cover: string | null;        // run-relative
 }
 
+/** These two give PNG cards, not a film (video §3.4). */
+export const stillFormat = (format: AdFormat): boolean => format === 'carousel' || format === 'static_image';
+
+/** A pin has no editor and no cut: `adapt_creative` keeps it null, so the world stays as it is. One slide is what the renderer reads. */
+function stillCut(c: AdCreative): VideoCut {
+  const screen = c.scenes[0]?.onScreenText || c.hook;
+  return {
+    v: 1, tempo: 'standard', sfx: false, craft: 0,
+    beats: [{ kind: 'slide', scene: 0, spoken: '', screen, estSec: 1.8, shots: 1 }],
+    metrics: { estSec: 1.8, hookWordSec: 0, productSec: 0, avgShotSec: 0, kinds: 1, captionWords: 0, endHoldSec: 0 },
+  };
+}
+
 export function buildRenderSpec(world: Readonly<WorldState>, creativeId: string, ratio: VideoRatio, voice: string | null = null): RenderSpec {
   const creative = world.company.creatives.find((c) => c.id === creativeId);
   if (!creative) throw new Error(`no creative ${creativeId}`);
-  if (!creative.cut) throw new Error(`creative ${creativeId} has no cut`);
+  const cut = creative.cut ?? (creative.format === 'static_image' ? stillCut(creative) : null);
+  if (!cut) throw new Error(`creative ${creativeId} has no cut`);
   const product = world.company.products.find((p) => p.id === creative.productId);
   if (!product) throw new Error(`creative ${creativeId}: no product ${creative.productId}`);
   return {
@@ -43,7 +57,7 @@ export function buildRenderSpec(world: Readonly<WorldState>, creativeId: string,
     hook: creative.hook,
     hookStyle: creative.hookStyle,
     cta: creative.cta,
-    cut: creative.cut,
+    cut,
     voice,
     brand: world.company.name,
     title: product.title,

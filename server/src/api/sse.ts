@@ -1,6 +1,6 @@
 /** Server-sent events hub: a light event per tick, throttled full snapshots and activity batches, heartbeats. */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { Activity } from '../shared.js';
+import type { Activity, CreativeVideo } from '../shared.js';
 
 export interface SnapshotSource {
   snapshotJson(god: boolean): string;
@@ -108,6 +108,11 @@ export class SseHub {
       console.error('[sse] tick :', (err as Error).message);
     }
     this.snapshotSoon(newDay);
+  }
+
+  /** A video changed status: one event, at once. The next snapshot carries it too. */
+  video(creativeId: string, video: CreativeVideo): void {
+    this.broadcastRaw(sseFrame(JSON.stringify({ type: 'video', creativeId, video })));
   }
 
   /** Coalesces snapshot broadcasts to at most one per `snapshotMinIntervalMs`. */

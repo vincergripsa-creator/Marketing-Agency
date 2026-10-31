@@ -5,6 +5,7 @@ import { escapeXml, hashString } from './text.js';
 export type Op =
   | { k: 'path'; d: string; fill?: string; stroke?: string; sw?: number; op?: number; cap?: 'round' | 'butt'; dash?: [number, number] }
   | { k: 'clip'; d: string; ops: Op[] }
+  | { k: 'group'; x: number; y: number; ops: Op[] }
   | { k: 'text'; s: string; x: number; y: number; font: FaceName; size: number; fill: string; anchor?: 'start' | 'middle' | 'end'; track?: number; op?: number };
 
 type Stroke = { stroke?: string; sw?: number; op?: number; cap?: 'round' | 'butt'; dash?: [number, number] };
@@ -66,6 +67,12 @@ export class Scene {
     this.ops.push({ k: 'clip', d, ops: inner.ops });
     return this;
   }
+
+  /** Draws another scene with its top-left corner at (x, y): a figure laid out on its own lands on a page as it is. */
+  place(other: Scene, x: number, y: number): this {
+    this.ops.push({ k: 'group', x, y, ops: other.ops });
+    return this;
+  }
 }
 
 /** Left edge of a text op, whatever its anchor. */
@@ -80,6 +87,9 @@ function emitPdf(doc: PDFKit.PDFDocument, ops: Op[]): void {
     doc.save();
     if (o.k === 'clip') {
       doc.path(o.d).clip();
+      emitPdf(doc, o.ops);
+    } else if (o.k === 'group') {
+      doc.translate(o.x, o.y);
       emitPdf(doc, o.ops);
     } else if (o.k === 'text') {
       if (o.op !== undefined) doc.fillOpacity(o.op);
@@ -140,6 +150,7 @@ function emitSvg(ops: Op[], clips: Map<string, string>, num: (v: number) => stri
       clips.set(id, o.d);
       return `<g clip-path="url(#${id})">${emitSvg(o.ops, clips, num, greekBelow)}</g>`;
     }
+    if (o.k === 'group') return `<g transform="translate(${num(o.x)} ${num(o.y)})">${emitSvg(o.ops, clips, num, greekBelow)}</g>`;
     if (o.k === 'path') {
       return `<path d="${o.d}" fill="${o.fill ?? 'none'}"${o.stroke ? ` stroke="${o.stroke}" stroke-width="${o.sw ?? 1}"` : ''}${o.cap ? ` stroke-linecap="${o.cap}"` : ''}${o.dash ? ` stroke-dasharray="${o.dash.join(' ')}"` : ''}${o.op !== undefined ? ` opacity="${o.op}"` : ''}/>`;
     }

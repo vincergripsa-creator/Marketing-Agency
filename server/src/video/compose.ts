@@ -17,10 +17,12 @@ import { drawBonus } from './scenes/bonus.js';
 import { drawEnd } from './scenes/end.js';
 import { drawFact } from './scenes/fact.js';
 import { drawHook } from './scenes/hook.js';
+import { drawNarrator } from './scenes/narrator.js';
 import { drawPain } from './scenes/pain.js';
 import { drawProof } from './scenes/proof.js';
+import { drawSlide } from './scenes/slide.js';
 import { drawTitle } from './scenes/title.js';
-import type { RenderSpec } from './spec.js';
+import { stillFormat, type RenderSpec } from './spec.js';
 import { insideSafe, safeColumn, stageFor, zoneAt, type Rect, type Stage } from './stage.js';
 import { beatAtFrame, eBack, eOut, PUNCH_SEC, settledFrames, type Timeline, type TimelineBeat } from './timeline.js';
 
@@ -91,9 +93,9 @@ interface SceneDef {
   caption?: boolean;
   low?: boolean;               // caption below the bubbles
   noProgress?: boolean;
+  hardCut?: boolean;           // no flash and no punch: a slideshow cuts on the music, video §3.4
 }
 
-// `slide` and `narrator` land in P7.2, which replaces these two lines. Until then a beat of theirs is a plain text card.
 const SCENES: Record<BeatKind, SceneDef> = {
   title_card: { draw: drawTitle, camera: true },
   hook: { draw: drawHook, camera: true },
@@ -101,8 +103,8 @@ const SCENES: Record<BeatKind, SceneDef> = {
   page_proof: { draw: drawProof, caption: true },
   fact_card: { draw: drawFact, camera: true, caption: true },
   bonus_stack: { draw: drawBonus, camera: true, caption: true },
-  narrator: { draw: drawFact, camera: true, caption: true },
-  slide: { draw: drawFact, camera: true },
+  narrator: { draw: drawNarrator, camera: true, caption: true },
+  slide: { draw: drawSlide, camera: true, hardCut: true },
   end_card: { draw: drawEnd, noProgress: true },
 };
 
@@ -204,7 +206,7 @@ export async function loadAssets(spec: RenderSpec, timeline: Timeline, stage: St
   if (guide) {
     try {
       for (const beat of timeline.beats) {
-        const hit = beat.kind === 'page_proof' && beat.proof ? guide.findNeedle(beat.proof.needle) : null;
+        const hit = (beat.kind === 'page_proof' || beat.kind === 'narrator') && beat.proof ? guide.findNeedle(beat.proof.needle) : null;
         if (hit) proofs.set(beat.index, { ...hit, picture: await guide.pageImage(hit.page, Math.max(1, PROOF_SCALE * k)) });
       }
       if (timeline.beats.some((b) => b.kind === 'bonus_stack')) {
@@ -253,6 +255,7 @@ export function createCompositor(timeline: Timeline, stage: Stage, assets: Asset
   const lowCaptionY = Math.min(logical.captionY + LOW_CAPTION, lowest.y1 - 40);
   const shape = SHAPES[SHAPE_OF[assets.spec.design.motif] ?? 'star'];
   const memos = new Map<object, unknown>();
+  const still = stillFormat(assets.spec.format); // a card is a picture: no time passes on it
   let ledger: TextBox[] = [];
   let settling = false;
 
@@ -458,12 +461,12 @@ export function createCompositor(timeline: Timeline, stage: Stage, assets: Asset
     const scene = SCENES[b.kind];
     const shot = b.shotAt.findLastIndex((s) => t >= s);
     const since = t - (b.shotAt[shot] ?? 0);
-    const punch = 1 + PUNCH * (1 - eOut(since / PUNCH_SEC));
+    const punch = scene.hardCut ? 1 : 1 + PUNCH * (1 - eOut(since / PUNCH_SEC));
     const jump = (1 + JUMP * (shot % 2)) * (1 + PUSH * Math.min(since, PUSH_MAX_SEC));
     const camera = (scene.camera ? jump : 1) * punch;
     api.shot = shot; api.since = since; api.jump = jump;
     ledger = [];
-    settling = since < PUNCH_SEC;
+    settling = !scene.hardCut && since < PUNCH_SEC;
     ctx.setTransform(kx, 0, 0, ky, 0, 0);
     ctx.save();
     ctx.translate(camX, camY);
@@ -476,10 +479,10 @@ export function createCompositor(timeline: Timeline, stage: Stage, assets: Asset
     settling = false;
     vignette();
     if (scene.caption) caption(b, t, scene.low ? lowCaptionY : logical.captionY);
-    if (!scene.noProgress) progressBar(at);
+    if (!scene.noProgress && !still) progressBar(at);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(grain, 0, 0);
-    if (t < FLASH_SEC && b.index > 0) {
+    if (t < FLASH_SEC && b.index > 0 && !scene.hardCut) {
       ctx.fillStyle = `rgba(255,255,255,${FLASH * (1 - t / FLASH_SEC)})`;
       ctx.fillRect(0, 0, stage.w, stage.h);
     }

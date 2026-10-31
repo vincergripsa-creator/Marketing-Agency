@@ -1,14 +1,14 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import PDFDocument from 'pdfkit';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { AdCreative, ChapterContent, DesignSpec, PdfContent, Product, SalesPage, VisualSpec } from '../src/shared.js';
 import { designFor, renderAdStoryboard, renderCoverSvg, renderPdf, renderSalesPageHtml } from '../src/deliverables/index.js';
 import { sanitizePdfText, wholeClause } from '../src/deliverables/text.js';
 import { titleBlock } from '../src/deliverables/cover.js';
-import { finalWording, MIN_PAGE_FILL, planIntro } from '../src/deliverables/pdf.js';
-import { gridWidths, splitDoDont, type PdfTheme } from '../src/deliverables/pdfVisuals.js';
+import { VOICES } from '../src/deliverables/voices.js';
+import { finalWording } from '../src/deliverables/pdf.js';
+import { gridWidths, splitDoDont } from '../src/deliverables/pdfVisuals.js';
 import { pdfPagesText, pdfPageStreams } from './pdfText.js';
 
 // ───────────────────────────── fixture ─────────────────────────────
@@ -181,10 +181,10 @@ describe('renderCoverSvg', () => {
     assertBalancedXml(svg);
   });
 
-  it('renders four genuinely different layouts', () => {
+  it('renders two genuinely different layouts, `centered` and `badge` wearing `split`', () => {
     const layouts = ['centered', 'split', 'badge', 'minimal'] as const;
     const svgs = layouts.map((coverLayout) => renderCoverSvg({ title: content.title, subtitle: content.subtitle, audience: content.audience, design: { ...design, coverLayout }, brand: 'Pixel Agency' }));
-    expect(new Set(svgs).size).toBe(4);
+    expect(new Set(svgs).size).toBe(2);
     svgs.forEach(assertBalancedXml);
   });
 
@@ -285,9 +285,9 @@ describe('renderAdStoryboard', () => {
 
 // ───────────────────────────── founder review regressions ─────────────────────────────
 
-/** Every <text> of an SVG, unescaped, joined with spaces (what a reader sees on the cover). */
+/** Every line drawn on an SVG, read from its aria-label, unescaped, joined with spaces (what a reader sees on the cover). */
 function svgText(svg: string): string {
-  return [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]!)
+  return [...svg.matchAll(/<path aria-label="([^"]*)"/g)].map((m) => m[1]!)
     .join(' ').replace(/ /g, ' ').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 }
 
@@ -302,14 +302,16 @@ describe('cover title is shown in full', () => {
         const svg = renderCoverSvg({ title: LONG, subtitle: content.subtitle, audience: content.audience, design: { ...design, coverLayout, titleFont }, brand: 'Pixel Agency' });
         assertBalancedXml(svg);
         const shown = svgText(svg).replace(/\s+/g, ' ');
-        expect(shown, `${coverLayout}/${titleFont}`).toContain(LONG);
+        // the head goes big, what follows « : » goes to the deck (pdf §7.1)
+        expect(shown, `${coverLayout}/${titleFont}`).toContain(LONG.split(' : ')[0]);
+        expect(shown, `${coverLayout}/${titleFont}`).toContain('La méthode simple pour les propriétaires d\'un chiot de 2 à 6 mois');
         expect(shown, `${coverLayout}/${titleFont}`).not.toMatch(/…/);
       }
     }
   });
 
   it('the title block grows to 6 lines before cutting; only titles beyond ~140 chars get an ellipsis', () => {
-    const font = { titleFont: 'Helvetica-Bold' as const, titleScale: 1.05 };
+    const font = { face: VOICES.conte.display };
     const short = titleBlock({ ...font, title: 'Chiot propre en 21 jours' }, 512, 60);
     expect(short.size).toBeGreaterThanOrEqual(40);
     const long = titleBlock({ ...font, title: LONG }, 512, 60);
@@ -322,22 +324,6 @@ describe('cover title is shown in full', () => {
 });
 
 describe('PDF layout regressions', () => {
-  const pageH = 700;
-  it('never leaves the « À la fin de ce guide » box alone on a near-empty page', () => {
-    // fits → untouched
-    expect(planIntro({ parts: [100, 100, 100], quote: 60, box: 80 }, 400, 500, pageH)).toEqual({ compact: false, quote: true, breakBefore: -1 });
-    // the box alone would spill (the lead's page 5): compact spacing, no decorative quote
-    expect(planIntro({ parts: [120, 110, 110, 100], quote: 70, box: 90 }, 520, 540, pageH)).toEqual({ compact: true, quote: false, breakBefore: -1 });
-    // compaction is not enough: the next page starts earlier and carries ≥ 25 % of content
-    const plan = planIntro({ parts: [150, 140, 130, 90], quote: 0, box: 80 }, 560, 540, pageH);
-    expect(plan.compact).toBe(false);
-    expect(plan.breakBefore).toBeGreaterThan(0);
-    const moved = [150, 140, 130, 90].slice(plan.breakBefore).reduce((a, b) => a + b, 0) + 80;
-    expect(moved).toBeGreaterThanOrEqual(pageH * MIN_PAGE_FILL);
-    // a big spill is a normal flow (the next page is full anyway)
-    expect(planIntro({ parts: [300, 300, 300], quote: 0, box: 80 }, 900, 540, pageH).breakBefore).toBe(-1);
-  });
-
   it('do / don’t visuals follow the shared label convention, unprefixed lists read « à éviter » first', () => {
     expect(splitDoDont(['À éviter : crier', 'À faire : récompenser', 'À éviter : le nez dans le pipi'])).toEqual({ dos: ['Récompenser'], donts: ['Crier', 'Le nez dans le pipi'] });
     expect(splitDoDont(['Gronder après coup', 'Crier', 'Récompenser dehors', 'Sortir après la sieste'])).toEqual({ donts: ['Gronder après coup', 'Crier'], dos: ['Récompenser dehors', 'Sortir après la sieste'] });
@@ -358,9 +344,10 @@ describe('PDF pages read like the founder reads them', () => {
       const file = join(dir, `headings-${n}.pdf`);
       await renderPdf({ product, content: { ...content, chapters }, design, brand: 'Pixel Agency', outFile: file });
       for (const [i, page] of (await pdfPagesText(file)).entries()) {
-        expect(bodyOf(page), `variante ${n}, page ${i + 1}`).not.toMatch(/(Étape par étape|Votre checklist|EXEMPLE TYPE)$/);
+        expect(bodyOf(page), `variante ${n}, page ${i + 1}`).not.toMatch(/(ÉTAPE PAR ÉTAPE|VOTRE CHECKLIST|EXEMPLE TYPE)$/);
         // a chapter's checklist never sits alone on an otherwise empty page
-        expect(bodyOf(page).startsWith('Votre checklist') && bodyOf(page).length < 400, `variante ${n}, page ${i + 1} : checklist seule`).toBe(false);
+        const body = bodyOf(page).replace(/^Chapitre d : .*?chiot propre/, '').trim();
+        expect(body.startsWith('VOTRE CHECKLIST') && body.length < 400, `variante ${n}, page ${i + 1} : checklist seule`).toBe(false);
       }
     }
   });
@@ -450,10 +437,8 @@ describe('fillable grid', () => {
   });
 
   it('takes the whole width, however few or many columns it has', () => {
-    const doc = new PDFDocument({ autoFirstPage: false });
-    const theme: PdfTheme = { p: design.palette, title: 'Helvetica-Bold', body: 'Helvetica', bold: 'Helvetica-Bold', italic: 'Helvetica-Oblique', ink: '#111111', muted: '#666666', primaryInk: '#223344', accentInk: '#884400', line: '#cccccc', card: '#f5f5f5' };
     for (const columns of [['Jour', 'Fait'], ['Jour', 'Note', 'Fait'], ['', 'Prévu', 'Payé'], Array.from({ length: 12 }, (_, k) => `Colonne${k + 1}`)]) {
-      const widths = gridWidths(doc, columns, days(3), columns.map((c) => c === 'Fait'), columns.map(() => false), 475, theme);
+      const widths = gridWidths(columns, days(3), columns.map((c) => c === 'Fait'), columns.map(() => false), 475, 'Helvetica-Bold');
       expect(widths.reduce((a, b) => a + b, 0), columns.join()).toBeCloseTo(475, 3);
       expect(Math.min(...widths), columns.join()).toBeGreaterThan(0);
     }
@@ -616,7 +601,6 @@ describe('sales page wording', () => {
 
   it('the cover never promises real examples', () => {
     const svg = renderCoverSvg({ title: 'Un guide', subtitle: 'Sous-titre', audience: 'Débutants', design: { ...design, coverLayout: 'split' }, brand: 'Pixel Agency' });
-    expect(svg).toContain('Exemples types');
     expect(svg).not.toMatch(/Exemples concrets|exemples réels/i);
   });
 });

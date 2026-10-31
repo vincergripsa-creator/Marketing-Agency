@@ -1,9 +1,11 @@
 /**
  * TikTok storyboard: one 9:16 SVG frame per scene (360×640) + a self-contained HTML preview
  * with a phone mockup that plays the scenes with their durations and voice-over subtitles.
+ * The other ratios re-lay the same scenes out on their own frame, plain SVG: no canvas, no ffmpeg, every machine.
  */
-import type { AdCreative, AdRatio, AdScene, DesignSpec, Product } from '../shared.js';
+import { SAFE_ZONES, type AdCreative, type AdRatio, type AdScene, type DesignSpec, type Product } from '../shared.js';
 import { darken, isDark, mix, readableOn, rgba } from './color.js';
+import { renderCoverSvg } from './cover.js';
 import { cssFontStack, normalizeDesign } from './design.js';
 import { placeMotif } from './motifs.js';
 import { escapeHtml as h, escapeXml as x, fitText, formatCount, hashString, n, slugify, stripEmoji, textWidth, truncate, wrapText } from './text.js';
@@ -12,15 +14,34 @@ const W = 360;
 const H = 640;
 const SANS = cssFontStack('Helvetica');
 
+/** What stays clear of the platform's own layer, in the frame's pixels. The master has none here: it is drawn inside a fake app. */
+interface Zone { x0: number; x1: number; y0: number; y1: number }
+
 interface FrameCtx {
   creative: AdCreative; product: Product; d: DesignSpec; brand: string; handle: string;
   scenes: AdScene[]; counts: { likes: number; comments: number; saves: number; shares: number };
+  w: number; h: number; zone: Zone | null;
+}
+
+type CutRatio = Exclude<AdRatio, 'text' | '9:16'>;
+
+const CUT_SAFE = { '4:5': SAFE_ZONES.meta_feed, '1:1': SAFE_ZONES.square, '2:3': SAFE_ZONES.pinterest } as const;
+const CUT_W: Record<CutRatio, number> = { '4:5': 432, '1:1': 540, '2:3': 400 };
+const CUT_PAD = 10;            // inside the zone: a stroke and a font wider than its estimate stay in
+const CUT_TOP = 26;            // the scene count sits above the text
+const CTA_H = 40;
+const COVER_RATIO = 848 / 600;
+
+function cutFrame(ratio: CutRatio): Pick<FrameCtx, 'w' | 'h' | 'zone'> {
+  const { w, h, insets } = CUT_SAFE[ratio];
+  const k = CUT_W[ratio] / w;
+  return { w: CUT_W[ratio], h: Math.round(h * k), zone: { x0: insets.left * k, x1: (w - insets.right) * k, y0: insets.top * k, y1: (h - insets.bottom) * k } };
 }
 
 const FORMAT_LABEL: Record<AdCreative['format'], string> = {
   faceless_voiceover: 'Voix off sans visage',
   text_slideshow: 'Diaporama texte',
-  ugc_avatar: 'Avatar UGC',
+  ugc_avatar: 'Narrateur animé',
   carousel: 'Carrousel',
   static_image: 'Image fixe',
   search_text: 'Annonce Search',
@@ -38,6 +59,9 @@ function durationOf(s: AdScene): number {
 
 function background(c: FrameCtx, i: number, uid: string): string {
   const p = c.d.palette;
+  const { w, h } = c;
+  const kx = w / W;
+  const ky = h / H;
   const variants: [string, string][] = [
     [darken(p.bg, isDark(p.bg) ? 0 : 0.35), darken(p.primary, 0.1)],
     [darken(p.primary, 0.15), mix(p.primary, p.secondary, 0.55)],
@@ -49,22 +73,25 @@ function background(c: FrameCtx, i: number, uid: string): string {
   const coords = [['0', '0', '0', '1'], ['0', '0', '1', '1'], ['1', '0', '0', '1'], ['0', '1', '1', '0']][angle];
   let s = `<linearGradient id="${uid}bg" x1="${coords[0]}" y1="${coords[1]}" x2="${coords[2]}" y2="${coords[3]}"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient>`
     + `<radialGradient id="${uid}vig" cx="0.5" cy="0.45" r="0.75"><stop offset="0.55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.45"/></radialGradient>`;
-  s = `<defs>${s}</defs><rect width="${W}" height="${H}" fill="url(#${uid}bg)"/>`;
+  s = `<defs>${s}</defs><rect width="${w}" height="${h}" fill="url(#${uid}bg)"/>`;
   // decorative blobs that move from scene to scene
-  const bx = [300, 60, 280, 90][i % 4];
-  const by = [120, 520, 560, 140][i % 4];
-  s += `<circle cx="${bx}" cy="${by}" r="150" fill="${p.accent}" opacity="0.13"/><circle cx="${W - bx}" cy="${H - by}" r="100" fill="${p.secondary}" opacity="0.12"/>`;
+  const bx = [300, 60, 280, 90][i % 4] * kx;
+  const by = [120, 520, 560, 140][i % 4] * ky;
+  s += `<circle cx="${n(bx)}" cy="${n(by)}" r="${n(150 * kx)}" fill="${p.accent}" opacity="0.13"/><circle cx="${n(w - bx)}" cy="${n(h - by)}" r="${n(100 * kx)}" fill="${p.secondary}" opacity="0.12"/>`;
   return s;
 }
 
 function art(c: FrameCtx, i: number, uid: string, last: boolean): string {
   const p = c.d.palette;
+  const kx = c.w / W;
+  const ky = c.h / H;
   if (c.creative.format === 'ugc_avatar') {
     // simple creator bust ("talking head" placeholder) in the lower half
     const skin = ['#f2d0b8', '#e0b393', '#c68e6a', '#8d5b3e'][hashString(c.creative.id) % 4];
     const shirt = mix(p.accent, p.primary, 0.3);
     const y0 = last ? 300 : 360;
-    return `<g opacity="0.95"><ellipse cx="180" cy="${y0 + 250}" rx="150" ry="150" fill="${shirt}"/>`
+    const place = c.zone ? ` transform="translate(${n((c.w - W * ky) / 2)} 0) scale(${ky.toFixed(4)})"` : '';
+    return `<g${place} opacity="0.95"><ellipse cx="180" cy="${y0 + 250}" rx="150" ry="150" fill="${shirt}"/>`
       + `<rect x="160" y="${y0 + 70}" width="40" height="44" rx="14" fill="${darken(skin, 0.08)}"/>`
       + `<ellipse cx="180" cy="${y0 + 40}" rx="56" ry="64" fill="${skin}"/>`
       + `<path d="M124 ${y0 + 30} C124 ${y0 - 30} 236 ${y0 - 34} 236 ${y0 + 26} C220 ${y0} 160 ${y0 - 4} 124 ${y0 + 30}Z" fill="${darken(p.ink, 0.2)}"/>`
@@ -78,19 +105,27 @@ function art(c: FrameCtx, i: number, uid: string, last: boolean): string {
     { x: 170, y: 86, s: 190, o: 0.55 },
   ];
   const spot = last ? { x: 196, y: 84, s: 120, o: 0.95 } : spots[i % spots.length];
-  return placeMotif(c.d.motif, p, `${uid}m`, spot.x, spot.y, spot.s, i, spot.o);
+  return placeMotif(c.d.motif, p, `${uid}m`, spot.x * kx, spot.y * ky, spot.s * Math.min(kx, ky), i, spot.o);
+}
+
+/** The master keeps its place left of the fake rail. A cut has no rail: the text takes its zone. */
+function textSlot(c: FrameCtx, i: number, last: boolean): { cx: number; width: number; top: number; anchorY: number } {
+  const narrated = c.creative.format === 'ugc_avatar';
+  if (!c.zone) return { cx: 168, width: 270, top: 96, anchorY: narrated ? (last ? 170 : 200) : i % 2 === 1 ? 228 : 246 };
+  const { x0, x1, y0, y1 } = c.zone;
+  const anchor = narrated ? 0.26 : last ? 0.34 : 0.46;
+  return { cx: (x0 + x1) / 2, width: x1 - x0 - CUT_PAD * 2, top: y0 + CUT_TOP, anchorY: y0 + (y1 - y0) * anchor };
 }
 
 function textBlock(c: FrameCtx, text: string, i: number, last: boolean): string {
   const clean = stripEmoji(text).replace(/\s+/g, ' ').trim();
   if (!clean) return '';
   const pill = c.creative.format === 'text_slideshow' || (c.creative.format === 'carousel' && i === 0);
-  const fit = fitText(clean, { maxWidth: pill ? 250 : 270, maxLines: 6, font: 'Helvetica-Bold', max: i === 0 ? 31 : 27, min: 17, scale: 1.06 });
+  const { cx, width, top: floor, anchorY } = textSlot(c, i, last);
+  const fit = fitText(clean, { maxWidth: pill ? width - 20 : width, maxLines: 6, font: 'Helvetica-Bold', max: i === 0 ? 31 : 27, min: 17, scale: 1.06 });
   const lh = Math.round(fit.size * (pill ? 1.42 : 1.2));
   const blockH = lh * fit.lines.length;
-  const cx = 168;
-  const anchorY = c.creative.format === 'ugc_avatar' ? (last ? 170 : 200) : i % 2 === 1 ? 228 : 246;
-  const top = Math.max(96, anchorY - blockH / 2);
+  const top = Math.max(floor, anchorY - blockH / 2);
   let s = '';
   fit.lines.forEach((line, k) => {
     const baseline = top + k * lh + lh / 2 + fit.size * 0.36;
@@ -189,22 +224,89 @@ function bottom(c: FrameCtx, last: boolean): string {
   return s;
 }
 
+function shade(c: FrameCtx, uid: string): string {
+  const high = Math.round(200 * c.h / H);
+  return `<rect width="${c.w}" height="${c.h}" fill="url(#${uid}vig)"/>`
+    + `<linearGradient id="${uid}sh" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.55"/></linearGradient>`
+    + `<rect x="0" y="${c.h - high}" width="${c.w}" height="${high}" fill="url(#${uid}sh)"/>`;
+}
+
+const uidOf = (c: FrameCtx, i: number): string => `f${hashString(`${c.creative.id}|${i}`).toString(36).slice(0, 5)}`;
+
+function svgFrame(c: FrameCtx, scene: AdScene | undefined, i: number, body: string): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${c.w} ${c.h}" width="${c.w}" height="${c.h}" role="img" aria-label="${x(`Scène ${i + 1} : ${scene?.onScreenText ?? ''}`)}">`
+    + `<title>${x(scene?.onScreenText ?? `Scène ${i + 1}`)}</title>${body}</svg>`;
+}
+
 function renderFrame(c: FrameCtx, i: number, opts: { progress: boolean }): string {
   const scene = c.scenes[i];
   const last = i === c.scenes.length - 1;
-  const uid = `f${hashString(`${c.creative.id}|${i}`).toString(36).slice(0, 5)}`;
+  const uid = uidOf(c, i);
   const body = background(c, i, uid)
     + art(c, i, uid, last)
-    + `<rect width="${W}" height="${H}" fill="url(#${uid}vig)"/>`
-    + `<linearGradient id="${uid}sh" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.55"/></linearGradient>`
-    + `<rect x="0" y="${H - 200}" width="${W}" height="200" fill="url(#${uid}sh)"/>`
+    + shade(c, uid)
     + topBar(c, i, opts.progress)
     + visualCaption(scene)
     + textBlock(c, scene?.onScreenText ?? '', i, last)
     + sideUi(c)
     + bottom(c, last);
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${x(`Scène ${i + 1} : ${scene?.onScreenText ?? ''}`)}">`
-    + `<title>${x(scene?.onScreenText ?? `Scène ${i + 1}`)}</title>${body}</svg>`;
+  return svgFrame(c, scene, i, body);
+}
+
+/** The button of the last frame, in the zone. */
+function ctaPill(c: FrameCtx, zone: Zone, y: number): string {
+  const p = c.d.palette;
+  const said = stripEmoji(c.creative.cta || 'Télécharger le guide').replace(/\s*\([^)]*\)\s*$/, '').replace(/^swipe\b.*?\bet\s+/i, ''); // the last card has nowhere left to swipe to
+  const cta = said.charAt(0).toLocaleUpperCase('fr-FR') + said.slice(1);
+  const width = zone.x1 - zone.x0 - CUT_PAD * 2;
+  const fit = fitText(cta, { maxWidth: width - 28, maxLines: 1, font: 'Helvetica-Bold', max: 16, min: 11, scale: 1.05 });
+  const cx = (zone.x0 + zone.x1) / 2;
+  return `<rect x="${n(cx - width / 2)}" y="${n(y)}" width="${n(width)}" height="${CTA_H}" rx="10" fill="${p.accent}"/>`
+    + `<text x="${n(cx)}" y="${n(y + CTA_H / 2 + fit.size * 0.36)}" font-family="${SANS}" font-size="${fit.size}" font-weight="bold" fill="${readableOn(p.accent)}" text-anchor="middle">${x(fit.lines[0] ?? cta)}</text>`;
+}
+
+/** One scene on a feed: no fake app, no rail, nothing of TikTok. The platform draws its own. */
+function renderCutFrame(c: FrameCtx, i: number): string {
+  const zone = c.zone!;
+  const scene = c.scenes[i];
+  const last = i === c.scenes.length - 1;
+  const uid = uidOf(c, i);
+  const mark = `<text x="${n(zone.x1 - CUT_PAD)}" y="${n(zone.y0 + 14)}" font-family="${SANS}" font-size="12" font-weight="bold" fill="#ffffff" opacity="0.85" text-anchor="end">${i + 1}/${c.scenes.length}</text>`;
+  const end = last ? ctaPill(c, zone, zone.y1 - CTA_H - CUT_PAD) : `<text x="${n(zone.x0 + CUT_PAD)}" y="${n(zone.y1 - CUT_PAD)}" font-family="${SANS}" font-size="12.5" font-weight="bold" fill="#ffffff" opacity="0.9">${x(truncate(stripEmoji(c.product.title || ''), Math.floor((zone.x1 - zone.x0) / 7.5)))}</text>`;
+  return svgFrame(c, scene, i, background(c, i, uid) + art(c, i, uid, last) + shade(c, uid) + mark + textBlock(c, scene?.onScreenText ?? '', i, last) + end);
+}
+
+/** The guide's own cover, as a nested SVG: it stays vector, and a frame is a file of its own, so its ids meet no others. */
+function coverAt(c: FrameCtx, cx: number, cy: number, w: number, tilt: number): string {
+  const brief = c.product;
+  const svg = renderCoverSvg({ title: brief.title, subtitle: brief.content?.subtitle || brief.subtitle || '', audience: brief.audience, design: c.d, brand: c.brand });
+  const h = w * COVER_RATIO;
+  const body = svg.replace(/^<svg\b[^>]*>/, `<svg x="${n(cx - w / 2)}" y="${n(cy - h / 2)}" width="${n(w)}" height="${n(h)}" viewBox="0 0 600 848">`);
+  return `<g transform="rotate(${tilt} ${n(cx)} ${n(cy)})"><rect x="${n(cx - w / 2 + 6)}" y="${n(cy - h / 2 + 8)}" width="${n(w)}" height="${n(h)}" rx="6" fill="#000" opacity="0.35"/>${body}</g>`;
+}
+
+/** `static_image`: one still, the hook over the guide's cover, the button. */
+function renderStaticFrame(c: FrameCtx): string {
+  const zone = c.zone!;
+  const scene = c.scenes[0];
+  const uid = uidOf(c, 0);
+  const high = zone.y1 - zone.y0;
+  const wide = c.w / c.h > 0.9; // on the square the guide moves beside the text
+  const coverW = (zone.x1 - zone.x0) * (wide ? 0.42 : 0.5);
+  const hook = scene?.onScreenText || c.creative.hook;
+  const textZone: Zone = wide ? { ...zone, x1: zone.x1 - coverW } : zone;
+  const fit = fitText(stripEmoji(hook).replace(/\s+/g, ' ').trim(), { maxWidth: textZone.x1 - textZone.x0 - CUT_PAD * 2, maxLines: 5, font: 'Helvetica-Bold', max: 34, min: 18, scale: 1.06 });
+  const lh = Math.round(fit.size * 1.18);
+  const top = zone.y0 + high * (wide ? 0.14 : 0.04);
+  const cx = (textZone.x0 + textZone.x1) / 2;
+  const text = fit.lines.map((line, k) => {
+    const y = top + (k + 1) * lh;
+    return `<text x="${n(cx)}" y="${n(y)}" font-family="${SANS}" font-size="${fit.size}" font-weight="bold" fill="#111111" stroke="#111111" stroke-width="${n(fit.size * 0.2)}" stroke-linejoin="round" text-anchor="middle">${x(line)}</text>`
+      + `<text x="${n(cx)}" y="${n(y)}" font-family="${SANS}" font-size="${fit.size}" font-weight="bold" fill="#ffffff" text-anchor="middle">${x(line)}</text>`;
+  }).join('');
+  const coverY = wide ? zone.y0 + high * 0.42 : zone.y0 + high * 0.66;
+  const body = background(c, 0, uid) + shade(c, uid) + coverAt(c, wide ? zone.x1 - coverW / 2 : (zone.x0 + zone.x1) / 2 + c.w * 0.14, coverY, coverW, 4) + text + ctaPill(c, zone, zone.y1 - CTA_H - CUT_PAD);
+  return svgFrame(c, scene, 0, body);
 }
 
 function previewHtml(c: FrameCtx, frames: string[]): string {
@@ -359,26 +461,37 @@ ol.scenes .dur{flex:none;font-size:11.5px;font-weight:800;color:var(--muted);bac
 `;
 }
 
-/** 9:16 SVG frames (one per scene) + an HTML phone preview that plays them. */
-export function renderAdStoryboard(input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string }): { frames: string[]; previewHtml: string } {
+function frameCtx(input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string }, frame: Pick<FrameCtx, 'w' | 'h' | 'zone'>): FrameCtx {
   const creative = input.creative;
-  const scenes = (creative?.scenes ?? []).filter(Boolean);
   const brand = (input.brand || 'Pixel Agency').trim();
   const seed = hashString(creative?.id || creative?.hook || 'pub');
   const likes = 800 + (seed % 46000);
-  const ctx: FrameCtx = {
+  return {
     creative, product: input.product, d: normalizeDesign(input.design ?? input.product?.design), brand,
     handle: `@${slugify(brand, 24).replace(/-/g, '.')}`,
-    scenes,
+    scenes: (creative?.scenes ?? []).filter(Boolean),
     counts: { likes, comments: Math.round(likes / (18 + (seed % 17))), saves: Math.round(likes / (7 + (seed % 9))), shares: Math.round(likes / (12 + (seed % 11))) },
+    ...frame,
   };
+}
+
+const MASTER_FRAME = { w: W, h: H, zone: null };
+
+/** 9:16 SVG frames (one per scene) + an HTML phone preview that plays them. */
+export function renderAdStoryboard(input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string }): { frames: string[]; previewHtml: string } {
+  const ctx = frameCtx(input, MASTER_FRAME);
+  const { scenes } = ctx;
   const frames = scenes.map((_, i) => renderFrame(ctx, i, { progress: true }));
   const previewFrames = scenes.map((_, i) => renderFrame(ctx, i, { progress: false }));
   return { frames, previewHtml: previewHtml(ctx, previewFrames) };
 }
 
-
-/** Still frames of a non-9:16 cut. No frames until P7.2: the market reads the script (D47). */
-export function renderAdCut(_input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string; ratio: Exclude<AdRatio, 'text'> }): { frames: string[] } {
-  return { frames: [] };
+/** Still frames of a cut: 432×540, 540×540, 400×600, one per scene. A pin is one frame, an ad with no media has none. */
+export function renderAdCut(input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string; ratio: Exclude<AdRatio, 'text'> }): { frames: string[] } {
+  const { ratio } = input;
+  if (input.creative?.format === 'search_text') return { frames: [] };
+  const ctx = frameCtx(input, ratio === '9:16' ? MASTER_FRAME : cutFrame(ratio));
+  if (ratio === '9:16') return { frames: ctx.scenes.map((_, i) => renderFrame(ctx, i, { progress: true })) };
+  if (input.creative?.format === 'static_image') return { frames: ctx.scenes.length ? [renderStaticFrame(ctx)] : [] };
+  return { frames: ctx.scenes.map((_, i) => renderCutFrame(ctx, i)) };
 }
