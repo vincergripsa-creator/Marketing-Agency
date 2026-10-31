@@ -1,16 +1,19 @@
-/** Analyse, Finance, RH and Direction rituals: daily report, A/B experiments, CFO budget, the books, retro, HR review, follow-up. */
-import type { Experiment, Product } from '../../shared.js';
+/** Analyse, Finance, RH and Direction rituals: daily report, A/B experiments, CFO budget and its split between channels, the books, retro, HR review, follow-up. */
+import { CHANNELS, CHANNEL_IDS, channelOf } from '../../shared.js';
+import type { DailyKpi, Experiment, Product } from '../../shared.js';
+import { allocateChannels } from '../allocator.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { addDeliverable, incident, nameOf, say, writeNote } from '../ctx.js';
+import { logDecision } from '../digest.js';
 import { learning, sim } from '../modules.js';
 import { reconcileDay, recordPnl, weeklyPnl } from '../accounting.js';
 import { versionSince } from '../acquisition.js';
-import { activeCampaigns, computeBudget, priceCeiling, productMetrics } from '../metrics.js';
+import { activeCampaigns, computeBudget, paidConversion, priceCeiling, productMetrics } from '../metrics.js';
 import { createTask, isOpen } from '../tasks.js';
 import { followFounderMissions, unblockStaleTasks } from '../missions.js';
 import { officerId } from '../org/officers.js';
 import { PRICE_ARMS } from '../playbook.js';
-import { dec, eur, numOf, pad3, pct, short } from '../util.js';
+import { dec, eur, numOf, pad3, pct, round2, short, sum } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { HOOK_LABELS, FORMAT_LABELS } from './phrases.js';
 
@@ -59,15 +62,18 @@ export function experimentCandidate(ctx: RuntimeCtx): Omit<Experiment, 'id' | 's
     const name = p.title.length > 50 ? `${p.title.slice(0, 49)}…` : p.title;
     const scope = { nicheId: p.nicheId, productId: p.id };
     // Ads, formats and prices are measured on paid traffic: without a campaign, nothing would be learned.
-    if (!activeCampaigns(ctx.world, p.id).length) continue;
-    if (!running(ctx, 'hook_style')) {
+    const paid = activeCampaigns(ctx.world, p.id);
+    if (!paid.length) continue;
+    // Hooks and formats read TikTok's rows alone: CTR levels differ by channel, a mix would reward the channel (channels §5.3).
+    const onTikTok = paid.some((c) => channelOf(c) === 'tiktok');
+    if (onTikTok && !running(ctx, 'hook_style')) {
       const arms = learning.armStats(ctx.world, `hook_style:${p.nicheId}`).filter((a) => a.pulls > 0);
       const v = arms.slice(0, 2).map((a) => a.key);
       if (arms.length >= 2 && !alreadyAnswered(ctx, 'hook_style', v, p.nicheId, p)) {
         return { ...scope, hypothesis: `Sur « ${name} », le hook ${HOOK_LABELS[v[0]!] ?? v[0]} bat le hook ${HOOK_LABELS[v[1]!] ?? v[1]} en CTR`, dimension: 'hook_style', variants: v, metric: 'ctr' };
       }
     }
-    if (!running(ctx, 'ad_format')) {
+    if (onTikTok && !running(ctx, 'ad_format')) {
       const arms = learning.armStats(ctx.world, `ad_format:${p.nicheId}`).filter((a) => a.pulls > 0);
       const v = arms.slice(0, 2).map((a) => a.key);
       if (arms.length >= 2 && !alreadyAnswered(ctx, 'ad_format', v, p.nicheId, p)) {
@@ -81,8 +87,8 @@ export function experimentCandidate(ctx: RuntimeCtx): Omit<Experiment, 'id' | 's
       // Direction from what buyers do: a paid conversion below PRICE_TEST_LOW_CVR says "too expensive" → test one
       // tier lower; otherwise test one tier higher. (Before, only raises were ever tested, so a guide launched
       // above what its buyers pay could never learn to come down.)
-      const m7 = productMetrics(ctx.world, p.id, Math.max(1, ctx.world.day - 6));
-      const cvr = m7.landingViews > 0 ? m7.adPurchases / m7.landingViews : null;
+      const m7 = paidConversion(ctx.world, p.id, Math.max(1, ctx.world.day - 6));
+      const cvr = m7.landingViews > 0 ? m7.purchases / m7.landingViews : null;
       const down = cvr !== null && m7.landingViews >= 120 && cvr < PRICE_TEST_LOW_CVR;
       const other = PRICE_ARMS[down ? Math.max(0, i - 1) : Math.min(PRICE_ARMS.length - 1, i + 1)]!;
       if (other !== cur && (down || Number(other) <= priceCeiling(ctx.world, p).ceiling) && !alreadyAnswered(ctx, 'price', [cur, other], p.nicheId, p)) {
@@ -110,7 +116,7 @@ export function orderVariantCreatives(ctx: RuntimeCtx, e: Experiment): number {
   const w = ctx.world;
   const product = w.company.products.find((p) => p.id === e.productId);
   if (!product) return 0;
-  const running = activeCampaigns(w, product.id);
+  const running = activeCampaigns(w, product.id).filter((c) => channelOf(c) === 'tiktok');
   const liveIds = new Set(running.flatMap((c) => c.creativeIds));
   const live = w.company.creatives.filter((c) => liveIds.has(c.id));
   const covered = new Set(live.map((c) => (e.dimension === 'hook_style' ? c.hookStyle : c.format)));
@@ -122,6 +128,16 @@ export function orderVariantCreatives(ctx: RuntimeCtx, e: Experiment): number {
     createdBy: e.owner, priority: 2,
   });
   return missing.length;
+}
+
+/** The three readings of a day, channel by channel: what the platform says, what the shop saw, what reconciliation keeps. */
+function channelTable(channels: NonNullable<DailyKpi['channels']>): string[] {
+  const roas = (revenue: number, spend: number) => (spend > 0 ? dec(revenue / spend) : '—');
+  const rows = CHANNEL_IDS.flatMap((ch) => {
+    const k = channels[ch];
+    return k ? [`| ${CHANNELS[ch].label} | ${eur(k.spend)} | ${roas(k.claimedRevenue, k.spend)} | ${roas(k.shopRevenue, k.spend)} | ${roas(k.reconciledRevenue, k.spend)} |`] : [];
+  });
+  return ['### Par canal', '| Canal | Dépense | ROAS annoncé | ROAS boutique | ROAS réconcilié |', '|---|---|---|---|---|', ...rows, ''];
 }
 
 export const opsHandlers: HandlerMap = {
@@ -152,6 +168,7 @@ export const opsHandlers: HandlerMap = {
         `| ROAS | ${dec(kpi.roas)} |`, `| CTR | ${pct(kpi.ctr, 2)} |`, `| Conversion page | ${pct(kpi.cvr, 2)} |`, `| CAC | ${eur(kpi.cac)} |`,
         `| Profit cumulé | ${eur(kpi.cumulativeProfit)} |`, `| Trésorerie | ${eur(kpi.cash)} |`, `| Tickets ouverts | ${kpi.openTickets} |`,
         '',
+        ...(kpi.channels ? channelTable(kpi.channels) : []),
         ...(notes.length ? ['### Notes du marché', ...notes.slice(0, 10).map((n) => `- ${n}`), ''] : []),
         'Liens : [[Objectifs]] · [[Playbook Analyse]]',
       ].join('\n');
@@ -218,6 +235,22 @@ export const opsHandlers: HandlerMap = {
         summary: `Enveloppe pub ${eur(b.adCap)}${b.survival ? ' — mode survie' : ''} ; trésorerie ${eur(b.cash)}, ${runway}.`,
         output: { adCap: b.adCap, survival: b.survival, cash: b.cash, runwayDays: b.runwayDays, rate: b.rate, bankrupt: b.bankrupt, outage: b.outage },
       };
+    },
+  },
+
+  allocate_channels: {
+    async run(ctx, task, agent) {
+      const plan = allocateChannels(ctx);
+      const moved = plan.lines.filter((l) => Math.abs(l.target - l.budget) >= 0.5);
+      const placed = round2(sum(plan.lines.map((l) => l.target)));
+      const idle = plan.unspent >= 1 ? `, ${eur(plan.unspent)} non dépensés : aucun canal ne rapporte son euro suivant` : '';
+      const text = `${eur(placed)}/jour sur ${plan.lines.length} ligne(s)${plan.lambda === null ? '' : `, ROAS marginal ${dec(plan.lambda)}`}${idle}`;
+      say(ctx, agent.id, `${agent.name} répartit ${text}`, 'finance');
+      if (moved.length) {
+        const impactEur = round2(sum(moved.map((l) => Math.abs(l.target - l.budget))));
+        logDecision(ctx.world, { kind: 'budget', who: agent.id, text: `${moved.length} ligne(s) déplacée(s) : ${eur(impactEur)}/jour changent de place`, why: text, impactEur });
+      }
+      return { summary: `Répartition : ${text}.`, output: { lambda: plan.lambda, unspent: plan.unspent, lines: plan.lines.length, moved: moved.length } };
     },
   },
 

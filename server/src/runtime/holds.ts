@@ -2,7 +2,7 @@
  * The founder's standing decisions: an order (« coupe toutes les pubs ») holds until he lifts it, a refusal holds for
  * a cooldown. They stay on record once ended: a week without ads because he said so proves nothing about a guide.
  */
-import type { AgentId, FounderHold, WorldState } from '../shared.js';
+import type { AgentId, ChannelId, FounderHold, WorldState } from '../shared.js';
 import { nextId } from '../core/index.js';
 
 /** Days a refused campaign or budget raise is not asked for again. */
@@ -14,9 +14,15 @@ function holdsOf(world: WorldState, kind: FounderHold['kind']): FounderHold[] {
   return (world.company.holds ?? []).filter((h) => h.kind === kind);
 }
 
-/** The hold that stops paid ads: on everything, or on this product. Without a product, only a hold on everything. */
-export function adsHold(world: WorldState, productId: string | null = null): FounderHold | null {
-  return holdsOf(world, 'ads').find((h) => holding(h, world.day) && (h.productId === null || h.productId === productId)) ?? null;
+/** « Coupe Meta » stops Meta alone: a hold without a channel stops all of them. */
+const onChannel = (h: FounderHold, channel: ChannelId): boolean => !h.channel || h.channel === channel;
+
+/**
+ * The hold that stops paid ads on this channel: on everything, or on this product. Without a product, only a hold on
+ * every product. Without a channel, TikTok's: whatever predates the channels runs there.
+ */
+export function adsHold(world: WorldState, productId: string | null = null, channel: ChannelId = 'tiktok'): FounderHold | null {
+  return holdsOf(world, 'ads').find((h) => holding(h, world.day) && (h.productId === null || h.productId === productId) && onChannel(h, channel)) ?? null;
 }
 
 export function advancesHold(world: WorldState): FounderHold | null {
@@ -52,8 +58,8 @@ export function activeHolds(world: WorldState): FounderHold[] {
 }
 
 /** Did a hold stop this product's ads on a day from `from` on? Those days say nothing about its traction. */
-export function adsHeldSince(world: WorldState, productId: string, from: number): boolean {
-  return holdsOf(world, 'ads').some((h) => (h.productId === null || h.productId === productId) && (h.liftedDay ?? h.until ?? world.day) >= from);
+export function adsHeldSince(world: WorldState, productId: string, from: number, channel: ChannelId = 'tiktok'): boolean {
+  return holdsOf(world, 'ads').some((h) => (h.productId === null || h.productId === productId) && onChannel(h, channel) && (h.liftedDay ?? h.until ?? world.day) >= from);
 }
 
 export function addHold(world: WorldState, spec: Omit<FounderHold, 'id' | 'day'>): FounderHold {

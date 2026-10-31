@@ -27,6 +27,9 @@ export function suggestPrice(anchors: readonly number[], competitorPrices: reado
 
 const COMPETITION_PENALTY: Record<TrendSignal['competitionHint'], number> = { faible: 0, moyenne: 12, forte: 26 };
 
+/** How loud a niche is where the company can buy: its best audience once 2 channels are open, TikTok's until then (channels §7.2). */
+const buzzOf = (s: TrendSignal): number => s.bestChannelBuzz ?? s.tiktokBuzz;
+
 /** Buzz is not value (talent §4.6): a better researcher looks at the price a niche pays. No talent = 0 = today. */
 export const valueWeightOf = (t: number | undefined): number => 1.2 * (t ?? 0);
 
@@ -41,7 +44,7 @@ export function heuristicRanking(
   for (const s of input.signals ?? []) {
     if (!s?.nicheId || exclude.has(s.nicheId)) continue;
     const prev = bySignal.get(s.nicheId);
-    if (!prev || s.tiktokBuzz + s.searchInterest > prev.tiktokBuzz + prev.searchInterest) bySignal.set(s.nicheId, s);
+    if (!prev || buzzOf(s) + s.searchInterest > buzzOf(prev) + prev.searchInterest) bySignal.set(s.nicheId, s);
   }
   // niches we only know through voice-of-customer research still deserve a rank
   for (const [id, v] of Object.entries(input.voc ?? {})) {
@@ -52,7 +55,7 @@ export function heuristicRanking(
   const ranked = [...bySignal.values()].map((s) => {
     const comps = (input.competitors ?? {})[s.nicheId] ?? [];
     const voc = input.voc?.[s.nicheId] ? safeVoc(input.voc[s.nicheId], s.nicheId) : null;
-    const demand = 0.55 * clampNum(s.tiktokBuzz, 0, 100, 40) + 0.45 * clampNum(s.searchInterest, 0, 100, 40);
+    const demand = 0.55 * clampNum(buzzOf(s), 0, 100, 40) + 0.45 * clampNum(s.searchInterest, 0, 100, 40);
     const weaknesses = uniqStrings(comps.flatMap((c) => c.weaknesses ?? []));
     const reviews = comps.reduce((a, c) => a + (c.reviews ?? 0), 0);
     const avgRating = comps.length ? comps.reduce((a, c) => a + (c.rating ?? 0), 0) / comps.length : 0;
@@ -82,7 +85,7 @@ export function heuristicRanking(
     const phraseQ = phrase ? clauseLabel(phrase, 60) : null;
     const angle = `Un seul problème : ${lf(problem)}. Une seule personne : ${lf(audience)}.${phraseQ ? ` Le guide parle avec leurs mots (« ${lf(phraseQ)} »).` : ''}`;
     const parts = [
-      `buzz TikTok ${Math.round(s.tiktokBuzz)}/100, intérêt ${Math.round(s.searchInterest)}/100, concurrence ${s.competitionHint}`,
+      `${s.bestChannelBuzz === undefined ? 'buzz TikTok' : 'meilleure audience'} ${Math.round(buzzOf(s))}/100, intérêt ${Math.round(s.searchInterest)}/100, concurrence ${s.competitionHint}`,
       comps.length ? `${comps.length} concurrent${comps.length > 1 ? 's' : ''} (${reviews} avis, note moyenne ${avgRating.toFixed(1).replace('.', ',')})` : 'aucun concurrent repéré',
       weaknesses.length ? `les acheteurs leur reprochent « ${lf(clauseLabel(weaknesses[0]!, 60) ?? fit(weaknesses[0]!, 60))} »` : '',
       voc ? `${voc.pains.length + voc.phrases.length} douleurs et phrases clients récoltées${voc.priceAnchors.length ? `, prix cités autour de ${fmtEur(price)}` : ''}` : 'recherche client à approfondir',

@@ -4,7 +4,8 @@
  * through the research tools, as any employee would: names, audiences, problems and keywords, never the market truth.
  */
 import type { DayPlanItem } from '../contracts.js';
-import type { AgentState, Alumnus, Mission, Product, Task, TaskKind, TrendSignal } from '../shared.js';
+import type { AgentState, Alumnus, ChannelId, Mission, Product, Task, TaskKind, TrendSignal } from '../shared.js';
+import { CHANNEL_IDS, channelOf } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { nameOf, nicheBriefOf, nicheName, productOf, say } from './ctx.js';
 import { nextId } from '../core/index.js';
@@ -208,12 +209,24 @@ export type OrderAction = 'stop_ads' | 'trim_ads' | 'stop_spending' | 'stop_laun
   | 'stop_firing' | 'allow_firing' | 'stop_hiring' | 'resume_hiring' | PersonOrder;
 
 export type FounderOrder =
-  | { action: Exclude<OrderAction, 'trim_ads' | PersonOrder>; product: Product | null }
+  | { action: Exclude<OrderAction, 'trim_ads' | PersonOrder>; product: Product | null; channels?: ChannelId[] } // channels: the ones he named, absent = all of them
   | { action: PersonOrder; agent: AgentState }
   | { action: 'no_target'; asked: OrderAction; topic: string }
   | { action: 'no_agent'; asked: PersonOrder; name: string; left: Alumnus | null };
 
 const ADS_WORD = '(?:pubs?|publicites?|campagnes?|ads|acquisition payante)';
+/** His words for a channel: « Facebook » is the account Meta runs (D59), « Google » alone is Search, YouTube has its own name. */
+const CHANNEL_WORDS: Readonly<Record<string, ChannelId>> = {
+  tiktok: 'tiktok', meta: 'meta', facebook: 'meta', fb: 'meta', instagram: 'meta', insta: 'meta',
+  youtube: 'youtube', shorts: 'youtube', pinterest: 'pinterest', google: 'google', search: 'google', adwords: 'google',
+};
+const CHANNEL_WORD = `(?:${Object.keys(CHANNEL_WORDS).join('|')})`;
+const CHANNEL_NAMED = new RegExp(`\\b${CHANNEL_WORD}\\b`);
+/** The verb's object is the channel, nothing else: « coupe tout sur Meta », « arrête les pubs Facebook », not « coupe les hooks trop longs sur Meta ». */
+const ON_CHANNEL = `(?:[\\s-]+(?:moi|nous|tout|tous|toutes?|le|la|les|nos|mes|sur|de|du|des|en|${ADS_WORD}))*[\\s-]+${CHANNEL_WORD}\\b`;
+/** What comes after one of these is kept: « coupe tout sauf TikTok ». */
+const SPARE_WORD = '(?:sauf|hors|excepte|mais\\s+pas|garde[rsz]?|laisse[rz]?)';
+const SPARED = new RegExp(`\\b${SPARE_WORD}\\b`);
 const PRODUCT_NOUN = '(?:guides?|pdf|produits?|ebooks?|e-books?|livres?|manuels?)';
 const STOP_VERB = '(?:coupe[rz]?|arrete[rz]?|stoppe[rz]?|stop|suspends?|suspendre|suspendez|gele[rz]?|desactive[rz]?|eteins|eteignez|bloque[rz]?)';
 const BACK_VERB = '(?:reprends?|reprenez|reprendre|relance[rz]?|reactive[rz]?|remets?|remettez|remettre|redemarre[rz]?|rallume[rz]?|republie[rz]?|publie[rz]?)';
@@ -222,12 +235,14 @@ const NEAR = '(?:[\\s-]+\\S+){0,4}?[\\s-]+';
 const anyOf = (...patterns: string[]): RegExp => new RegExp(patterns.join('|'));
 
 const STOP_SPENDING = anyOf(`\\bne\\s+depense[zr]?\\s+(?:plus|rien)\\b`, `\\b${STOP_VERB}\\b${NEAR}depens`, `\\b(?:plus|zero|aucune)\\s+(?:de\\s+|d')?depenses?\\b`, `\\bne\\b.*\\bplus\\b\\s+(?:un\\s+)?(?:euro|centime)\\b`);
-const RESUME_ADS = new RegExp(`\\b${BACK_VERB}\\b${NEAR}${ADS_WORD}\\b`);
+const RESUME_ADS = anyOf(`\\b${BACK_VERB}\\b${NEAR}${ADS_WORD}\\b`, `\\b${BACK_VERB}\\b${ON_CHANNEL}`);
 const RESUME_LAUNCHES = new RegExp(`\\b${BACK_VERB}\\b${NEAR}(?:lancements?|nouveaux?\\s+${PRODUCT_NOUN})`);
 const RESUME_ANY = /\b(?:leve[rz]?|annule[rz]?)\b.*\b(?:ordres?|gel|pause|stop|blocages?|interdictions?)\b/;
 const STOP_ADS = anyOf(
   `\\b${STOP_VERB}\\b${NEAR}${ADS_WORD}\\b`, `\\bmets?\\b.*\\b${ADS_WORD}\\b.*\\ben pause\\b`, `\\b(?:mets?|mettez|mettre)\\s+en\\s+pause\\b.*\\b${ADS_WORD}\\b`,
   `\\bpause\\b${NEAR}${ADS_WORD}\\b`, `\\bne\\s+\\S+\\s+(?:plus|pas)\\b${NEAR}${ADS_WORD}\\b`, `^(?:plus|pas|aucune?)\\s+(?:de\\s+|d'|aucune?\\s+)?${ADS_WORD}\\b`,
+  `\\b${STOP_VERB}\\b${ON_CHANNEL}`, `\\bmets?\\b${ON_CHANNEL}\\s+en pause\\b`, `\\b(?:mets?|mettez|mettre)\\s+en\\s+pause\\b${ON_CHANNEL}`,
+  `^(?:plus|pas|aucune?)\\s+(?:de\\s+|d')?${CHANNEL_WORD}\\b`, `\\b${STOP_VERB}\\b${NEAR}${SPARE_WORD}\\s+(?:sur\\s+)?${CHANNEL_WORD}\\b`,
 );
 /** Cutting what loses money is media buying, not an order to stop. */
 const ONLY_LOSERS = /non rentables?|perdantes?|a perte|mauvaises?|fatiguees?|sous (?:un )?roas|qui (?:ne\s+)?(?:perdent|marchent pas|rapportent pas|convertissent pas|vendent pas)/;
@@ -249,8 +264,8 @@ const RAISE_BUDGET = /\b(?:double[rz]?|triple[rz]?|multiplie[rz]?|augmente[rz]?|
 const FIRE_VERB = '(?:vire[rz]?|virons|licencie[rz]?|licencions)'; // not « renvoie »: « renvoie Marie vers le support » fires nobody
 const STAFF_WORD = "(?:d')?(?:embauches?|embaucher|recrutements?|recruter)";
 const CAN = '(?:tu\\s+peux|vous\\s+pouvez|on\\s+peut)\\s+(?:de\\s+nouveau\\s+|a\\s+nouveau\\s+)?';
-/** What follows a verb and is no person: « vire les pubs », « garde le prix », « tu peux virer si besoin ». */
-const NOT_A_NAME = '(?:personne|pas|plus|jamais|moi|nous|le|la|les|l|un|une|des|du|de|d|ce|cet|cette|ces|ca|cela|ceci|tout|tous|toute|toutes|mon|ma|mes|ton|ta|tes|son|sa|ses|notre|nos|votre|vos|leur|leurs|qui|que|quand|si|en|au|aux|a|bien|juste|seulement|maintenant|plutot|desormais|encore)';
+/** What follows a verb and is no person: « vire les pubs », « garde le prix », « garde TikTok », « tu peux virer si besoin ». */
+const NOT_A_NAME = `(?:${Object.keys(CHANNEL_WORDS).join('|')}|personne|pas|plus|jamais|moi|nous|le|la|les|l|un|une|des|du|de|d|ce|cet|cette|ces|ca|cela|ceci|tout|tous|toute|toutes|mon|ma|mes|ton|ta|tes|son|sa|ses|notre|nos|votre|vos|leur|leurs|qui|que|quand|si|en|au|aux|a|bien|juste|seulement|maintenant|plutot|desormais|encore)`;
 /** The person an order names: the word after the verb and its « -moi », captured. */
 const PERSON = `(?:[\\s-]+(?:moi|nous))?[\\s-]+(?!${NOT_A_NAME}\\b)([a-z0-9][a-z0-9'-]*)`;
 
@@ -291,8 +306,8 @@ function teamOrder(t: string, asking: boolean): OrderAction | null {
 
 /** Money and products. */
 function moneyOrder(t: string): OrderAction | null {
-  if (STOP_SPENDING.test(t) && !/inutiles?|superflues?/.test(t)) return 'stop_spending';
-  if (RESUME_ANY.test(t)) return new RegExp(ADS_WORD).test(t) ? 'resume_ads' : /lancement|guide/.test(t) ? 'resume_launches' : 'resume_all';
+  if (STOP_SPENDING.test(t) && !/inutiles?|superflues?/.test(t)) return CHANNEL_NAMED.test(t) ? 'stop_ads' : 'stop_spending';
+  if (RESUME_ANY.test(t)) return new RegExp(ADS_WORD).test(t) || CHANNEL_NAMED.test(t) ? 'resume_ads' : /lancement|guide/.test(t) ? 'resume_launches' : 'resume_all';
   if (RESUME_ADS.test(t)) return 'resume_ads';
   if (RESUME_LAUNCHES.test(t)) return 'resume_launches';
   if (STOP_ADS.test(t)) return ONLY_LOSERS.test(t) ? 'trim_ads' : 'stop_ads';
@@ -343,9 +358,21 @@ const ORDER_WORDS = new Set(`arrete arreter arretez stoppe stopper stop coupe co
   catalogue ligne hors remets remettre remettez reprends reprendre reprenez relance relancer reactive redemarre rallume republie publie publier leve annule definitivement
   depense depenser lancer lance lancement double triple multiplie augmente monte booste budget`.split(/\s+/).map((w) => canon(stemOf(w))));
 
+const CHANNEL_STEMS = new Set(Object.keys(CHANNEL_WORDS).map(stemOf));
+
+const channelWordsIn = (t: string): ChannelId[] => uniq([...t.matchAll(new RegExp(CHANNEL_NAMED, 'g'))].map((m) => CHANNEL_WORDS[m[0]]!));
+
+/** The channels an order is about, [] for all of them. « coupe tout sauf TikTok » names every other one, opened or not: he said so. */
+function channelsIn(text: string): ChannelId[] {
+  const [said = '', ...rest] = fold(text).split(SPARED);
+  const spared = channelWordsIn(rest.join(' '));
+  const named = channelWordsIn(said).filter((ch) => !spared.includes(ch));
+  return named.length || !spared.length ? named : CHANNEL_IDS.filter((ch) => !spared.includes(ch));
+}
+
 /** The product an order speaks of: the one of the niche it names, else, for a product order, the only one there is. */
 function orderTarget(ctx: RuntimeCtx, text: string): { product: Product | null; topic: string } {
-  const about = topicOf(text, true).filter((w) => !OPERATIONS.has(w) && !ORDER_WORDS.has(w));
+  const about = topicOf(text, true).filter((w) => !OPERATIONS.has(w) && !ORDER_WORDS.has(w) && !CHANNEL_STEMS.has(w));
   if (!about.length) return { product: null, topic: '' };
   const named = scored(visibleNiches(ctx, trendQuery(text, about)), about).filter((s) => s.strongHits > 0);
   for (const n of named) {
@@ -394,7 +421,8 @@ function readOrder(ctx: RuntimeCtx, { action, text }: SaidOrder): FounderOrder |
     case 'stop_ads': case 'resume_ads': {
       const { product, topic } = orderTarget(ctx, text);
       if (action === 'resume_ads' && !holds.some((h) => h.kind === 'ads')) return null;
-      return topic ? { action: 'no_target', asked: action, topic } : { action, product };
+      const channels = channelsIn(text);
+      return topic ? { action: 'no_target', asked: action, topic } : { action, product, ...(channels.length ? { channels } : {}) };
     }
     case 'pause_product': case 'kill_product': case 'resume_product': {
       const { product, topic } = orderTarget(ctx, text);
@@ -414,7 +442,7 @@ function readOrder(ctx: RuntimeCtx, { action, text }: SaidOrder): FounderOrder |
 
 /** Ad work the founder himself stopped is not started again behind his back: he lifts his order first. */
 function respectHolds(ctx: RuntimeCtx, route: Extract<MissionRoute, { kind: 'tasks' }>): MissionRoute {
-  const heldBy = (it: DayPlanItem) => (PAID_AD_TASKS.includes(it.kind) ? adsHold(ctx.world, str(it.input.productId) ?? null) : null);
+  const heldBy = (it: DayPlanItem) => (PAID_AD_TASKS.includes(it.kind) ? adsHold(ctx.world, str(it.input.productId) ?? null, channelOf(it.input as { channel?: ChannelId })) : null);
   const free = route.items.filter((it) => !heldBy(it));
   if (free.length === route.items.length) return route;
   return free.length ? { ...route, items: free } : { kind: 'held', reason: heldBy(route.items[0]!)!.reason };
@@ -424,7 +452,8 @@ export function routeMission(ctx: RuntimeCtx, text: string, items: DayPlanItem[]
   const read = ordersIn(text).map((said) => readOrder(ctx, said));
   const orders = read.filter((o): o is FounderOrder => !!o && o !== 'trim_ads');
   if (read.includes('trim_ads')) {
-    const route = tasksRoute(ctx, [{ kind: 'optimize_ads', title: KIND_META.optimize_ads.label, dept: KIND_META.optimize_ads.dept, priority: 1, input: {}, why: `Le fondateur a demandé : « ${short(text, 120)} »` }], false, null);
+    const [channel] = channelsIn(text);
+    const route = tasksRoute(ctx, [{ kind: 'optimize_ads', title: KIND_META.optimize_ads.label, dept: KIND_META.optimize_ads.dept, priority: 1, input: channel ? { channel } : {}, why: `Le fondateur a demandé : « ${short(text, 120)} »` }], false, null);
     return orders.length ? { ...route, orders } : route;
   }
   if (orders.length) return { kind: 'order', orders };

@@ -1,8 +1,9 @@
 /** A/B experiments: results recomputed from world data, concluded on sample size or after 7 days. */
-import type { Experiment, WorldState } from '../shared.js';
+import type { ChannelId, Experiment, WorldState } from '../shared.js';
+import { channelOf } from '../shared.js';
 import { emit, nextId } from '../core/index.js';
 import { nearestArm } from './bandits.js';
-import { addRow, adRows, emptyAgg, indexWorld, priceOnDay, productOfRow, type FunnelAgg } from './data.js';
+import { addRow, adRows, emptyAgg, indexWorld, onReference, priceOnDay, productOfRow, referenceChannels, type FunnelAgg } from './data.js';
 import { fold, round, safeDiv, unique } from './text.js';
 
 export const EXPERIMENT_MAX_DAYS = 7;
@@ -133,6 +134,16 @@ export function replyRecords(world: WorldState, fromDay: number, toDay: number):
   return out;
 }
 
+/**
+ * Which rows and orders an experiment reads (channels §5.3). A price or a promise is measured on its product's reference
+ * channel, or a shift in the mix would pass for its effect; anything else on TikTok's, where CTR levels can be compared.
+ */
+function experimentBasis(world: WorldState, e: Pick<Experiment, 'dimension'>): (productId: string | undefined, x: { channel?: ChannelId }) => boolean {
+  if (e.dimension !== 'price' && e.dimension !== 'sales_hype') return (_, x) => channelOf(x) === 'tiktok';
+  const refs = referenceChannels(world, world.day);
+  return (productId, x) => onReference(refs, productId ?? '', x);
+}
+
 /** Recomputes the results of one experiment from world data (days e.day..world.day, its niche only). */
 export function computeExperimentResults(world: WorldState, e: Experiment): Record<string, { n: number; value: number }> {
   const results: Record<string, { n: number; value: number }> = {};
@@ -154,9 +165,10 @@ export function computeExperimentResults(world: WorldState, e: Experiment): Reco
   const inScope = (p: { nicheId: string } | undefined): boolean => !nicheId || p?.nicheId === nicheId;
   const aggs = new Map<string, VariantAgg>(e.variants.map((v) => [v, emptyVariant()]));
   const duelId = e.dimension === 'agent_duel' ? world.company.league?.duels.find((d) => d.experimentId === e.id)?.id : undefined;
+  const onBasis = experimentBasis(world, e);
   for (const r of adRows(world, e.day, world.day)) {
     const product = productOfRow(ix, r);
-    if (!inScope(product)) continue;
+    if (!inScope(product) || !onBasis(product?.id, r)) continue;
     let key: string | null = null;
     if (e.dimension === 'hook_style') key = ix.creatives.get(r.creativeId)?.hookStyle ?? null;
     else if (e.dimension === 'ad_format') key = ix.creatives.get(r.creativeId)?.format ?? null;
@@ -168,7 +180,7 @@ export function computeExperimentResults(world: WorldState, e: Experiment): Reco
     if (agg) addRow(agg, r);
   }
   for (const o of world.market?.orders ?? []) {
-    if (o.day < e.day || o.day > world.day || !inScope(ix.products.get(o.productId))) continue;
+    if (o.day < e.day || o.day > world.day || !inScope(ix.products.get(o.productId)) || !onBasis(o.productId, o)) continue;
     const key = variantOfOrder(e, ix, o.productId, o.price);
     const agg = key ? aggs.get(key) : undefined;
     if (!agg) continue;

@@ -2,10 +2,12 @@
  * Observable metrics the managers reason with (ads stats, orders, inbox) and the CFO's daily budget.
  * Only reads data the company can legitimately see — never the market's hidden truth.
  */
-import type { Campaign, DailyAdStats, Product, WorldState } from '../shared.js';
+import { CHANNEL_IDS, channelOf } from '../shared.js';
+import type { Campaign, ChannelId, DailyAdStats, Product, WorldState } from '../shared.js';
 import { sim } from './modules.js';
 import { ORG } from './org/constants.js';
 import { payrollToday, SURVIVAL_CASH } from './org/payroll.js';
+import { growthOn } from './stages.js';
 import { median, round2, sum, strArr } from './util.js';
 
 export interface WindowMetrics {
@@ -129,6 +131,29 @@ export const MARKET_PRICE_MARGIN = 1.25;
 
 export interface PriceTier { price: number; views: number; revenue: number; rpv: number }
 
+/** Days a product's reference channel is read on. */
+const REFERENCE_DAYS = 14;
+
+/**
+ * The channel a product's price is read on: most landing views in 14 days. Intent differs by channel, so a mix shift
+ * would otherwise look like a price effect (channels §5.3). TikTok when nothing ran, and always with TikTok alone.
+ */
+export function referenceChannel(world: WorldState, productId: string): ChannelId {
+  const views = new Map<ChannelId, number>();
+  for (const s of world.market.adStats) {
+    if (s.productId === productId && s.day > world.day - REFERENCE_DAYS) views.set(channelOf(s), (views.get(channelOf(s)) ?? 0) + s.landingViews);
+  }
+  return CHANNEL_IDS.reduce<ChannelId>((best, ch) => ((views.get(ch) ?? 0) > (views.get(best) ?? 0) ? ch : best), 'tiktok');
+}
+
+/** Landing views and purchases of a product on its reference channel from `sinceDay`, announced outage days out. */
+export function paidConversion(world: WorldState, productId: string, sinceDay: number): { landingViews: number; purchases: number } {
+  const outage = sim.announcedOutageDays(world);
+  const channel = referenceChannel(world, productId);
+  const rows = world.market.adStats.filter((s) => s.productId === productId && s.day >= sinceDay && channelOf(s) === channel && !outage.includes(s.day));
+  return { landingViews: sum(rows.map((s) => s.landingViews)), purchases: sum(rows.map((s) => s.purchases)) };
+}
+
 /** What each price really earned per paid visitor (the price of a day = the last one set on or before it). */
 export function priceTiers(world: WorldState, p: Product): PriceTier[] {
   const priceOn = (day: number): number => {
@@ -137,8 +162,9 @@ export function priceTiers(world: WorldState, p: Product): PriceTier[] {
     return price;
   };
   const tiers = new Map<number, { views: number; revenue: number }>();
+  const channel = referenceChannel(world, p.id);
   for (const s of world.market.adStats) {
-    if (s.productId !== p.id) continue;
+    if (s.productId !== p.id || channelOf(s) !== channel) continue;
     const t = tiers.get(priceOn(s.day)) ?? { views: 0, revenue: 0 };
     t.views += s.landingViews;
     t.revenue += s.revenue;
@@ -176,7 +202,7 @@ function measuredCeiling(world: WorldState, p: Product): { ceiling: number; why:
 
 export interface Budget { adCap: number; survival: boolean; cash: number; runwayDays: number | null; rate: number; bankrupt: boolean; outage: boolean }
 
-/** Daily ad envelope: ≤ 15 % of the cash left once a week of pay is set aside, ≤ 8 % if runway < 14 days, 0 when bankrupt or on an announced outage day; survival below 30 % of start. */
+/** Daily ad envelope: ≤ 15 % of the cash left once a week of pay is set aside, ≤ 8 % if runway < 14 days, never into the reserve once growth decides (D9), 0 when bankrupt or on an announced outage day; survival below 30 % of start. */
 export function computeBudget(world: WorldState): Budget {
   const fin = sim.financeSnapshot(world);
   const start = Math.max(1, world.scenario.startingCash);
@@ -184,7 +210,9 @@ export function computeBudget(world: WorldState): Budget {
   const rate = lowRunway ? 0.08 : 0.15;
   const bankrupt = fin.bankrupt || fin.cash < 0 || world.status === 'bankrupt';
   const outage = sim.isAnnouncedOutage(world, world.day);
-  const adCap = bankrupt || outage || fin.cash <= 0 ? 0 : round2(Math.max(0, fin.cash - ORG.adReserveDays * payrollToday(world)) * rate);
+  const reserve = growthOn(world) ? world.company.growth?.allocation?.reserve : undefined;
+  const share = Math.max(0, fin.cash - ORG.adReserveDays * payrollToday(world)) * rate;
+  const adCap = bankrupt || outage || fin.cash <= 0 ? 0 : round2(reserve === undefined ? share : Math.min(share, Math.max(0, fin.cash - reserve)));
   return { adCap, survival: fin.cash < SURVIVAL_CASH * start, cash: round2(fin.cash), runwayDays: fin.runwayDays, rate, bankrupt, outage };
 }
 

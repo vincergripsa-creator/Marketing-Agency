@@ -2,7 +2,8 @@
  * Who waited, who worked (org §9). Everything sits in `company.org.load`, last 14 days, so a reload reads what a straight
  * run read. The founder's latency counts nowhere: he is not a reason to hire.
  */
-import type { AgentId, KindLoadDay, RoleId, RolePressure, TaskKind, WorldState } from '../../shared.js';
+import type { AgentId, ChannelId, KindLoadDay, RoleId, RolePressure, TaskKind, WorldState } from '../../shared.js';
+import { sameAccount } from '../../shared.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { openChannels } from '../channels.js';
 import type { Worked } from '../pillars.js';
@@ -57,9 +58,9 @@ function roleWaits(role: RoleId, rows: readonly KindLoadDay[]): { kind: TaskKind
 }
 
 /** A role the agency could fill today: it has kinds, a free seat and, for a media buyer, a channel to buy on. */
-function fillable(w: WorldState, role: RoleId, channels: readonly string[]): boolean {
+function fillable(w: WorldState, role: RoleId, channels: readonly ChannelId[]): boolean {
   const def = ROLES[role];
-  return def.core.length > 0 && roleHolders(w, role).length < def.seats && (!def.channel || channels.includes(def.channel));
+  return def.core.length > 0 && roleHolders(w, role).length < def.seats && (!def.channel || channels.some((ch) => sameAccount(ch, def.channel!)));
 }
 
 /** Each evening: what a hire would relieve, per role, how busy the owners are, and for how many evenings in a row both hold. */

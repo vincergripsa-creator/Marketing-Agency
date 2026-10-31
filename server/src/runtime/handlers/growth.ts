@@ -1,5 +1,6 @@
 /** Pub TikTok: hooks (bandit + exploration), 9:16 creatives, compliance submission, campaigns, stop-loss/scale, organic. */
-import type { AdCreative, AdFormat, AgentState, Campaign, HookStyle, Product, Task, TaskKind } from '../../shared.js';
+import { CHANNELS, acceptance, channelOf } from '../../shared.js';
+import type { AdCreative, AdFormat, AgentState, Campaign, ChannelId, HookStyle, Product, Task, TaskKind } from '../../shared.js';
 import { nextId } from '../../core/index.js';
 import type { AdDraft, MindContext } from '../../contracts.js';
 import type { RuntimeCtx } from '../ctx.js';
@@ -7,15 +8,18 @@ import { addDeliverable, incident, nameOf, nicheBriefOf, nicheName, productOf, s
 import { deliverables, learning, sim } from '../modules.js';
 import { addPlaybookRule, AD_FORMATS, bannedHits, directivesOf, HOOK_STYLES } from '../playbook.js';
 import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, type CampaignMetrics } from '../metrics.js';
-import { adHistory, companyPaidBlock, cooldownDays, launchableCreatives, MIN_CAMPAIGN_BUDGET, NO_TRACTION_ROAS, productHealth, productPaidBlock, promotionBlock, scalingRoom, STOP_LOSS_DAYS, STOP_LOSS_ROAS, STOP_LOSS_SPEND, TEST_CAMPAIGN_BUDGET, versionSince } from '../acquisition.js';
+import { adHistory, companyPaidBlock, cooldownDays, launchableCreatives, MIN_CAMPAIGN_BUDGET, NO_TRACTION_ROAS, productHealth, productPaidBlock, promotionBlock, scalingRoom, STOP_LOSS_DAYS, STOP_LOSS_ROAS, TEST_CAMPAIGN_BUDGET, versionSince } from '../acquisition.js';
+import { planNote, planTarget } from '../allocator.js';
+import { adjusted, creditOf } from '../channels.js';
 import { adsHold, REFUSAL_COOLDOWN_DAYS } from '../holds.js';
 import { officerId, ownersOfAny, roleHolders } from '../org/officers.js';
 import { dropTask } from '../pipeline.js';
+import { growthOn } from '../stages.js';
 import { armSharp, bestDraft, pruneRead, shrunkRoas } from '../talent/craft.js';
 import { onStrike } from '../talent/evidence.js';
-import { createTask, isOpen, openTasks } from '../tasks.js';
+import { createTask, isOpen, openTasks, taskChannel } from '../tasks.js';
 import { upsellContextOf } from '../upsell.js';
-import { clamp, dec, eur, idNum, keywords, numOf, pct, round2, short, str, uniq } from '../util.js';
+import { clamp, dec, eur, idNum, keywords, numOf, pct, round2, short, str, sum, uniq } from '../util.js';
 import type { HandlerMap, HandlerOutcome } from './common.js';
 import { NO_PRODUCT, requireProduct, reworkNotes, mindWith } from './common.js';
 import { COMPLIANCE_WORDS, FORMAT_LABELS, HOOK_LABELS } from './phrases.js';
@@ -110,14 +114,17 @@ export const ORGANIC_REPEAT_WINDOW_DAYS = 7;
 const ORGANIC_FORMATS: AdFormat[] = ['text_slideshow', 'faceless_voiceover', 'carousel'];
 
 /**
- * The stop-loss of Budget et garde-fous: ROAS < 0,8 after 25 € spent over at least 2 days (whole life, or the last 3
- * days: a winner can turn into a loser) → pause; no traction at all (ROAS < 0,4 after 25 €) → pause at once.
+ * The stop-loss of Budget et garde-fous: ROAS < 0,8 after the channel's stop-loss spend (25 € on TikTok) over at least 2
+ * days (whole life, or the last 3 days: a winner can turn into a loser) → pause; no traction at all (ROAS < 0,4 after that
+ * spend) → pause at once. Each channel's spend outlasts what its learning phase costs at its minimum budget, so no campaign
+ * is judged on the phase alone. The caller hands credit-adjusted metrics, never shrunk ones (D26): this protects the money.
  */
-export function stopLossReason(life: CampaignMetrics, recent: CampaignMetrics): string | null {
+export function stopLossReason(life: CampaignMetrics, recent: CampaignMetrics, ch: ChannelId = 'tiktok'): string | null {
   const days = (m: CampaignMetrics) => new Set(m.rows.filter((r) => r.spend > 0).map((r) => r.day)).size;
-  if (life.spend >= STOP_LOSS_SPEND && life.roas < NO_TRACTION_ROAS) return `stop-loss, ROAS ${dec(life.roas)} après ${eur(life.spend)} (aucune traction)`;
-  if (days(life) >= STOP_LOSS_DAYS && life.spend >= STOP_LOSS_SPEND && life.roas < STOP_LOSS_ROAS) return `stop-loss, ROAS ${dec(life.roas)} après ${eur(life.spend)} sur ${days(life)} jours`;
-  if (days(recent) >= STOP_LOSS_DAYS && recent.spend >= STOP_LOSS_SPEND && recent.roas < STOP_LOSS_ROAS) return `stop-loss sur 3 jours, ROAS ${dec(recent.roas)} pour ${eur(recent.spend)}`;
+  const spend = CHANNELS[ch].stopLossSpend;
+  if (life.spend >= spend && life.roas < NO_TRACTION_ROAS) return `stop-loss, ROAS ${dec(life.roas)} après ${eur(life.spend)} (aucune traction)`;
+  if (days(life) >= STOP_LOSS_DAYS && life.spend >= spend && life.roas < STOP_LOSS_ROAS) return `stop-loss, ROAS ${dec(life.roas)} après ${eur(life.spend)} sur ${days(life)} jours`;
+  if (days(recent) >= STOP_LOSS_DAYS && recent.spend >= spend && recent.roas < STOP_LOSS_ROAS) return `stop-loss sur 3 jours, ROAS ${dec(recent.roas)} pour ${eur(recent.spend)}`;
   return null;
 }
 
@@ -200,7 +207,7 @@ function runRaise(ctx: RuntimeCtx, task: Task): HandlerOutcome {
 
 function requestCreatives(ctx: RuntimeCtx, product: Product, task: Task, opts: { produce: number; attachTo?: string; launch?: boolean; flags?: Record<string, unknown>; why: string }): boolean {
   const open = ctx.world.company.tasks.some((t) => isOpen(t) && t.input.productId === product.id && (t.kind === 'write_ad_hooks' || t.kind === 'produce_ad'));
-  const mine = ctx.world.company.creatives.filter((c) => c.productId === product.id);
+  const mine = ctx.world.company.creatives.filter((c) => c.productId === product.id && acceptance('tiktok', c) !== null); // a cut for another channel is no TikTok creative
   const inUse = new Set(activeCampaigns(ctx.world).flatMap((c) => c.creativeIds));
   // Fresh = pending review, running, or approved but never shown: no point stacking more of those.
   const fresh = mine.filter((c) => c.review.status === 'pending' || inUse.has(c.id) || (c.review.status === 'approved' && !(ctx.world.market.creativeImpressions[c.id] > 0)));
@@ -399,41 +406,47 @@ export const growthHandlers: HandlerMap = {
         say(ctx, agent.id, `${agent.name} ne lance pas de campagne pour « ${short(product.title, 40)} » : ${reason}`, 'ad', { productId: product.id });
         return { summary: `Pas de campagne : ${reason}.`, skipReview: true, output: { skipped: true, reason: code, why: reason, ...extra } };
       };
+      const ch = taskChannel(task);
+      const label = CHANNELS[ch].label;
+      const minBudget = CHANNELS[ch].minDailyBudget;
       const severe = productHealth(ctx.world, product).severe;
       if (severe) return skip(`${severe} — on ne pousse pas un guide que les acheteurs n'aiment pas`, 'quality');
-      const blocked = companyPaidBlock(ctx.world);
+      const blocked = companyPaidBlock(ctx.world, ch);
       if (blocked) return skip(blocked, 'company');
       // The founder's stop beats everything, a launch he asked for earlier included: only his word lifts it.
-      const held = adsHold(ctx.world, product.id);
+      const held = adsHold(ctx.world, product.id, ch);
       if (held) return skip(held.reason, 'founder');
       // Cooldown / "ads-dead" are the team's own rules: a founder request or the CEO's watchdog overrides them.
       // A product that loses money or a « couper les pubs » lesson only yield to the founder.
-      const productBlock = productPaidBlock(ctx.world, product);
+      const productBlock = productPaidBlock(ctx.world, product, ch);
       const overrides = task.createdBy === 'founder' || (task.input.force === true && !productBlock?.final);
       if (productBlock && !overrides) return skip(productBlock.reason, productBlock.hard ? 'blocked' : 'cooldown');
-      const ready = launchableCreatives(ctx.world, product.id);
+      const ready = launchableCreatives(ctx.world, product.id, ch);
+      if (!ready.length && ch !== 'tiktok') return skip(`aucune créa validée par ${label} (les adaptations passent par le plan du jour)`, 'no_creative');
       if (!ready.length) {
         const writer = roleHolders(ctx.world, 'hook_writer')[0]?.id ?? officerId(ctx.world, 'growth');
         const asked = requestCreatives(ctx, product, task, { produce: 2, launch: true, flags: { ...launchFlags(task.input), ...(overrides ? { force: true } : {}) }, why: 'aucune créa fraîche validée par TikTok' });
         return skip(asked ? `aucune créa fraîche validée — ${nameOf(ctx, writer)} écrit de nouveaux hooks, la campagne suivra` : 'aucune créa fraîche validée (des créas sont déjà en production)', 'no_creative');
       }
-      const losers = adHistory(ctx.world, product.id, versionSince(ctx.world, product)).losers;
+      const losers = adHistory(ctx.world, product.id, versionSince(ctx.world, product), ch).losers;
       const envelope = launchBudget(ctx, losers);
       const remaining = envelope.remaining;
       // The CEO's watchdog test on an "ads-dead" version runs at the minimum budget.
       // When paid ads lose money overall, new campaigns start smaller (the CEO's cautious mode).
-      const planned = task.input.test === true ? Math.min(envelope.budget, TEST_CAMPAIGN_BUDGET)
-        : task.input.cautious === true ? Math.min(envelope.budget, Math.max(MIN_CAMPAIGN_BUDGET, Math.floor(envelope.budget * 0.6))) : envelope.budget;
+      const planned = task.input.test === true ? Math.min(envelope.budget, Math.max(TEST_CAMPAIGN_BUDGET, minBudget))
+        : task.input.cautious === true ? Math.min(envelope.budget, Math.max(minBudget, Math.floor(envelope.budget * 0.6))) : envelope.budget;
       // The founder agreed to an amount: the envelope may have grown since, his yes has not.
       const daily = Math.min(planned, numOf(task.input.askedBudget) ?? planned);
-      if (daily < MIN_CAMPAIGN_BUDGET) return skip(`enveloppe du CFO insuffisante (${eur(remaining)} restants)`, 'budget', { remaining });
+      if (daily < minBudget) return skip(`enveloppe du CFO insuffisante (${eur(remaining)} restants)`, 'budget', { remaining });
       if (ctx.world.scenario.founderApproval && task.input.founderApproved !== true) {
         task.input.askedBudget = daily;
-        return { summary: `Campagne prête (${eur(daily)}/jour, ${ready.length} créas) : en attente du fondateur.`, awaitFounder: `Lancer une campagne TikTok à ${eur(daily)}/jour pour « ${product.title} »` };
+        return { summary: `Campagne prête (${eur(daily)}/jour, ${ready.length} créas) : en attente du fondateur.`, awaitFounder: `Lancer une campagne ${label} à ${eur(daily)}/jour pour « ${product.title} »` };
       }
       const creatives = ready.slice(0, 3);
       const n = ctx.world.company.campaigns.filter((c) => c.productId === product.id).length + 1;
-      const input = { productId: product.id, name: `${short(product.title, 40)} — campagne ${n}`, creativeIds: creatives.map((c) => c.id), dailyBudget: daily, targeting: targetingFor(ctx, product), createdBy: agent.id };
+      // Only a channel's own test counts as one: the CEO's watchdog test stays a plain TikTok campaign.
+      const placement = ch === 'tiktok' ? {} : { channel: ch, ...(task.input.test === true ? { test: true } : {}) };
+      const input = { productId: product.id, name: `${short(product.title, 40)} — ${ch === 'tiktok' ? '' : `${label}, `}campagne ${n}`, creativeIds: creatives.map((c) => c.id), dailyBudget: daily, targeting: targetingFor(ctx, product), createdBy: agent.id, ...placement };
       const res = ctx.tools.createCampaign(input);
       if (!res.ok) {
         incident(ctx, `Campagne refusée pour « ${product.title} » : ${res.message}`);
@@ -441,7 +454,7 @@ export const growthHandlers: HandlerMap = {
       }
       const id = res.id ?? nextId(ctx.world, 'cmp');
       if (!ctx.world.company.campaigns.some((c) => c.id === id)) {
-        ctx.world.company.campaigns.push({ id, productId: input.productId, name: input.name, creativeIds: input.creativeIds, dailyBudget: input.dailyBudget, status: 'active', targeting: input.targeting, startDay: ctx.world.day, createdBy: agent.id });
+        ctx.world.company.campaigns.push({ id, productId: input.productId, name: input.name, creativeIds: input.creativeIds, dailyBudget: input.dailyBudget, status: 'active', targeting: input.targeting, startDay: ctx.world.day, createdBy: agent.id, ...placement });
       }
       // The founder overrode the numbers: only he, or the stop-loss, ends this campaign.
       const launched = ctx.world.company.campaigns.find((c) => c.id === id);
@@ -459,10 +472,14 @@ export const growthHandlers: HandlerMap = {
         if (!activeCampaigns(ctx.world).some((c) => c.id === t.input.campaignId)) dropTask(ctx, t, 'la campagne ne tourne plus');
       }
       const budget = currentBudget(ctx.world);
-      const campaigns = activeCampaigns(ctx.world);
+      // A task that names a channel is that channel's buyer's. Without one it reads them all: no campaign goes without its stop-loss.
+      const only = task.input.channel === undefined ? null : taskChannel(task);
+      const campaigns = activeCampaigns(ctx.world).filter((c) => !only || channelOf(c) === only);
       if (!campaigns.length) return { summary: 'Aucune campagne active.', skipReview: true, output: { actions: [] } };
-      const stats = ctx.tools.getAdStats(Math.max(1, ctx.world.day - 7));
-      const all = ctx.tools.getAdStats(1);
+      const channels = uniq(campaigns.map(channelOf));
+      const stats = channels.flatMap((ch) => ctx.tools.getAdStats(Math.max(1, ctx.world.day - 7), ch));
+      const all = channels.flatMap((ch) => ctx.tools.getAdStats(1, ch));
+      const allocation = growthOn(ctx.world) ? ctx.world.company.growth?.allocation : null;
       const t = mind.craft?.t;
       const actions: string[] = [];
       const pause = (c: Campaign, why: string) => {
@@ -472,22 +489,26 @@ export const growthHandlers: HandlerMap = {
         incident(ctx, `Campagne « ${c.name} » mise en pause : ${why}`);
       };
       for (const c of campaigns) {
+        const ch = channelOf(c);
+        const minBudget = CHANNELS[ch].minDailyBudget;
         const product = productOf(ctx, c.productId);
         if (!product || product.status === 'killed' || product.status === 'paused') { pause(c, 'produit arrêté'); continue; }
         if (budget.bankrupt) { pause(c, 'trésorerie négative'); continue; }
-        const barred = c.founderForced ? null : productPaidBlock(ctx.world, product);
+        const barred = c.founderForced ? null : productPaidBlock(ctx.world, product, ch);
         if (barred?.final) { pause(c, barred.reason); continue; }
-        const life = campaignMetrics(all, c.id, c.startDay);
-        const recent = campaignMetrics(stats, c.id, Math.max(c.startDay, ctx.world.day - 3));
-        const yesterday = campaignMetrics(stats, c.id, Math.max(c.startDay, ctx.world.day - 1));
+        const credit = creditOf(ctx.world, ch, product.nicheId);
+        const life = adjusted(campaignMetrics(all, c.id, c.startDay), credit);
+        const recent = adjusted(campaignMetrics(stats, c.id, Math.max(c.startDay, ctx.world.day - 3)), credit);
+        const yesterday = adjusted(campaignMetrics(stats, c.id, Math.max(c.startDay, ctx.world.day - 1)), credit);
         // 1. Stop-loss on a sample (Budget et garde-fous): one bad day is noise, except when nothing sells at all.
         //    Under the rule the campaign stops; it is never shrunk to 5 €/day while the sample takes days to arrive.
-        const stop = stopLossReason(life, recent);
+        const stop = stopLossReason(life, recent, ch);
         if (stop) {
           pause(c, stop);
-          const losers = adHistory(ctx.world, product.id, versionSince(ctx.world, product)).losers;
+          const losers = adHistory(ctx.world, product.id, versionSince(ctx.world, product), ch).losers;
           const wait = cooldownDays(losers);
-          if (!productPaidBlock(ctx.world, product)?.hard) {
+          // Outside TikTok the line's verdict decides what comes next, and the plan orders the cuts (channels §7.2, §7.5).
+          if (ch === 'tiktok' && !productPaidBlock(ctx.world, product)?.hard) {
             requestCreatives(ctx, product, task, wait === 0
               ? { produce: 2, launch: true, why: `${stop} : il faut un nouvel angle` }
               : { produce: 2, why: `${losers} campagnes perdantes d'affilée : créas prêtes pour une relance dans ${wait} jour(s)` });
@@ -525,21 +546,30 @@ export const growthHandlers: HandlerMap = {
           if (r.ok) c.creativeIds = keep;
           actions.push(`${dropped.length} créa(s) fatiguée(s) retirée(s) de ${c.name}`);
         }
-        if (tired > 0 || (recent.impressions >= 2000 && recent.ctr < 0.008)) {
+        if (ch === 'tiktok' && (tired > 0 || (recent.impressions >= 2000 && recent.ctr < 0.008))) {
           requestCreatives(ctx, product, task, { produce: Math.max(1, Math.min(2, tired)), attachTo: c.id, why: tired ? `${tired} créa(s) fatiguée(s)` : `CTR en baisse (${pct(recent.ctr, 2)})` });
         }
-        // 4. Scale winners (+30 % max) while the last day still holds, trim the lukewarm ones — inside the CFO envelope.
-        //    A buyer with talent discounts a thin sample before reading it (talent §4.5); what protects the money reads the raw number.
+        // 4. The budget. A line of the CFO's plan goes where the plan says, it read the money already; test campaigns wait
+        //    for their verdict at the budget they started with. Everything else: scale winners (+30 % max) while the last day
+        //    still holds, trim the lukewarm ones, inside the CFO envelope. A buyer with talent discounts a thin sample before
+        //    reading it (talent §4.5); what protects the money reads the raw number.
+        const target = planTarget(ctx.world, c);
+        if (target === 0 && !c.founderForced) { pause(c, planNote(ctx.world, c) ?? 'arrêtée par le plan du CFO'); c.planStopped = ctx.world.day; continue; }
         const read = t === undefined ? recent.roas : shrunkRoas(recent.revenue, recent.spend, t);
-        const room = Math.max(0, scalingRoom(ctx.world, product, budget.adCap) - committedAdBudget(ctx.world, c.id));
+        // What the others will spend once the same pass moved them: a raise does not wait for a cut further down the list.
+        const committed = sum(activeCampaigns(ctx.world).filter((o) => o.id !== c.id).map((o) => planTarget(ctx.world, o) ?? o.dailyBudget));
+        const room = Math.max(0, scalingRoom(ctx.world, product, budget.adCap) - round2(committed));
+        const scaleRoas = allocation?.scaleRoas ?? 1.8;
         let next = c.dailyBudget;
-        if (recent.spend >= 10 && read >= 1.8 && (yesterday.spend < 5 || yesterday.roas >= 1.4)) next = round2(c.dailyBudget * 1.3);
+        if (target !== null) next = target;
+        else if (c.test) next = c.dailyBudget;
+        else if (recent.spend >= 10 && read >= scaleRoas && (yesterday.spend < 5 || yesterday.roas >= (allocation ? 0.78 * scaleRoas : 1.4))) next = round2(c.dailyBudget * 1.3);
         // Brake: a big budget that collapsed yesterday (CPM spike, saturated audience) is halved at once.
         else if (yesterday.spend >= 30 && yesterday.roas < 0.5) next = round2(c.dailyBudget * 0.5);
         // Trim the lukewarm only: under the stop-loss, tomorrow's sample decides, a smaller budget would only delay it.
-        else if (recent.spend >= 20 && read < 1.3 && recent.roas >= STOP_LOSS_ROAS) next = round2(c.dailyBudget * 0.7);
-        next = round2(Math.max(5, Math.min(next, room)));
-        if (room < 5) { pause(c, `enveloppe CFO épuisée (${eur(budget.adCap)})`); continue; }
+        else if (recent.spend >= 20 && read < (allocation?.trimRoas ?? 1.3) && recent.roas >= STOP_LOSS_ROAS) next = round2(c.dailyBudget * 0.7);
+        next = round2(Math.max(minBudget, Math.min(next, room)));
+        if (room < minBudget) { pause(c, `enveloppe CFO épuisée (${eur(budget.adCap)})`); continue; }
         // Approval mode: reductions and pauses stay free, more than the founder agreed to waits for his yes.
         const agreed = ctx.world.scenario.founderApproval ? c.founderCap ?? c.dailyBudget : Number.POSITIVE_INFINITY;
         if (next > agreed) { askRaise(ctx, task, c, next, recent.roas); next = agreed; }
@@ -547,7 +577,7 @@ export const growthHandlers: HandlerMap = {
         if (Math.abs(next - before) >= 0.5) {
           const r = ctx.tools.updateCampaign(c.id, { dailyBudget: next });
           if (r.ok) {
-            actions.push(`${c.name} : ${eur(before)} → ${eur(next)}/jour (ROAS récent ${dec(recent.roas)})`);
+            actions.push((target !== null ? planNote(ctx.world, c) : null) ?? `${c.name} : ${eur(before)} → ${eur(next)}/jour (ROAS récent ${dec(recent.roas)})`);
             c.dailyBudget = next;
           }
         }

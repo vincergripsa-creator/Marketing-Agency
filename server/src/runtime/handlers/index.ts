@@ -11,10 +11,11 @@ import { partnerHandlers } from './partners.js';
 import { opsHandlers } from './ops.js';
 import { orgHandlers } from './org.js';
 import { leagueHandlers } from './league.js';
+import { channelHandlers } from './channels.js';
 
 export const HANDLERS = {
   ...researchHandlers, ...studioHandlers, ...creationHandlers, ...boutiqueHandlers,
-  ...growthHandlers, ...supportHandlers, ...partnerHandlers, ...opsHandlers, ...orgHandlers, ...leagueHandlers,
+  ...growthHandlers, ...supportHandlers, ...partnerHandlers, ...opsHandlers, ...orgHandlers, ...leagueHandlers, ...channelHandlers,
 } as Record<TaskKind, HandlerSpec>;
 
 export type { HandlerOutcome, HandlerSpec } from './common.js';

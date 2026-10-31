@@ -3,7 +3,8 @@
  * uses to convert) plus the playbooks: the fact-checker reads everything, the editor signs the fact-check, the art
  * director the cover, growth the ads, the shop the sales pages, the CEO the Red Team's verdicts and the publication.
  */
-import type { AgentState, QualityReport, ReviewNote, Task } from '../shared.js';
+import type { AgentState, QualityReport, ReviewNote, Task, TaskKind } from '../shared.js';
+import { CHANNELS, DROPPED_REASON } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, nameOf, productOf, runFileExists, say, vocOf } from './ctx.js';
 import { sim } from './modules.js';
@@ -12,6 +13,7 @@ import { officerId } from './org/officers.js';
 import { bannedHits, directivesOf } from './playbook.js';
 import { excludedNiches, killProduct, pauseProduct } from './pipeline.js';
 import { productPnls } from './accounting.js';
+import { taskChannel } from './tasks.js';
 import { eur, short, strArr, sum, uniq } from './util.js';
 import { creativeText } from './handlers/growth.js';
 import { scoreContent } from './handlers/studio.js';
@@ -38,18 +40,26 @@ function blockers(q: QualityReport, dimensions?: readonly Dimension[]): string[]
   return (q.blocking ?? []).filter((b) => !dimensions || dimensions.includes(b.dimension)).map((b) => b.text);
 }
 
+/** What the head of growth reads as an ad: one gate for a TikTok creative, a cut of it and a search ad (channels §6). */
+const AD_TASKS: readonly TaskKind[] = ['produce_ad', 'adapt_creative', 'write_search_ads'];
+
 /**
- * End of a rework loop: never a silent approval. An ad that still breaks the rules is dropped before TikTok sees it,
+ * End of a rework loop: never a silent approval. An ad that still breaks the rules is dropped before the platform sees it,
  * a guide or a page that still does ends with the product; anything else ships on a logged waiver.
  */
 export async function closeLoop(ctx: RuntimeCtx, task: Task, res: ReviewResult): Promise<ReviewResult> {
   const product = productOf(ctx, task.input.productId);
   const first = res.notes[0] ?? 'à retravailler';
-  if (res.noWaiver && task.kind === 'produce_ad') {
+  if (res.noWaiver && AD_TASKS.includes(task.kind)) {
     const creative = ctx.world.company.creatives.find((c) => c.id === task.output?.creativeId);
-    if (creative) creative.review = { status: 'rejected', reason: `Retirée avant soumission : ${first}`, day: ctx.world.day };
+    const channel = taskChannel(task);
+    const refused = { status: 'rejected' as const, reason: `${DROPPED_REASON} : ${first}`, day: ctx.world.day };
+    if (creative) {
+      if (channel === 'tiktok') creative.review = refused;
+      else (creative.channelReviews ??= {})[channel] = refused;
+    }
     task.output = { ...(task.output ?? {}), dropped: true };
-    incident(ctx, `Créa abandonnée après ${MAX_ATTEMPTS} tentatives (${first}) : elle n'ira pas chez TikTok`);
+    incident(ctx, `Créa abandonnée après ${MAX_ATTEMPTS} tentatives (${first}) : elle n'ira pas chez ${CHANNELS[channel].label}`);
     return { verdict: 'approve', notes: [...res.notes, 'Créa abandonnée, le compte pub ne prend pas ce risque.'], score: res.score };
   }
   if (res.noWaiver && product && product.status !== 'live' && product.status !== 'killed') {
@@ -135,19 +145,24 @@ export async function reviewTask(ctx: RuntimeCtx, task: Task, reviewer: AgentSta
       if (blocked.length) return changes(blocked.slice(0, 4), q.overall);
       return q.overall >= 65 ? approve([`Page de vente ${q.overall}/100.`], q.overall) : changes(q.issues.slice(0, 4), q.overall);
     }
-    case 'produce_ad': {
+    case 'produce_ad':
+    case 'adapt_creative':
+    case 'write_search_ads': {
       const creative = ctx.world.company.creatives.find((c) => c.id === task.output?.creativeId);
       if (!creative) return changes(['Créa introuvable.']);
+      const { label } = CHANNELS[taskChannel(task)];
       const voc = vocOf(ctx, product.nicheId);
       const q = sim.scoreCreative(creative, product, voc);
       creative.quality = q;
       const banned = uniq([...directivesOf(ctx.world, reviewer.id).banned, ...voc.bannedClaims]);
-      const hits = bannedHits(creativeText(creative), banned);
-      if (hits.length) return { ...changes([`Mots interdits par TikTok ou par notre playbook : ${hits.join(', ')}.`], q.overall), noWaiver: true };
-      if (q.compliance < 65) return { ...changes([`Risque de refus TikTok (conformité ${q.compliance}/100).`, ...q.issues.slice(0, 2)], q.overall), noWaiver: true };
+      // a search ad shows every title and description: the fields of a video creative hold only the first of each
+      const shown = [creativeText(creative), ...(creative.search?.headlines ?? []), ...(creative.search?.descriptions ?? [])].join(' \n ');
+      const hits = bannedHits(shown, banned);
+      if (hits.length) return { ...changes([`Mots interdits par ${label} ou par notre playbook : ${hits.join(', ')}.`], q.overall), noWaiver: true };
+      if (q.compliance < 65) return { ...changes([`Risque de refus ${label} (conformité ${q.compliance}/100).`, ...q.issues.slice(0, 2)], q.overall), noWaiver: true };
       const blocked = blockers(q);
       if (blocked.length) return { ...changes(blocked.slice(0, 3), q.overall), noWaiver: true };
-      return q.overall >= 60 ? approve([`Pub ${q.overall}/100, prête pour TikTok.`], q.overall) : changes(q.issues.slice(0, 3), q.overall);
+      return q.overall >= 60 ? approve([`Pub ${q.overall}/100, prête pour ${label}.`], q.overall) : changes(q.issues.slice(0, 3), q.overall);
     }
     case 'red_team': {
       const out = task.output ?? {};

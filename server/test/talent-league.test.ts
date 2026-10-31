@@ -1144,7 +1144,8 @@ describe('the whole cycle, on a real run of seed 7 (talent 4)', () => {
    * the rest is the company's own evidence. Runs `ticks` ticks, or until that person has left, and says how many it took.
    */
   async function play(reloadEvery: number, ticks: number): Promise<{ world: WorldState; ticks: number; dump: string; audit: string[] }> {
-    const m = await lab({ openEnded: true });
+    // TikTok alone: this pins seed 7's road through a firing, and buyers change who gets hired, and when (D23).
+    const m = await lab({ openEnded: true, channelControl: 'tiktok_only' });
     let { world, company } = m;
     let target: string | undefined;
     const audit: string[] = [];

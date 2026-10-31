@@ -392,6 +392,7 @@ export interface Campaign {
   startDay: number;
   createdBy: AgentId;
   pausedFor?: 'outage' | 'founder'; // outage: resumed the next morning; founder: resumed when he lifts his order
+  planStopped?: number;     // the day the CFO's plan stopped it: the line stays out while that reading stands (channels §7.4)
   founderForced?: boolean;  // launched by the founder against the company's own stop rules: only he (or the stop-loss) ends it
   founderCap?: number;      // approval mode: the daily budget the founder agreed to
   raiseRefusedDay?: number; // approval mode: the day he last refused a raise
@@ -1126,6 +1127,8 @@ export interface ChannelPlanLine {
   budget: number; target: number;
   average: number | null; marginal: number | null; elasticity: number | null; days: number;
   note: string;                // French, read in the feed and the UI
+  campaignTargets?: Record<string, number>; // `target` over the line's campaigns; 0 = the plan stops it
+  underMin?: number;           // days in a row under what the platform accepts
 }
 export interface ChannelPlan {
   day: number; envelope: number; testEnvelope: number;

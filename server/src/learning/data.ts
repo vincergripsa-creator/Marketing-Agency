@@ -1,6 +1,7 @@
 /** Read-only accessors and aggregations over the world (ledger, ad stats, orders) shared by KPI, experiments and retro. */
 import type { BrainNote } from '../contracts.js';
-import type { AdCreative, AgentState, DailyAdStats, LedgerEntry, Order, Product, WorldState } from '../shared.js';
+import type { AdCreative, AgentState, ChannelId, DailyAdStats, LedgerEntry, Order, Product, WorldState } from '../shared.js';
+import { CHANNEL_IDS, channelOf } from '../shared.js';
 import { SETUP_REF } from '../sim/finance.js';
 import { announcedOutageDays } from '../sim/outage.js';
 import { basenameOf } from './markdown.js';
@@ -73,6 +74,43 @@ export function adRows(world: WorldState, fromDay: number, toDay: number): Daily
   return (world.market?.adStats ?? []).filter((r) => r.day >= fromDay && r.day <= toDay && !outage.includes(r.day));
 }
 
+/**
+ * Ad rows a hook or a format can be compared on: TikTok's only. CTR levels differ by channel (channels §5.3): mixing them
+ * would reward the channel, not the hook. On a TikTok-only run these are all the rows.
+ */
+export function tiktokRows(world: WorldState, fromDay: number, toDay: number): DailyAdStats[] {
+  return adRows(world, fromDay, toDay).filter((r) => channelOf(r) === 'tiktok');
+}
+
+/** Days behind a product's reference channel. */
+export const REFERENCE_WINDOW_DAYS = 14;
+
+/**
+ * Where each product had the most landing views in the 14 days up to `day`. Price and promise are read on those rows
+ * alone: a shift in the mix of channels would otherwise look like a price effect. Absent means TikTok, as everywhere: a
+ * product without a view, or whose first channel is TikTok, is not in the map.
+ */
+export function referenceChannels(world: WorldState, day: number): Map<string, ChannelId> {
+  const views = new Map<string, Map<ChannelId, number>>();
+  for (const r of world.market?.adStats ?? []) {
+    if (r.day > day || r.day <= day - REFERENCE_WINDOW_DAYS) continue;
+    const m = views.get(r.productId) ?? new Map<ChannelId, number>();
+    m.set(channelOf(r), (m.get(channelOf(r)) ?? 0) + Math.max(0, finite(r.landingViews)));
+    views.set(r.productId, m);
+  }
+  const out = new Map<string, ChannelId>();
+  for (const [productId, m] of views) {
+    const best = CHANNEL_IDS.reduce((a, b) => ((m.get(b) ?? 0) > (m.get(a) ?? 0) ? b : a));
+    if (best !== 'tiktok') out.set(productId, best);
+  }
+  return out;
+}
+
+/** Does this ad row or order speak for its product's price? `refs` comes from referenceChannels. */
+export function onReference(refs: ReadonlyMap<string, ChannelId>, productId: string, x: { channel?: ChannelId }): boolean {
+  return channelOf(x) === (refs.get(productId) ?? 'tiktok');
+}
+
 /** « jours 28 à 30 », saying so when announced outage days were left out of the window. */
 export function windowLabel(world: WorldState, fromDay: number, toDay: number): string {
   const out = announcedOutageDays(world).filter((d) => d >= fromDay && d <= toDay);
@@ -120,9 +158,9 @@ function refundMoneyByRef(world: WorldState, day: number): Map<string, number> {
 /**
  * Refunds + chargebacks closed on a day, per product. Primary source: Order.refundedDay (exact daily
  * attribution); ledger entries of that day complete it for orders saved before the field existed.
- * An order refunded then disputed the same day counts once.
+ * An order refunded then disputed the same day counts once. `only` keeps the orders a reading is about.
  */
-export function refundsOnDay(world: WorldState, ix: WorldIndex, day: number): Map<string, { count: number; amount: number }> {
+export function refundsOnDay(world: WorldState, ix: WorldIndex, day: number, only?: (o: Order) => boolean): Map<string, { count: number; amount: number }> {
   const money = refundMoneyByRef(world, day);
   const out = new Map<string, { count: number; amount: number }>();
   const seen = new Set<string>();
@@ -135,11 +173,13 @@ export function refundsOnDay(world: WorldState, ix: WorldIndex, day: number): Ma
   for (const o of world.market?.orders ?? []) {
     if (o.refundedDay !== day || !(o.refunded || o.chargeback)) continue;
     seen.add(o.id);
-    add(o.productId, money.get(o.id) ?? Math.abs(finite(o.price)));
+    if (!only || only(o)) add(o.productId, money.get(o.id) ?? Math.abs(finite(o.price)));
   }
   for (const [ref, amount] of money) {
     if (seen.has(ref)) continue;
-    const productId = ix.orders.get(ref)?.productId ?? (ix.products.has(ref) ? ref : null);
+    const order = ix.orders.get(ref);
+    if (order && only && !only(order)) continue;
+    const productId = order?.productId ?? (ix.products.has(ref) ? ref : null);
     if (!productId) continue;
     seen.add(ref);
     add(productId, amount);

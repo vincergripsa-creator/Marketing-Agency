@@ -812,7 +812,9 @@ describe('a whole run', () => {
     expect(org(frozen.world).stats.hires).toBe(0);
     // goal_reached and bankrupt are the company's own books, pushed by checkStatus: the market drew neither. viral_organic
     // is rolled once per post the company made, and a community manager makes more: the rolls are the company's to count.
-    const OWN = ['goal_reached', 'bankrupt', 'viral_organic'];
+    // A channel needs its buyer (D23), and what the company then submits there is its own: the opening and the verdicts on
+    // its ads are in that count too, never in what the market rolls.
+    const OWN = ['goal_reached', 'bankrupt', 'viral_organic', 'channel_opened', 'channel_account_banned', 'ad_rejected', 'ad_account_warning', 'ad_account_banned'];
     const events = (w: WorldState) => w.market.events.filter((e) => !OWN.includes(e.kind)).map((e) => [e.day, e.kind]);
     expect(events(auto.world)).toEqual(events(frozen.world));
   }, 240_000);

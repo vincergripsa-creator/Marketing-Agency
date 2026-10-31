@@ -24,9 +24,10 @@ export const TOPIC_DEPTS: Record<Lesson['topic'], DeptId[] | 'chiefs'> = {
 
 /** Machine-readable rule patterns honoured by the heuristic engine (see shared conventions). */
 export const RULE_PATTERNS: readonly RegExp[] = [
-  /Ne jamais écrire « [^»]+ »/,
+  /Ne jamais écrire « [^»]+ »/i,
   /Privilégier le hook « [a-z_]+ »/,
   /Privilégier le format « [a-z_]+ »/,
+  /Privilégier le canal « [a-z_]+ »/,
   /Prix cible « \d+ »/,
   /Niveau de promesse max « [\d.]+ »/,
   /Ton support « [^»]+ »/,
@@ -118,6 +119,7 @@ const BANNED_RX = /Ne jamais écrire\s*«\s*([^»]+?)\s*»/i;
 const SINGLETON_RX: readonly RegExp[] = [
   /Privilégier le hook\s*«\s*([^»]+?)\s*»/i,
   /Privilégier le format\s*«\s*([^»]+?)\s*»/i,
+  /Privilégier le canal\s*«\s*([^»]+?)\s*»/i,
   /Prix cible\s*«\s*([^»]+?)\s*»/i,
   /Niveau de promesse max\s*«\s*([^»]+?)\s*»/i,
   /Ton support\s*«\s*([^»]+?)\s*»/i,

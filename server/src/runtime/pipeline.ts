@@ -9,13 +9,14 @@
  *   Red Team on the guide (see redteam.ts): a « fix » adds humanize → render → red_team before the publish, a « kill »
  *   adds outline → pdf → humanize → fact_check → render → sales page + red_team.
  */
-import type { AgentId, Product, Task, TaskKind } from '../shared.js';
+import type { AgentId, ChannelId, Product, Task, TaskKind } from '../shared.js';
+import { channelOf } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, latestOutput, nameOf, runFileExists, say } from './ctx.js';
 import type { GuideGaps } from '../contracts.js';
 import { addHold } from './holds.js';
 import { officerId } from './org/officers.js';
-import { createTask, isOpen, KIND_META, logTask, openTasks, type TaskSpec } from './tasks.js';
+import { createTask, isOpen, KIND_META, logTask, openTasks, taskChannel, type TaskSpec } from './tasks.js';
 import { activeCampaigns } from './metrics.js';
 import { productNote, writePostMortem } from './notes.js';
 import { unlinkUpsell } from './upsell.js';
@@ -196,17 +197,17 @@ export function cancelProductTasks(ctx: RuntimeCtx, productId: string, reason: s
 /** Task kinds that promote a product: cancelled when it is paused for quality. */
 const PROMOTION_TASKS: TaskKind[] = ['post_organic', 'write_ad_hooks', 'produce_ad', 'launch_campaign', 'find_creators', 'negotiate_deal'];
 /** Task kinds that lead to paid ads: cancelled when the founder stops them. */
-export const PAID_AD_TASKS: TaskKind[] = ['write_ad_hooks', 'produce_ad', 'launch_campaign'];
+export const PAID_AD_TASKS: TaskKind[] = ['write_ad_hooks', 'produce_ad', 'launch_campaign', 'adapt_creative', 'write_search_ads', 'open_channel'];
 
 /**
- * The founder stops paid ads, on one product or on all of them: running campaigns pause until he lifts it (a campaign
- * off for an outage stays off), and the work leading to a launch stops. Organic posts go on.
+ * The founder stops paid ads, on one product or on all of them, on one channel or on all of them: running campaigns pause
+ * until he lifts it (a campaign off for an outage stays off), and the work leading to a launch stops. Organic posts go on.
  */
-export function stopPaidAds(ctx: RuntimeCtx, productId: string | null, reason: string): { paused: number; cancelled: number } {
+export function stopPaidAds(ctx: RuntimeCtx, productId: string | null, reason: string, channel: ChannelId | null = null): { paused: number; cancelled: number } {
   const w = ctx.world;
   let paused = 0;
   for (const c of w.company.campaigns) {
-    if (productId && c.productId !== productId) continue;
+    if ((productId && c.productId !== productId) || (channel && channelOf(c) !== channel)) continue;
     if (c.status === 'active') {
       try { ctx.tools.updateCampaign(c.id, { status: 'paused' }); } catch { /* ignore */ }
       c.status = 'paused';
@@ -214,7 +215,7 @@ export function stopPaidAds(ctx: RuntimeCtx, productId: string | null, reason: s
       paused++;
     } else if (c.pausedFor === 'outage') c.pausedFor = 'founder';
   }
-  const tasks = openTasks(w, (t) => PAID_AD_TASKS.includes(t.kind) && (!productId || t.input.productId === productId));
+  const tasks = openTasks(w, (t) => PAID_AD_TASKS.includes(t.kind) && (!productId || t.input.productId === productId) && (!channel || taskChannel(t) === channel));
   for (const t of tasks) dropTask(ctx, t, reason);
   return { paused, cancelled: tasks.length };
 }

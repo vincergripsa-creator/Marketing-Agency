@@ -6,8 +6,10 @@
  *   - why paid acquisition is blocked today (ad ban, negative cash, survival, CFO envelope);
  *   - the ranking of the candidates, so ads and posts always go to the best products first.
  */
-import type { AdCreative, Lesson, Product, Review, WorldState } from '../shared.js';
+import type { AdCreative, ChannelId, Lesson, Product, Review, WorldState } from '../shared.js';
+import { acceptance, CHANNELS, channelOf } from '../shared.js';
 import { productPnls } from './accounting.js';
+import { CHANNEL_POLICY } from './channelPolicy.js';
 import { adsHold } from './holds.js';
 import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, isUpsellProduct, productMetrics } from './metrics.js';
 import { learning, sim } from './modules.js';
@@ -40,6 +42,8 @@ export const STOP_LOSS_ROAS = 0.8;
 export const STOP_LOSS_SPEND = 25;
 export const STOP_LOSS_DAYS = 2;
 export const NO_TRACTION_ROAS = 0.4;
+/** A creative shown this often to the same people is tired, on any channel. */
+export const TIRED_FREQUENCY = 2.5;
 /** For relaunch decisions, a stopped campaign that did not pay back its spend counts as a loser. */
 export const LOSER_ROAS = 1;
 /** After this many losing campaigns in a row with a weak ROAS over the streak, paid ads stop for this version. */
@@ -173,14 +177,17 @@ export function lessonDay(l: Lesson): number {
  * The retro's « Couper les pubs de la niche … » about this version: the team does not spend against its own lesson.
  * A rewrite alone does not make it about this version: its numbers must not hold ads shown before it went online.
  */
-export function cutLesson(world: WorldState, p: Product): Lesson | null {
+export function cutLesson(world: WorldState, p: Product, ch: ChannelId = 'tiktok'): Lesson | null {
   const key = learning.LESSON_KEYS.niche(p.nicheId);
   const since = versionSince(world, p);
   const inNiche = (id: string): boolean => world.company.products.some((x) => x.id === id && x.nicheId === p.nicheId);
   return world.company.lessons.find((l) => {
     if (l.key !== key || lessonDay(l) < since || !CUT_LESSON.test(l.insight)) return false;
     const from = lessonDay(l) - learning.NICHE_WINDOW_DAYS + 1;
-    return !world.market.adStats.some((s) => s.day >= from && s.day < since && s.spend > 0 && inNiche(s.productId));
+    const spent = (s: { day: number; spend: number; productId: string }) => s.day >= from && s.spend > 0 && inNiche(s.productId);
+    // A lesson only knows the channels that spent behind its numbers: it says nothing of one the guide has not tried.
+    if (ch !== 'tiktok' && !world.market.adStats.some((s) => spent(s) && s.day <= lessonDay(l) && channelOf(s) === ch)) return false;
+    return !world.market.adStats.some((s) => spent(s) && s.day < since);
   }) ?? null;
 }
 
@@ -212,8 +219,8 @@ export interface AdHistory {
   landingViews: number; purchases: number;
 }
 
-export function adHistory(world: WorldState, productId: string, sinceDay = 1): AdHistory {
-  const camps = world.company.campaigns.filter((c) => c.productId === productId && c.startDay >= sinceDay).sort((a, b) => a.startDay - b.startDay);
+export function adHistory(world: WorldState, productId: string, sinceDay = 1, ch: ChannelId = 'tiktok'): AdHistory {
+  const camps = world.company.campaigns.filter((c) => c.productId === productId && c.startDay >= sinceDay && channelOf(c) === ch).sort((a, b) => a.startDay - b.startDay);
   const stats = world.market.adStats.filter((s) => s.productId === productId);
   let losers = 0;
   let lastEndDay: number | null = null;
@@ -247,16 +254,20 @@ export function cooldownDays(losers: number): number {
 /** hard = until a new version; soft = cooldown; final = not even the CEO's watchdog test: the numbers already decided. */
 export interface PaidBlock { reason: string; hard: boolean; final?: boolean }
 
-/** Product-level reason not to start a new paid campaign today. */
-export function productPaidBlock(world: WorldState, p: Product): PaidBlock | null {
-  const held = adsHold(world, p.id);
+/**
+ * Product-level reason not to start a new paid campaign today. Holds, quality and money stay product-wide. Cooldowns and
+ * "ads-dead" are a channel's own history: a guide dead on TikTok can still get its Meta test.
+ */
+export function productPaidBlock(world: WorldState, p: Product, ch: ChannelId = 'tiktok'): PaidBlock | null {
+  const held = adsHold(world, p.id, ch);
   if (held) return { reason: held.reason, hard: true, final: true };
   const promo = promotionBlock(world, p);
   if (promo) return { reason: promo, hard: true, final: true };
   if (isUpsellProduct(world, p.id)) return { reason: 'upsell vendu via « La suite est ici », pas en pub froide', hard: true };
-  const cut = cutLesson(world, p);
+  const cut = cutLesson(world, p, ch);
   if (cut) return { reason: `leçon du jour ${lessonDay(cut)} : ${cut.insight.split(' : ')[0]}`, hard: true, final: true };
-  const h = adHistory(world, p.id, versionSince(world, p));
+  const since = versionSince(world, p);
+  const h = adHistory(world, p.id, since, ch);
   // "Ads-dead": stop paying for this version; one fresh test is allowed a week after the last campaign.
   if (h.losers >= ADS_DEAD_LOSERS && (h.streakRoas ?? 0) < ADS_DEAD_ROAS && (h.lastEndDay === null || world.day <= h.lastEndDay + ADS_DEAD_RETRY_DAYS)) {
     return { reason: `${h.losers} campagnes perdantes d'affilée (ROAS ${dec(h.streakRoas ?? 0)}) : plus de pub payante sur cette version avant le jour ${(h.lastEndDay ?? world.day) + ADS_DEAD_RETRY_DAYS + 1}`, hard: true };
@@ -265,26 +276,48 @@ export function productPaidBlock(world: WorldState, p: Product): PaidBlock | nul
   if (wait > 0 && h.lastEndDay !== null && world.day <= h.lastEndDay + wait) {
     return { reason: `${h.losers} campagnes perdantes d'affilée : on laisse ${wait} jour(s) avant un nouvel angle (reprise le jour ${h.lastEndDay + wait + 1})`, hard: false };
   }
+  // A plan stop holds (channels §7.4): an average can look fine while the next euro loses money. The line stays out while the days
+  // that stopped it are in the plan's window: back any sooner, it would read the same curve and stop again. A new version starts over.
+  const planStop = Math.max(0, ...world.company.campaigns.filter((c) => c.productId === p.id && channelOf(c) === ch).map((c) => c.planStopped ?? 0));
+  const back = planStop + CHANNEL_POLICY.alloc.windowDays;
+  if (planStop >= since && world.day < back) return { reason: `le plan du CFO a arrêté cette ligne le jour ${planStop} : reprise le jour ${back}`, hard: false };
   return null;
 }
 
-/** Same rule as the ad platform: a suspension ends on `bannedUntilDay`. */
-export function adBanActive(world: WorldState): boolean {
-  const acc = world.market.adAccount;
-  return acc.banned && world.day < acc.bannedUntilDay;
+/** The account behind a channel: TikTok keeps `adAccount`, YouTube and Search share Google's. */
+function adAccountOf(world: WorldState, ch: ChannelId) {
+  const id = CHANNELS[ch].account;
+  return id === 'tiktok' ? world.market.adAccount : world.market.channels?.accounts[id];
 }
 
-/** Company-level reason why no paid campaign can start today, or null. */
-export function companyPaidBlock(world: WorldState): string | null {
-  const held = adsHold(world);
+/** Same rule as the ad platform: a suspension ends on `bannedUntilDay`. Bans are per account. */
+export function adBanActive(world: WorldState, ch: ChannelId = 'tiktok'): boolean {
+  const acc = adAccountOf(world, ch);
+  return !!acc && acc.banned && world.day < acc.bannedUntilDay;
+}
+
+/** Set on a channel kill: `requested` then holds the day it may come back, and until that day the channel is off the book. */
+export function channelPaused(world: WorldState, ch: ChannelId): boolean {
+  const day = world.company.channels?.requested[ch];
+  return day !== undefined && day > world.day && !world.company.channels!.open.includes(ch);
+}
+
+/**
+ * Company-level reason why no paid campaign can start today, or null. With a channel it speaks for that account alone.
+ * Without one, a ban blocks only once every open account is banned.
+ */
+export function companyPaidBlock(world: WorldState, ch?: ChannelId): string | null {
+  const held = adsHold(world, null, ch);
   if (held) return held.reason;
+  if (ch && channelPaused(world, ch)) return `${CHANNELS[ch].label} en pause après ses pertes : pas de campagne avant le jour ${world.company.channels!.requested[ch]}`;
   if (currentBudget(world).outage) return `panne de paiement annoncée aujourd'hui : aucune vente possible, aucune dépense pub`;
-  if (adBanActive(world)) return `compte publicitaire TikTok suspendu jusqu'au jour ${world.market.adAccount.bannedUntilDay}`;
+  const accounts = ch ? [ch] : world.company.channels?.open ?? ['tiktok'];
+  if (accounts.every((c) => adBanActive(world, c))) return `compte publicitaire ${CHANNELS[accounts[0]!].label} suspendu jusqu'au jour ${adAccountOf(world, accounts[0]!)!.bannedUntilDay}`;
   const b = currentBudget(world);
   if (b.bankrupt || world.status === 'bankrupt') return 'trésorerie négative : aucune dépense pub';
   if (b.survival) return `mode survie (trésorerie ${eur(b.cash)} < 30 % du départ)`;
   const room = b.adCap - committedAdBudget(world);
-  if (room < MIN_CAMPAIGN_BUDGET) return `enveloppe pub du CFO déjà engagée (${eur(Math.max(0, room))} libres sur ${eur(b.adCap)})`;
+  if (room < (ch ? CHANNELS[ch].minDailyBudget : MIN_CAMPAIGN_BUDGET)) return `enveloppe pub du CFO déjà engagée (${eur(Math.max(0, room))} libres sur ${eur(b.adCap)})`;
   return null;
 }
 
@@ -292,29 +325,38 @@ export function companyPaidBlock(world: WorldState): string | null {
 
 export interface CreativeStats { impressions: number; clicks: number; spend: number; revenue: number; ctr: number; lastFrequency: number }
 
-export function creativeStats(world: WorldState, creativeId: string): CreativeStats {
+/** What a creative did on one channel: a CTR only compares with the CTRs of its own channel. */
+export function creativeStats(world: WorldState, creativeId: string, ch: ChannelId = 'tiktok'): CreativeStats {
   let impressions = 0, clicks = 0, spend = 0, revenue = 0, lastDay = -1, lastFrequency = 0;
   for (const s of world.market.adStats) {
-    if (s.creativeId !== creativeId) continue;
+    if (s.creativeId !== creativeId || channelOf(s) !== ch) continue;
     impressions += s.impressions; clicks += s.clicks; spend += s.spend; revenue += s.revenue;
     if (s.day >= lastDay) { lastDay = s.day; lastFrequency = s.frequency; }
   }
   return { impressions, clicks, spend, revenue, ctr: impressions > 0 ? clicks / impressions : 0, lastFrequency };
 }
 
+/** `review` stays TikTok's verdict on a master. Every other channel keeps its own, and its own formats. */
+function approvedOn(c: AdCreative, ch: ChannelId): boolean {
+  const review = ch === 'tiktok' ? c.review : c.channelReviews?.[ch];
+  return review?.status === 'approved' && acceptance(ch, c) !== null;
+}
+
 /**
- * Approved creatives of a product that are worth putting in a new campaign, best first:
+ * Approved creatives of a product that are worth putting in a new campaign on a channel, best first:
  * never shown (by quality), then proven ones (good CTR, not fatigued, not money-losing).
+ * Frequency alone says "tired" outside TikTok: it is public, the 40 000 impressions rule is TikTok's.
  */
-export function launchableCreatives(world: WorldState, productId: string): AdCreative[] {
-  const inUse = new Set(activeCampaigns(world).flatMap((c) => c.creativeIds));
+export function launchableCreatives(world: WorldState, productId: string, ch: ChannelId = 'tiktok'): AdCreative[] {
+  const inUse = new Set(activeCampaigns(world).filter((c) => channelOf(c) === ch).flatMap((c) => c.creativeIds));
+  const shown = (id: string): number | undefined => (ch === 'tiktok' ? world.market.creativeImpressions[id] : undefined);
   const fresh: AdCreative[] = [];
   const proven: { c: AdCreative; ctr: number }[] = [];
   for (const c of world.company.creatives) {
-    if (c.productId !== productId || c.review.status !== 'approved' || inUse.has(c.id)) continue;
-    const s = creativeStats(world, c.id);
-    if (s.impressions === 0 && !(world.market.creativeImpressions[c.id] > 0)) { fresh.push(c); continue; }
-    const tired = s.lastFrequency >= 2.5 || (world.market.creativeImpressions[c.id] ?? s.impressions) >= 40_000;
+    if (c.productId !== productId || !approvedOn(c, ch) || inUse.has(c.id)) continue;
+    const s = creativeStats(world, c.id, ch);
+    if (s.impressions === 0 && !((shown(c.id) ?? 0) > 0)) { fresh.push(c); continue; }
+    const tired = s.lastFrequency >= TIRED_FREQUENCY || (ch === 'tiktok' && (shown(c.id) ?? s.impressions) >= 40_000);
     const losing = s.spend >= 10 && s.revenue / s.spend < 1;
     if (!tired && !losing && s.ctr >= 0.008) proven.push({ c, ctr: s.ctr });
   }

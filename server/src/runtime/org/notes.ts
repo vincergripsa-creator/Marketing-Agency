@@ -3,6 +3,7 @@
  * Each write is awaited (D55): a note landing behind the next brain.search would make a reload differ from a straight run.
  */
 import type { AgentState, RoleId, WorldState } from '../../shared.js';
+import { sameAccount } from '../../shared.js';
 import { agentNoteName, agentNotePath, writeAlumnusNote, writeDeptNote, writePlaybookNotes } from '../../learning/playbooks.js';
 import { openChannels } from '../channels.js';
 import type { RuntimeCtx } from '../ctx.js';
@@ -65,7 +66,7 @@ function roleRow(w: WorldState, roleId: RoleId, days: NonNullable<WorldState['co
   const n = Math.max(1, days.length);
   const wait = sum(days.flatMap((d) => role.core.map((k) => d.wait[k] ?? 0))) / n;
   const holders = roleHolders(w, roleId);
-  if (!holders.length && (wait <= 0 || (role.channel && !openChannels(w).includes(role.channel)))) return null;
+  if (!holders.length && (wait <= 0 || (role.channel && !openChannels(w).some((ch) => sameAccount(ch, role.channel!))))) return null;
   const owners = holders.length ? holders : ownersOfAny(w, role.core);
   const busy = sum(owners.flatMap((a) => days.map((d) => d.busy[a.id] ?? 0)));
   const util = busy / (Math.max(1, owners.length) * n * ORG.workTicksPerDay);

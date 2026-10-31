@@ -3,7 +3,7 @@
  * and reviewer routing. Pure functions over WorldState (activities are emitted through core/emit).
  */
 import type { AgentId, AgentState, ChannelId, DeptId, Lesson, Mission, Office, Task, TaskKind, WorldState } from '../shared.js';
-import { channelOf } from '../shared.js';
+import { channelOf, sameAccount } from '../shared.js';
 import { emit, nextId } from '../core/index.js';
 import { ROLES } from './org/catalog.js';
 import { officerId, reviewerFor } from './org/officers.js';
@@ -221,10 +221,11 @@ export function taskChannel(task: Task): ChannelId {
 
 /**
  * Candidates able to do a kind: those whose job it is and the task's department first, then anyone who owns it, so a
- * specialist is never stranded outside the kind's home. A buyer serves only their own channel (D25).
+ * specialist is never stranded outside the kind's home. A buyer serves only their own account: YouTube and Search are
+ * one Google buyer's (D3, D25).
  */
 export function capableAgents(world: WorldState, kind: TaskKind, dept?: DeptId, channel: ChannelId = 'tiktok'): AgentState[] {
-  const able = world.company.agents.filter((a) => a.taskKinds.includes(kind) && (ROLES[a.roleId].channel ?? channel) === channel);
+  const able = world.company.agents.filter((a) => a.taskKinds.includes(kind) && sameAccount(ROLES[a.roleId].channel ?? channel, channel));
   const near = able.filter((a) => a.dept === (dept ?? KIND_META[kind].dept) || fitOf(a, kind) === 'core');
   return near.length ? near : able;
 }

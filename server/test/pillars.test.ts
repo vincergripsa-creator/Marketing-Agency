@@ -60,7 +60,6 @@ vi.mock('../src/runtime/compaction.js', async (importOriginal) => {
 
 /** Shrinks as packages land: P5.1 and P5.2 the channels, P11.1 and P11.2 the rest. Empty at the end. */
 const NOT_LANDED: TaskKind[] = [
-  'open_channel', 'adapt_creative', 'write_search_ads', 'reconcile_channels', 'allocate_channels',
   'write_lead_magnet', 'write_email_sequence', 'send_broadcast', 'design_bump', 'portfolio_review',
 ];
 

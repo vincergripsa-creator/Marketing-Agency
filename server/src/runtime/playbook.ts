@@ -2,7 +2,8 @@
  * Playbooks = learned French rules per agent (max 12). A few machine-readable patterns are honoured
  * by the runtime (and by the content engine): see SHARED CONVENTIONS.
  */
-import type { AdFormat, AgentId, HookStyle, WorldState } from '../shared.js';
+import type { AdFormat, AgentId, ChannelId, HookStyle, WorldState } from '../shared.js';
+import { CHANNEL_IDS } from '../shared.js';
 import { includesCI } from './util.js';
 
 export const MAX_PLAYBOOK_RULES = 12;
@@ -17,6 +18,7 @@ export interface PlaybookDirectives {
   banned: string[];
   hook: HookStyle | null;
   format: AdFormat | null;
+  channel: ChannelId | null;
   targetPrice: number | null;
   maxHype: number | null;
   tone: string | null;
@@ -26,12 +28,13 @@ const RX = {
   banned: /Ne jamais écrire\s*«\s*([^»]+?)\s*»/i,
   hook: /Privilégier le hook\s*«\s*([^»]+?)\s*»/i,
   format: /Privilégier le format\s*«\s*([^»]+?)\s*»/i,
+  channel: /Privilégier le canal\s*«\s*([^»]+?)\s*»/i,
   price: /Prix cible\s*«\s*([^»]+?)\s*»/i,
   hype: /Niveau de promesse max\s*«\s*([^»]+?)\s*»/i,
   tone: /Ton support\s*«\s*([^»]+?)\s*»/i,
 };
 
-const SINGLETONS = [RX.hook, RX.format, RX.price, RX.hype, RX.tone];
+const SINGLETONS = [RX.hook, RX.format, RX.channel, RX.price, RX.hype, RX.tone];
 
 function parseNumber(s: string): number | null {
   const m = /-?\d+(?:[.,]\d+)?/.exec(s);
@@ -53,7 +56,7 @@ function scopeOf(rule: string, m: RegExpExecArray): string | null {
  * With `niche`, rules scoped to another niche (« … sur « Autre niche » ») are ignored; banned words stay global.
  */
 export function parsePlaybook(rules: readonly string[], niche?: string): PlaybookDirectives {
-  const d: PlaybookDirectives = { banned: [], hook: null, format: null, targetPrice: null, maxHype: null, tone: null };
+  const d: PlaybookDirectives = { banned: [], hook: null, format: null, channel: null, targetPrice: null, maxHype: null, tone: null };
   const inScope = (rule: string, m: RegExpExecArray): boolean => {
     const scope = scopeOf(rule, m);
     if (!scope || !niche) return true;
@@ -67,6 +70,8 @@ export function parsePlaybook(rules: readonly string[], niche?: string): Playboo
     if (m && (HOOK_STYLES as readonly string[]).includes(m[1]!.trim())) { d.hook = m[1]!.trim() as HookStyle; continue; }
     m = RX.format.exec(rule);
     if (m && (AD_FORMATS as readonly string[]).includes(m[1]!.trim())) { d.format = m[1]!.trim() as AdFormat; continue; }
+    m = RX.channel.exec(rule);
+    if (m && (CHANNEL_IDS as readonly string[]).includes(m[1]!.trim())) { d.channel = m[1]!.trim() as ChannelId; continue; }
     m = RX.price.exec(rule);
     if (m) { const n = parseNumber(m[1]!); if (n !== null && n > 0) d.targetPrice = n; continue; }
     m = RX.hype.exec(rule);

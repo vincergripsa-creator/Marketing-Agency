@@ -2,9 +2,10 @@
  * The founder's orders, executed on the spot: a stop is a standing hold the plan and the handlers respect until he lifts
  * it, not a task that may or may not reach its goal. An order that cannot be carried out is said so, never closed as done.
  */
-import type { AgentState, Mission, Task } from '../shared.js';
+import type { AgentState, ChannelId, Mission, Task } from '../shared.js';
+import { CHANNELS } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
-import { addHold, firingHold, liftHolds } from './holds.js';
+import { addHold, adsHold, firingHold, liftHolds } from './holds.js';
 import { committedAdBudget, currentBudget } from './metrics.js';
 import type { FounderOrder, OrderAction, PersonOrder } from './missions.js';
 import { tellFounder } from './missions.js';
@@ -41,11 +42,30 @@ async function fireAgent(ctx: RuntimeCtx, agent: AgentState): Promise<{ text: st
   return { text: outcome === 'left' ? `C'est fait : ${agent.name} quitte l'agence.` : `C'est noté : ${agent.name} part dès que sa relève arrive, le recrutement est ouvert.`, left: true };
 }
 
+const channelNames = (order: { channels?: readonly ChannelId[] }): string => (order.channels ?? []).map((ch) => CHANNELS[ch].label).join(', ');
+
 function stopAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'stop_ads' }, when: string): string {
-  const { product } = order;
-  const { paused, cancelled } = stopPaidAds(ctx, product?.id ?? null, `ordre du fondateur du jour ${ctx.world.day}`);
-  addHold(ctx.world, { kind: 'ads', productId: product?.id ?? null, until: null, reason: `les pubs${product ? ` de « ${short(product.title, 50)} »` : ''} sont coupées sur ordre du fondateur (jour ${ctx.world.day})` });
-  return `C'est fait${when} : ${paused} campagne(s) en pause, ${cancelled} tâche(s) de pub annulée(s). Aucune pub ne repartira${product ? ` sur « ${short(product.title, 50)} »` : ''} tant que tu ne me dis pas « reprends les pubs ».`;
+  const { product, channels } = order;
+  const names = channelNames(order);
+  let paused = 0, cancelled = 0;
+  for (const channel of channels?.length ? channels : [null]) {
+    const stopped = stopPaidAds(ctx, product?.id ?? null, `ordre du fondateur du jour ${ctx.world.day}`, channel);
+    paused += stopped.paused;
+    cancelled += stopped.cancelled;
+    addHold(ctx.world, { kind: 'ads', productId: product?.id ?? null, until: null, ...(channel ? { channel } : {}), reason: `les pubs${channel ? ` ${CHANNELS[channel].label}` : ''}${product ? ` de « ${short(product.title, 50)} »` : ''} sont coupées sur ordre du fondateur (jour ${ctx.world.day})` });
+  }
+  return `C'est fait${when} : ${paused} campagne(s) en pause, ${cancelled} tâche(s) de pub annulée(s). Aucune pub ne repartira${names ? ` sur ${names}` : ''}${product ? ` sur « ${short(product.title, 50)} »` : ''} tant que tu ne me dis pas « reprends ${names || 'les pubs'} ».`;
+}
+
+/** « Reprends Meta » lifts what he said about Meta: an order on every channel still stands, and he is told so. */
+function resumeAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'resume_ads' }): { text: string; resumed: boolean } {
+  const w = ctx.world;
+  const { product, channels } = order;
+  const lifted = liftHolds(w, (h) => h.kind === 'ads' && (!product || h.productId === null || h.productId === product.id) && (!channels || (!!h.channel && channels.includes(h.channel))));
+  const stands = (channels ?? []).map((ch) => adsHold(w, product?.id ?? null, ch)).find(Boolean);
+  if (stands) return { text: `Je n'ai rien relancé : ${stands.reason}. Dis « reprends les pubs » pour lever cet ordre.`, resumed: false };
+  const { resumed, left } = resumeCampaigns(ctx, 'founder', product?.id, channels);
+  return { text: `C'est reparti${channels ? ` sur ${channelNames(order)}` : ''} : ${lifted.length} blocage(s) levé(s), ${resumed.length} campagne(s) relancée(s)${left.length ? `, ${left.length} restée(s) en pause (produit, budget ou règles de la pub)` : ''}. Le plan de demain reprend les lancements.`, resumed: true };
 }
 
 /** Every order of one sentence on one mission: he reads each answer, and one refused order shows on it. */
@@ -142,9 +162,8 @@ async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): P
       return;
     }
     case 'resume_ads': {
-      const lifted = liftHolds(w, (h) => h.kind === 'ads' && (!order.product || h.productId === null || h.productId === order.product.id));
-      const { resumed, left } = resumeCampaigns(ctx, 'founder', order.product?.id);
-      done(`C'est reparti : ${lifted.length} blocage(s) levé(s), ${resumed.length} campagne(s) relancée(s)${left.length ? `, ${left.length} restée(s) en pause (produit, budget ou règles de la pub)` : ''}. Le plan de demain reprend les lancements.`);
+      const { text, resumed } = resumeAds(ctx, { ...order, action: 'resume_ads' });
+      if (resumed) done(text); else refuse(text);
       return;
     }
     case 'resume_launches':

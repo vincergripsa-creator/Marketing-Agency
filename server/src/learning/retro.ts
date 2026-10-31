@@ -1,11 +1,12 @@
 /** Evening retro: KPI → bandit rewards → experiments → lessons (dedup) → playbooks → brain notes → activity feed. */
 import type { BrainNote, BrainVault, ContentEngine, LessonDraft, MindContext } from '../contracts.js';
-import type { AgentState, DailyKpi, Experiment, Lesson, WorldEvent, WorldState } from '../shared.js';
+import type { AgentState, ChannelId, DailyKpi, Experiment, Lesson, WorldEvent, WorldState } from '../shared.js';
+import { CHANNELS, channelOf } from '../shared.js';
 import { clamp, emit, nextId } from '../core/index.js';
 import { isAnnouncedOutage } from '../sim/outage.js';
 import { armStats, HYPE_ARMS, nearestArm, PRICE_ARMS, rewardArm } from './bandits.js';
 import {
-  addRow, adRows, ctrOf, cvrOf, emptyAgg, indexWorld, nicheName, priceOnDay, productOfRow, refundsOnDay, retroAgent, roasOf,
+  addRow, adRows, ctrOf, cvrOf, emptyAgg, indexWorld, nicheName, onReference, priceOnDay, productOfRow, referenceChannels, refundsOnDay, retroAgent, roasOf,
   type FunnelAgg,
 } from './data.js';
 import { updateExperiments, experimentValueKind } from './experiments.js';
@@ -42,6 +43,8 @@ export const WORN_CREATIVE_WEIGHT = 0.25;
  * Idempotent per day through CompanyState.lastRetroDay (survives save/reload): a second retro the
  * same evening, or a retro replayed after loading a save, never double-counts the rewards.
  * An announced outage day rewards nothing: adRows leaves it out, it says nothing about a hook, a price or a niche.
+ * Hook and format read TikTok's rows, price and promise their product's reference channel (channels §5.3). The channel
+ * bandit's own reward needs the reconciled credit: the channels pillar pays it.
  */
 export function applyDailyRewards(world: WorldState, day: number): number {
   const last = Number(world.company.lastRetroDay);
@@ -49,18 +52,24 @@ export function applyDailyRewards(world: WorldState, day: number): number {
   world.company.lastRetroDay = day;
 
   const ix = indexWorld(world);
+  const refs = referenceChannels(world, day);
   const perCreative = new Map<string, { agg: FunnelAgg; nicheId: string | null }>();
   const perProduct = new Map<string, FunnelAgg>();
+  const perReference = new Map<string, FunnelAgg>();
   for (const r of adRows(world, day, day)) {
     const p = productOfRow(ix, r);
-    const c = perCreative.get(r.creativeId) ?? { agg: emptyAgg(), nicheId: p?.nicheId ?? null };
-    addRow(c.agg, r);
-    perCreative.set(r.creativeId, c);
-    if (p) perProduct.set(p.id, addRow(perProduct.get(p.id) ?? emptyAgg(), r));
+    if (channelOf(r) === 'tiktok') {
+      const c = perCreative.get(r.creativeId) ?? { agg: emptyAgg(), nicheId: p?.nicheId ?? null };
+      addRow(c.agg, r);
+      perCreative.set(r.creativeId, c);
+    }
+    if (!p) continue;
+    perProduct.set(p.id, addRow(perProduct.get(p.id) ?? emptyAgg(), r));
+    if (onReference(refs, p.id, r)) perReference.set(p.id, addRow(perReference.get(p.id) ?? emptyAgg(), r));
   }
   // Impressions each creative had already received before today (its fatigue, visible in the ad stats).
   const seen = new Map<string, number>();
-  for (const r of world.market?.adStats ?? []) if (r.day < day && perCreative.has(r.creativeId)) seen.set(r.creativeId, (seen.get(r.creativeId) ?? 0) + r.impressions);
+  for (const r of world.market?.adStats ?? []) if (r.day < day && perCreative.has(r.creativeId) && channelOf(r) === 'tiktok') seen.set(r.creativeId, (seen.get(r.creativeId) ?? 0) + r.impressions);
   let rewards = 0;
   for (const [creativeId, { agg, nicheId }] of perCreative) {
     const creative = ix.creatives.get(creativeId);
@@ -75,11 +84,12 @@ export function applyDailyRewards(world: WorldState, day: number): number {
     rewardArm(world, `ad_format:${nicheId}`, creative.format, reward, weight);
     rewards += 2;
   }
-  const refunds = refundsOnDay(world, ix, day);
+  const refunds = refundsOnDay(world, ix, day, (o) => onReference(refs, o.productId, o));
   const ordersToday = new Map<string, number>();
-  for (const o of world.market?.orders ?? []) if (o.day === day) ordersToday.set(o.productId, (ordersToday.get(o.productId) ?? 0) + 1);
-  for (const [productId, agg] of perProduct) {
+  for (const o of world.market?.orders ?? []) if (o.day === day && onReference(refs, o.productId, o)) ordersToday.set(o.productId, (ordersToday.get(o.productId) ?? 0) + 1);
+  for (const [productId, all] of perProduct) {
     const p = ix.products.get(productId)!;
+    const agg = perReference.get(productId) ?? emptyAgg();
     const ref = refunds.get(productId) ?? { count: 0, amount: 0 };
     if (agg.landingViews >= 20) {
       const weight = clamp(agg.landingViews / 50, 0.5, 3);
@@ -96,8 +106,8 @@ export function applyDailyRewards(world: WorldState, day: number): number {
         rewards++;
       }
     }
-    if (agg.spend >= 3 && p.nicheId) {
-      rewardArm(world, 'niche', p.nicheId, clamp(roasOf(agg) / 3), clamp(agg.spend / 20, 0.5, 3));
+    if (all.spend >= 3 && p.nicheId) {
+      rewardArm(world, 'niche', p.nicheId, clamp(roasOf(all) / 3), clamp(all.spend / 20, 0.5, 3));
       rewards++;
     }
   }
@@ -286,15 +296,18 @@ async function mindContext(world: WorldState, brain: BrainVault, agent: AgentSta
   return { agent, playbook: [...(world.company.playbooks?.[agent.id] ?? [])], brainNotes, lessons: (world.company.lessons ?? []).slice(-10), day: world.day };
 }
 
+const CHANNEL_DIMENSIONS: Record<string, string> = { channel: 'Canal', channel_cat: 'Canal par catégorie' };
+
 function dimensionLabel(world: WorldState, dim: string): string {
   const [base, nicheId] = dim.split(':');
-  const label = DIMENSION_LABELS[base!] ?? base!;
+  const label = DIMENSION_LABELS[base!] ?? CHANNEL_DIMENSIONS[base!] ?? base!;
   return nicheId ? `${label} · ${nicheName(world, nicheId)}` : label;
 }
 
 function armLabel(world: WorldState, dim: string, key: string): string {
   if (dim === 'niche') return nicheName(world, key);
   if (dim.startsWith('price')) return `${key} €`;
+  if (dim.startsWith('channel')) return CHANNELS[key as ChannelId]?.label ?? key;
   return key;
 }
 

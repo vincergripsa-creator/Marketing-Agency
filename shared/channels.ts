@@ -57,6 +57,15 @@ export const CHANNELS: Record<ChannelId, ChannelPublic> = {
 
 export const channelOf = (x: { channel?: ChannelId }): ChannelId => x.channel ?? 'tiktok';
 
+/** One account, one buyer: YouTube and Search share Google's. */
+export const sameAccount = (a: ChannelId, b: ChannelId): boolean => CHANNELS[a].account === CHANNELS[b].account;
+
+/** How our own review opens the reason of an ad it dropped. */
+export const DROPPED_REASON = 'Retirée avant soumission';
+
+/** No platform saw this ad: its reason is our reviewer's note, and it says nothing of a platform's rules. */
+export const droppedBeforeSubmission = (review: { reason: string | null }): boolean => !!review.reason?.startsWith(DROPPED_REASON);
+
 /** The ratio factor of a creative on a channel, null when the channel refuses it. An absent ratio is 9:16. */
 export function acceptance(ch: ChannelId, c: { format: AdFormat; ratio?: AdRatio }): number | null {
   const ratio = c.ratio ?? '9:16';

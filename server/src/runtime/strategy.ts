@@ -5,20 +5,22 @@
  * Then the ContentEngine (Claude mode) may adjust it; the runtime materializes the plan into tasks.
  */
 import type { DayPlanItem, DayPlan } from '../contracts.js';
-import type { Lesson, Product, Task, TaskKind } from '../shared.js';
+import type { ChannelId, Lesson, Product, Task, TaskKind } from '../shared.js';
+import { CHANNELS, channelOf } from '../shared.js';
+import { multiChannel, openChannels, planChannels } from './channels.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, latestOutput, nameOf, productOf, speak, vocOf } from './ctx.js';
 import { learning, sim } from './modules.js';
-import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, fromBuyer, isProductFeedback, isUpsellProduct, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO } from './metrics.js';
+import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, fromBuyer, isProductFeedback, isUpsellProduct, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO, referenceChannel } from './metrics.js';
 import { adsHeldSince, launchHold, productHold } from './holds.js';
 import { officerId } from './org/officers.js';
 import { createProductPipeline, createUpsellPipeline, createV2Pipeline, excludedNiches, killProduct, openTasksForProduct, pauseProduct, resumePipeline } from './pipeline.js';
 import { guideGaps } from './redteam.js';
-import { createTask, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, PRODUCT_KINDS } from './tasks.js';
+import { createTask, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, PRODUCT_KINDS, taskChannel } from './tasks.js';
 import { openMessages, urgency } from './handlers/support.js';
 import { experimentCandidate } from './handlers/ops.js';
 import {
-  ACQUISITION_KINDS, acquisitionCandidates, adBanActive, bestCandidate, companyPaidBlock, daysWithoutAds, isReworking, launchableCreatives,
+  ACQUISITION_KINDS, acquisitionCandidates, adBanActive, bestCandidate, channelPaused, companyPaidBlock, daysWithoutAds, isReworking, launchableCreatives,
   lessonDay, LOSS_WINDOW_DAYS, MAX_IDLE_DAYS, MIN_CAMPAIGN_BUDGET, productHealth, productPaidBlock, promotionBlock, recentLoss, recentProfits, refundsTooHigh, refundsWorthRework, versionSince as versionSinceOf,
 } from './acquisition.js';
 
@@ -190,11 +192,12 @@ export const PRICE_DOWN_VIEWS = 300;
 export const PAID_PRICE_FLOOR = 14;
 const PRICE_TIERS = [9, 14, 19, 24, 29, 39, 49];
 
-/** Ad revenue per paid landing view of a product over [from, to] (what one more visitor is worth at that price). */
+/** Ad revenue per paid landing view of a product over [from, to] (what one more visitor is worth at that price), on its reference channel. */
 export function revenuePerVisitor(w: RuntimeCtx['world'], productId: string, from: number, to: number): { views: number; rpv: number } {
+  const channel = referenceChannel(w, productId);
   let views = 0, revenue = 0;
   for (const s of w.market.adStats) {
-    if (s.productId !== productId || s.day < from || s.day > to) continue;
+    if (s.productId !== productId || s.day < from || s.day > to || channelOf(s) !== channel) continue;
     views += s.landingViews; revenue += s.revenue;
   }
   return { views, rpv: views > 0 ? revenue / views : 0 };
@@ -292,17 +295,17 @@ export function reactToOutage(ctx: RuntimeCtx): boolean {
   return false;
 }
 
-/** Campaigns paused for this reason start again inside the CFO's envelope, unless their product can no longer take ads. */
-export function resumeCampaigns(ctx: RuntimeCtx, reason: 'outage' | 'founder', productId?: string): { resumed: string[]; left: string[] } {
+/** Campaigns paused for this reason start again inside the CFO's envelope, unless their product or their channel can no longer take ads. */
+export function resumeCampaigns(ctx: RuntimeCtx, reason: 'outage' | 'founder', productId?: string, channels?: readonly ChannelId[]): { resumed: string[]; left: string[] } {
   const w = ctx.world;
   let room = currentBudget(w).adCap - committedAdBudget(w);
   const resumed: string[] = [];
   const left: string[] = [];
-  for (const c of w.company.campaigns.filter((x) => x.pausedFor === reason && (!productId || x.productId === productId))) {
+  for (const c of w.company.campaigns.filter((x) => x.pausedFor === reason && (!productId || x.productId === productId) && (!channels || channels.includes(channelOf(x))))) {
     delete c.pausedFor;
     const p = productOf(ctx, c.productId);
     const daily = Math.min(c.dailyBudget, Math.floor(room));
-    if (!p || p.status !== 'live' || productPaidBlock(w, p)?.final || daily < MIN_CAMPAIGN_BUDGET) { left.push(c.name); continue; }
+    if (!p || p.status !== 'live' || channelPaused(w, channelOf(c)) || productPaidBlock(w, p, channelOf(c))?.final || daily < CHANNELS[channelOf(c)].minDailyBudget) { left.push(c.name); continue; }
     if (daily < c.dailyBudget && ctx.tools.updateCampaign(c.id, { dailyBudget: daily }).ok) c.dailyBudget = daily;
     if (!ctx.tools.updateCampaign(c.id, { status: 'active' }).ok) { left.push(c.name); continue; }
     c.status = 'active';
@@ -324,8 +327,9 @@ interface AcquisitionPlan { launchedFor: Product | null; blocked: string | null 
 function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: string[]): AcquisitionPlan {
   const w = ctx.world;
   const candidates = acquisitionCandidates(w);
-  const waiting = candidates.filter((c) => !activeCampaigns(w, c.product.id).length);
-  const companyBlock = companyPaidBlock(w);
+  // This is TikTok's plan: a test running on another channel leaves a guide waiting here, and a ban there stops nothing.
+  const waiting = candidates.filter((c) => !activeCampaigns(w, c.product.id).some((x) => channelOf(x) === 'tiktok'));
+  const companyBlock = companyPaidBlock(w, 'tiktok');
   const idle = daysWithoutAds(w);
   const budget = currentBudget(w);
   let room = budget.adCap - committedAdBudget(w);
@@ -341,7 +345,7 @@ function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
   let newLaunches = 0;
   for (const cand of waiting) {
     const p = cand.product;
-    let inFlight = openTasks(w, (t) => t.input.productId === p.id && (t.kind === 'launch_campaign' || t.kind === 'write_ad_hooks' || t.kind === 'produce_ad'));
+    let inFlight = openTasks(w, (t) => t.input.productId === p.id && taskChannel(t) === 'tiktok' && (t.kind === 'launch_campaign' || t.kind === 'write_ad_hooks' || t.kind === 'produce_ad'));
     // Watchdog: acquisition tasks that have been sitting for 2+ days while nothing runs are stuck → start again.
     // Waiting for the founder is not being stuck, and neither is a task he just approved: it runs at the next work tick.
     if (inFlight.length && idle >= MAX_IDLE_DAYS && !companyBlock && (!cand.block || !cand.block.hard)
@@ -503,6 +507,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   }
 
   const acquisition = planPaidAcquisition(ctx, items, notes);
+  planChannels(ctx, items, notes);
 
   for (const p of live) {
     const pid = p.id;
@@ -556,7 +561,12 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   }
 
   // 4. Media buying.
-  if (activeCampaigns(w).length) items.push(planItem('optimize_ads', {}, budget.survival ? 'Mode survie : on coupe tout ce qui ne rapporte pas.' : 'Stop-loss, scale progressif et créas fatiguées.', 1));
+  const buyWhy = budget.survival ? 'Mode survie : on coupe tout ce qui ne rapporte pas.' : 'Stop-loss, scale progressif et créas fatiguées.';
+  if (multiChannel(w)) {
+    // One task per channel, so each buyer holds their own campaigns (D25).
+    const running = new Set(activeCampaigns(w).map(channelOf));
+    for (const ch of [...running].sort()) items.push(planItem('optimize_ads', { channel: ch }, buyWhy, 1, `Optimiser les campagnes ${CHANNELS[ch].label}`));
+  } else if (activeCampaigns(w).length) items.push(planItem('optimize_ads', {}, buyWhy, 1));
 
   // 5. Inbox: batches of 6, most urgent first.
   const claimed = claimedMessageIds(w);
@@ -612,7 +622,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
 // ───────────────────────────── Plan merge & materialization ─────────────────────────────
 
 function itemKey(kind: TaskKind, input: Record<string, unknown>): string {
-  return [kind, input.productId, input.nicheId, input.campaignId, input.creatorId, input.orderId, strArr(input.messageIds).join(','), input.slot, input.reason, input.pipeline, input.day]
+  return [kind, input.productId, input.nicheId, input.campaignId, input.creatorId, input.orderId, strArr(input.messageIds).join(','), input.slot, input.reason, input.pipeline, input.day, input.channel]
     .map((x) => (x === undefined || x === null ? '' : String(x))).join('|');
 }
 
@@ -739,12 +749,29 @@ const MISSION_RULES: [RegExp, TaskKind][] = [
   [/red team|critique|tuer|risque/i, 'red_team'],
 ];
 
+/** A channel the founder names, in his words. */
+const CHANNEL_WORDS: [RegExp, ChannelId][] = [
+  [/\b(?:meta|facebook|instagram)\b/i, 'meta'],
+  [/\bpinterest\b/i, 'pinterest'],
+  [/\byoutube\b/i, 'youtube'],
+  [/\bgoogle\b/i, 'google'],
+];
+
+/** The founder names a closed channel: its account is asked for, through the buyer and the money gates like any other. */
+function channelMission(ctx: RuntimeCtx, text: string): DayPlanItem | null {
+  const ch = CHANNEL_WORDS.find(([rx]) => rx.test(text))?.[1];
+  if (!ch || !ctx.world.company.channels || openChannels(ctx.world).includes(ch)) return null;
+  return planItem('open_channel', { channel: ch }, `Mission du fondateur : ${short(text, 80)}`, 1, `Ouvrir le canal ${CHANNELS[ch].label} (mission du fondateur)`);
+}
+
 /** Keyword routing when the engine could not interpret a founder mission. */
 export function keywordMission(ctx: RuntimeCtx, text: string): DayPlanItem[] {
+  const opening = channelMission(ctx, text);
   const kinds = uniq(MISSION_RULES.filter(([rx]) => rx.test(text)).map(([, k]) => k)).slice(0, 3);
   const vague = !kinds.length;
   if (vague) kinds.push('daily_report');
-  const out: DayPlanItem[] = [];
+  const out: DayPlanItem[] = opening ? [opening] : [];
+  if (opening && vague) return out;
   for (const kind of kinds) {
     const input: Record<string, unknown> = {};
     if (kind === 'scan_trends') input.chain = 'opportunity';

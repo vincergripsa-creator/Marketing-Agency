@@ -5,6 +5,7 @@ import { nextId } from '../../core/index.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { addDeliverable, nameOf, nicheBriefOf, nicheName, productOf, say, vocOf, writeNote } from '../ctx.js';
 import { learning } from '../modules.js';
+import { multiChannel, openChannels } from '../channels.js';
 import { createTask, isOpen } from '../tasks.js';
 import { launchHold } from '../holds.js';
 import { officerId, officerOf } from '../org/officers.js';
@@ -59,6 +60,17 @@ function ideaSummary(ctx: RuntimeCtx, product: Product): string {
     voc && voc.bannedClaims.length ? `Allégations interdites par la plateforme : ${voc.bannedClaims.slice(0, 3).join(', ')}.` : '',
   ];
   return parts.filter(Boolean).join(' ');
+}
+
+/** Once 2 channels are open a niche is worth what its best audience is worth, not what TikTok says of it (channels §7.2). Read at the pick: nothing to keep. */
+function withChannelBuzz(ctx: RuntimeCtx, signals: TrendSignal[]): TrendSignal[] {
+  const w = ctx.world;
+  if (!multiChannel(w)) return signals;
+  const open = openChannels(w);
+  return signals.map((s) => {
+    const audiences = ctx.tools.channelSignals(s.nicheId).filter((c) => open.includes(c.channel)).map((c) => c.audience);
+    return audiences.length ? { ...s, bestChannelBuzz: Math.max(...audiences) } : s;
+  });
 }
 
 /** The CEO signs the pick, whoever prepared it: the bandit is read through her eyes (talent §4.6). */
@@ -185,7 +197,7 @@ export const researchHandlers: HandlerMap = {
       if (already) return { summary: `« ${short(already.title, 60)} » existe déjà dans cette niche : pas de doublon.`, skipReview: true, output: { productId: already.id, nicheId: forced, existing: true } };
       const excluded = uniq([...excludedNiches(ctx, { includeActive: true }), ...strArr(task.input.excludeNicheIds)]).filter((id) => id !== forced);
       if (!research.trends.length) return { summary: 'Aucune tendance connue : il faut d’abord scanner le marché.', skipReview: true, output: { rescan: true } };
-      const ranking = await ctx.engine.rankOpportunities({ signals: research.trends, competitors: research.competitors, voc: research.voc, excludeNicheIds: excluded }, mind);
+      const ranking = await ctx.engine.rankOpportunities({ signals: withChannelBuzz(ctx, research.trends), competitors: research.competitors, voc: research.voc, excludeNicheIds: excluded }, mind);
       const ranked = (ranking.ranked ?? []).filter((r) => r && r.nicheId && !excluded.includes(r.nicheId));
       if (!ranked.length && !forced) {
         say(ctx, agent.id, `${agent.name} : toutes les niches connues sont prises ou écartées, on relance un scan.`);

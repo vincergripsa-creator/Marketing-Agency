@@ -2,7 +2,7 @@
  * Evidence, rating, routing (talent §5, §6.2, §6.4). The rating is arithmetic and the market rows read planted ad stats,
  * so most tests are exact. Two short runs prove the wiring: what a real company feeds the league, and the routing.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,16 +20,8 @@ import { talentPillar } from '../src/runtime/talent/index.js';
 import { assignReady, capableAgents, createTask } from '../src/runtime/tasks.js';
 import { LEGACY } from './legacy.js';
 
-const spy = vi.hoisted(() => ({ credit: 1 }));
-
-vi.mock('../src/runtime/channels.js', async (original) => ({
-  ...(await original<typeof import('../src/runtime/channels.js')>()),
-  creditOf: () => spy.credit,
-}));
-
 const roots: string[] = [];
 
-beforeEach(() => { spy.credit = 1; });
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 3 });
 });
@@ -303,7 +295,10 @@ describe('what the work says (§5.2)', () => {
       );
     }
     world.market.adStats.push(row(2, 'cmp-brief', 'd', 'prd-1', { spend: 10, impressions: 1000, clicks: 10 }), row(3, 'cmp-brief', 'd', 'prd-1', { spend: 10, impressions: 1000, clicks: 10 }));
-    spy.credit = 0.5;
+    world.company.channels = {
+      open: ['tiktok'], requested: {}, lines: [], plan: null,
+      attribution: { day: world.day, fromDay: 1, toDay: 6, by: buyer!.id, niches: {}, rows: [{ channel: 'tiktok', spend: 0, shopRevenue: 0, claimedRevenue: 0, reconciledRevenue: 0, credit: 0.5, inflation: 1 }] },
+    };
     applyDailyEvidence(world, 6);
     expect(events(world).filter((e) => e.skill === 'buying')).toEqual([]);
     applyDailyEvidence(world, 7);

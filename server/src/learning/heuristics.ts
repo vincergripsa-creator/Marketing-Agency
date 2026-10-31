@@ -1,14 +1,17 @@
 /** Heuristic lesson detectors: turn the day's numbers into actionable French lessons with evidence. */
 import type { BrainNote, LessonDraft } from '../contracts.js';
-import type { AdCreative, AdFormat, DailyKpi, DeptId, Experiment, HookStyle, Lesson, Product, TaskKind, WorldState } from '../shared.js';
+import type { AdCreative, AdFormat, ChannelId, DailyKpi, DeptId, Experiment, HookStyle, Lesson, Product, TaskKind, WorldState } from '../shared.js';
+import { CHANNEL_IDS, CHANNELS, channelOf, droppedBeforeSubmission } from '../shared.js';
 import { clamp } from '../core/index.js';
 import { isScamFlag } from '../sim/market.js';
+import { RECON } from './attribution.js';
 import { empiricalMean, nearestArm, PRICE_ARMS } from './bandits.js';
 import {
-  addRow, adRows, ctrOf, cvrOf, emptyAgg, financeView, findNoteLink, nicheName, priceOnDay, productOfRow, roasOf, windowLabel,
+  addRow, adRows, ctrOf, cvrOf, emptyAgg, financeView, findNoteLink, nicheName, onReference, priceOnDay, productOfRow, referenceChannels, roasOf, tiktokRows, windowLabel,
   type FunnelAgg, type WorldIndex,
 } from './data.js';
 import { experimentNiche, experimentThreshold, experimentValueKind, lowerIsBetter } from './experiments.js';
+import { quotedTerms } from './playbooks.js';
 import {
   DIMENSION_LABELS, FORMAT_LABELS, HOOK_LABELS, TASK_LABELS, fmtEur, fmtNum, fmtPct, fmtRatio, fold, plural, round,
   safeDiv, shorten, slugify, unique,
@@ -78,7 +81,7 @@ function compareCreatives(inp: RetroInput, dim: 'hookStyle' | 'format'): Heurist
   const { world, day, ix } = inp;
   const from = Math.max(1, day - 13);
   const perNiche = new Map<string, Map<string, CreativeAgg>>();
-  for (const r of adRows(world, from, day)) {
+  for (const r of tiktokRows(world, from, day)) {
     const c = ix.creatives.get(r.creativeId);
     const p = productOfRow(ix, r);
     const key = c?.[dim];
@@ -124,7 +127,7 @@ function compareCreatives(inp: RetroInput, dim: 'hookStyle' | 'format'): Heurist
 function lowCtr(inp: RetroInput): HeuristicDraft[] {
   const from = Math.max(1, inp.day - 2);
   const agg = emptyAgg();
-  for (const r of adRows(inp.world, from, inp.day)) addRow(agg, r);
+  for (const r of tiktokRows(inp.world, from, inp.day)) addRow(agg, r);
   const ctr = ctrOf(agg);
   if (agg.impressions < 5000 || ctr >= 0.008) return [];
   return [draft({
@@ -142,14 +145,16 @@ function lowCtr(inp: RetroInput): HeuristicDraft[] {
 
 function fatigue(inp: RetroInput): HeuristicDraft[] {
   const { world, day, ix } = inp;
-  const perCreative = new Map<string, Map<number, FunnelAgg>>();
+  // A master can run on two channels: each one wears out on its own, and their CTR levels are not comparable.
+  const perCreative = new Map<string, { creativeId: string; channel: ChannelId; byDay: Map<number, FunnelAgg> }>();
   for (const r of adRows(world, 1, day)) {
-    const m = perCreative.get(r.creativeId) ?? new Map<number, FunnelAgg>();
-    m.set(r.day, addRow(m.get(r.day) ?? emptyAgg(), r));
-    perCreative.set(r.creativeId, m);
+    const key = `${channelOf(r)}:${r.creativeId}`;
+    const line = perCreative.get(key) ?? { creativeId: r.creativeId, channel: channelOf(r), byDay: new Map<number, FunnelAgg>() };
+    line.byDay.set(r.day, addRow(line.byDay.get(r.day) ?? emptyAgg(), r));
+    perCreative.set(key, line);
   }
-  let best: { c: AdCreative; first: number; last: number; drop: number; days: number; freq: number; impressions: number } | null = null;
-  for (const [creativeId, byDay] of perCreative) {
+  let best: { c: AdCreative; channel: ChannelId; first: number; last: number; drop: number; days: number; freq: number; impressions: number } | null = null;
+  for (const { creativeId, channel, byDay } of perCreative.values()) {
     if (!byDay.has(day) || byDay.size < 4) continue;
     const c = ix.creatives.get(creativeId);
     if (!c) continue;
@@ -169,7 +174,7 @@ function fatigue(inp: RetroInput): HeuristicDraft[] {
     if (first <= 0) continue;
     const drop = 1 - last / first;
     if (drop >= 0.35 && (!best || drop > best.drop)) {
-      best = { c, first, last, drop, days: days[days.length - 1]! - days[0]! + 1, freq: tail.maxFrequency, impressions: head.impressions + tail.impressions };
+      best = { c, channel, first, last, drop, days: days[days.length - 1]! - days[0]! + 1, freq: tail.maxFrequency, impressions: head.impressions + tail.impressions };
     }
   }
   if (!best) return [];
@@ -181,7 +186,7 @@ function fatigue(inp: RetroInput): HeuristicDraft[] {
     evidence: `Pub ${best.c.id} (${best.c.hookStyle}, ${best.c.format}) : baisse de ${fmtPct(best.drop, 0)} du CTR, fréquence ${fmtRatio(best.freq)}, ${fmtNum(best.impressions)} impressions comparées.`,
     confidence: sampleConfidence(best.impressions, 8000, best.drop / 0.6),
     links: ["Canaux d'acquisition"],
-    tags: ['fatigue', 'tiktok'],
+    tags: ['fatigue', best.channel],
     extraDepts: ['creation'],
   })];
 }
@@ -231,7 +236,8 @@ function rejections(inp: RetroInput): HeuristicDraft[] {
   const byTerm = new Map<string, AdCreative[]>();
   const unknown: AdCreative[] = [];
   for (const c of today) {
-    const term = extractBannedTerm(c.review.reason ?? '', creativeText(c), known);
+    // An ad our own review dropped never reached the platform: the word its note quotes may be the very one it should have used.
+    const term = droppedBeforeSubmission(c.review) ? null : extractBannedTerm(c.review.reason ?? '', creativeText(c), known);
     if (term) byTerm.set(term, [...(byTerm.get(term) ?? []), c]);
     else unknown.push(c);
   }
@@ -267,6 +273,34 @@ function rejections(inp: RetroInput): HeuristicDraft[] {
       extraDepts: ['creation'],
       critical: true,
     }));
+  }
+  return out;
+}
+
+/** A platform's refusal quotes the word it caught: it goes to the writers, with the channel that refused it (channels §6). Only a platform's. */
+function channelRejections(inp: RetroInput): HeuristicDraft[] {
+  const { world, day } = inp;
+  const out: HeuristicDraft[] = [];
+  for (const c of world.company.creatives ?? []) {
+    for (const channel of CHANNEL_IDS) {
+      const review = c.channelReviews?.[channel];
+      if (review?.status !== 'rejected' || review.day !== day || droppedBeforeSubmission(review)) continue;
+      const term = extractBannedTerm(review.reason ?? '', creativeText(c), []);
+      if (!term) continue; // a format or an automatic refusal names no word: nothing to learn
+      const { label } = CHANNELS[channel];
+      out.push(draft({
+        key: `pub-mot-interdit-${channel}-${slugify(term, 30)}`,
+        topic: 'ads',
+        title: `Mot refusé par ${label} : ${term}`,
+        insight: `Sur ${label}, ne jamais écrire « ${term} » : la plateforme refuse la pub, et sa règle n'est pas celle de TikTok.`,
+        evidence: `Pub « ${shorten(c.hook, 60)} » (${c.id}) refusée le jour ${day} — motif : « ${shorten(review.reason ?? 'non précisé', 110)} ».`,
+        confidence: 0.9,
+        links: ['Conformité pub par canal', "Canaux d'acquisition"],
+        tags: ['conformite', channel, 'refus'],
+        extraDepts: ['creation'],
+        critical: true,
+      }));
+    }
   }
   return out;
 }
@@ -357,11 +391,12 @@ function organic(inp: RetroInput): HeuristicDraft[] {
 function prices(inp: RetroInput): HeuristicDraft[] {
   const { world, day, ix } = inp;
   const from = Math.max(1, day - 20);
+  const refs = referenceChannels(world, day);
   type Bucket = { lv: number; revenue: number; purchases: number; refunds: number };
   const per = new Map<string, Map<string, Bucket>>();
   for (const r of adRows(world, from, day)) {
     const p = productOfRow(ix, r);
-    if (!p?.nicheId) continue;
+    if (!p?.nicheId || !onReference(refs, p.id, r)) continue;
     const bucket = nearestArm(priceOnDay(p, r.day), PRICE_ARMS);
     if (!bucket) continue;
     const m = per.get(p.nicheId) ?? new Map<string, Bucket>();
@@ -373,7 +408,7 @@ function prices(inp: RetroInput): HeuristicDraft[] {
     per.set(p.nicheId, m);
   }
   for (const o of world.market?.orders ?? []) {
-    if (o.day < from || o.day > day || o.source !== 'ads' || !(o.refunded || o.chargeback)) continue;
+    if (o.day < from || o.day > day || o.source !== 'ads' || !(o.refunded || o.chargeback) || !onReference(refs, o.productId, o)) continue;
     const p = ix.products.get(o.productId);
     const bucket = nearestArm(o.price, PRICE_ARMS);
     const cur = p && bucket ? per.get(p.nicheId)?.get(bucket) : undefined;
@@ -796,6 +831,94 @@ function finance(inp: RetroInput): HeuristicDraft[] {
   return [];
 }
 
+// ───────────────────────────── Channels ─────────────────────────────
+
+/** What a channel lesson needs: a real spend on each side, and a lead a noisy fortnight would not give. */
+export const CHANNEL_LESSON = { minSpend: 30, lead: 1.25, minRoas: 1.1, minInflation: 1.3 };
+
+/**
+ * Reconciled credit of a (channel, niche): the niche's, else the channel's, else 1. A report that went stale counts as 1,
+ * like `creditOf` in the runtime, which this module must not import.
+ */
+function reportCredit(world: WorldState, channel: ChannelId, nicheId: string): number {
+  const report = world.company.channels?.attribution;
+  if (!report || world.scenario?.channelControl === 'last_click' || world.day - report.day > RECON.staleDays) return 1;
+  return report.niches[nicheId]?.[channel] ?? report.rows.find((r) => r.channel === channel)?.credit ?? 1;
+}
+
+function channelLessons(inp: RetroInput): HeuristicDraft[] {
+  const { world, day, ix } = inp;
+  const book = world.company.channels;
+  if (!book || book.open.length < 2) return [];
+  const out: HeuristicDraft[] = [];
+  const stopped = (channel: ChannelId, nicheId: string): boolean => book.lines.some((l) => l.channel === channel && l.nicheId === nicheId && (l.status === 'killed' || l.status === 'blocked'));
+  const from = Math.max(1, day - RECON.windowDays + 1);
+  const perNiche = new Map<string, Map<ChannelId, FunnelAgg>>();
+  for (const r of adRows(world, from, day)) {
+    const nicheId = productOfRow(ix, r)?.nicheId;
+    if (!nicheId) continue;
+    const m = perNiche.get(nicheId) ?? new Map<ChannelId, FunnelAgg>();
+    m.set(channelOf(r), addRow(m.get(channelOf(r)) ?? emptyAgg(), r));
+    perNiche.set(nicheId, m);
+  }
+  for (const [nicheId, m] of perNiche) {
+    const list = [...m]
+      .filter(([, a]) => a.spend >= CHANNEL_LESSON.minSpend)
+      .map(([channel, a]) => ({ channel, spend: a.spend, roas: roasOf(a) * reportCredit(world, channel, nicheId) }))
+      .sort((a, b) => b.roas - a.roas || CHANNEL_IDS.indexOf(a.channel) - CHANNEL_IDS.indexOf(b.channel));
+    const [best, next] = list;
+    if (!best || !next || stopped(best.channel, nicheId)) continue;
+    if (best.roas < CHANNEL_LESSON.minRoas || best.roas < next.roas * CHANNEL_LESSON.lead) continue;
+    const name = nicheName(world, nicheId);
+    out.push(draft({
+      key: LESSON_KEYS.channel(nicheId),
+      topic: 'ads',
+      title: `Canal « ${best.channel} » sur ${name}`,
+      insight: `Privilégier le canal « ${best.channel} » sur « ${name} » : ROAS réconcilié ${fmtRatio(best.roas)} contre ${fmtRatio(next.roas)} sur ${CHANNELS[next.channel].label}.`,
+      evidence: `${list.map((l) => `${CHANNELS[l.channel].label} : ${fmtEur(l.spend)} dépensés, ROAS réconcilié ${fmtRatio(l.roas)}`).join(' · ')} — ${windowLabel(world, from, day)}.`,
+      confidence: sampleConfidence(Math.min(best.spend, next.spend), 150, safeDiv(best.roas, Math.max(next.roas, 0.01)) - 1),
+      links: ["Canaux d'acquisition", ...nicheLink(inp, nicheId)],
+      tags: ['canal', best.channel],
+    }));
+  }
+  for (const l of book.lines) {
+    if (l.status !== 'killed') continue;
+    const name = nicheName(world, l.nicheId);
+    // The verdict as it was given: a line's spend and revenue keep moving with the credit once it is cut. Plain spaces: a rule reads as its lesson.
+    const verdict = (l.reason ?? `ROAS réconcilié ${fmtRatio(safeDiv(l.revenue, l.spend))}`).replace(/\s+/g, ' ');
+    // A cut on the channel a lesson put forward takes its place: the two cannot stand side by side in a playbook.
+    const favoured = (world.company.lessons ?? []).find((x) => x.key === LESSON_KEYS.channel(l.nicheId));
+    out.push(draft({
+      key: favoured && quotedTerms(favoured.insight)[0] === l.channel ? LESSON_KEYS.channel(l.nicheId) : LESSON_KEYS.channelCut(l.channel, l.nicheId),
+      topic: 'ads',
+      title: `Couper ${CHANNELS[l.channel].label} sur ${name}`,
+      insight: `Couper « ${l.channel} » sur « ${name} » : ${verdict}.`,
+      evidence: `${CHANNELS[l.channel].label} coupé sur cette niche : ${verdict}${l.retestDay !== null ? `. Pas de nouveau test avant le jour ${l.retestDay}.` : '.'}`,
+      confidence: sampleConfidence(l.spend, 150),
+      links: ["Canaux d'acquisition", ...nicheLink(inp, l.nicheId)],
+      tags: ['canal', l.channel],
+    }));
+  }
+  const report = book.attribution;
+  for (const r of report && day - report.day <= RECON.staleDays ? report.rows : []) {
+    if (r.shopRevenue < RECON.minNicheRevenue || r.inflation < CHANNEL_LESSON.minInflation) continue;
+    const { label } = CHANNELS[r.channel];
+    out.push(draft({
+      key: LESSON_KEYS.channelClaim(r.channel),
+      topic: 'ads',
+      title: `${label} surévalue ses ventes`,
+      insight: `${label} s'attribue ${fmtRatio(r.inflation)} fois ce que la boutique lui donne : lire le réconcilié, jamais son tableau de bord.`,
+      evidence: `${fmtEur(r.claimedRevenue)} déclarés par la plateforme, ${fmtEur(r.shopRevenue)} vus par la boutique, ${fmtEur(r.reconciledRevenue)} après réconciliation (jours ${report!.fromDay} à ${report!.toDay}).`,
+      confidence: sampleConfidence(r.shopRevenue, 150, r.inflation - 1),
+      links: ["Canaux d'acquisition"],
+      tags: ['attribution', r.channel],
+      extraDepts: ['analyse'],
+      routeOnly: true, // the analyst's reading, not a rule for every writer
+    }));
+  }
+  return out;
+}
+
 // ───────────────────────────── Process ─────────────────────────────
 
 function processIssues(inp: RetroInput): HeuristicDraft[] {
@@ -843,6 +966,9 @@ export const LESSON_KEYS = {
   quality: (productId: string): string => `produit-qualite-${slugify(productId, 30)}`,
   niche: (nicheId: string): string => `niche-${slugify(nicheId, 40)}`,
   advance: 'partenariat-avance',
+  channel: (nicheId: string): string => `canal-${slugify(nicheId, 40)}`,
+  channelCut: (channel: ChannelId, nicheId: string): string => `canal-coupe-${channel}-${slugify(nicheId, 30)}`,
+  channelClaim: (channel: ChannelId): string => `canal-attribution-${channel}`,
 } as const;
 
 /** Key prefix of the lessons concluded by an A/B experiment. */
@@ -901,7 +1027,7 @@ function experiments(inp: RetroInput): HeuristicDraft[] {
 /** All heuristic detectors, most important first. Every draft carries numbers in its evidence. */
 export function detectLessons(inp: RetroInput): HeuristicDraft[] {
   const detectors = [
-    rejections, adAccount, finance, hypeAndQuality, support, creators, experiments,
+    rejections, channelRejections, adAccount, finance, hypeAndQuality, support, creators, experiments, channelLessons,
     (i: RetroInput) => compareCreatives(i, 'hookStyle'), (i: RetroInput) => compareCreatives(i, 'format'),
     prices, niches, fatigue, lowCtr, salesPageConversion, organic, processIssues,
   ];
