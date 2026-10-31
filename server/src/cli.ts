@@ -3,11 +3,12 @@
  * Creates (or resumes) runs/<runId>, runs the agency as fast as possible, prints a daily KPI table
  * and a final French verdict.
  */
-import type { DailyKpi, Difficulty, FinanceSnapshot, WorldState } from './shared.js';
+import type { DailyKpi, Difficulty, FinanceSnapshot, OrgConfig, WorldState } from './shared.js';
 import type { ConfigMindMode } from './api/env.js';
 import { isEntryPoint } from './api/entry.js';
 import { budgetRefusal } from './api/http.js';
-import { minStartingCash } from './sim/balance.js';
+import { LEAN_ORG } from './runtime/org/constants.js';
+import { minRunCash } from './runtime/org/payroll.js';
 
 export interface CliArgs {
   days: number;
@@ -17,6 +18,7 @@ export interface CliArgs {
   mind: ConfigMindMode;
   mindExplicit: boolean;
   runId: string | null;
+  org: OrgConfig;
   quiet: boolean;
   verbose: boolean;
   help: boolean;
@@ -25,17 +27,20 @@ export interface CliArgs {
 export const CLI_USAGE = `Utilisation : npm run sim -- [options]
 
   --days N          nombre de jours simulés (défaut 30)
-  --budget N        trésorerie de départ en € (défaut 500, minimum ${minStartingCash()})
+  --budget N        trésorerie de départ en € (défaut 500, minimum ${minRunCash({ org: LEAN_ORG })}, ${minRunCash({ org: { ...LEAN_ORG, payroll: false } })} avec --no-payroll)
   --difficulty D    facile | normal | cauchemar (défaut normal)
   --seed N          graine du marché virtuel (défaut 42)
   --mind M          heuristic | claude | auto (défaut heuristic : hors-ligne et gratuit)
-  --run-id X        nom du run (reprend le run s'il existe déjà)
+  --team T          lean | legacy31 (défaut lean : les 8 fondateurs, qui recrutent quand les chiffres le demandent)
+  --no-hire         l'équipe reste telle quelle (bras de contrôle)
+  --no-payroll      les agents ne sont pas payés (bras de contrôle)
+  --run-id X        nom du run (reprend le run s'il existe déjà, avec son équipe)
   --quiet           n'affiche que le verdict final
   --verbose         affiche aussi le fil d'activité des agents
   --help            cette aide`;
 
 const DIFFS: readonly Difficulty[] = ['facile', 'normal', 'cauchemar'];
-const VALUE_KEYS = new Set(['days', 'budget', 'seed', 'difficulty', 'mind', 'run-id', 'runid']);
+const VALUE_KEYS = new Set(['days', 'budget', 'seed', 'difficulty', 'mind', 'team', 'run-id', 'runid']);
 
 export class CliError extends Error {}
 
@@ -43,9 +48,9 @@ export class CliError extends Error {}
 export function parseCliArgs(argv: readonly string[]): CliArgs {
   const out: CliArgs = {
     days: 30, budget: 500, difficulty: 'normal', seed: 42, mind: 'heuristic', mindExplicit: false,
-    runId: null, quiet: false, verbose: false, help: false,
+    runId: null, org: { ...LEAN_ORG }, quiet: false, verbose: false, help: false,
   };
-  const flags = new Set(['quiet', 'verbose', 'help']);
+  const flags = new Set(['quiet', 'verbose', 'help', 'no-hire', 'no-payroll']);
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i]!;
     if (tok === '-h') { out.help = true; continue; }
@@ -55,6 +60,8 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
     if (flags.has(key)) {
       if (key === 'quiet') out.quiet = true;
       else if (key === 'verbose') out.verbose = true;
+      else if (key === 'no-hire') out.org.autoHire = false;
+      else if (key === 'no-payroll') out.org.payroll = false;
       else out.help = true;
       continue;
     }
@@ -70,13 +77,7 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
     };
     switch (key) {
       case 'days': out.days = Math.round(num(1, 730)); break;
-      case 'budget': {
-        const budget = num(0, 1_000_000);
-        const refusal = budgetRefusal(budget);
-        if (refusal) throw new CliError(refusal);
-        out.budget = Math.round(budget * 100) / 100;
-        break;
-      }
+      case 'budget': out.budget = Math.round(num(0, 1_000_000) * 100) / 100; break;
       case 'seed': out.seed = Math.floor(num(0, 2 ** 31 - 1)); break;
       case 'difficulty': {
         const d = value.toLowerCase() as Difficulty;
@@ -91,6 +92,12 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
         out.mindExplicit = true;
         break;
       }
+      case 'team': {
+        const t = value.toLowerCase();
+        if (t !== 'lean' && t !== 'legacy31') throw new CliError(`--team doit valoir lean ou legacy31 (reçu « ${value} »).`);
+        out.org.team = t;
+        break;
+      }
       case 'run-id':
       case 'runid':
         if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value) || value.includes('..')) throw new CliError('--run-id : lettres, chiffres, « . », « _ » et « - » uniquement.');
@@ -100,6 +107,9 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
         throw new CliError(`Option inconnue : --${key}.`);
     }
   }
+  // Read once every flag is known: the floor depends on --no-payroll, wherever it stands on the line.
+  const refusal = budgetRefusal(out.budget, out.org);
+  if (refusal) throw new CliError(refusal);
   return out;
 }
 
@@ -229,7 +239,7 @@ export function verdict({ world, finance, daysRun, filesDir, brainDir, worldFile
 
   const runway = finance.runwayDays === null ? 'illimitée (dernière semaine sans perte)' : `${finance.runwayDays} jours`;
   out.push(`  Trésorerie    ${fmtEur(finance.cash)} (départ ${fmtEur(s.startingCash)}) · runway ${runway}`);
-  out.push(`  Chiffre d'aff. ${fmtEur(finance.revenue)} · pub ${fmtEur(finance.adSpend)} · remboursements ${fmtEur(finance.refunds)} · frais ${fmtEur(finance.fees + finance.otherCosts)}`);
+  out.push(`  Chiffre d'aff. ${fmtEur(finance.revenue)} · pub ${fmtEur(finance.adSpend)} · remboursements ${fmtEur(finance.refunds)} · frais ${fmtEur(finance.fees + finance.otherCosts)}${finance.payroll ? ` · salaires ${fmtEur(finance.payroll)}` : ''}`);
   out.push(`  ROAS 7 jours  ${fmtNum(finance.roas7d)} · profit 7 jours ${fmtEur(finance.profit7d, true)}${finance.compute > 0 ? ` · calcul IA ${fmtEur(finance.compute)}` : ''}`);
 
   const products = world.company.products ?? [];
@@ -329,6 +339,7 @@ async function main(argv: readonly string[]): Promise<number> {
       mindMode: args.mind,
       maxComputeEur: config.maxComputeEur,
       horizonDays: Math.max(base.horizonDays, args.days),
+      org: args.org,
     });
     world = runtime.createWorld(scenario, args.runId ?? persist.newRunId());
   }

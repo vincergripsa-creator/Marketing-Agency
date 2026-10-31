@@ -8,6 +8,7 @@ Chaque agent **lit le cerveau avant d'agir** et **l'alimente après chaque actio
 ## L'entreprise
 - [[Identité]] — qui nous sommes, ce qu'on vend
 - [[Objectifs]] — la mission chiffrée de la simulation
+- [[Organigramme]] — qui fait quoi aujourd'hui, tenu à jour à chaque embauche et chaque départ
 
 ## Le business (PDF à forte valeur)
 - [[Règle du un]] — un problème, une personne
@@ -21,9 +22,10 @@ Chaque agent **lit le cerveau avant d'agir** et **l'alimente après chaque actio
 - [[Budget et garde-fous]]
 - [[Conformité pub TikTok]]
 - [[Support client]]
+- [[Recrutement]]
 
 ## Playbooks des départements
-- [[Playbook Direction]] · [[Playbook Recherche]] · [[Playbook Studio]] · [[Playbook Création]] · [[Playbook Growth]] · [[Playbook Boutique]] · [[Playbook Support]] · [[Playbook Analyse]] · [[Playbook Finance]] · [[Playbook RH]] · [[Playbook Partenariats]]
+- [[Playbook Direction]] · [[Playbook Recherche]] · [[Playbook Studio]] · [[Playbook Création]] · [[Playbook Growth]] · [[Playbook Boutique]] · [[Playbook Support]] · [[Playbook Analyse]] · [[Playbook Finance]] · [[Playbook RH]] · [[Playbook Partenariats]] · [[Playbook Vidéo]] · [[Playbook Communauté]]
 
 ## Mémoire vivante (écrite par les agents)
 - `lecons/` — ce qu'on a appris, avec les chiffres
@@ -31,3 +33,4 @@ Chaque agent **lit le cerveau avant d'agir** et **l'alimente après chaque actio
 - `niches/` — recherches de marché
 - `produits/` — fiches produit
 - `post-mortems/` — produits tués et pourquoi
+- `rh/` — revues de la semaine et effectif, rôle par rôle

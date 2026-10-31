@@ -9,10 +9,11 @@ import { growthHandlers } from './growth.js';
 import { supportHandlers } from './support.js';
 import { partnerHandlers } from './partners.js';
 import { opsHandlers } from './ops.js';
+import { orgHandlers } from './org.js';
 
 export const HANDLERS = {
   ...researchHandlers, ...studioHandlers, ...creationHandlers, ...boutiqueHandlers,
-  ...growthHandlers, ...supportHandlers, ...partnerHandlers, ...opsHandlers,
+  ...growthHandlers, ...supportHandlers, ...partnerHandlers, ...opsHandlers, ...orgHandlers,
 } as Record<TaskKind, HandlerSpec>;
 
 export type { HandlerOutcome, HandlerSpec } from './common.js';

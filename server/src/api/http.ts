@@ -1,8 +1,10 @@
 /** Small, pure HTTP helpers (unit-tested): path safety, mime types, JSON bodies, input sanitising. */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { Difficulty, ScenarioConfig, Speed } from '../shared.js';
-import { FEES, MIN_BUDGET_DAYS, minStartingCash } from '../sim/balance.js';
+import type { Difficulty, OrgConfig, ScenarioConfig, Speed, TalentMode } from '../shared.js';
+import { LEAN_ORG } from '../runtime/org/constants.js';
+import { minRunCash } from '../runtime/org/payroll.js';
+import { FEES, MIN_BUDGET_DAYS } from '../sim/balance.js';
 
 export type { Speed };
 
@@ -205,18 +207,35 @@ function str(v: unknown, max: number): string | undefined {
   return t || undefined;
 }
 
-/** Why a starting budget cannot open a company (French, for the founder), or null when it can. */
-export function budgetRefusal(cash: number): string | null {
-  const min = minStartingCash();
+/** Why a starting budget cannot open a company (French, for the founder), or null when it can. A new run is lean unless told otherwise. */
+export function budgetRefusal(cash: number, org: OrgConfig = LEAN_ORG): string | null {
+  const min = minRunCash({ org });
   if (cash >= min) return null;
   const setup = Math.round(FEES.setupCost);
-  const fixed = Math.round(MIN_BUDGET_DAYS * (FEES.boutiqueDaily + FEES.toolsDaily));
-  return `Budget de départ trop bas : il faut au moins ${min} € (${setup} € de frais de démarrage et ${fixed} € de frais fixes pour ${MIN_BUDGET_DAYS} jours). Avec moins, l'agence serait en faillite dès le premier jour.`;
+  const running = org.payroll ? 'frais fixes et de salaires' : 'frais fixes';
+  return `Budget de départ trop bas : il faut au moins ${min} € (${setup} € de frais de démarrage et ${min - setup} € de ${running} pour ${MIN_BUDGET_DAYS} jours). Avec moins, l'agence ne tiendrait pas son premier mois.`;
 }
 
-/** Keeps only valid, clamped ScenarioConfig fields from an untrusted body; an unusable budget is refused (400). */
+/** The team a body asks for: what it leaves out stays as on a new lean run. */
+function sanitizeOrg(v: unknown): OrgConfig | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  const org: OrgConfig = { ...LEAN_ORG };
+  if (o.team === 'lean' || o.team === 'legacy31') org.team = o.team;
+  if (typeof o.autoHire === 'boolean') org.autoHire = o.autoHire;
+  if (typeof o.payroll === 'boolean') org.payroll = o.payroll;
+  return org;
+}
+
+const TALENT_MODES: readonly TalentMode[] = ['off', 'flat', 'league'];
+
+/** Keeps only valid, clamped ScenarioConfig fields from an untrusted body; an unusable budget is refused (400). `control` is for benchmarks: it never gets through. */
 export function sanitizeScenario(body: Record<string, unknown>): Partial<ScenarioConfig> {
   const out: Partial<ScenarioConfig> = {};
+  const org = sanitizeOrg(body.org);
+  if (org) out.org = org;
+  if (TALENT_MODES.includes(body.talent as TalentMode)) out.talent = body.talent as TalentMode;
+  if (typeof body.openEnded === 'boolean') out.openEnded = body.openEnded;
   const name = str(body.name, 80);
   if (name) out.name = name;
   const companyName = str(body.companyName, 60);
@@ -225,7 +244,7 @@ export function sanitizeScenario(body: Record<string, unknown>): Partial<Scenari
   if (seed !== undefined) out.seed = Math.floor(seed);
   const cash = num(body.startingCash, 0, 1_000_000);
   if (cash !== undefined) {
-    const refusal = budgetRefusal(cash);
+    const refusal = budgetRefusal(cash, org);
     if (refusal) throw new HttpError(400, refusal);
     out.startingCash = Math.round(cash * 100) / 100;
   }

@@ -541,6 +541,7 @@ export interface WeeklyPnl {
 export interface FinanceSnapshot {
   cash: number;
   revenue: number; refunds: number; adSpend: number; fees: number; compute: number; otherCosts: number;
+  payroll?: number;           // cumulative 'salary' + 'recruiting', no longer inside otherCosts
   profit: number;             // cumulative, excluding starting capital
   profit7d: number;
   burn7d: number;             // average daily net outflow over 7 days (positive = burning)

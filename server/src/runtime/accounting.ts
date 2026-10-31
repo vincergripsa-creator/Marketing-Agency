@@ -33,7 +33,7 @@ export function reconcileDay(world: WorldState, day: number): Reconciliation {
   const adSpend = -sumOf('ad_spend');
   const fees = -sumOf('payment_fee');
   const creators = -sumOf('creator_payout');
-  const fixed = -sumOf('platform_fee', 'tool_subscription', 'compute');
+  const fixed = -sumOf('platform_fee', 'tool_subscription', 'compute', 'salary', 'recruiting');
   const gaps: string[] = [];
   let checks = 0;
   const compare = (label: string, known: number, booked: number) => {

@@ -3,6 +3,7 @@
  *
  *   cd server && npx tsx scripts/balance.ts [--days 60] [--seeds 1,2,3,7,42] [--difficulties facile,normal,cauchemar]
  *                                           [--budget 500] [--jobs 3] [--keep] [--json fichier.json] [--details]
+ *                                           [--team lean|legacy31] [--no-hire] [--no-payroll]
  *
  * Lance des entreprises sans interface (cerveau heuristique, dossiers temporaires supprimés sauf --keep),
  * en parallèle sur quelques processus (--jobs 1 = tout dans ce processus), puis affiche un tableau par run
@@ -12,7 +13,8 @@ import { spawn } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
 import { cpus } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import type { Difficulty } from '../src/shared.js';
+import { LEAN_ORG } from '../src/runtime/org/constants.js';
+import type { Difficulty, OrgConfig } from '../src/shared.js';
 import {
   aggregate, aggregateLines, applyOverrides, DIFFICULTIES, learningShare, resultRow, runOne, tableHeader, type RunResult, type RunSpec,
 } from './balanceLib.js';
@@ -28,6 +30,8 @@ interface Args {
   details: boolean;
   worker: string | null;
   overrides: Record<string, number>;
+  /** The team of every run, null to leave the scenario's own. */
+  org: OrgConfig | null;
 }
 
 const USAGE = `Utilisation : npx tsx scripts/balance.ts [options]
@@ -39,6 +43,9 @@ const USAGE = `Utilisation : npx tsx scripts/balance.ts [options]
   --keep                   garde les runs dans runs/bench-<difficulté>-<graine> (world.json chargeable dans l'UI)
   --json FICHIER           écrit les résultats détaillés (lignes jour par jour comprises)
   --details                affiche les falaises et arrêts de pub détectés
+  --team T                 lean ou legacy31 (défaut : l'équipe du scénario, lean)
+  --no-hire                l'équipe reste telle quelle (bras de contrôle)
+  --no-payroll             les agents ne sont pas payés (bras de contrôle)
   --set CHEMIN=N           remplace une constante de sim/balance.ts pour ce benchmark (répétable),
                            par exemple --set ADS.baseCtr=0.008 --set DIFFICULTY.cauchemar.cpmMultiplier=1.5`;
 
@@ -47,7 +54,7 @@ class ArgError extends Error {}
 function parseArgs(argv: string[]): Args {
   const a: Args = {
     days: 60, seeds: [1, 2, 3, 7, 42], difficulties: [...DIFFICULTIES], budget: 500,
-    jobs: Math.max(1, Math.min(3, cpus().length - 1)), keep: false, json: null, details: false, worker: null, overrides: {},
+    jobs: Math.max(1, Math.min(3, cpus().length - 1)), keep: false, json: null, details: false, worker: null, overrides: {}, org: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i]!;
@@ -56,6 +63,8 @@ function parseArgs(argv: string[]): Args {
     if (!tok.startsWith('--')) throw new ArgError(`Argument inattendu : « ${tok} ».`);
     if (key === 'keep') { a.keep = true; continue; }
     if (key === 'details') { a.details = true; continue; }
+    if (key === 'no-hire') { a.org = { ...(a.org ?? LEAN_ORG), autoHire: false }; continue; }
+    if (key === 'no-payroll') { a.org = { ...(a.org ?? LEAN_ORG), payroll: false }; continue; }
     if (key === 'help') throw new ArgError('');
     const value = eq >= 0 ? tok.slice(eq + 1) : argv[++i];
     if (value === undefined) throw new ArgError(`L'option --${key} attend une valeur.`);
@@ -70,6 +79,10 @@ function parseArgs(argv: string[]): Args {
       case 'jobs': a.jobs = int(1, 16); break;
       case 'json': a.json = value; break;
       case 'worker': a.worker = value; break;
+      case 'team':
+        if (value !== 'lean' && value !== 'legacy31') throw new ArgError('--team doit valoir lean ou legacy31.');
+        a.org = { ...(a.org ?? LEAN_ORG), team: value };
+        break;
       case 'set': {
         const m = /^([A-Za-z_][\w.]*)=(-?\d+(?:\.\d+)?)$/.exec(value);
         if (!m) throw new ArgError('--set attend CHEMIN=nombre, par exemple --set ADS.baseCtr=0.008.');
@@ -154,7 +167,8 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const specs: RunSpec[] = [];
-  for (const difficulty of args.difficulties) for (const seed of args.seeds) specs.push({ difficulty, seed, days: args.days, budget: args.budget, keep: args.keep, overrides: args.overrides });
+  const scenario = args.org ? { org: args.org } : undefined;
+  for (const difficulty of args.difficulties) for (const seed of args.seeds) specs.push({ difficulty, seed, days: args.days, budget: args.budget, keep: args.keep, overrides: args.overrides, scenario });
   try {
     applyOverrides(args.overrides); // validates the paths before spawning anything
   } catch (e) {
@@ -181,6 +195,7 @@ async function main(argv: string[]): Promise<number> {
     prev = r.difficulty;
   }
   console.log('\nArtefacts : F = falaise de profit (> 40 % du pic perdu en < 7 jours), S = plus de 2 jours sans pub avec trésorerie et produit vendable, K = KPI ≠ grand livre, N = NaN.');
+  console.log('Effectif : agents le dernier jour. Masse salariale : salaires, embauches et départs sur tout le run. Violations : invariants d\'organisation rompus, doit rester à 0.');
   const half = Math.floor(args.days / 2);
   console.log(`ROAS/CTR 1→2 : jours 1-${half} → jours ${half + 1}-${args.days} (↑ = meilleur en 2e moitié ; ROAS pub brut, « — » sous 20 € de pub ou 2 000 impressions).`);
   console.log('Objectif : 1er jour où le profit cumulé atteint 1 000 €. J>0 : 1er jour où le profit cumulé (frais de démarrage compris) passe au-dessus de 0.\n');

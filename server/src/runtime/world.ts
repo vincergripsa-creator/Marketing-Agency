@@ -3,7 +3,7 @@ import type { AgentState, ScenarioConfig, WorldState } from '../shared.js';
 import { createRng, emit } from '../core/index.js';
 import { sim } from './modules.js';
 import { buildTeam } from './org/catalog.js';
-import { LEGACY_ORG } from './org/constants.js';
+import { LEAN_ORG, LEGACY_ORG } from './org/constants.js';
 import { officerOf } from './org/officers.js';
 import { legacyOrgState, reconcileOrg } from './org/reconcile.js';
 import { DEPARTMENTS, SEED_PLAYBOOKS } from './roster.js';
@@ -22,6 +22,14 @@ export function defaultScenario(overrides: Partial<ScenarioConfig> = {}): Scenar
     chargeCompute: true,
     maxComputeEur: 3,
     goal: { targetProfit: 1000, byDay: 60 },
+    // The V1 company. An absent field is an older save, which keeps the behaviour it had (§2.8).
+    org: { ...LEAN_ORG },
+    talent: 'league',
+    channelControl: 'none',
+    videoModel: 'on',
+    visualModel: 'on',
+    scaling: true,
+    openEnded: false,
   };
   const o = overrides ?? {};
   const s: ScenarioConfig = { ...base, ...o, goal: { ...base.goal, ...(o.goal ?? {}) } };

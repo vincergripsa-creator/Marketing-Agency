@@ -20,6 +20,8 @@ import { SseHub, sseFrame, type SnapshotSource } from '../src/api/sse.js';
 import {
   buildSnapshot, DEFAULT_LIMITS, estimateFinance, serializeLiveSnapshot, serializeSnapshot, shrinkValue, SNAPSHOT_BUDGET_BYTES, taskStatsOf, TIGHT_LIMITS, trimContent, trimInbox, trimTasks,
 } from '../src/api/trim.js';
+import { LEAN_ORG, LEGACY_ORG } from '../src/runtime/org/constants.js';
+import { minRunCash } from '../src/runtime/org/payroll.js';
 import { FEES, minStartingCash } from '../src/sim/balance.js';
 import { banditInsights, CliError, fmtEur, kpiRow, parseCliArgs, tableHeader, verdict } from '../src/cli.js';
 
@@ -369,23 +371,47 @@ describe('path traversal protection', () => {
     const s = sanitizeScenario({ startingCash: '1e9', difficulty: 'cauchemar', mindMode: 'claude', seed: 12.7, horizonDays: 3, evil: 'x', goal: { targetProfit: 2000, byDay: 45 }, founderApproval: 'yes' });
     expect(s).toEqual({ startingCash: 1_000_000, difficulty: 'cauchemar', mindMode: 'claude', seed: 12, horizonDays: 7, goal: { targetProfit: 2000, byDay: 45 } });
     expect(sanitizeScenario({ difficulty: 'impossible', companyName: '   ' })).toEqual({});
-    expect(sanitizeScenario({ startingCash: minStartingCash() })).toEqual({ startingCash: minStartingCash() });
+    expect(sanitizeScenario({ startingCash: minRunCash({ org: LEAN_ORG }) })).toEqual({ startingCash: minRunCash({ org: LEAN_ORG }) });
     expect(parseControl({ action: 'play', speed: 4 })).toEqual({ action: 'play', speed: 4 });
     expect(parseControl({ action: 'pause' })).toEqual({ action: 'pause' });
     expect(() => parseControl({ action: 'rewind' })).toThrow(HttpError);
     expect(() => parseControl({ action: 'play', speed: 3 })).toThrow(/Vitesse/);
   });
 
-  it('refuses a budget that cannot pay the launch and a month of fixed costs, in French', () => {
+  it('refuses a budget that cannot pay the launch and a month of fixed costs and founders, in French', () => {
     const fixed = 30 * (FEES.boutiqueDaily + FEES.toolsDaily);
     expect(minStartingCash()).toBeGreaterThanOrEqual(FEES.setupCost + fixed);
-    expect(minStartingCash()).toBe(110);
-    for (const startingCash of [0, 50, 109.99, '40', -5]) {
+    expect(minRunCash({ org: LEAN_ORG })).toBeGreaterThanOrEqual(FEES.setupCost + fixed + 30 * 7.6);
+    expect(minRunCash({ org: LEAN_ORG })).toBe(330);
+    for (const startingCash of [0, 50, 329.99, '40', -5]) {
       expect(() => sanitizeScenario({ startingCash })).toThrow(HttpError);
-      expect(() => sanitizeScenario({ startingCash })).toThrow(/Budget de départ trop bas : il faut au moins 110 €/);
+      expect(() => sanitizeScenario({ startingCash })).toThrow(/Budget de départ trop bas : il faut au moins 330 €/);
     }
-    expect(() => parseCliArgs(['--budget', '40'])).toThrow(/Budget de départ trop bas : il faut au moins 110 €/);
-    expect(parseCliArgs(['--budget', '110']).budget).toBe(110);
+    expect(() => sanitizeScenario({ startingCash: 40 })).toThrow(/60 € de frais de démarrage et 270 € de frais fixes et de salaires pour 30 jours/);
+    expect(() => parseCliArgs(['--budget', '40'])).toThrow(/Budget de départ trop bas : il faut au moins 330 €/);
+    expect(parseCliArgs(['--budget', '330']).budget).toBe(330);
+  });
+
+  it('keeps the old floor of 110 € for a team nobody pays', () => {
+    expect(minRunCash({ org: LEGACY_ORG })).toBe(110);
+    expect(minRunCash({ org: { ...LEAN_ORG, payroll: false } })).toBe(110);
+    expect(minRunCash({})).toBe(110); // an older save, which is the legacy team
+    expect(minRunCash({ org: { ...LEGACY_ORG, payroll: true } })).toBe(330); // the floor pays founders, and nobody else, on any team
+    expect(sanitizeScenario({ startingCash: 110, org: { payroll: false } })).toEqual({ startingCash: 110, org: { ...LEAN_ORG, payroll: false } });
+    expect(() => sanitizeScenario({ startingCash: 109, org: { payroll: false } })).toThrow(/il faut au moins 110 € \(60 € de frais de démarrage et 50 € de frais fixes pour 30 jours\)/);
+    expect(() => sanitizeScenario({ startingCash: 110, org: 'gratuit' })).toThrow(/il faut au moins 330 €/);
+    expect(parseCliArgs(['--budget', '110', '--no-payroll']).budget).toBe(110); // whichever comes first on the line
+    expect(parseCliArgs(['--no-payroll', '--budget', '110']).budget).toBe(110);
+    expect(() => parseCliArgs(['--budget', '110'])).toThrow(/il faut au moins 330 €/);
+  });
+
+  it('takes the V1 switches of a new scenario and never a control arm', () => {
+    expect(sanitizeScenario({ org: { team: 'legacy31', autoHire: false, payroll: false, salary: 9 } })).toEqual({ org: LEGACY_ORG });
+    expect(sanitizeScenario({ org: { team: 'mega', autoHire: 'non' } })).toEqual({ org: LEAN_ORG });
+    expect(sanitizeScenario({ org: [] })).toEqual({});
+    expect(sanitizeScenario({ talent: 'flat', openEnded: true })).toEqual({ talent: 'flat', openEnded: true });
+    expect(sanitizeScenario({ talent: 'divin', openEnded: 'oui' })).toEqual({});
+    expect(sanitizeScenario({ control: { noLearning: true } })).toEqual({});
   });
 
   it('detects the process entry module', () => {
@@ -706,14 +732,17 @@ describe('SSE pacing', () => {
   it('sends a tick event for every tick but at most one full snapshot per interval, the light one when there is one', async () => {
     let day = 1;
     const source: SnapshotSource = { snapshotJson: () => '{"full":true}', liveSnapshotJson: () => '{"live":true}', tickJson: () => JSON.stringify({ type: 'tick', day }) };
+    const start = Date.now();
     const s = stream(source, { snapshotMinIntervalMs: 120 });
     expect(s.frames.at(-1)).toContain('"live":true');
     for (let i = 0; i < 12; i++) { s.hub.tick(); await new Promise((r) => setTimeout(r, 25)); }
     await new Promise((r) => setTimeout(r, 150));
+    const elapsed = Date.now() - start;
     expect(s.count('tick')).toBe(12);
     const snapshots = s.count('snapshot');
     expect(snapshots).toBeGreaterThanOrEqual(3);
-    expect(snapshots).toBeLessThanOrEqual(5);
+    // One per interval, over the time the loop really took (5 at full speed): with a worker per core, timers run late.
+    expect(snapshots).toBeLessThanOrEqual(Math.ceil(elapsed / 120) + 1);
     expect(s.frames.some((f) => f.includes('"full":true'))).toBe(false);
     // a new day does not wait for the interval
     s.hub.tick();
@@ -905,7 +934,7 @@ describe('HTTP server', () => {
     expect(JSON.parse(sc.body).runId).toBe(world.runId);
     const poor = await call(port, 'POST', '/api/scenario', JSON.stringify({ startingCash: 50 }));
     expect(poor.status).toBe(400);
-    expect(JSON.parse(poor.body).error).toMatch(/il faut au moins 110 €/);
+    expect(JSON.parse(poor.body).error).toMatch(/il faut au moins 330 €/);
     const created = JSON.parse(calls.find((c) => c.startsWith('newRun:'))!.slice(7));
     expect(created).toMatchObject({ startingCash: 800, difficulty: 'facile' });
     expect(typeof created.seed).toBe('number');
@@ -1084,6 +1113,15 @@ describe('cli', () => {
     expect(parseCliArgs(['-h']).help).toBe(true);
   });
 
+  it('picks the team, the same flags as the benchmark', () => {
+    expect(parseCliArgs([]).org).toEqual(LEAN_ORG);
+    expect(parseCliArgs(['--team', 'legacy31']).org).toEqual({ team: 'legacy31', autoHire: true, payroll: true });
+    expect(parseCliArgs(['--team=legacy31', '--no-hire', '--no-payroll']).org).toEqual(LEGACY_ORG);
+    expect(parseCliArgs(['--no-hire']).org).toEqual({ team: 'lean', autoHire: false, payroll: true });
+    expect(() => parseCliArgs(['--team', 'mega'])).toThrow(/lean ou legacy31/);
+    expect(LEAN_ORG).toEqual({ team: 'lean', autoHire: true, payroll: true }); // a parse never writes on the shared default
+  });
+
   it('formats the daily table and the verdict in French', () => {
     expect(fmtEur(1234.5)).toBe('1 234,50 €');
     expect(fmtEur(-12)).toBe('-12,00 €');
@@ -1106,6 +1144,9 @@ describe('cli', () => {
     const poor = verdict({ world: { ...w, company: { ...w.company, products: [], lessons: [] } }, finance: { ...FINANCE, profit: -120, profit7d: -30 }, daysRun: 10, filesDir: 'f', brainDir: 'b', worldFile: 'w' });
     expect(poor).toContain('PAS ENCORE RENTABLE');
     expect(poor).toContain('aucune vente');
+    expect(poor).not.toContain('salaires');
+    const paid = verdict({ world: w, finance: { ...FINANCE, payroll: 456 }, daysRun: 60, filesDir: 'f', brainDir: 'b', worldFile: 'w' });
+    expect(paid).toContain('salaires 456,00 €');
   });
 });
 
@@ -1194,7 +1235,8 @@ describe('live session', () => {
     await new Promise((r) => setTimeout(r, 1100)); // second-based run ids
     const second = await s.newRun({ startingCash: 900, difficulty: 'cauchemar' }, false);
     expect(second.runId).not.toBe(first);
-    expect(s.world.scenario).toMatchObject({ startingCash: 900, difficulty: 'cauchemar', maxComputeEur: 3 });
+    expect(s.world.scenario).toMatchObject({ startingCash: 900, difficulty: 'cauchemar', maxComputeEur: 3, openEnded: true });
+    expect(s.info().minStartingCash).toBe(330);
     const runs = await s.listRuns();
     expect(runs.find((r) => r.current)!.runId).toBe(second.runId);
     expect(runs.map((r) => r.runId)).toContain(first);

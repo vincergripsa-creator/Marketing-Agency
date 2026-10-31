@@ -4,6 +4,8 @@
  */
 import type { Campaign, DailyAdStats, Product, WorldState } from '../shared.js';
 import { sim } from './modules.js';
+import { ORG } from './org/constants.js';
+import { payrollToday, SURVIVAL_CASH } from './org/payroll.js';
 import { median, round2, sum, strArr } from './util.js';
 
 export interface WindowMetrics {
@@ -174,7 +176,7 @@ function measuredCeiling(world: WorldState, p: Product): { ceiling: number; why:
 
 export interface Budget { adCap: number; survival: boolean; cash: number; runwayDays: number | null; rate: number; bankrupt: boolean; outage: boolean }
 
-/** Daily ad envelope: ≤ 15 % of cash, ≤ 8 % if runway < 14 days, 0 when bankrupt or on an announced outage day; survival below 30 % of start. */
+/** Daily ad envelope: ≤ 15 % of the cash left once a week of pay is set aside, ≤ 8 % if runway < 14 days, 0 when bankrupt or on an announced outage day; survival below 30 % of start. */
 export function computeBudget(world: WorldState): Budget {
   const fin = sim.financeSnapshot(world);
   const start = Math.max(1, world.scenario.startingCash);
@@ -182,8 +184,8 @@ export function computeBudget(world: WorldState): Budget {
   const rate = lowRunway ? 0.08 : 0.15;
   const bankrupt = fin.bankrupt || fin.cash < 0 || world.status === 'bankrupt';
   const outage = sim.isAnnouncedOutage(world, world.day);
-  const adCap = bankrupt || outage || fin.cash <= 0 ? 0 : round2(fin.cash * rate);
-  return { adCap, survival: fin.cash < 0.3 * start, cash: round2(fin.cash), runwayDays: fin.runwayDays, rate, bankrupt, outage };
+  const adCap = bankrupt || outage || fin.cash <= 0 ? 0 : round2(Math.max(0, fin.cash - ORG.adReserveDays * payrollToday(world)) * rate);
+  return { adCap, survival: fin.cash < SURVIVAL_CASH * start, cash: round2(fin.cash), runwayDays: fin.runwayDays, rate, bankrupt, outage };
 }
 
 /** Today's budget as decided by the CFO this morning (falls back to a live computation). */

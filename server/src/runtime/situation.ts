@@ -3,7 +3,7 @@
  * heuristic mind picks the lines that answer the question (by their prefix), Claude reads them all. Only observable
  * data: the books, the public events, the market notes of the last close, the company's own tasks.
  */
-import type { AgentState, DailyKpi } from '../shared.js';
+import type { AgentState, DailyKpi, DeptId } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { learning, sim } from './modules.js';
 import { productPnls } from './accounting.js';
@@ -11,7 +11,7 @@ import { activeHolds } from './holds.js';
 import { activeCampaigns, currentBudget } from './metrics.js';
 import { founderMissionLines } from './missions.js';
 import { isOpen, openTasks, taskById } from './tasks.js';
-import { dec, eur, round2, short, sum } from './util.js';
+import { dec, eur, round2, short, sum, uniq } from './util.js';
 import { FORMAT_LABELS, HOOK_LABELS } from './handlers/phrases.js';
 
 function oneLine(text: string): string {
@@ -33,7 +33,7 @@ function causeLines(ctx: RuntimeCtx, kpi: DailyKpi): string[] {
   const out: string[] = [];
   const entries = w.ledger.filter((e) => e.day === day);
   const refunds = -sum(entries.filter((e) => ['refund', 'chargeback', 'discount', 'scam_loss'].includes(e.type)).map((e) => e.amount));
-  const costs = -sum(entries.filter((e) => ['platform_fee', 'tool_subscription', 'compute', 'payment_fee'].includes(e.type) && !(e.ref ?? '').startsWith('hold:')).map((e) => e.amount));
+  const costs = -sum(entries.filter((e) => ['platform_fee', 'tool_subscription', 'compute', 'payment_fee', 'salary', 'recruiting'].includes(e.type) && !(e.ref ?? '').startsWith('hold:')).map((e) => e.amount));
   const outage = sim.isAnnouncedOutage(w, day);
   if (outage) out.push(`Cause d'hier : panne de paiement du jour ${day}, annoncée par le prestataire, aucune vente possible ce jour-là, ${kpi.adSpend > 0 ? `${eur(kpi.adSpend)} de pub perdus` : 'pubs en pause donc aucune dépense pub'}`);
   for (const e of w.market.events) {
@@ -103,12 +103,16 @@ function productLines(ctx: RuntimeCtx): string[] {
   return [...lines, ...activeHolds(w).map((h) => `Ordre du fondateur : ${oneLine(h.reason)}`)];
 }
 
-/** Facts a member of each department would know by heart. */
+/** Facts someone knows by heart: those of their department, and of each one they cover with a hat. */
 function deptFacts(ctx: RuntimeCtx, agent: AgentState): string[] {
+  return uniq([agent.dept, ...agent.hatDepts].flatMap((dept) => factsOf(ctx, dept)));
+}
+
+function factsOf(ctx: RuntimeCtx, dept: DeptId): string[] {
   const w = ctx.world;
   const live = w.company.products.filter((p) => p.status === 'live');
   const out: string[] = [];
-  switch (agent.dept) {
+  switch (dept) {
     case 'growth': {
       const camps = activeCampaigns(w);
       out.push(camps.length ? `Pub : ${camps.length} campagne(s) active(s), ${eur(camps.reduce((s, c) => s + c.dailyBudget, 0))} par jour.` : 'Pub : aucune campagne active.');

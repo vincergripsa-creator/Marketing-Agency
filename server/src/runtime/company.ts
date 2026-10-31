@@ -20,7 +20,7 @@ import { HANDLERS, type HandlerOutcome } from './handlers/index.js';
 import { syncSalesPages } from './handlers/boutique.js';
 import { closeLoop, reviewTask, MAX_ATTEMPTS } from './review.js';
 import {
-  agentById, assignReady, chiefOf, closeMissions, createTask, depState, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, productIdOf, refreshAgentScore, taskById,
+  agentById, assignReady, chiefOf, closeMissions, createTask, depState, isGuardKind, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, productIdOf, refreshAgentScore, taskById,
 } from './tasks.js';
 import { buildHeuristicPlan, keywordMission, materialize, mergePlans, normalizeItem, prepareFounderItem, reactToOutage } from './strategy.js';
 import { addHold, liftHolds, productHold, REFUSAL_COOLDOWN_DAYS } from './holds.js';
@@ -31,6 +31,7 @@ import { situationFor } from './situation.js';
 import { CANDIDATES } from './org/catalog.js';
 import { isLegacyOrg } from './org/constants.js';
 import { officerId, officerOf } from './org/officers.js';
+import { speedFor } from './org/reconcile.js';
 import { activeCampaigns, currentBudget } from './metrics.js';
 import { PILLARS, type Worked } from './pillars.js';
 import { STREAM } from './streams.js';
@@ -445,7 +446,7 @@ export class Company implements CompanyApi {
       const task = this.pickTask(agent);
       if (!task) { this.idle(agent); continue; }
       this.memory.idleTicks[agent.id] = 0;
-      if (agent.energy <= 12 && task.workLeft > 0) {
+      if (agent.energy <= 12 && task.workLeft > 0 && !isGuardKind(w, task.kind)) {
         this.coffee(agent, `${agent.name} est à plat : pause café avant de reprendre « ${short(task.title, 40)} »`);
         continue;
       }
@@ -464,7 +465,7 @@ export class Company implements CompanyApi {
       agent.bubble = KIND_META[task.kind].bubble;
       if (task.workLeft > 0) {
         task.progress = Math.min(0.95, task.progress + (1 - task.progress) / task.workLeft);
-        task.workLeft -= 1;
+        task.workLeft = Math.max(0, round2(task.workLeft - speedFor(w, agent, task.kind)));
         agent.energy = Math.max(0, agent.energy - 8);
       }
       worked.push({ agentId: agent.id, taskId: task.id, kind: task.kind });
@@ -519,6 +520,10 @@ export class Company implements CompanyApi {
     }
     if (w.day % 7 === 0) await this.runImmediate('performance_review', hr, `Revue RH de la semaine ${Math.ceil(w.day / 7)}`);
     for (const p of PILLARS) await p.evening?.(this.ctx);
+    // A departure books its severance after the retro froze the day. Only the ledger's columns follow it: the rest of the
+    // row is the retro's, and a fresh tasksDone would count the retro itself.
+    const { cash, profit, cumulativeProfit } = learning.computeDailyKpi(w, w.day);
+    Object.assign(w.company.kpis.find((k) => k.day === w.day)!, { cash, profit, cumulativeProfit });
     const closed = closeMissions(w);
     if (closed.length) speak(this.ctx, 'chief_of_staff', `${closed.length} mission(s) bouclée(s) aujourd'hui`);
     const staff = officerId(w, 'chief_of_staff');
@@ -545,12 +550,15 @@ export class Company implements CompanyApi {
 
   private pickTask(agent: AgentState): Task | null {
     const w = this.world;
-    const current = agent.currentTaskId ? taskById(w, agent.currentTaskId) : undefined;
-    if (current && current.status === 'in_progress' && current.assignee === agent.id) return current;
-    if (current && current.status !== 'in_progress') agent.currentTaskId = null;
     const mine = w.company.tasks
       .filter((t) => t.assignee === agent.id && (t.status === 'pending' || t.status === 'in_progress') && depState(w, t) === 'ready')
       .sort((a, b) => (a.status === 'in_progress' ? -1 : 0) - (b.status === 'in_progress' ? -1 : 0) || a.priority - b.priority || idNum(a.id) - idNum(b.id));
+    // A guard task goes before whatever the agent has in hand: the stop-loss runs on the morning it is due.
+    const guard = mine.find((t) => isGuardKind(w, t.kind));
+    if (guard) return guard;
+    const current = agent.currentTaskId ? taskById(w, agent.currentTaskId) : undefined;
+    if (current && current.status === 'in_progress' && current.assignee === agent.id) return current;
+    if (current && current.status !== 'in_progress') agent.currentTaskId = null;
     return mine[0] ?? null;
   }
 

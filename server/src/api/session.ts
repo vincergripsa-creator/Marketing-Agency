@@ -7,8 +7,9 @@ import { EventEmitter } from 'node:events';
 import { emit, round2, runPaths } from '../core/index.js';
 import { createBrainVault } from '../learning/index.js';
 import { createContentEngine } from '../minds/index.js';
-import { minStartingCash } from '../sim/balance.js';
 import { Company, createWorld, defaultScenario } from '../runtime/index.js';
+import { LEAN_ORG } from '../runtime/org/constants.js';
+import { minRunCash } from '../runtime/org/payroll.js';
 import type { BrainNote, BrainVault, CompanyApi, ContentEngine, RunPaths, StepResult, UsageEvent } from '../contracts.js';
 import type { LiveAgent, MissionResponse, RunInfo, ScenarioConfig, SessionInfo, WorldState } from '../shared.js';
 import { TICKS_PER_DAY } from '../shared.js';
@@ -169,7 +170,7 @@ export class AgencySession {
       day: this.run?.world.day ?? 0,
       tick: this.run?.world.tick ?? 0,
       lastError: this.lastError,
-      minStartingCash: minStartingCash(),
+      minStartingCash: minRunCash({ org: LEAN_ORG }),
       pace: 'live',
       watchers: 0,
       backoffMs: null,
@@ -200,7 +201,7 @@ export class AgencySession {
 
   async newRun(partial: Partial<ScenarioConfig> = {}, play = true): Promise<WorldState> {
     return this.switchRun(() => {
-      const scenario = defaultScenario({ maxComputeEur: config.maxComputeEur, ...partial });
+      const scenario = defaultScenario({ maxComputeEur: config.maxComputeEur, openEnded: true, ...partial });
       return createWorld(scenario, newRunId(runsDir()));
     }, play);
   }

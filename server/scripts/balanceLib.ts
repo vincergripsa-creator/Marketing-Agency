@@ -7,7 +7,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runPaths } from '../src/core/index.js';
+import { runPaths, summarizeLedger } from '../src/core/index.js';
 import { createBrainVault } from '../src/learning/index.js';
 import { createContentEngine } from '../src/minds/index.js';
 import { Company, createWorld, defaultScenario } from '../src/runtime/index.js';
@@ -86,6 +86,14 @@ export interface RunResult {
   ctr2: number | null;
   refundPct: number;
   lessons: number;
+  /** Agents still in the company on the last day. */
+  headcount: number;
+  /** Everything paid to people over the run: salaries, plus the one-offs of hires and departures. */
+  payroll: number;
+  hires: number;
+  departures: number;
+  /** Broken org invariants, summed over every evening. Must stay 0. */
+  violations: number;
   cliffs: Cliff[];
   stalls: Stall[];
   kpiMismatchDays: number[];
@@ -261,6 +269,7 @@ export async function runOne(spec: RunSpec): Promise<RunResult> {
     const bankruptEvent = world.market.events.find((e) => e.kind === 'bankrupt');
     const firstProfit = rows.find((r) => r.cumulativeProfit > 0);
     const goalRow = rows.find((r) => r.cumulativeProfit >= scenario.goal.targetProfit);
+    const org = world.company.org?.stats;
     if (spec.keep) {
       const persist = await import('../src/api/persist.js');
       await persist.saveWorld(world, { finance: { cash: fin.cash, profit: fin.profit } });
@@ -284,6 +293,11 @@ export async function runOne(spec: RunSpec): Promise<RunResult> {
       roas1: a1.roas, roas2: a2.roas, ctr1: a1.ctr, ctr2: a2.ctr,
       refundPct: orders.length ? refunded / orders.length : 0,
       lessons: world.company.lessons.length,
+      headcount: world.company.agents.length,
+      payroll: summarizeLedger(world.ledger, world.day).payroll,
+      hires: org?.hires ?? 0,
+      departures: org?.departures ?? 0,
+      violations: org?.violations ?? 0,
       cliffs: findCliffs(world, rows),
       stalls: findStalls(rows, spec.budget),
       kpiMismatchDays,
@@ -329,6 +343,11 @@ export interface Aggregate {
   stalls: number;
   kpiMismatches: number;
   nan: number;
+  medianHeadcount: number;
+  medianPayroll: number;
+  hires: number;
+  departures: number;
+  violations: number;
 }
 
 export function aggregate(results: RunResult[], difficulty: Difficulty): Aggregate | null {
@@ -354,6 +373,11 @@ export function aggregate(results: RunResult[], difficulty: Difficulty): Aggrega
     stalls: rs.reduce((n, r) => n + r.stalls.length, 0),
     kpiMismatches: rs.reduce((n, r) => n + r.kpiMismatchDays.length, 0),
     nan: rs.reduce((n, r) => n + r.nanDays.length, 0),
+    medianHeadcount: median(rs.map((r) => r.headcount)),
+    medianPayroll: r2(median(rs.map((r) => r.payroll))),
+    hires: rs.reduce((n, r) => n + r.hires, 0),
+    departures: rs.reduce((n, r) => n + r.departures, 0),
+    violations: rs.reduce((n, r) => n + r.violations, 0),
   };
 }
 
@@ -372,6 +396,7 @@ const arrow = (a: number | null, b: number | null, fmt: (n: number | null) => st
 const COLUMNS: [string, number][] = [
   ['Difficulté', 10], ['Graine', 6], ['Trésorerie', 10], ['Profit', 9], ['Pic', 9], ['J>0', 4], ['Objectif', 8], ['Faillite', 8],
   ['Produits (en ligne/arrêtés)', 12], ['ROAS 1→2', 14], ['CTR 1→2', 18], ['Remb.', 7], ['Leçons', 6], ['Artefacts', 9],
+  ['Effectif', 8], ['Masse salariale', 15], ['Embauches', 9], ['Départs', 7], ['Violations', 10],
 ];
 
 function line(cells: string[]): string {
@@ -394,6 +419,7 @@ export function resultRow(r: RunResult): string {
     r.difficulty, String(r.seed), eur(r.finalCash), eur(r.profit), eur(r.peakProfit), dayS(r.firstProfitDay), dayS(r.goalDay),
     r.bankrupt ? `oui J${r.bankruptDay}` : 'non', `${r.live}/${r.killed}`,
     arrow(r.roas1, r.roas2, (n) => num(n)), arrow(r.ctr1, r.ctr2, (n) => pctS(n, 2)), pctS(r.refundPct), String(r.lessons), artefacts,
+    String(r.headcount), eur(r.payroll), String(r.hires), String(r.departures), String(r.violations),
   ]);
 }
 
@@ -403,6 +429,7 @@ export function aggregateLines(a: Aggregate): string[] {
   return [
     `${a.difficulty.padEnd(10)} │ profit médian ${eur(a.medianProfit)} (min ${eur(a.minProfit)}, max ${eur(a.maxProfit)}) · rentables ${p(a.profitable)} · objectif ${p(a.goal)} · faillites ${p(a.bankrupt)} · 1er jour > 0 médian ${dayS(a.medianFirstProfitDay)}`,
     `${''.padEnd(10)} │ 2e moitié meilleure : CTR ${share(a.ctrImproved)} · ROAS ${share(a.roasImproved)} · les deux ${share(a.bothImproved)} · falaises ${a.cliffs} (inexpliquées ${a.unexplainedCliffs}) · arrêts pub ${a.stalls} · KPI≠grand livre ${a.kpiMismatches} · NaN ${a.nan}`,
+    `${''.padEnd(10)} │ effectif médian ${a.medianHeadcount} · masse salariale médiane ${eur(a.medianPayroll)} · embauches ${a.hires} · départs ${a.departures} · violations ${a.violations}`,
   ];
 }
 

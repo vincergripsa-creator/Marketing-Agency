@@ -12,7 +12,7 @@ export const COACHING_PREFIX = 'Coaching RH :';
 
 /** Which departments receive a lesson of a given topic ('chiefs' = every department chief). */
 export const TOPIC_DEPTS: Record<Lesson['topic'], DeptId[] | 'chiefs'> = {
-  ads: ['growth'],
+  ads: ['growth', 'video', 'crm'],
   pricing: ['boutique'],
   product: ['studio', 'creation'],
   support: ['support'],
@@ -57,7 +57,8 @@ export function lessonLink(l: Pick<Lesson, 'insight' | 'notePath'>): string {
 }
 
 /**
- * Agents whose playbook receives a lesson: the topic's departments (+ extra departments, + matching roles).
+ * Agents whose playbook receives a lesson: the topic's departments (+ extra departments, + matching roles). Wearing
+ * a department's kinds as a hat counts as being in it: the lesson reaches whoever does that work today.
  * `routeOnly`: only the extra departments and the CEO (e.g. a process issue of one team).
  */
 export function agentsForLesson(
@@ -68,7 +69,7 @@ export function agentsForLesson(
   const depts = new Set<DeptId>([...(route === 'chiefs' || route === 'only' ? [] : route), ...extraDepts]);
   const roleKeys = roles.map((r) => fold(r).trim()).filter((r) => r.length >= 3);
   return agents.filter((a) => {
-    if (depts.has(a.dept)) return true;
+    if (depts.has(a.dept) || (a.hatDepts ?? []).some((d) => depts.has(d))) return true;
     if (route === 'chiefs' && a.isChief) return true;
     if (route === 'only' && a.isChief && a.dept === 'direction') return true;
     if (roleKeys.length === 0) return false;
@@ -176,6 +177,24 @@ export function addRule(world: WorldState, agentId: string, rule: string, replac
   return pb.includes(text) ? 'added' : 'skipped';
 }
 
+/**
+ * What someone leaving knows outlives them: their machine rules reach `toIds`, and the lessons behind those rules
+ * learn their new holders. Prose stays with the leaver. Returns the agents whose playbook changed.
+ */
+export function handOverRules(world: WorldState, fromId: string, toIds: readonly string[]): string[] {
+  const rules = (world.company.playbooks?.[fromId] ?? []).filter(hasMachineRule);
+  const changed = new Set<string>();
+  for (const to of toIds) {
+    for (const rule of rules) {
+      const r = addRule(world, to, rule);
+      if (r === 'added' || r === 'replaced') changed.add(to);
+      if (r === 'skipped') continue;
+      for (const l of lessonsOfRules(world, [rule])) l.appliesTo = unique([...l.appliesTo, to]);
+    }
+  }
+  return [...changed];
+}
+
 /** Replaces a revised rule everywhere it appears. Returns the agents whose playbook changed. */
 export function replaceRuleEverywhere(world: WorldState, oldRule: string, newRule: string): string[] {
   const changed: string[] = [];
@@ -252,6 +271,22 @@ function agentNoteBody(world: WorldState, agent: AgentState): string {
 /** Section of a department note maintained by the retro; everything else in the note (seed text) is kept. */
 export const DEPT_RULES_SECTION = '## Règles en vigueur';
 
+/** Who does a closed department's work today: whoever wears its kinds, else the chief of the department hosting it. */
+function carriersOf(world: WorldState, dept: DeptId): AgentState[] {
+  const agents = world.company.agents ?? [];
+  const wearers = agents.filter((a) => (a.hatDepts ?? []).includes(dept));
+  if (wearers.length) return wearers;
+  const host = world.company.org?.deptHost?.[dept];
+  return host ? agents.filter((a) => a.dept === host && a.isChief) : [];
+}
+
+/** "Ce département n'a pas d'équipe : Clara s'en occupe", null while it has one or nobody carries it. */
+function carriedLine(world: WorldState, carriers: readonly AgentState[]): string | null {
+  if (!carriers.length) return null;
+  const names = carriers.map((a) => `[[${agentNoteName(world, a)}]]`).join(', ');
+  return `Ce département n'a pas d'équipe : ${names} s'en ${carriers.length > 1 ? 'occupent' : 'occupe'}.`;
+}
+
 /** Header of a department note created from scratch (no seed note in the vault). */
 function deptNoteIntro(world: WorldState, dept: DeptId): string {
   const def = (world.company.departments ?? []).find((d) => d.id === dept);
@@ -265,10 +300,13 @@ function deptNoteIntro(world: WorldState, dept: DeptId): string {
   return lines.join('\n');
 }
 
-/** The maintained "## Règles en vigueur" section: rules currently in the team's playbooks + links to each member. */
+/** The maintained "## Règles en vigueur" section: rules currently in the team's playbooks + links to each member. A closed department reads its carriers instead. */
 export function deptRulesSection(world: WorldState, dept: DeptId, day: number): string {
-  const members = (world.company.agents ?? []).filter((a) => a.dept === dept).sort((a, b) => Number(b.isChief) - Number(a.isChief));
+  const team = (world.company.agents ?? []).filter((a) => a.dept === dept).sort((a, b) => Number(b.isChief) - Number(a.isChief));
+  const members = team.length ? team : carriersOf(world, dept);
   const lines: string[] = [DEPT_RULES_SECTION, `_Tenue à jour par la rétro du soir (jour ${day}) à partir des playbooks de l'équipe._`];
+  const carried = team.length ? null : carriedLine(world, members);
+  if (carried) lines.push('', carried);
   if (members.length) lines.push('', `**Playbooks individuels** : ${members.map((a) => `[[${agentNoteName(world, a)}]]`).join(' · ')}`);
   const counts = new Map<string, number>();
   for (const a of members) for (const r of world.company.playbooks?.[a.id] ?? []) counts.set(r, (counts.get(r) ?? 0) + 1);
@@ -302,30 +340,43 @@ export function deptNoteBody(world: WorldState, dept: DeptId, day: number, exist
 }
 
 /**
- * Writes playbooks/<Prénom>.md for the given agents and refreshes the "## Règles en vigueur" section of
- * "Playbook <Département>" for their departments. A department note shipped by the seed vault keeps its
- * title, tags and body: only that section is (re)written below it.
+ * Refreshes the "## Règles en vigueur" section of one "Playbook <Département>". A note shipped by the seed vault
+ * keeps its title, tags and body: only that section is (re)written below it.
  */
+export async function writeDeptNote(world: WorldState, brain: BrainVault, dept: DeptId, day: number): Promise<void> {
+  const path = `playbooks/${deptNoteTitle(dept)}.md`;
+  const existing = await brain.read(path);
+  const own = existing && fold(existing.path) === fold(path) ? existing : null;
+  await brain.write({
+    path,
+    title: own?.title || deptNoteTitle(dept),
+    tags: unique([...(own?.tags ?? []), 'playbook', 'departement', dept]),
+    body: deptNoteBody(world, dept, day, own ? own.body : null),
+    day,
+  });
+}
+
+/** Writes playbooks/<Prénom>.md for the given agents and refreshes their departments' notes, closed departments they carry included. */
 export async function writePlaybookNotes(world: WorldState, brain: BrainVault, agentIds: Iterable<string>, day: number): Promise<number> {
   const ids = new Set(agentIds);
   const agents = (world.company.agents ?? []).filter((a) => ids.has(a.id));
+  const closed = new Set((world.company.org?.closedDepts ?? []).map((d) => d.id));
   let written = 0;
   for (const a of agents) {
     await brain.write({ path: agentNotePath(world, a), title: a.name || a.id, tags: ['playbook', a.dept], body: agentNoteBody(world, a), day });
     written++;
   }
-  for (const dept of unique(agents.map((a) => a.dept))) {
-    const path = `playbooks/${deptNoteTitle(dept)}.md`;
-    const existing = await brain.read(path);
-    const own = existing && fold(existing.path) === fold(path) ? existing : null;
-    await brain.write({
-      path,
-      title: own?.title || deptNoteTitle(dept),
-      tags: unique([...(own?.tags ?? []), 'playbook', 'departement', dept]),
-      body: deptNoteBody(world, dept, day, own ? own.body : null),
-      day,
-    });
+  for (const dept of unique(agents.flatMap((a) => [a.dept, ...(a.hatDepts ?? []).filter((d) => closed.has(d))]))) {
+    await writeDeptNote(world, brain, dept, day);
     written++;
   }
   return written;
+}
+
+/**
+ * The note of someone who left stays in the vault, tagged `alumni`, so that every link to it keeps working. `path` is
+ * read while they are still on the team: agentNoteName only sees the living.
+ */
+export async function writeAlumnusNote(world: WorldState, brain: BrainVault, agent: AgentState, path: string, line: string, day: number): Promise<void> {
+  await brain.write({ path, title: agent.name || agent.id, tags: ['playbook', agent.dept, 'alumni'], body: `> ${line}\n\n${agentNoteBody(world, agent)}`, day });
 }

@@ -2,9 +2,12 @@
  * Task system: kind metadata, creation helper, dependency resolution, assignment by department chiefs
  * and reviewer routing. Pure functions over WorldState (activities are emitted through core/emit).
  */
-import type { AgentId, AgentState, DeptId, Lesson, Mission, Office, Task, TaskKind, WorldState } from '../shared.js';
+import type { AgentId, AgentState, ChannelId, DeptId, Lesson, Mission, Office, Task, TaskKind, WorldState } from '../shared.js';
+import { channelOf } from '../shared.js';
 import { emit, nextId } from '../core/index.js';
+import { ROLES } from './org/catalog.js';
 import { officerId, reviewerFor } from './org/officers.js';
+import { deptFor, fitOf, isLean, speedFor, workFor } from './org/reconcile.js';
 import { short, idNum } from './util.js';
 
 export interface KindMeta {
@@ -108,7 +111,7 @@ export function createTask(world: WorldState, spec: TaskSpec): Task {
     id: nextId(world, 'tsk'),
     kind: spec.kind,
     title: spec.title ?? meta.label,
-    dept: meta.dept,
+    dept: deptFor(world, spec.kind),
     assignee: spec.assignee ?? null,
     createdBy: spec.createdBy ?? 'system',
     missionId: spec.missionId ?? null,
@@ -118,7 +121,7 @@ export function createTask(world: WorldState, spec: TaskSpec): Task {
     dayCreated: world.day,
     dayDone: null,
     progress: 0,
-    workLeft: Math.max(0, spec.workLeft ?? meta.work),
+    workLeft: Math.max(0, spec.workLeft ?? workFor(world, spec.kind)),
     attempts: 0,
     reviewer: spec.reviewer !== undefined ? spec.reviewer : reviewerFor(world, spec.kind),
     reviews: [],
@@ -172,9 +175,11 @@ export function productIdOf(task: Task): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
+/** A closed department answers through the department carrying it. */
 export function chiefOf(world: WorldState, dept: DeptId): AgentState | undefined {
-  const def = world.company.departments.find((d) => d.id === dept);
-  return world.company.agents.find((a) => a.id === def?.chiefId) ?? world.company.agents.find((a) => a.dept === dept && a.isChief);
+  const host = world.company.org?.deptHost[dept] ?? dept;
+  const def = world.company.departments.find((d) => d.id === host);
+  return world.company.agents.find((a) => a.id === def?.chiefId) ?? world.company.agents.find((a) => a.dept === host && a.isChief);
 }
 
 export function agentById(world: WorldState, id: AgentId | null | undefined): AgentState | undefined {
@@ -208,11 +213,27 @@ export function fixSelfReview(world: WorldState, task: Task): void {
   task.reviewer = walk.find((id) => id && id !== task.assignee) ?? null;
 }
 
-/** Candidates able to do a kind: department members first, then anyone with the skill. */
-export function capableAgents(world: WorldState, kind: TaskKind, dept?: DeptId): AgentState[] {
-  const able = world.company.agents.filter((a) => a.taskKinds.includes(kind));
-  const inDept = able.filter((a) => a.dept === (dept ?? KIND_META[kind].dept));
-  return inDept.length ? inDept : able;
+/** No `input.channel` means TikTok (D25). */
+export function taskChannel(task: Task): ChannelId {
+  return channelOf(task.input as { channel?: ChannelId });
+}
+
+/**
+ * Candidates able to do a kind: those whose job it is and the task's department first, then anyone who owns it, so a
+ * specialist is never stranded outside the kind's home. A buyer serves only their own channel (D25).
+ */
+export function capableAgents(world: WorldState, kind: TaskKind, dept?: DeptId, channel: ChannelId = 'tiktok'): AgentState[] {
+  const able = world.company.agents.filter((a) => a.taskKinds.includes(kind) && (ROLES[a.roleId].channel ?? channel) === channel);
+  const near = able.filter((a) => a.dept === (dept ?? KIND_META[kind].dept) || fitOf(a, kind) === 'core');
+  return near.length ? near : able;
+}
+
+/** Stop-loss and refunds preempt everything, whatever the queue and however tired the agent (org §6). */
+const GUARD_KINDS: readonly TaskKind[] = ['optimize_ads', 'handle_refund'];
+
+/** Not on the legacy team: it stays what it was, byte for byte. */
+export function isGuardKind(world: WorldState, kind: TaskKind): boolean {
+  return GUARD_KINDS.includes(kind) && isLean(world);
 }
 
 /** Has done less than a quarter of what a colleague did: the specialists keep their share, nobody is left out. */
@@ -221,7 +242,7 @@ function farBehind(a: AgentState, b: AgentState): boolean {
 }
 
 /**
- * Chiefs delegate every ready, unassigned task to the capable member with the lowest load and energy > 20
+ * Chiefs delegate every ready, unassigned task to the capable member who would finish it first, with energy > 20
  * (chiefs work too: among equally loaded specialists, a member far behind the others takes the next task, so a
  * team of three never leaves one of them idle for weeks). Emits 'delegate' (chief → assignee) and 'walk'.
  */
@@ -232,10 +253,12 @@ export function assignReady(world: WorldState): number {
     .sort((a, b) => a.priority - b.priority || idNum(a.id) - idNum(b.id));
   for (const task of pending) {
     if (depState(world, task) !== 'ready') continue;
-    const candidates = capableAgents(world, task.kind, task.dept).filter((a) => a.energy > 20);
+    const guard = isGuardKind(world, task.kind);
+    const candidates = capableAgents(world, task.kind, task.dept, taskChannel(task)).filter((a) => guard || a.energy > 20);
     if (!candidates.length) continue;
+    const finish = new Map(candidates.map((a) => [a.id, (agentLoad(world, a.id) + task.workLeft) / speedFor(world, a, task.kind)]));
     candidates.sort((a, b) => {
-      const la = agentLoad(world, a.id), lb = agentLoad(world, b.id);
+      const la = finish.get(a.id)!, lb = finish.get(b.id)!;
       if (la !== lb) return la - lb;
       const pa = a.taskKinds[0] === task.kind ? 0 : 1, pb = b.taskKinds[0] === task.kind ? 0 : 1;
       if (pa !== pb) return pa - pb;

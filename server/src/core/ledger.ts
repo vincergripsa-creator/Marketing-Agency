@@ -11,6 +11,11 @@ export const REVERSAL_REF = 'reversal:';
 /** Ledger ref of the one-off launch costs (FEES.setupCost): a real cost, but not a daily burn. */
 export const SETUP_REF = 'setup';
 
+/** One-off costs: the launch, and the 7 days of pay of a hire or a departure (org §5). Real money, not a daily burn. */
+function isOneOff(ref: string | null | undefined): boolean {
+  return !!ref && (ref === SETUP_REF || ref.startsWith('hire:') || ref.startsWith('leave:'));
+}
+
 /** Holds are cash timing only, never profit or loss. */
 export function isHold(e: Pick<LedgerEntry, 'ref'>): boolean {
   return !!e.ref && e.ref.startsWith(HOLD_REF);
@@ -30,6 +35,7 @@ export function lastClosedLedgerDay(ledger: readonly LedgerEntry[], day: number)
 
 export interface LedgerSummary extends FinanceSnapshot {
   capital: number;
+  payroll: number;
 }
 
 /**
@@ -39,7 +45,7 @@ export interface LedgerSummary extends FinanceSnapshot {
  */
 export function summarizeLedger(ledger: readonly LedgerEntry[], day: number, outageDays: Iterable<number> = []): LedgerSummary {
   let cash = 0, capital = 0;
-  let revenue = 0, refunds = 0, adSpend = 0, fees = 0, compute = 0, otherCosts = 0, profit = 0;
+  let revenue = 0, refunds = 0, adSpend = 0, fees = 0, compute = 0, payroll = 0, otherCosts = 0, profit = 0;
   let profit7d = 0, oneOff7d = 0, revenue7d = 0, adSpend7d = 0;
   const closed = lastClosedLedgerDay(ledger, day);
   const outage = new Set(outageDays);
@@ -51,7 +57,7 @@ export function summarizeLedger(ledger: readonly LedgerEntry[], day: number, out
     profit += amount;
     const recent = e.day > closed - 7 && e.day <= closed;
     if (recent) profit7d += amount;
-    if (recent && e.ref === SETUP_REF) oneOff7d += amount;
+    if (recent && isOneOff(e.ref)) oneOff7d += amount;
     const inRoas = recent && !outage.has(e.day);
     switch (e.type) {
       case 'revenue': revenue += amount; if (inRoas) revenue7d += amount; break;
@@ -59,6 +65,7 @@ export function summarizeLedger(ledger: readonly LedgerEntry[], day: number, out
       case 'ad_spend': adSpend -= amount; if (inRoas) adSpend7d -= amount; break;
       case 'payment_fee': case 'platform_fee': fees -= amount; break;
       case 'compute': compute -= amount; break;
+      case 'salary': case 'recruiting': payroll -= amount; break;
       default: otherCosts -= amount; break;
     }
   }
@@ -68,7 +75,7 @@ export function summarizeLedger(ledger: readonly LedgerEntry[], day: number, out
   return {
     cash: round2(cash),
     revenue: round2(revenue), refunds: round2(refunds), adSpend: round2(adSpend), fees: round2(fees),
-    compute: round2(compute), otherCosts: round2(otherCosts),
+    compute: round2(compute), otherCosts: round2(otherCosts), payroll: round2(payroll),
     profit: round2(profit),
     profit7d: round2(profit7d),
     burn7d: Object.is(burn7d, -0) ? 0 : burn7d,

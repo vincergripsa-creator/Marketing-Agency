@@ -153,8 +153,8 @@ export const SEED_PLAYBOOKS: Record<DeptId, string[]> = {
   ],
 };
 
-/** Brain note (file basename) of each department's playbook — linked from "00 - Accueil". `video` and `crm` join with their notes (P2.4). */
-export const PLAYBOOK_NOTES: Partial<Record<DeptId, string>> = {
+/** Brain note (file basename) of each department's playbook — linked from "00 - Accueil". */
+export const PLAYBOOK_NOTES: Record<DeptId, string> = {
   direction: 'Playbook Direction',
   recherche: 'Playbook Recherche',
   studio: 'Playbook Studio',
@@ -166,6 +166,8 @@ export const PLAYBOOK_NOTES: Partial<Record<DeptId, string>> = {
   finance: 'Playbook Finance',
   rh: 'Playbook RH',
   partenariats: 'Playbook Partenariats',
+  video: 'Playbook Vidéo',
+  crm: 'Playbook Communauté',
 };
 
 export function deptOf(id: DeptId): DeptDef {

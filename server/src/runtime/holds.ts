@@ -31,6 +31,11 @@ export function productHold(world: WorldState, productId: string): FounderHold |
   return holdsOf(world, 'product').find((h) => holding(h, world.day) && h.productId === productId) ?? null;
 }
 
+/** Nobody new joins while it stands: a refused hire, or the founder's freeze. */
+export function hiringHold(world: WorldState): FounderHold | null {
+  return holdsOf(world, 'hiring').find((h) => holding(h, world.day)) ?? null;
+}
+
 /** Holds in force, newest first: what the company tells whoever asks. */
 export function activeHolds(world: WorldState): FounderHold[] {
   return (world.company.holds ?? []).filter((h) => holding(h, world.day)).reverse();

@@ -58,9 +58,9 @@ vi.mock('../src/runtime/compaction.js', async (importOriginal) => {
   return { ...real, compactWorld: vi.fn(real.compactWorld) };
 });
 
-/** Shrinks as packages land: P2.3 headcount_review and recruit, P3.5 league_review, P5.1 and P5.2 the channels, P11.1 and P11.2 the rest. Empty at the end. */
+/** Shrinks as packages land: P3.5 league_review, P5.1 and P5.2 the channels, P11.1 and P11.2 the rest. Empty at the end. */
 const NOT_LANDED: TaskKind[] = [
-  'headcount_review', 'recruit', 'league_review',
+  'league_review',
   'open_channel', 'adapt_creative', 'write_search_ads', 'reconcile_channels', 'allocate_channels',
   'write_lead_magnet', 'write_email_sequence', 'send_broadcast', 'design_bump', 'portfolio_review',
 ];
