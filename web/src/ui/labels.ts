@@ -1,28 +1,50 @@
 // French labels and lookup helpers shared by every panel.
 import type {
-  ActivityKind, AdFormat, AgentState, AgentStatus, CompanySnapshot, DayPhase, DeptDef, DeptId, Deliverable,
-  Difficulty, Experiment, HookStyle, InboxMessage, LedgerType, Lesson, MessageIntent, ModelTier, ProductStatus, Task,
-  TaskKind, TaskStatus, ToolName, WorldEvent,
+  ActivityKind, AdFormat, AgentState, AgentStatus, Alumnus, CompanySnapshot, DayPhase, DeptDef, DeptId, Deliverable,
+  Difficulty, DuelView, Experiment, HiringReqView, HookStyle, InboxMessage, LedgerType, Lesson, MessageIntent, ModelTier,
+  PersonChip, ProbationPlan, ProductStatus, RoleId, Skill, Task, TaskKind, TaskStatus, ToolName, WorldEvent,
 } from '../../../shared/types';
 import type { IconName } from './icons';
 
 export type TabId =
-  | 'bureau' | 'taches' | 'calendrier' | 'produits' | 'pub' | 'mail' | 'finance' | 'cerveau' | 'apprentissage' | 'galerie';
+  | 'bureau' | 'taches' | 'calendrier' | 'produits' | 'pub' | 'canaux' | 'croissance' | 'effectif' | 'competition'
+  | 'mail' | 'finance' | 'cerveau' | 'apprentissage' | 'galerie';
 
-export const TABS: { id: TabId; label: string; icon: IconName; key: string }[] = [
+/** Ten in the bar, four behind « Plus » (ui D12). The phone menu lists all of them. */
+export const TABS: { id: TabId; label: string; icon: IconName; key: string; more?: true }[] = [
   { id: 'bureau', label: 'Bureau', icon: 'building', key: '1' },
   { id: 'taches', label: 'Tâches', icon: 'list', key: '2' },
-  { id: 'calendrier', label: 'Calendrier', icon: 'calendar', key: '3' },
-  { id: 'produits', label: 'Produits', icon: 'package', key: '4' },
-  { id: 'pub', label: 'Pub TikTok', icon: 'music', key: '5' },
-  { id: 'mail', label: 'Boîte mail', icon: 'inbox', key: '6' },
-  { id: 'finance', label: 'Finance', icon: 'wallet', key: '7' },
-  { id: 'cerveau', label: 'Cerveau', icon: 'brain', key: '8' },
-  { id: 'apprentissage', label: 'Apprentissage', icon: 'grad', key: '9' },
+  { id: 'produits', label: 'Produits', icon: 'package', key: '3' },
+  { id: 'pub', label: 'Acquisition', icon: 'megaphone', key: '4' },
+  { id: 'canaux', label: 'Canaux', icon: 'globe', key: '5' },
+  { id: 'croissance', label: 'Croissance', icon: 'trendUp', key: '6' },
+  { id: 'effectif', label: 'Effectif', icon: 'users', key: '7' },
+  { id: 'competition', label: 'Compétition', icon: 'trophy', key: '8' },
+  { id: 'finance', label: 'Finance', icon: 'wallet', key: '9' },
   { id: 'galerie', label: 'Galerie', icon: 'image', key: '0' },
+  { id: 'mail', label: 'Boîte mail', icon: 'inbox', key: 'm', more: true },
+  { id: 'calendrier', label: 'Calendrier', icon: 'calendar', key: 'c', more: true },
+  { id: 'cerveau', label: 'Cerveau', icon: 'brain', key: 'b', more: true },
+  { id: 'apprentissage', label: 'Apprentissage', icon: 'grad', key: 'a', more: true },
 ];
 
-export const DEPT_ORDER: DeptId[] = ['direction', 'recherche', 'studio', 'creation', 'growth', 'boutique', 'support', 'analyse', 'finance', 'rh', 'partenariats'];
+/** A place of the world opens the tab that tells its story (ui §4.6). */
+export function placeTab(place: string): TabId | null {
+  if (place === 'quai') return 'effectif';
+  if (place === 'ligue' || place === 'podium' || place === 'duel') return 'competition';
+  return place.startsWith('canal:') ? 'canaux' : null;
+}
+
+export const DEPT_ORDER: DeptId[] = ['direction', 'recherche', 'studio', 'creation', 'video', 'growth', 'crm', 'boutique', 'support', 'analyse', 'finance', 'rh', 'partenariats'];
+
+/** Known departments in DEPT_ORDER, then any other as it came: a new one neither sorts first nor drops out of a filter. */
+export function deptOrder<T extends { id: DeptId }>(departments: readonly T[]): T[] {
+  const rank = (id: DeptId) => {
+    const i = DEPT_ORDER.indexOf(id);
+    return i < 0 ? DEPT_ORDER.length : i;
+  };
+  return [...departments].sort((a, b) => rank(a.id) - rank(b.id));
+}
 
 export const DEFAULT_DEPTS: Record<DeptId, { name: string; color: string; icon: string }> = {
   direction: { name: 'Direction', color: '#7c3aed', icon: 'DIRECTION' },
@@ -125,6 +147,43 @@ export const BUSY_STATUSES: ReadonlySet<AgentStatus> = new Set<AgentStatus>(['wo
 
 export const TIER_LABEL: Record<ModelTier, string> = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
 
+/** The titles of the role catalog: a role under pressure often has nobody to read its title from. */
+export const ROLE_LABEL: Record<RoleId, string> = {
+  ceo: 'CEO', chief_of_staff: 'Chef de cabinet',
+  research_lead: 'Chef Recherche', competitor_analyst: 'Veille concurrents', voc_analyst: 'Voix du client',
+  editor_in_chief: 'Rédaction en chef', ghostwriter: 'Plume', humanizer: 'Édition-humanisation', fact_checker: 'Fact-checker',
+  art_director: 'Direction artistique', cover_designer: 'Designer de couvertures', layout_designer: 'Maquettiste',
+  video_editor: 'Montage vidéo', motion_designer: 'Motion designer',
+  growth_lead: 'Head of growth', hook_writer: 'Scénariste de hooks', media_buyer_tiktok: 'Media buyer TikTok',
+  media_buyer_meta: 'Media buyer Facebook & Instagram', media_buyer_google: 'Media buyer Google', media_buyer_pinterest: 'Media buyer Pinterest',
+  community_manager: 'Community manager', email_marketer: 'Email marketer',
+  shop_lead: 'Chef boutique', sales_copywriter: 'Copywriter page de vente', pricing_manager: 'Pricing & upsell',
+  support_lead: 'Chef support', support_agent: 'Agent support',
+  data_analyst: 'Data analyst', experiment_analyst: 'Expériences A/B',
+  cfo: 'CFO', accountant: 'Comptable',
+  hr_lead: 'DRH & coach', red_teamer: 'Red Team',
+  partnerships_lead: 'Chef partenariats', partner_manager: 'Négociation & anti-fraude',
+};
+
+export const SKILL_LABEL: Record<Skill, string> = {
+  copy: 'Pubs', video: 'Montage', longform: 'Guides', polish: 'Relecture', page: 'Pages de vente', design: 'Design',
+  buying: 'Achat média', research: 'Recherche', support: 'Support',
+};
+
+export const CONTRACT_LABEL: Record<PersonChip['contract'], string> = { trial: 'Essai', active: 'Titulaire', probation: 'Plan d’amélioration', notice: 'Préavis' };
+export const CONTRACT_TONE: Record<PersonChip['contract'], Tone> = { trial: 'blue', active: 'green', probation: 'amber', notice: 'red' };
+
+export const REQ_STATUS_LABEL: Record<HiringReqView['status'], string> = { open: 'Ouvert', filled: 'Pourvu', cancelled: 'Annulé' };
+export const REQ_STATUS_TONE: Record<HiringReqView['status'], Tone> = { open: 'amber', filled: 'green', cancelled: 'neutral' };
+
+export const PLAN_OUTCOME_LABEL: Record<ProbationPlan['outcome'], string> = { open: 'En cours', met: 'Atteint', failed: 'Échoué', kept_no_better: 'Maintenu : personne de mieux' };
+export const PLAN_OUTCOME_TONE: Record<ProbationPlan['outcome'], Tone> = { open: 'amber', met: 'green', failed: 'red', kept_no_better: 'neutral' };
+
+export const DUEL_STATUS_LABEL: Record<DuelView['status'], string> = { open: 'En cours', done: 'Terminé', void: 'Annulé' };
+export const DUEL_STATUS_TONE: Record<DuelView['status'], Tone> = { open: 'blue', done: 'green', void: 'neutral' };
+
+export const ALUMNUS_KIND_LABEL: Record<Alumnus['kind'], string> = { fired: 'Remplacement', layoff: 'Réduction d’effectif', founder_order: 'Décision du fondateur' };
+
 export const PHASE_LABEL: Record<DayPhase, string> = { morning: 'matin', work: 'travail', market: 'marché', evening: 'soir' };
 export const PHASE_ICON: Record<DayPhase, IconName> = { morning: 'sunrise', work: 'briefcase', market: 'store', evening: 'moon' };
 export const PHASE_HINT: Record<DayPhase, string> = {
@@ -176,7 +235,7 @@ export const MESSAGE_STATUS_TONE: Record<InboxMessage['status'], Tone> = {
 };
 
 export const LEDGER_LABEL: Record<LedgerType, string> = {
-  capital: 'Capital', revenue: 'Ventes', refund: 'Remboursements', chargeback: 'Chargebacks', ad_spend: 'Pub TikTok',
+  capital: 'Capital', revenue: 'Ventes', refund: 'Remboursements', chargeback: 'Chargebacks', ad_spend: 'Publicité',
   payment_fee: 'Frais de paiement', platform_fee: 'Frais plateforme', tool_subscription: 'Abonnements outils',
   compute: 'Compute Claude', creator_payout: 'Commissions créateurs', scam_loss: 'Pertes (arnaques)', discount: 'Remises',
   salary: 'Salaires', recruiting: 'Recrutement',
@@ -246,7 +305,7 @@ export const ACTIVITY_META: Record<ActivityKind, { icon: IconName; label: string
   deliverable: { icon: 'file', label: 'Livrable', chip: 'LIVRABLE' },
   sale: { icon: 'cart', label: 'Vente', chip: 'VENTE' },
   refund: { icon: 'refund', label: 'Remboursement', chip: 'REMBOURSEMENT' },
-  ad: { icon: 'megaphone', label: 'Pub TikTok', chip: 'PUB TIKTOK' },
+  ad: { icon: 'megaphone', label: 'Publicité', chip: 'PUBLICITÉ' },
   message: { icon: 'mail', label: 'Message client', chip: 'BOÎTE MAIL' },
   event: { icon: 'alert', label: 'Événement', chip: 'ÉVÉNEMENT' },
   finance: { icon: 'euro', label: 'Finance', chip: 'FINANCE' },
@@ -265,7 +324,7 @@ export const TOOL_GROUPS: { id: string; label: string; icon: IconName; tools: To
   { id: 'brain', label: 'Cerveau (Obsidian)', icon: 'brain', tools: ['brain.read', 'brain.write'] },
   { id: 'market', label: 'Recherche marché', icon: 'search', tools: ['market.trends', 'market.competitors', 'market.pains'] },
   { id: 'store', label: 'Boutique en ligne', icon: 'store', tools: ['store.publish', 'store.price', 'store.stats'] },
-  { id: 'ads', label: 'TikTok Ads', icon: 'megaphone', tools: ['ads.review', 'ads.campaign', 'ads.stats'] },
+  { id: 'ads', label: 'Publicité', icon: 'megaphone', tools: ['ads.review', 'ads.campaign', 'ads.stats'] },
   { id: 'organic', label: 'TikTok organique', icon: 'music', tools: ['organic.post'] },
   { id: 'creators', label: 'Créateurs', icon: 'users', tools: ['creators.search', 'creators.deal'] },
   { id: 'inbox', label: 'Boîte mail', icon: 'inbox', tools: ['inbox.read', 'inbox.reply', 'inbox.refund'] },
@@ -299,6 +358,8 @@ export type Tone = 'neutral' | 'blue' | 'green' | 'red' | 'amber' | 'violet' | '
 
 export interface Lookups {
   agents: Map<string, AgentState>;
+  /** People who left (`scene.names`), so an old task never prints a raw id. */
+  names: Map<string, string>;
   depts: Map<DeptId, DeptDef>;
   tasks: Map<string, Task>;
   deliverables: Map<string, Deliverable>;
@@ -319,7 +380,8 @@ export function buildLookups(s: CompanySnapshot | null): Lookups {
   for (const n of s?.godMode?.niches ?? []) if (n?.id && !nicheNames.has(n.id)) nicheNames.set(n.id, n.name);
   const ceoId = depts.get('direction')?.chiefId;
   const ceo = (ceoId && agents.get(ceoId)) || (c?.agents ?? []).find((a) => a.dept === 'direction' && a.isChief) || (c?.agents ?? []).find((a) => a.dept === 'direction') || null;
-  return { agents, depts, tasks, deliverables, nicheNames, products, ceo };
+  const names = new Map(Object.entries(s?.scene?.names ?? {}));
+  return { agents, names, depts, tasks, deliverables, nicheNames, products, ceo };
 }
 
 export function deptColor(l: Lookups, id: DeptId | null | undefined): string {
@@ -342,7 +404,7 @@ export function agentName(l: Lookups, id: string | null | undefined): string {
   if (!id) return '—';
   if (id === 'founder') return 'Fondateur';
   if (id === 'system') return 'Système';
-  return l.agents.get(id)?.name ?? id;
+  return l.agents.get(id)?.name ?? l.names.get(id) ?? id;
 }
 
 export function nicheName(l: Lookups, id: string | null | undefined): string {

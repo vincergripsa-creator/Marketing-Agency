@@ -837,11 +837,12 @@ export interface CompanySnapshot {
   };
   taskStats?: TaskStats;            // counted on every task, whatever company.tasks keeps
   adTotals?: AdTotals;              // counted on every ad row, whatever market.adStats keeps
+  kpiBaseline?: KpiBaseline;        // the first days of the run, whatever company.kpis keeps
   deliverableCounts?: Partial<Record<Deliverable['kind'], number>>; // the whole run, whatever company.deliverables keeps
   goalReachedDay?: number | null;   // the day the goal was reached, whatever market.events keeps
   session?: SessionInfo;            // live server loop state (play/pause, speed)
   scene?: SceneView;
-  counts?: { creatives: number; deliverables: number; lessons: number; messages: number; products: number };
+  counts?: { creatives: number; deliverables: number; lessons: number; messages: number; products: number; catalogue?: CatalogueTotals };
   videos?: Record<string, CreativeVideo>; // filled by the API layer, never from the world
   archive?: ArchiveCounters;
 }
@@ -865,7 +866,18 @@ export interface TaskStats {
 export interface AdTotals {
   days: { day: number; spend: number; revenue: number }[]; // every day the market still holds, oldest first
   creatives: Record<string, CreativeAdTotals>;             // the whole life of the creatives of this snapshot
+  week?: AdWeekRow[];                                      // the last 7 closed days, the window Canaux reads, whatever market.adStats keeps
 }
+
+/** A creative of a campaign on a channel, over a week: the sums of its rows, its highest frequency. */
+export type AdWeekRow = Pick<DailyAdStats, 'campaignId' | 'creativeId' | 'channel' | 'spend' | 'impressions' | 'clicks' | 'landingViews' | 'purchases' | 'revenue' | 'frequency'>;
+
+/** The readings of « L'agence s'améliore-t-elle ? » (shared/trends.ts). */
+export type TrendId = 'ctr' | 'cvr' | 'roas' | 'refund' | 'reply' | 'profit';
+export type KpiBaseline = Partial<Record<TrendId, number>>;
+
+/** The whole catalogue: a light snapshot stops listing stopped guides past the latest ones. */
+export interface CatalogueTotals { stopped: number; revenue: number; sales: number; refunds: number; rating: number }
 
 /** What moves on every tick: the light 'tick' event carries it between two full snapshots. */
 export type LiveAgent = Pick<AgentState, 'id' | 'status' | 'place' | 'currentTaskId' | 'energy' | 'bubble'>;
@@ -1260,7 +1272,7 @@ export interface StagePolicy {
   bumpMinSales: number | null;
   magnetMinSales: number | null;
 }
-export interface GateCheck { label: string; value: number; target: number; ok: boolean }
+export interface GateCheck { label: string; value: number; target: number; ok: boolean; lower?: boolean } // lower: the target is a ceiling
 export interface GateProgress { next: StageId | null; checks: GateCheck[]; weeksHeld: number; weeksNeeded: number }
 export interface Allocation {
   week: number; day: number;
@@ -1383,7 +1395,7 @@ export interface TalentTruthView { truth: number; note: string }
 export interface HeadRow {
   agentId: AgentId; name: string; role: string; avatar: AvatarSpec; isChief: boolean; tier: ModelTier;
   contract: PersonChip['contract']; hiredDay: number; desk: number; rating: number | null; hats: TaskKind[];
-  pay30d: number;              // payOf × days present in the last 30, plus any recruiting line of that agent
+  pay30d: number;              // payOf × days present in the last 30, the founders' cut applied, plus their recruiting line of those days
   output30d: number;           // validated tasks
   costPerOutput: number | null;
 }
@@ -1412,6 +1424,7 @@ export interface LeagueRow {
   form: ('V' | 'N' | 'D')[];   // last 5 duels or weeks
   points: number; sample: number; confidence: 'faible' | 'moyenne' | 'forte';
   contract: PersonChip['contract'];
+  metric?: string | null;      // ui §6.4 « métrique lisible »: METRICS[skill].text(SkillRating.metric), « 81/100 »
 }
 export interface DuelSide { agentId: AgentId; name: string; score: number | null; ratingDelta: number | null }
 export interface DuelView {

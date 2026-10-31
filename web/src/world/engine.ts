@@ -4,16 +4,18 @@ import type { Activity, AgentState, CompanySnapshot, DeptId } from '../../../sha
 import { AgentSim, type AgentVis } from './agents';
 import { Bubbles } from './bubbles';
 import { Camera } from './camera';
+import { Effects } from './effects';
 import { Flows } from './flow';
 import { freshState, needsOverviewFit, pruneSeen, takeFresh, type FreshItem, type FreshState } from './fresh';
 import { isoX, isoY, pointInPoly } from './iso';
 import { drawIslandLabel, drawNameTag, drawPlaceTag, type LabelRect } from './labels';
 import { buildLayout, layoutKeyOf } from './layout';
-import type { IslandModel, Sprite, WorldLayout } from './model';
+import type { HotspotId, IslandModel, Sprite, WorldLayout } from './model';
 import { rgba, shade } from './palette';
-import { fillPoly } from './pixel';
+import { fillPoly, makeCanvas } from './pixel';
 import { Scenery } from './scenery';
-import { CELL_H, FRAME, drawFrame, statusIcon, type IconKind } from './sprites';
+import { CELL_H, FRAME, drawCarrying, drawFrame, statusIcon, type IconKind } from './sprites';
+import { StageLayer, type DynProp } from './stage';
 import { FONT_UI } from './text';
 
 export type WorldFocus = { kind: 'dept'; id: DeptId } | { kind: 'agent'; id: string } | { kind: 'overview' } | null;
@@ -21,13 +23,14 @@ export type WorldFocus = { kind: 'dept'; id: DeptId } | { kind: 'agent'; id: str
 export interface EngineCallbacks {
   onSelectAgent(id: string): void;
   onSelectDept(id: DeptId): void;
+  onSelectPlace?(id: HotspotId): void;
 }
 
 const BUSY = new Set(['working', 'reviewing', 'meeting', 'thinking']);
 const AT_DESK = new Set(['working', 'reviewing', 'thinking', 'blocked']);
 const SCREEN_COLOR: Record<string, string> = { working: '#9be9ff', reviewing: '#ffe08a', thinking: '#d3c6ff', blocked: '#ffb4b4' };
 
-interface DynItem { depth: number; kind: 'agent' | 'screen'; v?: AgentVis; poly?: [number, number][]; color?: string; flicker?: number }
+interface DynItem { depth: number; kind: 'agent' | 'screen' | 'prop'; v?: AgentVis; poly?: [number, number][]; color?: string; flicker?: number; prop?: DynProp }
 
 function makeGlow(color: [number, number, number]): HTMLCanvasElement {
   const c = document.createElement('canvas');
@@ -50,6 +53,8 @@ export class WorldEngine {
   private sim = new AgentSim();
   private bubbles = new Bubbles();
   private flows = new Flows();
+  private stage = new StageLayer();
+  private effects = new Effects();
   private layout: WorldLayout | null = null;
   private snapshot: CompanySnapshot | null = null;
   private byId = new Map<string, AgentState>();
@@ -69,12 +74,15 @@ export class WorldEngine {
   private userMoved = false;
   private hoverAgent: string | null = null;
   private hoverDept: string | null = null;
+  private hoverPlace: HotspotId | null = null;
   private pointer: { x: number; y: number } | null = null;
   private labelRects: LabelRect[] = [];
   private pointers = new Map<number, { x: number; y: number }>();
   private down: { x: number; y: number; moved: number; t: number } | null = null;
   private pinch: { d: number; mx: number; my: number } | null = null;
   private lastFrame = 0;
+  /** The last frame before a reflow, fading out over the new map. */
+  private dissolve: { img: HTMLCanvasElement; t0: number; dur: number } | null = null;
   private time = 0;
   private beam = 0;
   private cursor = '';
@@ -106,23 +114,36 @@ export class WorldEngine {
       }
       this.runId = s.runId;
     }
+    const reflow = !!this.snapshot && this.lastFrame > 0;
     this.snapshot = s;
     this.byId = new Map((s?.company.agents ?? []).map((a) => [a.id, a]));
     this.persistentBubbles = new Map((s?.company.agents ?? []).filter((a) => a.bubble).map((a) => [a.id, a.bubble as string]));
     const key = layoutKeyOf(s);
     if (!this.layout || this.layout.key !== key) {
+      if (reflow) {
+        // a tier or a new department moves whole islands: the last frame dissolves over the new map
+        const copy = makeCanvas(this.canvas.width, this.canvas.height);
+        copy.g.drawImage(this.canvas, 0, 0);
+        const still = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        this.dissolve = { img: copy.c, t0: now, dur: still ? 0 : 0.35 };
+      }
       this.layout = buildLayout(s);
       this.sim.setLayout(this.layout);
       this.camera.setBounds(this.layout.bounds);
       // first real layout: re-frame it unless the user already took the camera (the frames drawn before the
       // first snapshot fitted a plaza-only placeholder, ×2.2 zoom on the fountain)
       if (this.camera.w > 1 && needsOverviewFit(this.fitted, this.fittedPlaceholder, this.userMoved)) this.fitOverview();
+      else if (reflow && !this.userMoved && (this.focusKey === '' || this.focusKey.startsWith('overview'))) {
+        const o = this.camera.overview();
+        this.camera.flyTo(o.x, o.y, o.zoom);
+      }
       if (this.pendingFocus) {
         const f = this.pendingFocus;
         this.pendingFocus = null;
         this.applyFocus(f);
       }
     }
+    this.stage.sync(s?.scene, this.layout);
     this.scenery.setClock(s?.tick ?? 4);
     // fresh activities
     const acts = s?.activity ?? [];
@@ -246,6 +267,7 @@ export class WorldEngine {
     this.camera.update(dt);
     this.scenery.update(dt);
     this.sim.update(dt, now);
+    this.effects.update(dt);
     this.flows.prune(now);
     const readers = this.flows.brainActivity(now) + [...this.sim.agents.values()].filter((v) => v.spot?.kind === 'fountain' && !v.moving).length;
     const bt = Math.min(1, readers / 4);
@@ -320,6 +342,7 @@ export class WorldEngine {
         dyn.push({ depth: seat.deskDepth + 0.0005, kind: 'screen', poly: seat.screen, color: SCREEN_COLOR[v.state.status] ?? '#9be9ff', flicker: flick });
       }
     }
+    for (const prop of this.stage.items()) dyn.push({ depth: prop.depth, kind: 'prop', prop });
     dyn.sort((a, b) => a.depth - b.depth);
     // selection ring under the agent
     const selV = this.selectedAgent ? this.sim.agents.get(this.selectedAgent) : undefined;
@@ -330,12 +353,13 @@ export class WorldEngine {
     const S = L.sprites;
     let si = 0;
     const drawSprite = (s: Sprite) => {
-      if (s.x > vx1 || s.y > vy1 || s.x + s.img.width < vx0 || s.y + s.img.height < vy0) return;
+      if (s.hidden || s.x > vx1 || s.y > vy1 || s.x + s.img.width < vx0 || s.y + s.img.height < vy0) return;
       g.drawImage(s.img, s.x, s.y);
     };
     for (const d of dyn) {
       while (si < S.length && S[si].depth <= d.depth) drawSprite(S[si++]);
       if (d.kind === 'agent') this.drawAgent(g, d.v!, now, vx0, vy0, vx1, vy1);
+      else if (d.prop) drawSprite(d.prop);
       else if (d.poly) {
         g.globalAlpha = d.flicker ?? 1;
         fillPoly(g, d.poly, d.color ?? '#9be9ff');
@@ -480,6 +504,7 @@ export class WorldEngine {
     // status icons (not tinted)
     g.imageSmoothingEnabled = false;
     for (const v of this.sim.agents.values()) this.drawIcon(g, v, now, vx0, vy0, vx1, vy1);
+    this.effects.draw(g);
 
     // ── background behind everything already drawn
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -492,6 +517,17 @@ export class WorldEngine {
     // ── screen-space UI
     g.imageSmoothingEnabled = true;
     this.drawUi(g, now);
+
+    if (this.dissolve) {
+      const t = this.dissolve.dur ? (now - this.dissolve.t0) / this.dissolve.dur : 1;
+      if (t >= 1) this.dissolve = null;
+      else {
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.globalAlpha = 1 - Math.max(0, t);
+        g.drawImage(this.dissolve.img, 0, 0);
+        g.globalAlpha = 1;
+      }
+    }
   }
 
   private drawRing(g: CanvasRenderingContext2D, v: AgentVis, now: number, selected: boolean): void {
@@ -525,7 +561,12 @@ export class WorldEngine {
     const f = v.facing;
     const front = f === 'se' || f === 'sw';
     const mirror = f === 'sw' || f === 'nw';
-    if (v.moving) return { frame: (front ? FRAME.walkFront : FRAME.walkBack) + (Math.floor(v.walkT * 8) % 4), mirror, lift: 0 };
+    const pose = v.pose && now < (v.poseUntil ?? 0) ? v.pose : null;
+    if (pose) return { frame: pose === 'cheer' ? FRAME.cheer + (Math.floor(now * 5 + v.phase) % 2) : pose === 'slump' ? FRAME.slump : FRAME.shake, mirror, lift: 0 };
+    if (v.moving) {
+      const walk = v.carry ? (front ? FRAME.carryFront : FRAME.carryBack) : front ? FRAME.walkFront : FRAME.walkBack;
+      return { frame: walk + (Math.floor(v.walkT * 8) % 4), mirror, lift: 0 };
+    }
     if (this.seated(v)) {
       const st = v.state.status;
       const typing = (st === 'working' || st === 'reviewing') && Math.sin(now * 0.9 + v.phase) > -0.35;
@@ -555,7 +596,8 @@ export class WorldEngine {
     }
     // idle breathing (1 px), livelier nodding while in a meeting
     const bob = v.moving || lift ? 0 : v.state.status === 'meeting' ? (Math.sin(now * 5 + v.phase) > 0.3 ? 1 : 0) : Math.sin(now * 2.1 + v.phase) > 0.75 ? 1 : 0;
-    drawFrame(g, v.sheet, frame, mirror, x, y - lift - bob);
+    if (v.carry && v.moving) drawCarrying(g, v.sheet, frame, mirror, x, y, v.carry, v.facing === 'se' || v.facing === 'sw', this.layout?.deptIsland.get(v.state.dept)?.color);
+    else drawFrame(g, v.sheet, frame, mirror, x, y - lift - bob);
   }
 
   private drawIcon(g: CanvasRenderingContext2D, v: AgentVis, now: number, vx0: number, vy0: number, vx1: number, vy1: number): void {
@@ -615,7 +657,7 @@ export class WorldEngine {
       const [sx, sy] = cam.worldToScreen(isl.labelAnchor.x, isl.labelAnchor.y);
       if (sx < -150 || sx > cam.w + 150 || sy < -60 || sy > cam.h + 80) continue;
       const c = counts.get(isl.id) ?? { n: 0, busy: 0, coffee: 0 };
-      const sub = `${c.n} agent${c.n > 1 ? 's' : ''} · ${c.busy} en cours`;
+      const sub = isl.kind === 'pier' ? this.stage.tags().find((t) => t.id === 'quai')?.sub ?? '' : `${c.n} agent${c.n > 1 ? 's' : ''} · ${c.busy} en cours`;
       const state = this.selectedDept && isl.deptId === this.selectedDept ? 'selected' : this.hoverDept && isl.deptId === this.hoverDept ? 'hover' : 'normal';
       const glyph = (isl.name || '?').trim().charAt(0).toLocaleUpperCase('fr-FR');
       const r = drawIslandLabel(g, isl.deptId ?? isl.id, sx / labelScale, (sy - 6) / labelScale, isl.name, sub, isl.color, glyph, state, c.busy);
@@ -633,6 +675,12 @@ export class WorldEngine {
     if (cafe && cam.zoom >= 1.25) {
       const [sx, sy] = cam.worldToScreen(cafe.anchor.x, cafe.anchor.y);
       drawPlaceTag(g, sx, sy, 'Café', coffee ? `${coffee} en pause` : 'calme', '#e5484d');
+    }
+    // the stage's places: on hover, and the league's own from zoom 1,25 on
+    for (const t of this.stage.tags()) {
+      if (t.id !== this.hoverPlace && !(t.league && cam.zoom >= 1.25)) continue;
+      const [sx, sy] = cam.worldToScreen(t.x, t.y);
+      drawPlaceTag(g, sx, sy, t.title, t.sub, t.color);
     }
     // name tags
     const tagFor = (id: string | null, strong: boolean) => {
@@ -690,12 +738,12 @@ export class WorldEngine {
 
   // ───────────── hit testing & input ─────────────
 
-  private pick(sx: number, sy: number): { agent?: string; dept?: DeptId } {
+  private pick(sx: number, sy: number): { agent?: string; dept?: DeptId; place?: HotspotId } {
     const L = this.layout;
     if (!L) return {};
     for (let i = this.labelRects.length - 1; i >= 0; i--) {
       const r = this.labelRects[i];
-      if (sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) return { dept: r.id as DeptId };
+      if (sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) return r.id === L.pier.id ? { place: 'quai' } : { dept: r.id as DeptId };
     }
     const [wx, wy] = this.camera.screenToWorld(sx, sy);
     const pad = Math.max(0, 5 / this.camera.zoom - 2);
@@ -705,6 +753,7 @@ export class WorldEngine {
       const lift = this.seated(v) ? 2 : 0;
       if (wx >= p.x - 6 - pad && wx <= p.x + 6 + pad && wy >= p.y - 20 - lift - pad && wy <= p.y + 1 + pad) return { agent: v.id };
     }
+    for (const h of L.hotspots) if (pointInPoly(wx, wy, h.poly)) return { place: h.id };
     const islands = [...L.islands].sort((a, b) => b.depth - a.depth);
     for (const isl of islands) {
       if (pointInPoly(wx, wy, isl.hitPoly)) return isl.deptId ? { dept: isl.deptId } : {};
@@ -717,6 +766,7 @@ export class WorldEngine {
       if (!this.pointer) {
         this.hoverAgent = null;
         this.hoverDept = null;
+        this.hoverPlace = null;
       }
       this.setCursor(this.down && this.down.moved > 5 ? 'grabbing' : 'default');
       return;
@@ -724,7 +774,8 @@ export class WorldEngine {
     const hit = this.pick(this.pointer.x, this.pointer.y);
     this.hoverAgent = hit.agent ?? null;
     this.hoverDept = hit.agent ? null : hit.dept ?? null;
-    this.setCursor(hit.agent || hit.dept ? 'pointer' : 'default');
+    this.hoverPlace = hit.place ?? null;
+    this.setCursor(hit.agent || hit.dept || hit.place ? 'pointer' : 'default');
   }
 
   private setCursor(c: string): void {
@@ -793,6 +844,7 @@ export class WorldEngine {
         if (wasDown && wasDown.moved <= 5 && e.type === 'pointerup') {
           const hit = this.pick(p.x, p.y);
           if (hit.agent) this.cb.onSelectAgent(hit.agent);
+          else if (hit.place) this.cb.onSelectPlace?.(hit.place);
           else if (hit.dept) this.cb.onSelectDept(hit.dept);
         }
       }

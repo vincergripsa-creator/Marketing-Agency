@@ -101,7 +101,7 @@ function portefeuilleChecks(w: WorldState): GateCheck[] {
     check('Profit sur 28 jours', profit, profit28),
     check('Guides qui rapportent sur 28 jours', earning.length, minMains),
     check('Niches qui rapportent', uniq(earning.map((m) => m.product.nicheId)).length, niches),
-    check('Part du meilleur guide', top, topShare, total > 0 && top <= topShare),
+    { ...check('Part du meilleur guide', top, topShare, total > 0 && top <= topShare), lower: true },
     check('Part des revenus de la clientèle (e-mail, suites, kits)', owned, ownedShare),
   ];
 }

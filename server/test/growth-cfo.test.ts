@@ -377,6 +377,7 @@ describe('stages (scale 7)', () => {
     expect(zones).toMatchObject({ value: 3, ok: true });
     expect(top!.value).toBeCloseTo(980 / 2660, 2); // prd_a and its upsell together
     expect(top!.ok).toBe(true);
+    expect(gate.checks.filter((c) => c.lower)).toEqual([top]); // the one ceiling: the tabs read it the other way round
     expect(owned!.value).toBeCloseTo(420 / 2660, 2);
     expect(owned!.ok).toBe(true);
     for (const o of world.market.orders.filter((x) => x.productId === 'prd_up')) o.source = 'ads';

@@ -2,7 +2,7 @@
 // working agents as dots, active department outlined, "Vue d'ensemble" button.
 import { useMemo, type JSX } from 'react';
 import type { CompanySnapshot, DeptDef, DeptId } from '../../../shared/types';
-import { effectiveGrid } from './layout';
+import { mapGrid } from './layout';
 import { deptColor, shade } from './palette';
 
 export interface MinimapProps {
@@ -64,7 +64,7 @@ export function Minimap(props: MinimapProps): JSX.Element {
   const agents = snapshot?.company.agents ?? [];
 
   const layout = useMemo(() => {
-    const grid = effectiveGrid(departments);
+    const grid = mapGrid(snapshot);
     const items = departments
       .filter((d) => d.id !== 'direction' && grid.has(d.id))
       .map((d) => {

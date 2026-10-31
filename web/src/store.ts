@@ -1,6 +1,6 @@
 // Live agency state: initial GET /api/state, then SSE updates; demo fallback when the server is down.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Activity, CompanySnapshot, SessionInfo } from '../../shared/types';
+import type { Activity, CompanySnapshot, CreativeVideo, SessionInfo } from '../../shared/types';
 import { api, openStream, type Speed, type TickInfo } from './api';
 import { mockSnapshot } from './world/mockSnapshot';
 
@@ -79,6 +79,11 @@ export function withTick(s: CompanySnapshot, t: TickInfo): CompanySnapshot {
   return { ...next, company: { ...s.company, agents: s.company.agents.map((a) => { const m = live.get(a.id); return m ? { ...a, ...m } : a; }) } };
 }
 
+/** A video event on top of the last snapshot. */
+export function withVideo(s: CompanySnapshot, creativeId: string, video: CreativeVideo): CompanySnapshot {
+  return { ...s, videos: { ...s.videos, [creativeId]: video } };
+}
+
 /** Hidden truth to keep after a snapshot: a new run never inherits the niches and intents of the previous one. */
 export function godDataAfter(prev: CompanySnapshot['godMode'] | null, s: CompanySnapshot, sameRun: boolean): CompanySnapshot['godMode'] | null {
   return s.godMode ?? (sameRun ? prev : null);
@@ -133,6 +138,10 @@ export function useAgency(): Agency {
         onTick: (t) => {
           if (cancelled) return;
           setSnapshot((prev) => (prev ? withTick(prev, t) : prev));
+        },
+        onVideo: (id, video) => {
+          if (cancelled) return;
+          setSnapshot((prev) => (prev ? withVideo(prev, id, video) : prev));
         },
         onStatus: (status, reconnected) => {
           if (cancelled) return;

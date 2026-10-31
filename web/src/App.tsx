@@ -1,5 +1,5 @@
 // App shell: the pixel world fills the screen; floating glass panels on top (like the reference video).
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CompanySnapshot, DeptId } from '../../shared/types';
 import { api, type ControlAction, type Speed } from './api';
 import { useAgency } from './store';
@@ -14,7 +14,7 @@ import { EndBanner } from './ui/EndBanner';
 import { ErrorBoundary } from './ui/ErrorBoundary';
 import { CompanyBadge, SimHud } from './ui/Hud';
 import { PixelLogo } from './ui/icons';
-import { buildLookups, TABS, type TabId } from './ui/labels';
+import { buildLookups, placeTab, TABS, type TabId } from './ui/labels';
 import { MissionBar } from './ui/MissionBar';
 import { ScenarioModal } from './ui/ScenarioModal';
 import { AdsTab } from './ui/tabs/AdsTab';
@@ -31,6 +31,12 @@ import { TopBar } from './ui/TopBar';
 import { useEventToasts } from './ui/useEventToasts';
 import { Minimap } from './world/Minimap';
 import { WorldCanvas } from './world/WorldCanvas';
+
+// Tabs read from a GET and fetch their chunk on first open: the main bundle stays what the world needs.
+const CanauxTab = lazy(() => import('./ui/tabs/CanauxTab').then((m) => ({ default: m.CanauxTab })));
+const CroissanceTab = lazy(() => import('./ui/tabs/CroissanceTab').then((m) => ({ default: m.CroissanceTab })));
+const EffectifTab = lazy(() => import('./ui/tabs/EffectifTab').then((m) => ({ default: m.EffectifTab })));
+const CompetitionTab = lazy(() => import('./ui/tabs/CompetitionTab').then((m) => ({ default: m.CompetitionTab })));
 
 export type Focus = { kind: 'dept'; id: DeptId } | { kind: 'agent'; id: string } | { kind: 'overview' } | null;
 
@@ -108,6 +114,10 @@ export default function App() {
   const closePanel = useCallback(() => { setAgentId(null); setPanelDept(null); setBackDept(null); }, []);
   const backToDept = useCallback(() => { setAgentId(null); setPanelDept(backDept); setBackDept(null); }, [backDept]);
   const overview = useCallback(() => setFocus({ kind: 'overview' }), []);
+  const openPlace = useCallback((place: string) => {
+    const target = placeTab(place);
+    if (target) setTab(target);
+  }, []);
   const openBrainNote = useCallback((path: string) => { setBrainPath(path); setTab('cerveau'); }, []);
   const refresh = useCallback(() => { void agencyRefresh().catch(() => undefined); }, [agencyRefresh]);
 
@@ -135,7 +145,7 @@ export default function App() {
 
   const toggleGod = useCallback((on: boolean) => {
     setGodMode(on);
-    if (on) push({ tone: 'info', icon: 'eye', title: 'Mode dieu activé', text: demo ? 'Mode démo : vérité cachée simulée.' : 'Vraies intentions des clients et vérité des niches visibles (Boîte mail, Apprentissage).' });
+    if (on) push({ tone: 'info', icon: 'eye', title: 'Mode dieu activé', text: demo ? 'Mode démo : vérité cachée simulée.' : 'Vraies intentions des clients, vérité des niches et vrai talent visibles (Boîte mail, Apprentissage, Compétition).' });
   }, [setGodMode, push, demo]);
 
   const onLoaded = useCallback((s: CompanySnapshot) => {
@@ -146,7 +156,7 @@ export default function App() {
     setFocus({ kind: 'overview' });
   }, [replaceSnapshot, closePanel]);
 
-  // ── Keyboard: Esc closes, 1-9/0 switch tabs, / focuses search ──
+  // ── Keyboard: Esc closes, 1-9/0 and the letters of « Plus » switch tabs, / focuses search ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -209,6 +219,7 @@ export default function App() {
               flowMode={flowMode}
               onSelectAgent={selectAgentInWorld}
               onSelectDept={openDept}
+              onSelectPlace={openPlace}
             />
           </ErrorBoundary>
         </div>
@@ -236,6 +247,12 @@ export default function App() {
             {tab === 'calendrier' ? <CalendarTab onClose={closeTab} /> : null}
             {tab === 'produits' ? <ProductsTab onClose={closeTab} focusId={productFocus?.id ?? null} focusSeq={productFocus?.seq ?? 0} /> : null}
             {tab === 'pub' ? <AdsTab onClose={closeTab} /> : null}
+            <Suspense fallback={null}>
+              {tab === 'canaux' ? <CanauxTab onClose={closeTab} /> : null}
+              {tab === 'croissance' ? <CroissanceTab onClose={closeTab} /> : null}
+              {tab === 'effectif' ? <EffectifTab onClose={closeTab} /> : null}
+              {tab === 'competition' ? <CompetitionTab onClose={closeTab} /> : null}
+            </Suspense>
             {tab === 'mail' ? <InboxTab onClose={closeTab} /> : null}
             {tab === 'finance' ? <FinanceTab onClose={closeTab} /> : null}
             {tab === 'cerveau' ? <BrainTab key={currentRun} onClose={closeTab} initialPath={brainPath} /> : null}

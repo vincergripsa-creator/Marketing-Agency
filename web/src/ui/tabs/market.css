@@ -1,0 +1,66 @@
+/* Canaux, Croissance, Publicité. Existing tokens only (styles.css). */
+
+/* Canaux: the five cards */
+.channel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.channel-card { display: flex; flex-direction: column; gap: 8px; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; min-width: 0; }
+.channel-card[data-state='closed'] { background: var(--surface-2); }
+.channel-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.channel-glyph { flex: none; width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; color: #fff; font-size: 12px; font-weight: 700; letter-spacing: .02em; }
+.channel-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.channel-titles strong { font-size: 13px; line-height: 1.25; }
+.channel-why { font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+
+/* Publicité: which channel a row belongs to */
+.channel-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; white-space: nowrap; color: var(--ink-2); }
+
+/* Canaux: the three readings */
+.roas-table td.roas-key, .roas-table th.roas-key { font-weight: 700; }
+.roas-table td.roas-key { font-size: 13.5px; }
+.roas-inflated { display: block; font-size: 11px; font-weight: 600; color: var(--warn); }
+.roas-total td { font-weight: 700; background: var(--surface-2); }
+.roas-help { font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+
+/* Canaux: channel × niche */
+.matrix-cell { min-width: 112px; }
+.matrix-cell[tabindex] { cursor: help; }
+.matrix-cell:focus { outline: 2px solid #3b82f6; outline-offset: -2px; }
+.matrix-why { display: none; margin-top: 4px; font-size: 11px; line-height: 1.35; color: var(--ink-2); }
+.matrix-cell:focus .matrix-why, .matrix-cell:hover .matrix-why { display: block; }
+
+/* Canaux: spend share per channel */
+.share-area { display: block; }
+
+/* Canaux: what opens a channel */
+.unlock-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.unlock-rows { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.unlock-row { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.unlock-row .bar { width: 100%; }
+
+/* Croissance: the four stages. StageMeter and its gates are in team.css */
+.stage-track { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.stage-step { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: 12.5px; font-weight: 600; min-width: 0; }
+.stage-step.is-done { color: var(--good); }
+.stage-step.is-now { background: var(--ink); color: #fff; }
+.stage-num { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; background: rgba(15, 23, 42, 0.08); }
+.stage-step.is-now .stage-num { background: rgba(255, 255, 255, 0.2); }
+.stage-track + .stage-meter, .stage-track + .muted { margin-top: 10px; }
+
+.growth-table .link-btn, .growth-decision .link-btn { text-align: left; }
+
+/* Croissance: the list */
+.funnel { display: flex; flex-direction: column; gap: 6px; }
+.funnel-row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 64px; gap: 8px; align-items: center; font-size: 12.5px; }
+.funnel-row strong { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Publicité: a creative shows at its own ratio */
+.phone[data-ratio='4:5'] { aspect-ratio: 4 / 5; }
+.phone[data-ratio='1:1'] { aspect-ratio: 1 / 1; }
+.phone[data-ratio='2:3'] { aspect-ratio: 2 / 3; }
+.phone[data-ratio='text'] { aspect-ratio: 1 / 1; }
+.health-list { display: flex; flex-direction: column; gap: 8px; }
+.review-pills { display: flex; flex-direction: column; gap: 3px; }
+
+@media (max-width: 760px) {
+  .stage-track { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .funnel-row { grid-template-columns: 80px minmax(0, 1fr) 52px; }
+}

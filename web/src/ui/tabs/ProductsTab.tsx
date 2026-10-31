@@ -8,6 +8,7 @@ import { nextStepTitle } from '../derive';
 import { fmtEur, fmtInt, fmtPct, safeDiv, stars, sum } from '../format';
 import { Icon } from '../icons';
 import { nicheName, PIPELINE, PRODUCT_STATUS_LABEL, PRODUCT_STATUS_TONE } from '../labels';
+import { PdfLightbox } from '../viewers/Lightbox';
 
 type Filter = 'all' | 'live' | 'prod' | 'stopped';
 
@@ -39,11 +40,14 @@ export function ProductsTab({ onClose, focusId = null, focusSeq = 0 }: { onClose
   }), [products]);
   const list = filter === 'all' ? [...products].sort((a, b) => rank(a) - rank(b) || b.createdDay - a.createdDay) : groups[filter];
 
-  const revenue = sum(products, (p) => p.stats?.revenue ?? 0);
-  const sales = sum(products, (p) => p.stats?.sales ?? 0);
-  const refunds = sum(products, (p) => p.stats?.refunds ?? 0);
+  // a light snapshot stops listing stopped guides past the latest ones: the tiles read the whole catalogue
+  const whole = snapshot?.counts?.catalogue;
   const rated = products.filter((p) => (p.stats?.rating ?? 0) > 0);
-  const avgRating = rated.length ? sum(rated, (p) => p.stats.rating) / rated.length : 0;
+  const revenue = whole?.revenue ?? sum(products, (p) => p.stats?.revenue ?? 0);
+  const sales = whole?.sales ?? sum(products, (p) => p.stats?.sales ?? 0);
+  const refunds = whole?.refunds ?? sum(products, (p) => p.stats?.refunds ?? 0);
+  const avgRating = whole?.rating ?? (rated.length ? sum(rated, (p) => p.stats.rating) / rated.length : 0);
+  const stopped = whole?.stopped ?? groups.stopped.length;
 
   return (
     <Overlay title="Produits" subtitle="Les guides PDF de l’agence, de l’idée à la vente" icon="package" onClose={onClose}>
@@ -55,11 +59,12 @@ export function ProductsTab({ onClose, focusId = null, focusSeq = 0 }: { onClose
       </div>
       <div className="filters-row">
         <Segmented<Filter> size="sm" value={filter} onChange={setFilter} options={[
-          { id: 'all', label: 'Tous', count: products.length },
+          { id: 'all', label: 'Tous', count: snapshot?.counts?.products ?? products.length },
           { id: 'live', label: 'En vente', count: groups.live.length },
           { id: 'prod', label: 'En production', count: groups.prod.length },
-          { id: 'stopped', label: 'En pause / abandonnés', count: groups.stopped.length },
+          { id: 'stopped', label: 'En pause / abandonnés', count: stopped },
         ]} />
+        {stopped > groups.stopped.length ? <span className="muted small">{fmtInt(groups.stopped.length)} derniers guides arrêtés affichés sur {fmtInt(stopped)}</span> : null}
       </div>
       {list.length === 0 ? (
         <Empty icon="package">{products.length === 0 ? 'Aucun guide pour l’instant : la Recherche cherche encore la bonne niche (règle du un : un problème, une personne).' : 'Aucun produit dans cette catégorie.'}</Empty>
@@ -95,6 +100,7 @@ function Cover({ p }: { p: Product }) {
 function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) {
   const { lookups, runId, demo } = useApp();
   const [showIssues, setShowIssues] = useState(false);
+  const [flipping, setFlipping] = useState(false);
   const st = p.stats ?? { views: 0, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, rating: 0, reviews: [], upsellSales: 0 };
   const upsellId = p.upsellProductId ?? p.content?.nextStep?.upsellProductId ?? null;
   const upsell = upsellId && upsellId !== p.id ? lookups.products.get(upsellId) : undefined;
@@ -180,6 +186,7 @@ function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) 
         ) : null}
 
         <div className="product-actions">
+          {p.files?.pdf && !demo ? <button type="button" className="btn btn-sm btn-ghost" data-viewer="pdf" onClick={() => setFlipping(true)} title="Feuilleter le guide"><Icon name="layers" size={13} />Feuilleter</button> : null}
           <FileLink runId={runId} path={p.files?.pdf} demo={demo} icon="file">Ouvrir le PDF</FileLink>
           <FileLink runId={runId} path={p.files?.salesPage} demo={demo} icon="store">Page de vente</FileLink>
           {!p.files?.pdf && !p.files?.salesPage ? <span className="muted small">Fichiers en cours de fabrication…</span> : null}
@@ -193,6 +200,7 @@ function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) 
           </div>
         ) : null}
       </div>
+      {flipping && p.files?.pdf ? <PdfLightbox url={fileUrl(runId, p.files.pdf)} title={p.title} onClose={() => setFlipping(false)} /> : null}
     </article>
   );
 }

@@ -1,10 +1,11 @@
 // Realistic, fully typed fake snapshot (31 agents, 11 departments, a live product, 10 days of KPIs)
 // for offline previews and the shell's demo mode. Deterministic content; `at` timestamps are
 // relative to now so the speech bubbles show up.
+import { CHANNELS, CHANNEL_IDS } from '../../../shared/channels';
 import type {
-  Activity, ActivityKind, AdCreative, AgentState, AvatarSpec, BanditArm, Campaign, CompanySnapshot, CreatorProfile, DailyAdStats,
+  Activity, ActivityKind, AdCreative, AgentState, AvatarSpec, BanditArm, Campaign, ChannelChip, ChronicleEntry, CompanySnapshot, CreatorProfile, DailyAdStats,
   DailyKpi, DeptDef, DeptId, Deliverable, Experiment, FinanceSnapshot, InboxMessage, LedgerEntry, Lesson, Mission, ModelTier,
-  Order, OrganicPost, Partnership, PdfContent, Place, Product, RoleId, Task, TaskKind, ToolName, WorldEvent, AgentStatus,
+  Order, OrganicPost, Partnership, PdfContent, PersonCard, Place, Product, RoleId, SceneView, StageId, Task, TaskKind, ToolName, WorldEvent, AgentStatus,
 } from '../../../shared/types';
 
 const DAY = 10;
@@ -27,16 +28,21 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 
 const DEPTS: DeptDef[] = [
   { id: 'direction', name: 'Direction', color: '#7c6cf0', icon: 'DIRECTION', description: 'Fixe le cap chaque matin, arbitre les budgets et valide ce qui part chez le client.', chiefId: 'camille', grid: { col: 0, row: 0 } },
-  { id: 'recherche', name: 'Recherche', color: '#3b82f6', icon: 'RECHERCHE', description: 'Trouve les niches rentables : tendances, douleurs des clients, concurrents.', chiefId: 'nadia', grid: { col: 0, row: -1 } },
-  { id: 'studio', name: 'Studio PDF', color: '#f59e0b', icon: 'STUDIO PDF', description: 'Écrit les guides : 10 titres, plan qui vend, rédaction, humanisation, fact-check.', chiefId: 'elise', grid: { col: -1, row: 0 } },
-  { id: 'creation', name: 'Création', color: '#8b5cf6', icon: 'CRÉATION', description: 'Couvertures, mise en page du PDF, visuels et storyboards TikTok.', chiefId: 'zoe', grid: { col: 1, row: 0 } },
-  { id: 'growth', name: 'Growth', color: '#ec4899', icon: 'GROWTH', description: 'Pubs TikTok, contenu organique, tests de hooks et pilotage des budgets.', chiefId: 'leo', grid: { col: -1, row: -1 } },
-  { id: 'boutique', name: 'Boutique', color: '#ef4444', icon: 'BOUTIQUE', description: 'Pages de vente, prix, mise en ligne et upsell « La suite est ici ».', chiefId: 'clara', grid: { col: 1, row: -1 } },
+  { id: 'recherche', name: 'Recherche', color: '#3b82f6', icon: 'RECHERCHE', description: 'Trouve les niches rentables : tendances, douleurs des clients, concurrents.', chiefId: 'nadia', grid: { col: -1, row: 0 } },
+  { id: 'studio', name: 'Studio PDF', color: '#f59e0b', icon: 'STUDIO PDF', description: 'Écrit les guides : 10 titres, plan qui vend, rédaction, humanisation, fact-check.', chiefId: 'elise', grid: { col: -1, row: -1 } },
+  { id: 'creation', name: 'Création', color: '#8b5cf6', icon: 'CRÉATION', description: 'Couvertures, mise en page du PDF, visuels et storyboards TikTok.', chiefId: 'zoe', grid: { col: 0, row: -1 } },
+  { id: 'growth', name: 'Growth', color: '#ec4899', icon: 'GROWTH', description: 'Pubs TikTok, contenu organique, tests de hooks et pilotage des budgets.', chiefId: 'leo', grid: { col: 2, row: -1 } },
+  { id: 'boutique', name: 'Boutique', color: '#ef4444', icon: 'BOUTIQUE', description: 'Pages de vente, prix, mise en ligne et upsell « La suite est ici ».', chiefId: 'clara', grid: { col: 1, row: 0 } },
   { id: 'support', name: 'Support', color: '#f97316', icon: 'SUPPORT', description: 'Répond aux clients, gère remboursements, arnaques et clients difficiles.', chiefId: 'ines', grid: { col: 1, row: 1 } },
-  { id: 'analyse', name: 'Analyse', color: '#14b8a6', icon: 'ANALYSE', description: 'Rapports quotidiens, expériences A/B et lecture honnête des chiffres.', chiefId: 'raphael', grid: { col: 0, row: 1 } },
-  { id: 'finance', name: 'Finance', color: '#65a30d', icon: 'FINANCE', description: 'Trésorerie, enveloppes de dépense, rentabilité et garde-fous budgétaires.', chiefId: 'gabriel', grid: { col: 2, row: -1 } },
-  { id: 'rh', name: 'RH', color: '#f472b6', icon: 'RH', description: 'Rétro du soir, leçons, playbooks et revues de performance des agents.', chiefId: 'nora', grid: { col: -1, row: 1 } },
-  { id: 'partenariats', name: 'Partenariats', color: '#06b6d4', icon: 'PARTENARIATS', description: 'Petits créateurs à la commission, négociation et détection des arnaques.', chiefId: 'rayan', grid: { col: -1, row: 2 } },
+  { id: 'analyse', name: 'Analyse', color: '#14b8a6', icon: 'ANALYSE', description: 'Rapports quotidiens, expériences A/B et lecture honnête des chiffres.', chiefId: 'raphael', grid: { col: -2, row: 2 } },
+  { id: 'finance', name: 'Finance', color: '#65a30d', icon: 'FINANCE', description: 'Trésorerie, enveloppes de dépense, rentabilité et garde-fous budgétaires.', chiefId: 'gabriel', grid: { col: -1, row: 1 } },
+  { id: 'rh', name: 'RH', color: '#f472b6', icon: 'RH', description: 'Rétro du soir, leçons, playbooks et revues de performance des agents.', chiefId: 'nora', grid: { col: -2, row: 1 } },
+  { id: 'partenariats', name: 'Partenariats', color: '#06b6d4', icon: 'PARTENARIATS', description: 'Petits créateurs à la commission, négociation et détection des arnaques.', chiefId: 'rayan', grid: { col: 1, row: -1 } },
+];
+/** The catalog's two departments with nobody yet: vacant plots. */
+const CLOSED_DEPTS: DeptDef[] = [
+  { id: 'video', name: 'Vidéo', color: '#a855f7', icon: 'VIDÉO', description: 'Monte les publicités vidéo et les déclinaisons de format.', chiefId: '', grid: { col: 0, row: -2 } },
+  { id: 'crm', name: 'CRM', color: '#0ea5e9', icon: 'CRM', description: 'Liste e-mail, séquences de bienvenue et campagnes.', chiefId: '', grid: { col: 2, row: 0 } },
 ];
 
 // ───────────── agents ─────────────
@@ -614,6 +620,167 @@ function buildActivity(now: number): Activity[] {
   });
 }
 
+// ───────────── scene ─────────────
+
+const STAGES: { id: StageId; name: string }[] = [
+  { id: 'survie', name: 'Survie' }, { id: 'adequation', name: 'Adéquation' }, { id: 'acceleration', name: 'Accélération' }, { id: 'portefeuille', name: 'Portefeuille' },
+];
+const stageView = (level: number, sinceDay: number, headcount: number): SceneView['stage'] => ({ level, total: 4, ...STAGES[level]!, sinceDay, headcount, gate: null });
+
+function chip(id: ChannelChip['id'], state: ChannelChip['state'], share: number): ChannelChip {
+  const c = CHANNELS[id];
+  return { id, name: c.label, glyph: c.glyph, color: c.color, state, share };
+}
+
+function cardOf(a: AgentState): PersonCard {
+  return { id: a.id, name: a.name, role: a.role, dept: a.dept, avatar: a.avatar };
+}
+
+function buildScene(agents: AgentState[]): SceneView {
+  const by = (id: string) => agents.find((a) => a.id === id)!;
+  const rated: [string, number, number][] = [['elise', 1584, 22], ['leo', 1561, -8], ['zoe', 1543, 15], ['nadia', 1528, 0], ['clara', 1502, -14]];
+  return {
+    people: {
+      ...Object.fromEntries(rated.map(([id, rating, delta7d], i) => [id, { rating, rank: i + 1, of: rated.length, delta7d, contract: 'active' as const, badge: i === 0 ? 'champion' as const : i < 3 ? 'podium' as const : null }])),
+      adam: { rating: 1471, rank: 2, of: 3, delta7d: -19, contract: 'probation', badge: 'probation' },
+      chloe: { rating: 1500, rank: 3, of: 3, delta7d: 0, contract: 'trial', badge: 'new' },
+    },
+    board: rated.map(([id, rating, delta7d]) => ({ agentId: id, name: by(id).name, rating, delta7d })),
+    podium: {
+      season: 2,
+      places: [
+        { place: 1, person: cardOf(by('elise')), score: 84, gone: false },
+        { place: 2, person: cardOf(by('leo')), score: 61, gone: false },
+        { place: 3, person: cardOf(by('zoe')), score: 43, gone: false },
+      ],
+      cups: [{ season: 1, name: 'Zoé' }, { season: 2, name: 'Élise' }],
+    },
+    duels: [],
+    recent: [
+      { key: 'season:2', day: DAY - 1, kind: 'season_end', text: 'Fin de la saison 2 : Élise championne.', agentId: 'elise', numbers: { season: 2 } },
+      { key: 'plan:adam', day: DAY, kind: 'probation', text: 'Adam passe en plan de progrès.', why: 'Note 1 471, en baisse de 19 points sur 7 jours.', agentId: 'adam' },
+    ],
+    channels: [chip('tiktok', 'open', 0.62), chip('meta', 'open', 0.38), chip('youtube', 'verifying', 0), chip('pinterest', 'banned', 0)],
+    stage: stageView(1, 6, agents.length),
+    team: { headcount: agents.length, payroll30d: 684, revenuePerHead30d: 41 },
+    openSeats: { growth: 1, support: 1 },
+    closedDepts: CLOSED_DEPTS.map((d) => ({ ...d, grid: { ...d.grid } })),
+    names: { bastien: 'Bastien' },
+  };
+}
+
+/** What each button of the preview's « Scènes » panel does: one more line in `scene.recent`, as the server would send. */
+export interface SceneAction { id: string; label: string; apply(s: CompanySnapshot): CompanySnapshot }
+
+/** Keys stay unique past the 24 lines `recent` keeps: the drama plays a key once. */
+let sceneSeq = 0;
+
+function withScene(s: CompanySnapshot, patch: Partial<SceneView>, entry: Omit<ChronicleEntry, 'key' | 'day'> & { key: string }, company?: Partial<CompanySnapshot['company']>): CompanySnapshot {
+  const scene = s.scene ?? buildScene(s.company.agents);
+  return {
+    ...s,
+    company: { ...s.company, ...company },
+    scene: { ...scene, ...patch, recent: [...(patch.recent ?? scene.recent), { ...entry, key: `${entry.key}:${++sceneSeq}`, day: s.day }].slice(-24) },
+  };
+}
+
+const RECRUITS = [
+  { name: 'Léa', role: 'Media buyer Facebook & Instagram', dept: 'growth', shirt: '#22d3ee', hair: 4, skin: 1 },
+  { name: 'Yanis', role: 'Agent support', dept: 'support', shirt: '#fdba74', hair: 1, skin: 3 },
+  { name: 'Mina', role: 'Rédactrice de guides', dept: 'studio', shirt: '#fbbf24', hair: 0, skin: 4 },
+] as const;
+
+function hire(s: CompanySnapshot): CompanySnapshot {
+  const n = s.company.agents.length;
+  const r = RECRUITS[n % RECRUITS.length]!;
+  const template = s.company.agents.find((a) => a.dept === r.dept && !a.isChief) ?? s.company.agents[0]!;
+  const id = `recrue-${n}`;
+  const agent: AgentState = {
+    ...template, id, name: r.name, role: r.role, founder: false, hiredDay: s.day, rampUntilDay: s.day + 7, status: 'working', place: r.dept, bubble: null, currentTaskId: null,
+    avatar: { ...template.avatar, skin: SKIN[r.skin]!, hair: HAIR[r.hair]!, shirt: r.shirt },
+  };
+  const scene = s.scene ?? buildScene(s.company.agents);
+  const openSeats = { ...scene.openSeats, [r.dept]: Math.max(0, (scene.openSeats[r.dept] ?? 1) - 1) };
+  return withScene(s, { openSeats, people: { ...scene.people, [id]: { rating: 1500, rank: 1, of: 1, delta7d: 0, contract: 'trial', badge: 'new' } } },
+    { key: `hire:${id}`, kind: 'hire', text: `${r.name} rejoint l’équipe.`, why: 'Poste ouvert par la charge du département.', agentId: id, person: cardOf(agent), dept: r.dept },
+    { agents: [...s.company.agents, agent] });
+}
+
+function fire(s: CompanySnapshot): CompanySnapshot {
+  const staff = [...s.company.agents].reverse().filter((a) => !a.isChief && !a.founder);
+  const leaver = staff.find((a) => a.hiredDay < s.day) ?? staff[0]; // not the one who just walked in
+  if (!leaver) return s;
+  const scene = s.scene ?? buildScene(s.company.agents);
+  const { [leaver.id]: _gone, ...people } = scene.people;
+  return withScene(s, { people, names: { ...scene.names, [leaver.id]: leaver.name }, board: scene.board.filter((r) => r.agentId !== leaver.id) },
+    { key: `fire:${leaver.id}`, kind: 'fire', text: `${leaver.name} quitte l’agence.`, why: 'Note sous la barre depuis 14 jours, plan de progrès non tenu.', agentId: leaver.id, person: cardOf(leaver), dept: leaver.dept },
+    { agents: s.company.agents.filter((a) => a.id !== leaver.id) });
+}
+
+function duel(s: CompanySnapshot): CompanySnapshot {
+  const scene = s.scene ?? buildScene(s.company.agents);
+  const open = scene.duels[0];
+  if (open) {
+    return withScene(s, { duels: scene.duels.slice(1) },
+      { key: `duel:${open.id}:end`, kind: 'duel_end', text: `Fin du duel : ${open.label}.`, agentId: open.a, otherId: open.b, numbers: { ratingDeltaA: 18, ratingDeltaB: -12 } });
+  }
+  const pair = s.company.agents.filter((a) => a.dept === 'growth').slice(0, 2);
+  const [a, b] = [pair[0] ?? s.company.agents[0]!, pair[1] ?? s.company.agents[1]!];
+  const id = `duel_${scene.recent.length}`;
+  const label = `${a.name} contre ${b.name}`;
+  return withScene(s, { duels: [{ id, a: a.id, b: b.id, label, endDay: s.day + 7 }] }, { key: `duel:${id}:open`, kind: 'duel_open', text: `Duel ouvert : ${label}.`, agentId: a.id, otherId: b.id });
+}
+
+function seasonEnd(s: CompanySnapshot): CompanySnapshot {
+  const scene = s.scene ?? buildScene(s.company.agents);
+  const board = scene.board.map((r, i) => ({ ...r, rating: r.rating + [6, -4, 12, 3, -9][i % 5]!, delta7d: [6, -4, 12, 3, -9][i % 5]! })).sort((x, y) => y.rating - x.rating);
+  const season = (scene.podium?.season ?? 0) + 1;
+  const ranked = board.slice(0, 3).flatMap((r) => {
+    const a = s.company.agents.find((x) => x.id === r.agentId);
+    return a ? [{ person: cardOf(a), score: r.rating - 1500 }] : [];
+  });
+  const places = ranked.map((r, i) => ({ place: (i + 1) as 1 | 2 | 3, ...r, gone: false }));
+  const champion = places[0]?.person.name ?? '';
+  return withScene(s, { board, podium: { season, places, cups: [...(scene.podium?.cups ?? []), { season, name: champion }].slice(-8) } },
+    { key: `season:${season}`, kind: 'season_end', text: `Fin de la saison ${season} : ${champion} en tête.`, agentId: places[0]?.person.id ?? null, numbers: { season } });
+}
+
+function openChannel(s: CompanySnapshot): CompanySnapshot {
+  const scene = s.scene ?? buildScene(s.company.agents);
+  const missing = CHANNEL_IDS.find((id) => !scene.channels.some((c) => c.id === id));
+  const verifying = scene.channels.find((c) => c.state === 'verifying');
+  const id = missing ?? verifying?.id;
+  if (!id) return s;
+  const channels = missing ? [...scene.channels, chip(id, 'verifying', 0)] : scene.channels.map((c) => (c.id === id ? { ...c, state: 'open' as const, share: 0.1 } : c));
+  return withScene(s, { channels }, { key: `channel:${id}`, kind: 'channel_open', text: `Canal ${CHANNELS[id].label} : ${missing ? 'compte en vérification' : 'ouvert'}.`, channel: id });
+}
+
+function growIsland(s: CompanySnapshot): CompanySnapshot {
+  const biggest = [...s.company.departments].filter((d) => d.id !== 'direction').sort((a, b) => (a.deskHigh ?? 0) - (b.deskHigh ?? 0))[0];
+  if (!biggest) return s;
+  const team = s.company.agents.filter((a) => a.dept === biggest.id).length;
+  const deskHigh = Math.max(biggest.deskHigh ?? 0, team) + 7;
+  return withScene(s, {}, { key: `dept:${biggest.id}:${deskHigh}`, kind: 'dept_open', text: `${biggest.name} s’agrandit.`, dept: biggest.id },
+    { departments: s.company.departments.map((d) => (d.id === biggest.id ? { ...d, deskHigh } : d)) });
+}
+
+function stageUp(s: CompanySnapshot): CompanySnapshot {
+  const scene = s.scene ?? buildScene(s.company.agents);
+  const level = Math.min(STAGES.length - 1, scene.stage.level + 1);
+  if (level === scene.stage.level) return s;
+  return withScene(s, { stage: stageView(level, s.day, s.company.agents.length) }, { key: `stage:${s.day}:${level}`, kind: 'stage_up', text: `Palier suivant : ${STAGES[level]!.name}.` });
+}
+
+export const SCENE_ACTIONS: SceneAction[] = [
+  { id: 'hire', label: 'Embaucher', apply: hire },
+  { id: 'fire', label: 'Renvoyer', apply: fire },
+  { id: 'duel', label: 'Duel', apply: duel },
+  { id: 'season', label: 'Fin de saison', apply: seasonEnd },
+  { id: 'channel', label: 'Ouvrir un canal', apply: openChannel },
+  { id: 'island', label: 'Agrandir l’île', apply: growIsland },
+  { id: 'stage', label: 'Palier suivant', apply: stageUp },
+];
+
 // ───────────── snapshot ─────────────
 
 export function mockSnapshot(): CompanySnapshot {
@@ -675,5 +842,6 @@ export function mockSnapshot(): CompanySnapshot {
     activity: buildActivity(now),
     session: { runId: 'demo-pixel-agency', playing: true, speed: 1, intervalMs: 2000, busy: false, mindMode: 'heuristic', status: 'running', day: DAY, tick: TICK, lastError: null },
     godMode: { niches: [], intents: Object.fromEntries(inbox.map((m) => [m.id, m.intent])) },
+    scene: buildScene(agents),
   };
 }

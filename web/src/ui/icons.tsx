@@ -1,5 +1,6 @@
 // Inline stroke icons (24×24 grid, currentColor) — no icon font, no emoji.
 import type { CSSProperties, ReactNode } from 'react';
+import type { AvatarSpec } from '../../../shared/types';
 
 const ICONS = {
   building: <><rect x="4" y="2" width="16" height="20" rx="2" /><path d="M9 22v-4h6v4M8 6h.01M12 6h.01M16 6h.01M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01" /></>,
@@ -44,6 +45,7 @@ const ICONS = {
   globe: <><circle cx="12" cy="12" r="10" /><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>,
   film: <><rect x="6" y="2" width="12" height="20" rx="2" /><path d="M10 18h4M9.5 8.5l5 2.5-5 2.5z" /></>,
   star: <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z" />,
+  trophy: <path d="M7 4h10v6a5 5 0 0 1-10 0zM7 6H3v2a4 4 0 0 0 4 4M17 6h4v2a4 4 0 0 1-4 4M12 15v4M8 21h8M9.5 21v-2h5v2" />,
   flow: <><circle cx="6" cy="19" r="3" /><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15" /><circle cx="18" cy="5" r="3" /></>,
   eye: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></>,
   plus: <path d="M12 5v14M5 12h14" />,
@@ -95,6 +97,51 @@ export function Icon({ name, size = 16, className, style, strokeWidth = 2, title
     >
       {title ? <title>{title}</title> : null}
       {ICONS[name]}
+    </svg>
+  );
+}
+
+type PixelRect = readonly [x: number, y: number, w: number, h: number, color: string];
+
+const AVATAR_INK = '#251a2e';
+const AVATAR_DEFAULT: AvatarSpec = { skin: '#f1c7a5', hair: '#3b2a20', shirt: '#4f7cff', pants: '#3a3f5c', hairStyle: 0, accessory: 'none' };
+
+/** The bust on a 12×12 grid: same `AvatarSpec` as the world's sheets, short / long / bun / curly / bald / ponytail. */
+export function avatarRects(a: AvatarSpec): PixelRect[] {
+  const { skin, hair, shirt } = a;
+  const hairRects: Record<AvatarSpec['hairStyle'], PixelRect[]> = {
+    0: [[3, 2, 6, 2, hair], [3, 4, 1, 1, hair], [8, 4, 1, 1, hair]],
+    1: [[3, 2, 6, 2, hair], [2, 3, 1, 6, hair], [9, 3, 1, 6, hair]],
+    2: [[3, 2, 6, 2, hair], [5, 0, 2, 2, hair]],
+    3: [[4, 1, 4, 1, hair], [2, 2, 8, 2, hair], [2, 4, 1, 2, hair], [9, 4, 1, 2, hair]],
+    4: [[3, 2, 6, 1, skin]],
+    5: [[3, 2, 6, 2, hair], [9, 3, 2, 1, hair], [10, 4, 1, 3, hair]],
+  };
+  const accessoryRects: Record<AvatarSpec['accessory'], PixelRect[]> = {
+    none: [],
+    glasses: [[3, 5, 6, 1, '#475569'], [4, 5, 1, 1, '#e2e8f0'], [7, 5, 1, 1, '#e2e8f0']],
+    cap: [[3, 1, 6, 2, shirt], [3, 3, 8, 1, shirt]],
+    headphones: [[3, 1, 6, 1, '#334155'], [2, 2, 1, 3, '#334155'], [9, 2, 1, 3, '#334155'], [2, 5, 1, 2, '#64748b'], [9, 5, 1, 2, '#64748b']],
+    beard: [[3, 7, 6, 1, hair], [4, 8, 4, 1, hair]],
+    tie: [[5, 9, 2, 3, '#d64545']],
+  };
+  return [
+    [2, 9, 8, 3, shirt],
+    [5, 8, 2, 1, skin],
+    [3, 3, 6, 5, skin],
+    [4, 5, 1, 1, AVATAR_INK],
+    [7, 5, 1, 1, AVATAR_INK],
+    ...hairRects[a.hairStyle],
+    ...accessoryRects[a.accessory],
+  ];
+}
+
+/** Plain SVG on purpose: a tab draws dozens of these and a static render has no canvas. */
+export function PixelAvatar({ avatar, size = 28, title }: { avatar: AvatarSpec | null | undefined; size?: number; title?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 12 12" shapeRendering="crispEdges" className="pixel-avatar" aria-hidden={title ? undefined : true} role={title ? 'img' : undefined}>
+      {title ? <title>{title}</title> : null}
+      {avatarRects(avatar ?? AVATAR_DEFAULT).map(([x, y, w, h, fill]) => <rect key={`${x}-${y}-${w}-${h}-${fill}`} x={x} y={y} width={w} height={h} fill={fill} />)}
     </svg>
   );
 }

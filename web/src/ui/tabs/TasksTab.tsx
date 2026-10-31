@@ -8,7 +8,7 @@ import { approvalAsk, doneTasksTotal, failedTasksTotal, hasWaiver, redTeamView }
 import { fmtInt } from '../format';
 import { Icon } from '../icons';
 import {
-  agentName, DELIVERABLE_ICON, DELIVERABLE_LABEL, deptColor, deptName, DEPT_ORDER, TASK_KIND_LABEL, TASK_STATUS_LABEL, TASK_STATUS_TONE,
+  agentName, DELIVERABLE_ICON, DELIVERABLE_LABEL, deptColor, deptName, DEPT_ORDER, deptOrder, TASK_KIND_LABEL, TASK_STATUS_LABEL, TASK_STATUS_TONE,
 } from '../labels';
 
 type Filter = 'all' | 'running' | 'review' | 'waiting' | 'done' | 'failed';
@@ -46,7 +46,7 @@ export function TasksTab({ onClose }: { onClose(): void }) {
     return [...list].sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.priority - b.priority || (b.dayDone ?? b.dayCreated) - (a.dayDone ?? a.dayCreated));
   }, [scoped, filter]);
 
-  const deptIds = DEPT_ORDER.filter((d) => lookups.depts.size === 0 || lookups.depts.has(d));
+  const deptIds = lookups.depts.size === 0 ? DEPT_ORDER : deptOrder([...lookups.depts.values()]).map((d) => d.id);
   // the snapshot keeps the latest finished tasks only: the counts are the run's, the list says what it shows
   const doneTotal = Math.max(doneTasksTotal(snapshot, dept) ?? 0, counts.done);
   const failedTotal = Math.max(failedTasksTotal(snapshot, dept) ?? 0, counts.failed);

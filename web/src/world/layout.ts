@@ -1,11 +1,14 @@
 // World layout: effective island grid (collision + connectivity fixes), island placement,
-// bridges, one composited ground canvas and the sorted list of static props.
-import type { AgentState, CompanySnapshot, DeptDef } from '../../../shared/types';
+// bridges, one composited ground canvas and the sorted list of static props. The layout knows
+// departments and tiers, never people: a hire or a departure rebuilds nothing.
+import type { AgentId, AgentState, CompanySnapshot, DeptDef } from '../../../shared/types';
+import { ISLAND_TIERS, PIER_CELL, tierFor } from '../../../shared/worldgrid';
 import { isoX, isoY, type Pt } from './iso';
-import { buildDeptIsland, islandSizeFor } from './islands';
-import { OPPOSITE, type Bridge, type IslandModel, type Seat, type Side, type Sprite, type WorldLayout } from './model';
+import { buildDeptIsland } from './islands';
+import { OPPOSITE, type Bridge, type IslandModel, type Side, type Sprite, type WorldLayout } from './model';
 import { deptColor } from './palette';
 import { makeCanvas } from './pixel';
+import { PIER_SIZE, buildPier } from './pier';
 import { PLAZA_SIZE, buildPlaza } from './plaza';
 import { paintBridge } from './bridges';
 import { clearBakeCache } from './pixel';
@@ -13,6 +16,8 @@ import { clearBakeCache } from './pixel';
 export const GRID_LIMIT = 3;
 const GAP = 2.4;
 const MAX_BRIDGE_GAP = 4.2;
+/** No island on (0,2): it stays open sky under the Accueil. */
+const OPEN_SKY = { col: 0, row: 2 } as const;
 
 const key = (c: number, r: number) => `${c},${r}`;
 const NEIGHBORS: [number, number, Side][] = [[1, 0, 'x+'], [-1, 0, 'x-'], [0, 1, 'y+'], [0, -1, 'y-']];
@@ -23,13 +28,17 @@ function clampInt(v: unknown, lim: number): number {
 }
 
 /**
- * Effective grid positions: direction always lives on the central plaza (0,0); collisions move an
- * island to the nearest free cell; islands that cannot be reached by 4-adjacency are moved next to
- * the connected group. Used by both the world and the minimap so they always match.
+ * Effective grid positions: direction always lives on the central plaza (0,0); the Accueil and the
+ * open sky under it take their cells before any department; collisions move an island to the nearest
+ * free cell; islands that cannot be reached by 4-adjacency are moved next to the connected group.
+ * A no-op on the catalog, open and closed departments together. Used by both the world and the
+ * minimap so they always match.
  */
 export function effectiveGrid(departments: readonly DeptDef[]): Map<string, { col: number; row: number }> {
   const out = new Map<string, { col: number; row: number }>();
   const occ = new Map<string, string>();
+  const reserved = new Set([key(PIER_CELL.col, PIER_CELL.row), key(OPEN_SKY.col, OPEN_SKY.row)]);
+  for (const k of reserved) occ.set(k, 'reserved');
   occ.set(key(0, 0), 'plaza');
   out.set('direction', { col: 0, row: 0 });
   const list = departments.filter((d) => d && d.id && d.id !== 'direction');
@@ -56,7 +65,7 @@ export function effectiveGrid(departments: readonly DeptDef[]): Map<string, { co
     occ.set(key(c, r), d.id);
     out.set(d.id, { col: c, row: r });
   }
-  // connectivity
+  // connectivity: the pier only bridges to the plaza, nobody crosses it
   const connected = (): Set<string> => {
     const seen = new Set<string>([key(0, 0)]);
     const q: [number, number][] = [[0, 0]];
@@ -64,7 +73,7 @@ export function effectiveGrid(departments: readonly DeptDef[]): Map<string, { co
       const [c, r] = q.shift()!;
       for (const [dc, dr] of NEIGHBORS) {
         const k = key(c + dc, r + dr);
-        if (occ.has(k) && !seen.has(k)) {
+        if (occ.has(k) && !reserved.has(k) && !seen.has(k)) {
           seen.add(k);
           q.push([c + dc, r + dr]);
         }
@@ -107,47 +116,111 @@ export function homeDept(a: AgentState, depts: Set<string>): string {
   return depts.has(a.dept) && a.dept !== 'direction' ? a.dept : 'direction';
 }
 
-function teamOf(snapshot: CompanySnapshot | null, deptId: string, def: DeptDef | null, depts: Set<string>): AgentState[] {
-  const agents = (snapshot?.company.agents ?? []).filter((a) => homeDept(a, depts) === deptId);
-  const chiefId = def?.chiefId;
-  return agents
-    .map((a, i) => ({ a, i }))
-    .sort((x, y) => {
-      const cx = x.a.isChief || x.a.id === chiefId ? 0 : 1;
-      const cy = y.a.isChief || y.a.id === chiefId ? 0 : 1;
-      return cx - cy || x.i - y.i;
-    })
-    .map((x) => x.a);
+/** Tier of a department: it follows the desks ever used, so it never shrinks (ui D7). */
+function tierOf(d: DeptDef, agents: readonly AgentState[]): (typeof ISLAND_TIERS)[number] {
+  const team = agents.filter((a) => a.dept === d.id).length;
+  return tierFor(Math.max(d.deskHigh ?? 0, team));
 }
 
+/** The departments of the map: the open ones, then the vacant plots, which the stream carries in `scene` (D35). */
+export function mapDepartments(snapshot: CompanySnapshot | null): { open: DeptDef[]; closed: DeptDef[] } {
+  const open = (snapshot?.company.departments ?? []).filter((d) => d && typeof d.id === 'string');
+  const ids = new Set(open.map((d) => d.id));
+  const closed = (snapshot?.scene?.closedDepts ?? []).filter((d) => d && typeof d.id === 'string' && !ids.has(d.id) && d.id !== 'direction');
+  return { open, closed };
+}
+
+/** The cells of the map: plots hold theirs, so an open department never gets moved. World and minimap both read this. */
+export function mapGrid(snapshot: CompanySnapshot | null): Map<string, { col: number; row: number }> {
+  const { open, closed } = mapDepartments(snapshot);
+  return effectiveGrid([...open, ...closed]);
+}
+
+/** No agent in it: a hire or a departure leaves the world alone unless the tier changes. */
 export function layoutKeyOf(snapshot: CompanySnapshot | null): string {
-  const depts = snapshot?.company.departments ?? [];
+  const { open, closed } = mapDepartments(snapshot);
   const agents = snapshot?.company.agents ?? [];
-  return JSON.stringify([
-    depts.map((d) => [d.id, d.name, d.color, d.icon, d.grid?.col, d.grid?.row, d.chiefId]),
-    agents.map((a) => [a.id, a.dept, a.isChief ? 1 : 0]),
-  ]);
+  return JSON.stringify(open.map((d): unknown[] => {
+    const size = d.id === 'direction' ? 0 : tierOf(d, agents).size; // the plaza never resizes
+    return [d.id, d.name, d.color, d.icon, d.grid?.col, d.grid?.row, size];
+  }).concat(closed.map((d) => [d.id, d.grid?.col, d.grid?.row, 'plot'])));
+}
+
+/**
+ * Desk index of each agent inside its department: `desk` when set. Otherwise (old saves before their first tick, mock):
+ * chief first, then roster order, skipping taken desks.
+ */
+export function deskIndexes(agents: readonly AgentState[], chiefOf: (dept: string) => string | undefined): Map<AgentId, number> {
+  const out = new Map<AgentId, number>();
+  const taken = new Map<string, Set<number>>();
+  const usedIn = (dept: string): Set<number> => {
+    let s = taken.get(dept);
+    if (!s) taken.set(dept, (s = new Set()));
+    return s;
+  };
+  for (const a of agents) {
+    if (typeof a.desk !== 'number' || usedIn(a.dept).has(a.desk)) continue;
+    usedIn(a.dept).add(a.desk);
+    out.set(a.id, a.desk);
+  }
+  const rest = agents.filter((a) => !out.has(a.id));
+  const isChief = (a: AgentState) => a.isChief || a.id === chiefOf(a.dept);
+  for (const a of [...rest.filter(isChief), ...rest.filter((x) => !isChief(x))]) {
+    const used = usedIn(a.dept);
+    let i = 0;
+    while (used.has(i)) i++;
+    used.add(i);
+    out.set(a.id, i);
+  }
+  return out;
+}
+
+/** Shows the desks below max(deskHigh, highest used + 1). Called from sync, O(desks). The plaza keeps its four. */
+export function applyDeskVisibility(L: WorldLayout, desks: Map<AgentId, number>, agents: readonly AgentState[], depts: readonly DeptDef[]): void {
+  const high = new Map<string, number>();
+  for (const d of depts) high.set(d.id, d.deskHigh ?? 0);
+  for (const a of agents) {
+    const i = desks.get(a.id);
+    if (i !== undefined) high.set(a.dept, Math.max(high.get(a.dept) ?? 0, i + 1));
+  }
+  for (const isl of L.islands) {
+    if (isl.kind !== 'dept') continue;
+    const shown = high.get(isl.id) ?? 0;
+    isl.seats.forEach((seat, i) => {
+      for (const s of seat.sprites) s.hidden = i >= shown;
+    });
+  }
 }
 
 export function buildLayout(snapshot: CompanySnapshot | null): WorldLayout {
   clearBakeCache();
-  const departments = (snapshot?.company.departments ?? []).filter((d) => d && typeof d.id === 'string');
-  const deptSet = new Set(departments.map((d) => d.id as string));
-  const grid = effectiveGrid(departments);
+  const { open, closed } = mapDepartments(snapshot);
+  const departments = [...open, ...closed];
+  const agents = snapshot?.company.agents ?? [];
+  const closedIds = new Set(closed.map((d) => d.id as string));
+  const grid = mapGrid(snapshot);
   const defOf = new Map(departments.map((d) => [d.id as string, d]));
   const cells = new Map<string, string>();
   for (const [id, g] of grid) cells.set(key(g.col, g.row), id === 'direction' ? 'plaza' : id);
+  cells.set(key(PIER_CELL.col, PIER_CELL.row), 'quai');
 
-  const sidesOf = (c: number, r: number): Side[] => NEIGHBORS.filter(([dc, dr]) => cells.has(key(c + dc, r + dr))).map(([, , s]) => s);
+  // the pier only bridges to the plaza: finance and support, its other neighbours, do not see it
+  const sidesOf = (c: number, r: number): Side[] => NEIGHBORS
+    .filter(([dc, dr]) => {
+      const other = cells.get(key(c + dc, r + dr));
+      return other !== undefined && (other !== 'quai' || (c === 0 && r === 0));
+    })
+    .map(([, , s]) => s);
 
   // sizes
-  const sizes = new Map<string, number>();
-  const teams = new Map<string, AgentState[]>();
-  for (const [id, g] of grid) {
-    const def = defOf.get(id) ?? null;
-    const team = teamOf(snapshot, id, def, deptSet);
-    teams.set(id, team);
-    sizes.set(id === 'direction' ? 'plaza' : id, id === 'direction' ? PLAZA_SIZE : islandSizeFor(team.length, sidesOf(g.col, g.row)));
+  const sizes = new Map<string, number>([['plaza', PLAZA_SIZE], ['quai', PIER_SIZE]]);
+  const seatCount = new Map<string, number>();
+  for (const id of grid.keys()) {
+    if (id === 'direction') continue;
+    const def = defOf.get(id)!;
+    const tier = closedIds.has(id) ? ISLAND_TIERS[0] : tierOf(def, agents);
+    sizes.set(id, tier.size);
+    seatCount.set(id, closedIds.has(id) ? 0 : tier.seats);
   }
   // column / row centres (uniform per column so bridges stay straight)
   const colsW = new Map<number, number>();
@@ -177,7 +250,6 @@ export function buildLayout(snapshot: CompanySnapshot | null): WorldLayout {
   const rowY = centres(rowsH);
 
   // islands
-  const seatOf = new Map<string, { island: IslandModel; seat: Seat }>();
   const islands: IslandModel[] = [];
   const byId = new Map<string, IslandModel>();
   const deptIsland = new Map<string, IslandModel>();
@@ -188,8 +260,7 @@ export function buildLayout(snapshot: CompanySnapshot | null): WorldLayout {
     color: deptColor('direction', dirDef?.color),
     center: { tx: 0, ty: 0 },
     bridgeSides: sidesOf(0, 0),
-    agents: teams.get('direction') ?? [],
-  }, seatOf);
+  });
   islands.push(plaza);
   byId.set('plaza', plaza);
   deptIsland.set('direction', plaza);
@@ -207,14 +278,20 @@ export function buildLayout(snapshot: CompanySnapshot | null): WorldLayout {
       col: g.col,
       row: g.row,
       center,
-      size: sizes.get(d.id) ?? 8,
+      size: sizes.get(d.id) ?? ISLAND_TIERS[0].size,
+      seats: seatCount.get(d.id) ?? 0,
       bridgeSides: sidesOf(g.col, g.row),
-      agents: teams.get(d.id) ?? [],
-    }, seatOf);
+      closed: closedIds.has(d.id),
+    });
     islands.push(isl);
     byId.set(isl.id, isl);
     deptIsland.set(d.id, isl);
   }
+  const pier = buildPier({
+    center: { tx: colX.get(PIER_CELL.col) ?? 0, ty: rowY.get(PIER_CELL.row) ?? 0 }, col: PIER_CELL.col, row: PIER_CELL.row, bridgeSides: ['y-'],
+  });
+  islands.push(pier);
+  byId.set(pier.id, pier);
 
   // bridges: short ones always, long ones only when needed for connectivity
   type Cand = { a: IslandModel; b: IslandModel; sa: Side; sb: Side; gap: number };
@@ -225,6 +302,7 @@ export function buildLayout(snapshot: CompanySnapshot | null): WorldLayout {
       const otherId = cells.get(key(isl.col + dc, isl.row + dr));
       const other = otherId ? byId.get(otherId) : undefined;
       if (!other) continue;
+      if ((isl.kind === 'pier' || other.kind === 'pier') && isl.kind !== 'plaza') continue;
       const pa = isl.edges[side]!;
       const pb = other.edges[OPPOSITE[side]]!;
       cands.push({ a: isl, b: other, sa: side, sb: OPPOSITE[side], gap: Math.hypot(pa.tx - pb.tx, pa.ty - pb.ty) });
@@ -291,7 +369,7 @@ export function buildLayout(snapshot: CompanySnapshot | null): WorldLayout {
   for (const i of islands) sprites.push(...i.sprites);
   sprites.sort((a, b) => a.depth - b.depth);
 
-  return {
+  const layout: WorldLayout = {
     key: layoutKeyOf(snapshot),
     islands,
     byId,
@@ -303,7 +381,11 @@ export function buildLayout(snapshot: CompanySnapshot | null): WorldLayout {
     lights: islands.flatMap((i) => i.lights),
     bounds: { minX: minX + 30, minY: minY + 30, maxX: maxX - 30, maxY: maxY - 60 },
     plaza,
+    pier,
+    hotspots: [],
     grid,
-    seatOf,
   };
+  const chiefs = new Map(open.map((d) => [d.id as string, d.chiefId]));
+  applyDeskVisibility(layout, deskIndexes(agents, (dept) => chiefs.get(dept)), agents, open);
+  return layout;
 }

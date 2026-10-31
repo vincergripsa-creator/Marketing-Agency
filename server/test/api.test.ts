@@ -93,9 +93,14 @@ vi.mock('../src/runtime/index.js', () => {
 });
 
 vi.mock('../src/sim/index.js', async () => {
-  const trim = await import('../src/api/trim.js');
+  // Not through api/trim.js, as it was: that module reads the runtime now (ui §3.2), which binds this very mock, and the two would wait for each other.
+  const { summarizeLedger } = await import('../src/core/ledger.js');
+  const { announcedOutageDays } = await import('../src/sim/outage.js');
   return {
-    financeSnapshot: (w: WorldState) => trim.estimateFinance(w),
+    financeSnapshot: (w: WorldState) => {
+      const { capital: _capital, ...finance } = summarizeLedger(w.ledger ?? [], w.day ?? 0, announcedOutageDays(w));
+      return finance;
+    },
     recordLedger: (w: WorldState, e: { type: LedgerEntry['type']; amount: number; memo: string; ref?: string | null }) => {
       const entry = { id: `led_x${w.ledger.length}`, day: w.day, type: e.type, amount: -Math.abs(e.amount), memo: e.memo, ref: e.ref ?? null };
       w.ledger.push(entry);
@@ -366,6 +371,12 @@ describe('path traversal protection', () => {
     expect(mimeFor('x.png')).toBe('image/png');
     expect(mimeFor('x.json')).toContain('application/json');
     expect(mimeFor('x.unknown')).toBe('application/octet-stream');
+    expect(mimeFor('a.mp4')).toBe('video/mp4');
+    expect(mimeFor('a.webm')).toBe('video/webm');
+    expect(mimeFor('a.vtt')).toBe('text/vtt; charset=utf-8');
+    expect(mimeFor('a.m4a')).toBe('audio/mp4');
+    expect(mimeFor('a.mp3')).toBe('audio/mpeg');
+    expect(mimeFor('a.wav')).toBe('audio/wav');
   });
 
   it('sanitises scenario bodies and control actions', () => {
@@ -930,6 +941,8 @@ function call(port: number, method: string, path: string, body?: string, headers
   });
 }
 
+const MP4 = Array.from({ length: 1000 }, (_, i) => String.fromCharCode(33 + (i % 90))).join('');
+
 describe('HTTP server', () => {
   let dir: string;
   let port: number;
@@ -962,6 +975,7 @@ describe('HTTP server', () => {
     await mkdir(files, { recursive: true });
     await writeFile(join(files, 'guide.pdf'), '%PDF-1.4 faux pdf');
     await writeFile(join(files, 'cover.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+    await writeFile(join(files, 'ad.mp4'), MP4);
     await writeFile(join(dir, 'runs', world.runId, 'world.json'), '{"secret":true}');
     await writeFile(join(dir, 'secret.txt'), 'top secret');
     const app = createAgencyServer({ session: fake, runsRoot: join(dir, 'runs'), webDist: join(dir, 'no-dist'), sse: { activityThrottleMs: 20, heartbeatMs: 60_000, snapshotMinIntervalMs: 0 } });
@@ -1060,6 +1074,57 @@ describe('HTTP server', () => {
     expect((await call(port, 'GET', `/runs/${world.runId}/../../secret.txt`)).status).toBe(403);
     expect((await call(port, 'GET', '/runs/..%2F/secret.txt')).status).toBe(404);
     expect((await call(port, 'POST', `/runs/${world.runId}/files/prd_1/v1/guide.pdf`)).status).toBe(405);
+  });
+
+  describe('byte ranges (ui §3.3): a <video> cannot seek without them', () => {
+    const mp4 = () => `/runs/${world.runId}/files/prd_1/v1/ad.mp4`;
+
+    it('bytes=0-99 answers 206 with its Content-Range and exactly those 100 bytes', async () => {
+      const res = await call(port, 'GET', mp4(), undefined, { Range: 'bytes=0-99' });
+      expect(res.status).toBe(206);
+      expect(res.headers['content-range']).toBe(`bytes 0-99/${MP4.length}`);
+      expect(res.headers['content-length']).toBe('100');
+      expect(res.headers['content-type']).toBe('video/mp4');
+      expect(res.headers['accept-ranges']).toBe('bytes');
+      expect(res.body).toBe(MP4.slice(0, 100));
+    });
+
+    it('a range past the end is refused with 416 and the real size', async () => {
+      const res = await call(port, 'GET', mp4(), undefined, { Range: 'bytes=999999-' });
+      expect(res.status).toBe(416);
+      expect(res.headers['content-range']).toBe(`bytes */${MP4.length}`);
+      expect(res.body).toBe('');
+    });
+
+    it('without a Range header, the whole file and Accept-Ranges', async () => {
+      const res = await call(port, 'GET', mp4());
+      expect(res.status).toBe(200);
+      expect(res.headers['accept-ranges']).toBe('bytes');
+      expect(res.body).toBe(MP4);
+    });
+
+    it('takes an open end, a suffix and an end past the file; anything else gets the whole file', async () => {
+      const tail = await call(port, 'GET', mp4(), undefined, { Range: `bytes=${MP4.length - 10}-` });
+      expect([tail.status, tail.body, tail.headers['content-range']]).toEqual([206, MP4.slice(-10), `bytes ${MP4.length - 10}-${MP4.length - 1}/${MP4.length}`]);
+      const suffix = await call(port, 'GET', mp4(), undefined, { Range: 'bytes=-20' });
+      expect([suffix.status, suffix.body]).toEqual([206, MP4.slice(-20)]);
+      const clipped = await call(port, 'GET', mp4(), undefined, { Range: `bytes=5-${MP4.length * 2}` });
+      expect([clipped.status, clipped.body]).toEqual([206, MP4.slice(5)]);
+      for (const range of ['bytes=abc', 'items=0-5', 'bytes=-', 'bytes=0-1,4-5']) {
+        const whole = await call(port, 'GET', mp4(), undefined, { Range: range });
+        expect([range, whole.status, whole.body.length]).toEqual([range, 200, MP4.length]);
+      }
+    });
+
+    it('HEAD with a range answers its headers, no body', async () => {
+      const res = await call(port, 'HEAD', mp4(), undefined, { Range: 'bytes=10-19' });
+      expect([res.status, res.headers['content-range'], res.body]).toEqual([206, `bytes 10-19/${MP4.length}`, '']);
+    });
+
+    it('a range never opens what the guard refuses: /runs/<id>/world.json stays closed', async () => {
+      expect((await call(port, 'GET', `/runs/${world.runId}/world.json`, undefined, { Range: 'bytes=0-5' })).status).toBe(403);
+      expect((await call(port, 'GET', `/runs/${world.runId}/world.json`)).status).toBe(403);
+    });
   });
 
   it('shows the French dev landing page when web/dist is missing', async () => {

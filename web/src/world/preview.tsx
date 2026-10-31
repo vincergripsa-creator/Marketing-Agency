@@ -5,7 +5,8 @@ import { createRoot } from 'react-dom/client';
 import type { Activity, ActivityKind, AgentState, AgentStatus, CompanySnapshot, DayPhase, DeptId, Place } from '../../../shared/types';
 import { Minimap } from './Minimap';
 import { WorldCanvas, type WorldCanvasProps } from './WorldCanvas';
-import { mockSnapshot } from './mockSnapshot';
+import { SCENE_ACTIONS, mockSnapshot } from './mockSnapshot';
+import { ANCHOR_X, ANCHOR_Y, CELL_H, CELL_W, FRAME, drawCarrying, drawFrame, getSheet } from './sprites';
 
 const PHASE: (t: number) => DayPhase = (t) => (t === 0 ? 'morning' : t <= 9 ? 'work' : t === 10 ? 'market' : 'evening');
 const pick = <T,>(a: readonly T[]): T => a[Math.floor(Math.random() * a.length)];
@@ -100,6 +101,38 @@ const btn = (on = false): CSSProperties => ({
 
 const PHASE_LABEL: Record<DayPhase, string> = { morning: 'Stand-up du matin', work: 'Travail', market: 'Clôture du marché', evening: 'Rétro du soir' };
 
+const PLATE_ROWS = [
+  { label: 'Carton', kind: 'box', frames: [0, 1, 2, 3] },
+  { label: 'Sac', kind: 'bag', frames: [0, 1, 2, 3] },
+  { label: 'Gestes', kind: null, frames: [FRAME.cheer, FRAME.cheer + 1, FRAME.slump, FRAME.shake] },
+] as const;
+const PLATE_ZOOM = 2;
+
+/** The new frames at zoom 2: carrying (front, then back) and the three gestures. */
+function SpritePlate({ avatar }: { avatar: AgentState['avatar'] }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const w = CELL_W * 8;
+  const h = CELL_H * PLATE_ROWS.length;
+  useEffect(() => {
+    const g = ref.current?.getContext('2d');
+    if (!g) return;
+    g.clearRect(0, 0, w, h);
+    const sheet = getSheet(avatar);
+    PLATE_ROWS.forEach((row, y) => {
+      const at = (i: number) => [i * CELL_W + ANCHOR_X, y * CELL_H + ANCHOR_Y] as const;
+      if (!row.kind) {
+        row.frames.forEach((f, i) => drawFrame(g, sheet, f, false, ...at(i)));
+        return;
+      }
+      row.frames.forEach((f, i) => {
+        drawCarrying(g, sheet, FRAME.carryFront + f, false, ...at(i), row.kind, true);
+        drawCarrying(g, sheet, FRAME.carryBack + f, false, ...at(i + 4), row.kind, false);
+      });
+    });
+  }, [avatar, w, h]);
+  return <canvas ref={ref} width={w} height={h} aria-label="Planche des nouveaux sprites" style={{ display: 'block', width: w * PLATE_ZOOM, height: h * PLATE_ZOOM, imageRendering: 'pixelated', background: 'rgba(124,108,240,0.08)', borderRadius: 8 }} />;
+}
+
 function Preview() {
   const [snapshot, setSnapshot] = useState<CompanySnapshot>(() => mockSnapshot());
   const [selectedAgentId, setAgent] = useState<string | null>(null);
@@ -107,6 +140,7 @@ function Preview() {
   const [focus, setFocus] = useState<WorldCanvasProps['focus']>({ kind: 'overview' });
   const [flowMode, setFlow] = useState(false);
   const [running, setRunning] = useState(true);
+  const [placeId, setPlace] = useState<string | null>(null);
   const cycle = useRef(0);
 
   useEffect(() => {
@@ -153,6 +187,7 @@ function Preview() {
         flowMode={flowMode}
         onSelectAgent={onSelectAgent}
         onSelectDept={onSelectDept}
+        onSelectPlace={setPlace}
       />
       <div style={{ ...panel, position: 'absolute', top: 14, left: 14, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -183,6 +218,17 @@ function Preview() {
             ) : null}
           </div>
         )}
+      </div>
+      <div style={{ ...panel, position: 'absolute', top: 14, right: 14, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
+        <strong>Scènes</strong>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {SCENE_ACTIONS.map((a) => (
+            <button key={a.id} type="button" style={btn()} onClick={() => setSnapshot(a.apply)}>{a.label}</button>
+          ))}
+        </div>
+        <div style={{ color: '#6f6888', minHeight: 16 }}>{snapshot.scene?.recent.at(-1)?.text}</div>
+        {placeId && <div style={{ color: '#6f6888' }}>Lieu cliqué : {placeId}</div>}
+        <SpritePlate avatar={snapshot.company.agents[0]!.avatar} />
       </div>
       <div style={{ position: 'absolute', right: 14, bottom: 14 }}>
         <Minimap snapshot={snapshot} selectedDept={selectedDept} onPick={onSelectDept} onOverview={overview} />

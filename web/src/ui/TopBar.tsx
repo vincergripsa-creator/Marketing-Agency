@@ -5,9 +5,21 @@ import { Avatar, ChiefBadge, cx, Kbd } from './common';
 import { useApp } from './context';
 import { Icon, PixelLogo } from './icons';
 import { AGENT_STATUS_LABEL, BUSY_STATUSES, deptColor, deptName, TABS, type TabId } from './labels';
+import './tabs/team.css';
+
+const MORE_TABS = TABS.filter((t) => t.more);
 
 function norm(s: string): string {
   return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+/** Where an arrow key sends the focus in a menu of `count` items, wrapping. Null: not a navigation key. */
+export function menuTarget(key: string, index: number, count: number): number | null {
+  if (key === 'ArrowDown') return (index + 1) % count;
+  if (key === 'ArrowUp') return (index - 1 + count) % count;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return null;
 }
 
 export function TopBar({ tab, onTab, flowMode, onFlow, godMode, onGod, onNewScenario, searchRef }: {
@@ -56,7 +68,7 @@ export function TopBar({ tab, onTab, flowMode, onFlow, godMode, onGod, onNewScen
             <button
               key={t.id}
               type="button"
-              className={cx('tab', tab === t.id && 'tab-active')}
+              className={cx('tab', t.more && 'tab-phone', tab === t.id && 'tab-active')}
               aria-current={tab === t.id ? 'page' : undefined}
               onClick={() => pick(t.id)}
               title={`${t.label} (touche ${t.key})`}
@@ -66,6 +78,7 @@ export function TopBar({ tab, onTab, flowMode, onFlow, godMode, onGod, onNewScen
             </button>
           ))}
         </nav>
+        <MoreMenu tab={tab} badge={badges.mail ?? 0} onPick={pick} />
       </div>
 
       <div className="glass bar-pill right-pill">
@@ -81,7 +94,7 @@ export function TopBar({ tab, onTab, flowMode, onFlow, godMode, onGod, onNewScen
           <Icon name="flow" />
         </button>
         <button type="button" className={cx('icon-btn', godMode && 'icon-btn-on icon-btn-god')} onClick={() => onGod(!godMode)}
-          title={godMode ? 'Mode dieu activé : la vérité cachée du marché est visible' : 'Mode dieu : révéler la vérité cachée du marché (demande, prix accepté, vraies intentions)'}
+          title={godMode ? 'Mode dieu activé : la vérité cachée du marché est visible' : 'Mode dieu : révéler la vérité cachée du marché (demande, prix accepté, vraies intentions, vrai talent)'}
           aria-pressed={godMode}>
           <Icon name="eye" />
         </button>
@@ -90,6 +103,65 @@ export function TopBar({ tab, onTab, flowMode, onFlow, godMode, onGod, onNewScen
         </button>
       </div>
     </header>
+  );
+}
+
+/** The four tabs behind « Plus ». Sits outside `.tabs`, which scrolls and would clip the list. The agency answers its mail alone: the count is enough here. */
+function MoreMenu({ tab, badge, onPick }: { tab: TabId; badge: number; onPick(id: TabId): void }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const active = MORE_TABS.some((t) => t.id === tab);
+
+  useEffect(() => { setOpen(false); }, [tab]);
+
+  useEffect(() => {
+    if (!open) return;
+    itemRefs.current[Math.max(0, MORE_TABS.findIndex((t) => t.id === tab))]?.focus();
+    const onDown = (e: PointerEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Tab') { setOpen(false); return; }
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setOpen(false);
+        buttonRef.current?.focus();
+        return;
+      }
+      const at = itemRefs.current.findIndex((el) => el === document.activeElement);
+      const next = menuTarget(e.key, at, MORE_TABS.length);
+      if (next === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      itemRefs.current[next]?.focus();
+    };
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('keydown', onKey, true);
+    return () => { window.removeEventListener('pointerdown', onDown, true); window.removeEventListener('keydown', onKey, true); };
+  }, [open, tab]);
+
+  return (
+    <div className="more-wrap" ref={wrapRef}>
+      <button type="button" ref={buttonRef} className={cx('tab more-btn', active && 'tab-active')} aria-haspopup="menu" aria-expanded={open}
+        onClick={() => setOpen((v) => !v)} title="Plus d’onglets"
+        onKeyDown={(e) => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setOpen(true); } }}>
+        Plus
+        {badge ? <span className="tab-badge" title="Messages ouverts dans la boîte mail">{badge}</span> : null}
+        <Icon name={open ? 'chevronUp' : 'chevronDown'} size={12} />
+      </button>
+      {open ? (
+        <div className="more-menu glass" role="menu" aria-label="Autres onglets">
+          {MORE_TABS.map((t, i) => (
+            <button key={t.id} type="button" role="menuitem" ref={(el) => { itemRefs.current[i] = el; }}
+              className={cx('tab more-item', tab === t.id && 'tab-active')} aria-current={tab === t.id ? 'page' : undefined}
+              onClick={() => { setOpen(false); onPick(t.id); }}>
+              <span className="more-item-label"><Icon name={t.icon} size={14} />{t.label}</span>
+              <Kbd>{t.key}</Kbd>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

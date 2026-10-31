@@ -3,12 +3,12 @@ import type { DeptId } from '../../../shared/types';
 import { cx } from './common';
 import { useApp } from './context';
 import { Icon } from './icons';
-import { BUSY_STATUSES, DEFAULT_DEPTS, DEPT_ORDER } from './labels';
+import { BUSY_STATUSES, DEFAULT_DEPTS, DEPT_ORDER, deptOrder } from './labels';
 
 export function DeptStrip({ selected, onPick, onOverview }: { selected: DeptId | null; onPick(id: DeptId): void; onOverview(): void }) {
   const { snapshot } = useApp();
   const depts = snapshot?.company?.departments?.length
-    ? [...snapshot.company.departments].sort((a, b) => DEPT_ORDER.indexOf(a.id) - DEPT_ORDER.indexOf(b.id))
+    ? deptOrder(snapshot.company.departments)
     : DEPT_ORDER.map((id) => ({ id, ...DEFAULT_DEPTS[id] }));
   const agents = snapshot?.company?.agents ?? [];
 

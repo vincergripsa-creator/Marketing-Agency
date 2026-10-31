@@ -5,9 +5,9 @@
 import type { DeptDef, DeptId } from '../shared.js';
 
 // ───────────────────────────── Departments ─────────────────────────────
-// Island grid around the central plaza (0,0 = Direction + Cerveau + café). The ten first islands
-// sit on the radius-3 ring, two cells apart, which projects to a clean ellipse in isometric view.
-// Video and CRM take their cells of ui §2.4 (D36). chiefId is the named candidate, reconcileOrg keeps it true.
+// Island grid around the central plaza (0,0 = Direction + Cerveau + café). The catalog is closed, so each department
+// has a fixed cell of ui §2.4 (D36), open or not, and the grid is connected as it stands: opening one moves nobody.
+// (0,1) is the Accueil pier, (0,2) stays empty. chiefId is the named candidate, reconcileOrg keeps it true.
 
 export const DEPARTMENTS: DeptDef[] = [
   {
@@ -18,52 +18,52 @@ export const DEPARTMENTS: DeptDef[] = [
   {
     id: 'recherche', name: 'Recherche', color: '#3a86ff', icon: 'RECHERCHE', chiefId: 'nadia',
     description: "Chasse les niches où les gens sont prêts à payer : tendances TikTok, concurrents Gumroad/Etsy et mots exacts des clients.",
-    grid: { col: -3, row: -1 },
+    grid: { col: -1, row: 0 },
   },
   {
     id: 'studio', name: 'Studio PDF', color: '#e76f51', icon: 'STUDIO PDF', chiefId: 'elise',
     description: "Écrit les guides : 10 titres, plan qui vend, rédaction complète, humanisation et fact-check avant toute sortie.",
-    grid: { col: -1, row: -3 },
+    grid: { col: -1, row: -1 },
   },
   {
     id: 'creation', name: 'Création', color: '#9d4edd', icon: 'CRÉATION', chiefId: 'zoe',
     description: "Couvertures lisibles en miniature, mise en page du PDF final et infographies par chapitre.",
-    grid: { col: 1, row: -3 },
+    grid: { col: 0, row: -1 },
   },
   {
-    id: 'growth', name: 'Pub TikTok', color: '#ff006e', icon: 'PUB TIKTOK', chiefId: 'leo',
+    id: 'growth', name: 'Acquisition', color: '#ff006e', icon: 'ACQUISITION', chiefId: 'leo',
     description: "Hooks, créas 9:16, campagnes payantes et contenu organique. Coupe vite ce qui ne marche pas, scale progressivement ce qui marche.",
-    grid: { col: 3, row: -3 },
+    grid: { col: 2, row: -1 },
   },
   {
     id: 'partenariats', name: 'Partenariats', color: '#c08552', icon: 'PARTENARIATS', chiefId: 'rayan',
     description: "Recrute de petits créateurs de la niche, à la commission de préférence, et filtre les faux profils.",
-    grid: { col: 3, row: -1 },
+    grid: { col: 1, row: -1 },
   },
   {
     id: 'boutique', name: 'Boutique', color: '#06d6a0', icon: 'BOUTIQUE', chiefId: 'clara',
     description: "Notre propre boutique : pages de vente avec les mots des clients, prix testés, mise en ligne et upsell « La suite est ici ».",
-    grid: { col: 3, row: 1 },
+    grid: { col: 1, row: 0 },
   },
   {
     id: 'support', name: 'Service client', color: '#fb8500', icon: 'SUPPORT', chiefId: 'ines',
     description: "La boîte mail : répond sous 24 h, rembourse de bonne foi, bloque les arnaques et remonte les plaintes qualité au Studio.",
-    grid: { col: 1, row: 3 },
+    grid: { col: 1, row: 1 },
   },
   {
     id: 'finance', name: 'Finance', color: '#80b918', icon: 'FINANCE', chiefId: 'gabriel',
     description: "Grand livre, trésorerie et runway. Fixe chaque matin l'enveloppe pub du jour et déclenche le mode survie si besoin.",
-    grid: { col: -1, row: 3 },
+    grid: { col: -1, row: 1 },
   },
   {
     id: 'analyse', name: 'Analyse', color: '#00b4d8', icon: 'ANALYSE', chiefId: 'raphael',
     description: "Rapport quotidien, attribution des ventes et expériences A/B : une variable à la fois, une conclusion seulement avec assez de données.",
-    grid: { col: -3, row: 3 },
+    grid: { col: -2, row: 2 },
   },
   {
     id: 'rh', name: 'RH & Apprentissage', color: '#b56576', icon: 'RH', chiefId: 'nora',
     description: "Rétro du soir, leçons chiffrées dans le cerveau, revues de performance hebdomadaires — et la Red Team qui essaie de tout tuer.",
-    grid: { col: -3, row: 1 },
+    grid: { col: -2, row: 1 },
   },
   {
     id: 'video', name: 'Studio Vidéo', color: '#dc2626', icon: 'VIDÉO', chiefId: 'chloe',

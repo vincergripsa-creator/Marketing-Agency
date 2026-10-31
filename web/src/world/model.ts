@@ -14,6 +14,7 @@ export interface Sprite {
   x: number;
   y: number;
   depth: number;
+  hidden?: boolean;           // baked but not drawn: a desk nobody uses yet
 }
 
 export interface Light {
@@ -33,16 +34,22 @@ export interface Seat {
   /** Depth of the desk sprite (the lit screen is drawn right after it). */
   deskDepth: number;
   chief: boolean;
+  /** Desk + chair, hidden while the seat is unused. */
+  sprites: Sprite[];
 }
 
 export interface Gate { side: Side; inner: Pt; outer: Pt }
 
 export interface Rect { x0: number; y0: number; x1: number; y1: number }
 
+export type IslandKind = 'dept' | 'plaza' | 'pier';
+export type HotspotId = 'quai' | 'ligue' | 'podium' | 'duel' | `canal:${string}`;
+export interface Hotspot { id: HotspotId; poly: P2[]; title: string }
+
 export interface IslandModel {
-  id: string;                 // dept id, 'plaza' for the central plaza
-  kind: 'dept' | 'plaza';
-  deptId: DeptId | null;      // plaza hosts 'direction'
+  id: string;                 // dept id, 'plaza' for the central plaza, 'quai' for the pier
+  kind: IslandKind;
+  deptId: DeptId | null;      // plaza hosts 'direction', the pier nobody
   def: DeptDef | null;
   name: string;
   color: string;
@@ -65,9 +72,18 @@ export interface IslandModel {
   topPoly: P2[];              // top face (world px) for outline/selection
   hitPoly: P2[];              // top + sides (world px)
   depth: number;
+  closed?: boolean;           // vacant plot of a department with no team: no room, no desk
   // plaza extras
   fountain?: { center: Pt; radius: number; crystal: { x: number; y: number }; spots: Pt[]; ring: number };
   cafe?: { spots: Pt[]; facing: Facing[]; machine: { x: number; y: number }; area: Rect; anchor: { x: number; y: number } };
+  stage?: {
+    podium: { centre: Pt; tops: { place: 1 | 2 | 3; at: Pt; z: number }[]; champion: Pt };
+    wall: Pt; board: Pt;
+    duel: { centre: Pt; spots: [Pt, Pt]; facing: [Facing, Facing] };
+    channelSlots: Pt[];
+  };
+  // pier extras
+  pier?: { dock: Pt };
 }
 
 export interface Bridge {
@@ -88,9 +104,11 @@ export interface WorldLayout {
   lights: Light[];
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
   plaza: IslandModel;
+  pier: IslandModel;
+  /** Clickable places of the stage, filled by stage.ts. */
+  hotspots: Hotspot[];
   /** Effective grid (after collision / connectivity fixes), shared with the minimap. */
   grid: Map<string, { col: number; row: number }>;
-  seatOf: Map<string, { island: IslandModel; seat: Seat }>;
 }
 
 export function place(b: Baked, tx: number, ty: number, depth: number, z = 0): Sprite {

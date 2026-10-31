@@ -2,6 +2,7 @@
 import { useEffect, useRef, type JSX } from 'react';
 import type { Activity, CompanySnapshot, DeptId } from '../../../shared/types';
 import { WorldEngine } from './engine';
+import type { HotspotId } from './model';
 
 const LOW_POWER_FRAME_MS = 48;
 
@@ -23,6 +24,8 @@ export interface WorldCanvasProps {
   lowPower?: boolean;
   onSelectAgent(id: string): void;
   onSelectDept(id: DeptId): void;
+  /** A clickable place of the map: l'Accueil, the league's stage, a channel totem. */
+  onSelectPlace?(id: HotspotId): void;
 }
 
 export function WorldCanvas(props: WorldCanvasProps): JSX.Element {
@@ -39,6 +42,7 @@ export function WorldCanvas(props: WorldCanvasProps): JSX.Element {
     const engine = new WorldEngine(canvas, {
       onSelectAgent: (id) => propsRef.current.onSelectAgent(id),
       onSelectDept: (id) => propsRef.current.onSelectDept(id),
+      onSelectPlace: (id) => propsRef.current.onSelectPlace?.(id),
     });
     engineRef.current = engine;
     // handle for debugging from the devtools console: document.querySelector('canvas').__pixelWorld

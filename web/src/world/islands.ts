@@ -1,9 +1,10 @@
-// Department island generator: size from the team, fenced office with one desk per agent,
-// themed decor seeded by the department id, trees/bushes on the grass margin, sign with the name.
-import type { AgentState, DeptDef } from '../../../shared/types';
+// Department island generator: size from its tier, fenced office with every desk of the tier baked and shown
+// by the sim, themed decor seeded by the department id, trees/bushes on the grass margin, sign with the name.
+// A department with no team is a vacant plot on the same cell: grass, boxes, a sign, no office.
+import type { DeptDef } from '../../../shared/types';
 import { isoX, isoY, type Facing, type Pt } from './iso';
 import type { Gate, IslandModel, Light, Rect, Seat, Side, Sprite } from './model';
-import { place } from './model';
+import { SIDES, place } from './model';
 import { mix, shade } from './palette';
 import { hashStr, seeded, type Baked, type P2 } from './pixel';
 import {
@@ -108,19 +109,6 @@ function gateSides(bridgeSides: Side[]): Side[] {
   return [...s];
 }
 
-/** Smallest island (8..16 tiles) whose office fits one desk per agent. */
-export function islandSizeFor(agentCount: number, bridgeSides: Side[]): number {
-  const minSize = agentCount <= 3 ? 8 : agentCount <= 5 ? 9 : 10;
-  for (let n = minSize; n <= 16; n++) {
-    const room = roomOf(n);
-    const occ = new Occupancy(room);
-    for (const side of gateSides(bridgeSides)) occ.mark(gateCorridor(side, room, n / 2));
-    reserveTallZones(occ, room);
-    if (deskSlots(room, occ, agentCount + 1).length >= agentCount + (agentCount > 6 ? 0 : 1)) return n;
-  }
-  return 16;
-}
-
 function reserveTallZones(occ: Occupancy, room: Rect): Rect[] {
   const zones = [R(room.x1 - 1.25, room.y0 + 0.08, 1.1, 0.45), R(room.x0 + 0.08, room.y1 - 1.25, 0.45, 1.1)];
   const kept: Rect[] = [];
@@ -171,12 +159,14 @@ export interface IslandInput {
   row: number;
   center: Pt;
   size: number;
+  seats: number;     // desks baked, whatever the team is today
   bridgeSides: Side[];
-  agents: AgentState[];
+  closed?: boolean;  // vacant plot: no office, no desk, lights off
 }
 
-export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: IslandModel; seat: Seat }>): IslandModel {
+export function buildDeptIsland(inp: IslandInput): IslandModel {
   const N = inp.size;
+  const closed = !!inp.closed;
   const x0 = inp.center.tx - N / 2;
   const y0 = inp.center.ty - N / 2;
   const seed = hashStr(inp.id);
@@ -187,8 +177,10 @@ export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: 
   const W = (p: Pt): Pt => ({ tx: p.tx + x0, ty: p.ty + y0 });
   const sprites: Sprite[] = [];
   const lights: Light[] = [];
-  const add = (b: Baked, lx: number, ly: number, depthBias = 0, z = 0) => {
-    sprites.push(place(b, lx + x0, ly + y0, lx + x0 + (ly + y0) + depthBias, z));
+  const add = (b: Baked, lx: number, ly: number, depthBias = 0, z = 0): Sprite => {
+    const spr = place(b, lx + x0, ly + y0, lx + x0 + (ly + y0) + depthBias, z);
+    sprites.push(spr);
+    return spr;
   };
   /** Adds a prop whose footprint is [lx, lx+w]×[ly, ly+d] (depth = footprint centre). */
   const addAt = (b: Baked, lx: number, ly: number, w: number, d: number) => {
@@ -199,15 +191,16 @@ export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: 
   const t = paintTerrain(N, seed);
   const floorA = mix(color, '#ffffff', 0.56);
   const floorB = mix(color, '#ffffff', 0.46);
-  paintFloor(t, room.x0, room.y0, room.x1, room.y1, floorA, floorB, 1);
+  if (!closed) paintFloor(t, room.x0, room.y0, room.x1, room.y1, floorA, floorB, 1);
 
-  const sides = gateSides(inp.bridgeSides);
+  const sides = closed ? [] : gateSides(inp.bridgeSides);
   const occ = new Occupancy(room);
-  for (const s of sides) occ.mark(gateCorridor(s, room, mid));
-  const tallZones = reserveTallZones(occ, room);
+  // all four corridors, bridge or not: a new neighbour must not move a desk
+  for (const s of SIDES) occ.mark(gateCorridor(s, room, mid));
+  const tallZones = closed ? [] : reserveTallZones(occ, room);
 
   // ── desks
-  const slots = deskSlots(room, occ, Math.max(inp.agents.length, 2));
+  const slots = closed ? [] : deskSlots(room, occ, inp.seats);
   const deskTop = [
     '#f2efe9', '#e9d3b1', '#dcb68a', mix(color, '#ffffff', 0.8),
   ][seed % 4];
@@ -223,13 +216,12 @@ export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: 
     const wx = isoX(dx + x0, dy + y0);
     const wy = isoY(dx + x0, dy + y0);
     const screen = desk.screen.map(([px, py]) => [wx + px, wy + py] as P2);
-    const seat: Seat = { pos: W(s.seat), facing: s.facing, aisle: W(s.aisle), screen, deskDepth: spr.depth, chief };
-    seats.push(seat);
-    add(chairProp(s.facing, chairColor), s.seat.tx, s.seat.ty, 0.05);
+    const chair = add(chairProp(s.facing, chairColor), s.seat.tx, s.seat.ty, 0.05);
+    seats.push({ pos: W(s.seat), facing: s.facing, aisle: W(s.aisle), screen, deskDepth: spr.depth, chief, sprites: [spr, chair] });
   });
 
   // ── decor
-  const theme = THEMES[inp.id] ?? ['plant', 'cabinet', 'cooler', 'plant'];
+  const theme = closed ? [] : THEMES[inp.id] ?? ['plant', 'cabinet', 'cooler', 'plant'];
   const tall = theme.filter((k) => TALL.includes(k));
   const floorItems = theme.filter((k) => !TALL.includes(k));
   tallZones.forEach((z, i) => {
@@ -279,6 +271,13 @@ export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: 
     }
   }
 
+  if (closed) {
+    const boxes: Rect = R(room.x1 - 2.2, room.y0 + 0.35, 1.1, 0.9);
+    occ.mark(boxes);
+    addAt(boxesProp(seed % 4), boxes.x0, boxes.y0, 0.75, 0.6);
+    addAt(boxesProp((seed + 1) % 4), boxes.x0 + 0.3, boxes.y0 + 0.45, 0.75, 0.6);
+  }
+
   // ── free floor: meeting point, visitors, wandering
   const freePts: Pt[] = [];
   for (let y = room.y0 + 0.45; y < room.y1 - 0.3; y += 0.5) {
@@ -296,7 +295,7 @@ export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: 
       meetingCenter = p;
     }
   }
-  if (freePts.length > 6) paintRug(t, meetingCenter.tx - 0.75, meetingCenter.ty - 0.75, 1.5, 1.5, mix(color, '#ffffff', 0.25));
+  if (!closed && freePts.length > 6) paintRug(t, meetingCenter.tx - 0.75, meetingCenter.ty - 0.75, 1.5, 1.5, mix(color, '#ffffff', 0.25));
   const meetingSpots: Pt[] = [];
   for (const [dx, dy] of [[0.62, 0], [0, 0.62], [-0.62, 0], [0, -0.62], [0.5, 0.5], [-0.5, -0.5]] as const) {
     meetingSpots.push(W({ tx: meetingCenter.tx + dx, ty: meetingCenter.ty + dy }));
@@ -337,7 +336,7 @@ export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: 
       gates.push({ side, inner: W(inner), outer: W(outer) });
     }
   };
-  (['y-', 'x-', 'x+', 'y+'] as Side[]).forEach(wall);
+  if (!closed) (['y-', 'x-', 'x+', 'y+'] as Side[]).forEach(wall);
 
   // ── edges + paths to bridges
   const edges: Partial<Record<Side, Pt>> = {
@@ -348,9 +347,16 @@ export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: 
     const edge = s === 'y-' ? [mid, 0.1] : s === 'y+' ? [mid, N - 0.1] : s === 'x-' ? [0.1, mid] : [N - 0.1, mid];
     if (inp.bridgeSides.includes(s) || s === 'y+') paintPath(t, outer[0], outer[1], edge[0], edge[1], seed + s.length);
   }
+  // agents cross a plot: its paths meet in the middle
+  if (closed) {
+    for (const s of inp.bridgeSides) {
+      const edge = s === 'y-' ? [mid, 0.1] : s === 'y+' ? [mid, N - 0.1] : s === 'x-' ? [0.1, mid] : [N - 0.1, mid];
+      paintPath(t, edge[0], edge[1], mid, mid, seed + s.length);
+    }
+  }
 
   // ── margin decor: sign, trees, bushes, lamp, rocks
-  const signB = signProp(inp.sign, color);
+  const signB = closed ? signProp('À LOUER', '#94a3b8') : signProp(inp.sign, color);
   add(signB, 0.5, 0.5);
   const nearGate = (side: Side, a: number) => sides.includes(side) && Math.abs(a - mid) < 1.3;
   const treeKinds: ('round' | 'pine' | 'blossom')[] = ['round', 'pine', 'round', 'blossom'];
@@ -364,12 +370,14 @@ export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: 
     if (!nearGate('x+', a) && rnd() < 0.5) add(rnd() < 0.5 ? rockProp(Math.floor(rnd() * 2)) : bushProp(2), N - 0.42, a + 0.3);
   }
   if (rnd() < 0.7) add(rockProp(1), 1.4, N - 0.4);
-  const lampB = lampProp();
-  add(lampB, mid + 1.15, N - 0.45);
-  const lw = { x: Math.round(isoX(mid + 1.15 + x0, N - 0.45 + y0)), y: Math.round(isoY(mid + 1.15 + x0, N - 0.45 + y0, 29)) };
-  lights.push({ x: lw.x, y: lw.y, r: 34, color: '#ffd27a', kind: 'lamp' });
-  const rc = W({ tx: (room.x0 + room.x1) / 2, ty: (room.y0 + room.y1) / 2 });
-  lights.push({ x: isoX(rc.tx, rc.ty), y: isoY(rc.tx, rc.ty, 6), r: N * 15, color: '#ffcf8a', kind: 'room' });
+  if (!closed) {
+    const lampB = lampProp();
+    add(lampB, mid + 1.15, N - 0.45);
+    const lw = { x: Math.round(isoX(mid + 1.15 + x0, N - 0.45 + y0)), y: Math.round(isoY(mid + 1.15 + x0, N - 0.45 + y0, 29)) };
+    lights.push({ x: lw.x, y: lw.y, r: 34, color: '#ffd27a', kind: 'lamp' });
+    const rc = W({ tx: (room.x0 + room.x1) / 2, ty: (room.y0 + room.y1) / 2 });
+    lights.push({ x: isoX(rc.tx, rc.ty), y: isoY(rc.tx, rc.ty, 6), r: N * 15, color: '#ffcf8a', kind: 'room' });
+  }
 
   // ── geometry
   const T: P2 = [isoX(x0, y0), isoY(x0, y0)];
@@ -378,7 +386,7 @@ export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: 
   const L: P2 = [isoX(x0, y0 + N), isoY(x0, y0 + N)];
   const signBase = W({ tx: 0.5, ty: 0.5 });
 
-  const island: IslandModel = {
+  return {
     id: inp.id,
     kind: 'dept',
     deptId: (inp.def?.id ?? inp.id) as IslandModel['deptId'],
@@ -390,7 +398,7 @@ export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: 
     size: N,
     x0, y0,
     center: inp.center,
-    room: { x0: room.x0 + x0, y0: room.y0 + y0, x1: room.x1 + x0, y1: room.y1 + y0 },
+    room: closed ? null : { x0: room.x0 + x0, y0: room.y0 + y0, x1: room.x1 + x0, y1: room.y1 + y0 },
     gates,
     edges,
     seats,
@@ -405,12 +413,8 @@ export function buildDeptIsland(inp: IslandInput, seatOf: Map<string, { island: 
     topPoly: [T, Rr, B, L],
     hitPoly: [T, Rr, [Rr[0], Rr[1] + SIDE_DEPTH * 0.6], [B[0], B[1] + SIDE_DEPTH], [L[0], L[1] + SIDE_DEPTH * 0.6], L],
     depth: inp.center.tx + inp.center.ty,
+    ...(closed ? { closed } : {}),
   };
-  inp.agents.forEach((a, i) => {
-    const seat = seats[i];
-    if (seat) seatOf.set(a.id, { island, seat });
-  });
-  return island;
 }
 
 /** Facing that looks from `from` towards `to`. */

@@ -1,25 +1,40 @@
 // Apprentissage: is the agency getting better? KPI trends, lessons, bandits, experiments, market truth (god mode).
 import { useMemo, useState } from 'react';
-import type { BanditArm, DailyKpi, Experiment, Lesson } from '../../../../shared/types';
+import { CHANNELS, CHANNEL_IDS, type ChannelId } from '../../../../shared/channels';
+import { firstValue, lastValue, trendValue } from '../../../../shared/trends';
+import type { BanditArm, Experiment, KpiBaseline, Lesson, TrendId } from '../../../../shared/types';
 import { Sparkline, SERIES } from '../charts';
 import { Avatar, Bar, cx, Empty, Overlay, Pill, SectionTitle, Segmented } from '../common';
 import { useApp } from '../context';
-import { fmtDec, fmtEur, fmtInt, fmtPct, fmtRoas, ok, safeDiv } from '../format';
+import { fmtDec, fmtEur, fmtInt, fmtPct, fmtRoas, safeDiv } from '../format';
 import { Icon } from '../icons';
 import {
   agentColor, agentName, banditArmLabel, banditDimensionLabel, EXPERIMENT_DIM_LABEL, EXPERIMENT_STATUS, HOOK_LABEL, LESSON_TOPIC_LABEL,
-  LESSON_TOPIC_TONE, METRIC_LABEL,
+  LESSON_TOPIC_TONE, METRIC_LABEL, nicheName, type Lookups,
 } from '../labels';
 
-interface Trend { id: string; label: string; values: (number | null)[]; fmt(n: number): string; higherIsBetter: boolean; color: string }
+/** Bandits keyed `<dim>:<nicheId>` that labels.ts does not know: without them a raw id reaches the screen. */
+const NICHE_DIMS: Record<string, string> = { channel: 'Canal', video_tempo: 'Rythme des vidéos', email_angle: 'Angle des e-mails' };
+const TEMPO_LABEL: Record<string, string> = { calm: 'Posé', standard: 'Standard', fast: 'Rapide' };
 
-/** Average of the first and of the last measured days (up to 7 each, never overlapping). */
-function firstLast(values: (number | null)[]): { first: number | null; last: number | null } {
-  const vals = values.filter(ok);
-  if (vals.length < 2) return { first: null, last: null };
-  const k = Math.max(1, Math.min(7, Math.floor(vals.length / 2)));
-  const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
-  return { first: avg(vals.slice(0, k)), last: avg(vals.slice(vals.length - k)) };
+function dimensionLabel(l: Lookups, key: string): string {
+  const [dim = '', rest = ''] = key.split(':');
+  if (NICHE_DIMS[dim]) return `${NICHE_DIMS[dim]} · ${nicheName(l, rest)}`;
+  if (dim === 'channel_cat') return `Canal · catégorie ${rest}`;
+  return banditDimensionLabel(l, key);
+}
+
+/** `channel:` and `channel_cat:` have channels for arms. */
+function armLabel(l: Lookups, key: string, arm: string): string {
+  if (key.startsWith('channel')) return CHANNELS[arm as ChannelId]?.label ?? arm;
+  return key.startsWith('video_tempo') ? TEMPO_LABEL[arm] ?? arm : banditArmLabel(l, key, arm);
+}
+
+interface Trend { id: TrendId; label: string; values: (number | null)[]; fmt(n: number): string; higherIsBetter: boolean; color: string }
+
+/** The last days are in the snapshot. The first are not, past its window: the server keeps them, and they are the start of the run. */
+function firstLast(t: Trend, baseline: KpiBaseline | undefined): { first: number | null; last: number | null } {
+  return { first: baseline ? baseline[t.id] ?? null : firstValue(t.values), last: lastValue(t.values) };
 }
 
 export function LearningTab({ onClose }: { onClose(): void }) {
@@ -28,26 +43,29 @@ export function LearningTab({ onClose }: { onClose(): void }) {
   const lessons = snapshot?.company?.lessons ?? [];
   const bandits = snapshot?.company?.bandits ?? {};
   const experiments = snapshot?.company?.experiments ?? [];
+  // the stream keeps the latest lessons: the title says so rather than read as the total (ui §3.1)
+  const lessonTotal = snapshot?.counts?.lessons ?? 0;
+  const lessonCount = lessonTotal > lessons.length ? `${fmtInt(lessons.length)} sur ${fmtInt(lessonTotal)}` : fmtInt(lessons.length);
 
   const trends: Trend[] = useMemo(() => {
-    const val = (k: DailyKpi, f: (k: DailyKpi) => number, needs: (k: DailyKpi) => boolean) => (needs(k) ? f(k) : null);
+    const row = (id: TrendId, label: string, color: string, higherIsBetter: boolean, fmt: (n: number) => string): Trend => ({ id, label, color, higherIsBetter, fmt, values: kpis.map((k) => trendValue(id, k)) });
     return [
-      { id: 'ctr', label: 'CTR des pubs', color: SERIES.blue, higherIsBetter: true, fmt: (n) => fmtPct(n, 2), values: kpis.map((k) => val(k, (x) => x.ctr, (x) => x.impressions > 0)) },
-      { id: 'cvr', label: 'Conversion page de vente', color: SERIES.aqua, higherIsBetter: true, fmt: (n) => fmtPct(n, 1), values: kpis.map((k) => val(k, (x) => x.cvr, (x) => x.clicks > 0 || x.sales > 0)) },
-      { id: 'roas', label: 'ROAS', color: SERIES.violet, higherIsBetter: true, fmt: fmtRoas, values: kpis.map((k) => val(k, (x) => x.roas, (x) => x.adSpend > 0)) },
-      { id: 'refund', label: 'Taux de remboursement', color: SERIES.orange, higherIsBetter: false, fmt: (n) => fmtPct(n, 1), values: kpis.map((k) => val(k, (x) => safeDiv(x.refunds, x.sales), (x) => x.sales > 0)) },
-      { id: 'reply', label: 'Qualité des réponses support', color: SERIES.magenta, higherIsBetter: true, fmt: (n) => `${Math.round(n)}/100`, values: kpis.map((k) => val(k, (x) => x.avgReplyScore, (x) => x.avgReplyScore > 0)) },
-      { id: 'profit', label: 'Profit quotidien', color: '#0ca30c', higherIsBetter: true, fmt: (n) => fmtEur(n, 0), values: kpis.map((k) => k.profit) },
+      row('ctr', 'CTR des pubs', SERIES.blue, true, (n) => fmtPct(n, 2)),
+      row('cvr', 'Conversion page de vente', SERIES.aqua, true, (n) => fmtPct(n, 1)),
+      row('roas', 'ROAS', SERIES.violet, true, fmtRoas),
+      row('refund', 'Taux de remboursement', SERIES.orange, false, (n) => fmtPct(n, 1)),
+      row('reply', 'Qualité des réponses support', SERIES.magenta, true, (n) => `${Math.round(n)}/100`),
+      row('profit', 'Profit quotidien', '#0ca30c', true, (n) => fmtEur(n, 0)),
     ];
   }, [kpis]);
 
   return (
-    <Overlay title="Apprentissage" subtitle={`${fmtInt(lessons.length)} leçons · ${fmtInt(Object.keys(bandits).length)} bandits · ${fmtInt(experiments.length)} expériences`} icon="grad" onClose={onClose}>
+    <Overlay title="Apprentissage" subtitle={`${lessonCount} leçons · ${fmtInt(Object.keys(bandits).length)} bandits · ${fmtInt(experiments.length)} expériences`} icon="grad" onClose={onClose}>
       <SectionTitle right={<span className="muted small">premiers jours mesurés vs 7 derniers</span>}>L’agence s’améliore-t-elle ?</SectionTitle>
       {kpis.length < 2 ? <Empty compact icon="trendUp">Les tendances apparaissent après deux journées clôturées.</Empty> : (
         <div className="trend-grid">
           {trends.map((t) => {
-            const { first, last } = firstLast(t.values);
+            const { first, last } = firstLast(t, snapshot?.kpiBaseline);
             const delta = first !== null && last !== null && first !== 0 ? (last - first) / Math.abs(first) : null;
             // zero baseline: compare directions instead of a meaningless percentage
             const diff = first !== null && last !== null ? last - first : null;
@@ -75,7 +93,7 @@ export function LearningTab({ onClose }: { onClose(): void }) {
 
       <div className="two-col two-col-wide">
         <div>
-          <SectionTitle>Leçons · {lessons.length}</SectionTitle>
+          <SectionTitle>Leçons · {lessonCount}</SectionTitle>
           <Lessons lessons={lessons} />
         </div>
         <div>
@@ -153,12 +171,12 @@ function Bandits({ bandits }: { bandits: Record<string, BanditArm[]> }) {
         return (
           <div key={key} className="bandit card">
             <div className="bandit-head">
-              <strong>{banditDimensionLabel(lookups, key)}</strong>
+              <strong>{dimensionLabel(lookups, key)}</strong>
               <span className="muted small">{fmtInt(total)} essais</span>
             </div>
             {[...stats].sort((a, b) => b.mean - a.mean).map((s) => (
               <div key={s.key} className={cx('arm', best?.key === s.key && 'arm-best')}>
-                <span className="arm-label">{banditArmLabel(lookups, key, s.key)}</span>
+                <span className="arm-label">{armLabel(lookups, key, s.key)}</span>
                 <Bar value={s.mean} color={best?.key === s.key ? '#2a78d6' : '#9ec5f4'} height={7} />
                 <span className="arm-val">{fmtDec(s.mean, 2)}</span>
                 <span className="arm-pulls muted">{fmtInt(s.pulls)}</span>
@@ -220,7 +238,7 @@ function GodTruth() {
       {niches.length === 0 ? <div className="muted small">Aucune donnée cachée reçue du serveur.</div> : (
         <div className="table-wrap">
           <table className="table">
-            <thead><tr><th>Niche</th><th className="num">Demande</th><th className="num">Prix accepté (min · idéal · max)</th><th className="num">Concurrence</th><th className="num">Affinité TikTok</th><th>Meilleur hook</th></tr></thead>
+            <thead><tr><th>Niche</th><th className="num">Demande</th><th className="num">Prix accepté (min · idéal · max)</th><th className="num">Concurrence</th>{CHANNEL_IDS.map((ch) => <th key={ch} className="num" title="Adéquation cachée de la niche à ce canal">{CHANNELS[ch].label}</th>)}<th>Meilleur hook</th></tr></thead>
             <tbody>
               {niches.map((n) => {
                 const bestHook = Object.entries(n.hookAffinity ?? {}).sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))[0];
@@ -230,7 +248,7 @@ function GodTruth() {
                     <td className="num">{fmtPct(n.demand, 0)}</td>
                     <td className="num">{fmtEur(n.wtp?.min, 0)} · <strong>{fmtEur(n.wtp?.sweet, 0)}</strong> · {fmtEur(n.wtp?.max, 0)}</td>
                     <td className="num">{fmtPct(n.competition, 0)}</td>
-                    <td className="num">{fmtPct(n.tiktokAffinity, 0)}</td>
+                    {CHANNEL_IDS.map((ch) => <td key={ch} className="num">{ch === 'tiktok' ? fmtPct(n.tiktokAffinity, 0) : n.channels?.[ch] ? fmtPct(n.channels[ch].fit, 0) : '—'}</td>)}
                     <td className="small">{bestHook ? `${HOOK_LABEL[bestHook[0] as keyof typeof HOOK_LABEL] ?? bestHook[0]} ×${fmtDec(bestHook[1] ?? 1, 1)}` : '—'}</td>
                   </tr>
                 );

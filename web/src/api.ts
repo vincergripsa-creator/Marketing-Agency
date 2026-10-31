@@ -1,6 +1,6 @@
 // Typed client for the agency server (see server/src/contracts.ts, "api/" section).
 import type {
-  Activity, AgentId, CompanySnapshot, DayPhase, FinanceSnapshot, LiveAgent, Mission, ScenarioConfig, SessionInfo, StreamEvent,
+  Activity, AgentId, CompanySnapshot, CreativeVideo, DayPhase, FinanceSnapshot, LiveAgent, Mission, ScenarioConfig, SessionInfo, StreamEvent,
 } from '../../shared/types';
 
 // ───────────────────────────── Response shapes ─────────────────────────────
@@ -249,6 +249,8 @@ export interface StreamHandlers {
   onSnapshot(snapshot: CompanySnapshot): void;
   onActivity(batch: Activity[]): void;
   onTick?(tick: TickInfo): void;
+  /** A render moved on. It must not wait for a snapshot: a paused run sends none. */
+  onVideo?(creativeId: string, video: CreativeVideo): void;
   /** 'open' on (re)connection, 'reconnecting' while the link is down. */
   onStatus?(status: 'open' | 'reconnecting', reconnected: boolean): void;
 }
@@ -277,6 +279,8 @@ export function openStream(handlers: StreamHandlers): () => void {
       if (typeof ev.day === 'number' && typeof ev.tick === 'number' && isObj(ev.finance)) {
         handlers.onTick?.({ day: ev.day, tick: ev.tick, phase: ev.phase as DayPhase, finance: ev.finance as unknown as FinanceSnapshot, agents: Array.isArray(ev.agents) ? ev.agents as LiveAgent[] : undefined });
       }
+    } else if (type === 'video') {
+      if (typeof ev.creativeId === 'string' && isObj(ev.video)) handlers.onVideo?.(ev.creativeId, ev.video as unknown as CreativeVideo);
     }
   };
 

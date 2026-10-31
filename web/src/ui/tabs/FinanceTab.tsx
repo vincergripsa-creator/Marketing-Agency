@@ -21,6 +21,8 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
   const budgetSpend = budget ? sum((snapshot?.market?.adStats ?? []).filter((r) => r.day === budget.day), (r) => r.spend) : 0;
   const f = snapshot?.finance;
   const kpis = snapshot?.company?.kpis ?? [];
+  // a snapshot keeps the latest closed days: past them, a « best day » is only the best of those
+  const kpiWindow = (kpis[0]?.day ?? 1) > 1 ? ` (${fmtInt(kpis.length)} derniers jours)` : '';
   const ledger = snapshot?.ledger ?? [];
   const sc = snapshot?.scenario;
   const mind = snapshot?.mind;
@@ -35,9 +37,10 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
   const pnl = f ? [
     { label: 'Chiffre d’affaires', value: f.revenue, sign: 1 },
     { label: 'Remboursements', value: -Math.abs(f.refunds), sign: -1 },
-    { label: 'Pub TikTok', value: -Math.abs(f.adSpend), sign: -1 },
+    { label: 'Publicité', value: -Math.abs(f.adSpend), sign: -1 },
     { label: 'Frais (paiement, plateforme)', value: -Math.abs(f.fees), sign: -1 },
     { label: 'Compute Claude', value: -Math.abs(f.compute), sign: -1 },
+    ...(f.payroll ? [{ label: 'Salaires et recrutement', value: -Math.abs(f.payroll), sign: -1 }] : []),
     { label: 'Autres coûts', value: -Math.abs(f.otherCosts), sign: -1 },
   ] : [];
   const pnlMax = Math.max(1, ...pnl.map((r) => Math.abs(r.value)));
@@ -153,8 +156,8 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
           <ul className="bullets small">
             <li>Revenu total : <strong>{fmtEur(f.revenue)}</strong> · pub : <strong>{fmtEur(f.adSpend)}</strong> ({f.revenue ? `${Math.round(safeDiv(f.adSpend, f.revenue) * 100)} % du CA` : '—'})</li>
             <li>Remboursements : <strong>{fmtEur(f.refunds)}</strong> ({f.revenue ? `${Math.round(safeDiv(f.refunds, f.revenue) * 100)} % du CA` : '—'})</li>
-            <li>Meilleure journée : <strong>{kpis.length ? fmtEurSigned(Math.max(...kpis.map((k) => k.profit))) : '—'}</strong> · pire : <strong>{kpis.length ? fmtEurSigned(Math.min(...kpis.map((k) => k.profit))) : '—'}</strong></li>
-            <li>Jours rentables : <strong>{fmtInt(kpis.filter((k) => k.profit > 0).length)}</strong> / {fmtInt(kpis.length)}</li>
+            <li>Meilleure journée{kpiWindow} : <strong>{kpis.length ? fmtEurSigned(Math.max(...kpis.map((k) => k.profit))) : '—'}</strong> · pire : <strong>{kpis.length ? fmtEurSigned(Math.min(...kpis.map((k) => k.profit))) : '—'}</strong></li>
+            <li>Jours rentables{kpiWindow} : <strong>{fmtInt(kpis.filter((k) => k.profit > 0).length)}</strong> / {fmtInt(kpis.length)}</li>
           </ul>
         </div>
       </div>

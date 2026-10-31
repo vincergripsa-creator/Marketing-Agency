@@ -1,0 +1,111 @@
+/* Effectif, Compétition and the « Plus » menu of the top bar. Existing tokens only. */
+
+/* ───────────── Top bar ───────────── */
+.more-wrap { position: relative; flex: none; }
+.more-btn { position: relative; }
+.more-menu {
+  position: absolute; top: calc(100% + 10px); right: -2px; z-index: 60; min-width: 190px; padding: 6px; border-radius: 12px;
+  display: flex; flex-direction: column; gap: 2px; background: var(--glass-solid);
+}
+.more-item { justify-content: space-between; width: 100%; padding: 8px 10px; }
+.more-item-label { display: inline-flex; align-items: center; gap: 7px; }
+.more-item .kbd { margin-left: 12px; }
+.tab.tab-phone { display: none; }
+@media (max-width: 760px) {
+  .tab.tab-phone { display: inline-flex; }
+  .more-wrap { display: none; }
+}
+
+/* ───────────── Shared ───────────── */
+.pixel-avatar { image-rendering: pixelated; flex: none; border-radius: 7px; background: var(--surface-2); }
+.team-tab .bullets { margin-top: 6px; }
+.team-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.team-list li { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 6px; font-size: 12.5px; }
+.team-day { color: var(--muted); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; padding-top: 1px; }
+.team-line { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.team-scroll { max-height: 280px; overflow: auto; }
+.team-stack { display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
+.team-item { display: flex; flex-direction: column; gap: 3px; }
+.team-item + .team-item { border-top: 1px solid var(--line); padding-top: 9px; }
+.team-item-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* ───────────── Palier ───────────── */
+.stage-meter { display: flex; flex-direction: column; gap: 8px; }
+.stage-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.stage-pips { display: inline-flex; gap: 3px; }
+.stage-pip { width: 18px; height: 7px; border-radius: 3px; background: var(--line-2); }
+.stage-pip.is-on { background: #2a78d6; }
+.stage-gate { display: flex; flex-direction: column; gap: 5px; }
+.gate-row { display: grid; grid-template-columns: minmax(120px, 220px) minmax(0, 1fr) auto; gap: 10px; align-items: center; font-size: 12px; }
+.gate-label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.gate-val { font-variant-numeric: tabular-nums; color: var(--muted); }
+
+/* ───────────── Organigramme ───────────── */
+.org-top { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
+.org-top .head-card { width: 240px; }
+.org-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; align-items: start; }
+.org-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 9px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line); }
+.org-col-head { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.head-card {
+  display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 8px; border-radius: 10px; border: 1px solid var(--line);
+  background: #fff; cursor: pointer; font: inherit; text-align: left; color: inherit;
+}
+.head-card:hover { border-color: #93c5fd; }
+.head-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.head-name { display: flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; }
+.head-role { font-size: 11px; color: var(--muted); }
+.head-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.head-hats { display: flex; flex-wrap: wrap; gap: 3px; }
+.hat-badge { font-size: 10px; line-height: 1.5; padding: 0 5px; border-radius: 5px; background: #fef3c7; color: #92400e; white-space: nowrap; }
+
+/* ───────────── Pression, recrutement ───────────── */
+.pressure { display: flex; flex-direction: column; gap: 11px; }
+.pressure-row { display: grid; grid-template-columns: 72px minmax(0, 1fr) 84px; gap: 3px 8px; align-items: center; font-size: 12px; }
+.pressure-title { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.pressure-label { color: var(--muted); font-size: 11px; }
+.pressure-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.req-why { min-width: 240px; }
+.refusal { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; }
+.refusal-numbers { display: flex; flex-wrap: wrap; gap: 5px; }
+
+/* ───────────── Classement ───────────── */
+.league-table td { vertical-align: middle; }
+.league-agent, .league-person { display: inline-flex; align-items: center; gap: 7px; text-align: left; }
+.league-agent { border: 0; background: none; padding: 0; cursor: pointer; font: inherit; color: inherit; }
+.league-agent:hover strong { text-decoration: underline; }
+.league-name { display: flex; flex-direction: column; min-width: 0; }
+.league-table .pill { margin-left: 6px; }
+.rank-delta { white-space: nowrap; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.form-dots { display: inline-flex; gap: 2px; }
+.form-dot { width: 15px; height: 15px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 9px; font-weight: 700; color: #fff; }
+.form-V { background: #16a34a; }
+.form-N { background: #94a3b8; }
+.form-D { background: #dc2626; }
+.cut-line td { border-top: 2px dashed #dc2626; border-bottom: 0; padding: 3px 10px; color: #b91c1c; font-size: 11px; font-weight: 600; background: #fffafa; }
+.god-col { background: #faf5ff; color: #6d28d9; }
+.god-card { display: flex; flex-direction: column; gap: 6px; border-color: #ddd6fe; background: #fdfcff; }
+.truth-scatter { max-width: 560px; }
+
+/* ───────────── Duels, dernier test ───────────── */
+.duel-line { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.duel-win { font-weight: 700; color: var(--good); }
+.test-rows { display: flex; flex-direction: column; gap: 7px; }
+.test-row { display: grid; grid-template-columns: minmax(110px, 170px) minmax(60px, 1fr) 62px minmax(0, 1.6fr); gap: 10px; align-items: center; padding: 4px 6px; border-radius: 8px; }
+.test-row.is-winner { background: #f0fdf4; }
+.test-name { display: flex; flex-direction: column; min-width: 0; }
+.test-score { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.test-made { color: var(--ink-2); min-width: 0; }
+
+/* ───────────── Panthéon, anciens ───────────── */
+.hall-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.hall-card { display: flex; gap: 10px; align-items: flex-start; }
+.hall-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12.5px; }
+.alumni-why { min-width: 260px; }
+
+@media (max-width: 760px) {
+  .gate-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .gate-row .bar { grid-column: 1 / -1; grid-row: 2; }
+  .test-row { grid-template-columns: minmax(0, 1fr) 62px; }
+  .test-row .bar, .test-made { grid-column: 1 / -1; }
+  .org-top .head-card { width: 100%; }
+}

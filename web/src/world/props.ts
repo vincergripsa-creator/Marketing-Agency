@@ -1,7 +1,7 @@
 // Furniture & decor painters. Each returns a cached baked canvas whose origin is the prop's local
 // tile origin at floor level; islands place them with `place()` and depth-sort them with agents.
 import { HALF_H, HALF_W } from './iso';
-import { drawPixelText, textWidth } from './font';
+import { drawPixelText, normalizeSign, textWidth } from './font';
 import { PAL, mix, shade } from './palette';
 import {
   P, bake, blob, box, cylinder, ellipse, fillPoly, flat, hash2, rect, tones, wallX, wallY,
@@ -579,5 +579,164 @@ export function plaqueProp(text: string, color: string): Baked {
     rect(g, x0, by - 23, bw, 1, shade(color, 0.35));
     drawPixelText(g, text, x0 + 4, by - 19, shade(color, -0.5));
     drawPixelText(g, text, x0 + 4, by - 20, '#ffffff');
+  });
+}
+
+// ───────────── league stage ─────────────
+
+const GOLD = '#f4c542';
+const SILVER = '#c3cad6';
+const BRONZE = '#c98a52';
+export const TROPHY_WALL_W = 2.5;
+
+/** Three steps along x, trimmed silver, gold, bronze: tops at 10, 14 and 6 px. */
+export function podiumProp(): Baked {
+  const w = 0.7;
+  const steps = [[0, 10, SILVER, '2'], [0.75, 14, GOLD, '1'], [1.5, 6, BRONZE, '3']] as const;
+  return bakeIso('podium', 0, 0, 2.2, 1.2, 16, (g, ox, oy) => {
+    for (const [a, h, trim, digit] of steps) {
+      box(g, ox, oy, a, 0, w, 1.2, 0, h, tones('#e9e4f2', 0.08, -0.18));
+      box(g, ox, oy, a, 0, w, 1.2, h - 2, 2, tones(trim, 0.28, -0.14));
+      const [x, y] = P(ox, oy, a + w / 2, 1.2, Math.max(7, Math.round((h - 2) / 2) + 3));
+      drawPixelText(g, digit, x - 2, y, shade(trim, -0.45));
+    }
+  });
+}
+
+/** Stone wall behind the podium, the last 8 champions' cups on its +ty face: the newest gold, the others bronze. */
+export function trophyWallProp(cups: readonly { season: number; name: string }[]): Baked {
+  const L = TROPHY_WALL_W;
+  const shown = cups.slice(-8);
+  return bakeIso(null, 0, 0, L, 0.25, 24, (g, ox, oy) => {
+    box(g, ox, oy, 0, 0, L, 0.25, 0, 20, tones('#cbc3d8', 0.12, -0.2));
+    for (let i = 1; i < 4; i++) {
+      const [x, y] = P(ox, oy, (i / 4) * L, 0.25, 19);
+      rect(g, x, y, 1, 18, '#b5acc6');
+    }
+    box(g, ox, oy, -0.04, -0.03, L + 0.08, 0.31, 20, 2, tones('#e4dcef', 0.1, -0.2));
+    shown.forEach((_, i) => {
+      const [x, y] = P(ox, oy, ((i + 0.5) / 8) * L, 0.25, 7);
+      const col = i === shown.length - 1 ? GOLD : BRONZE;
+      rect(g, x - 1, y - 7, 3, 3, col);
+      rect(g, x - 1, y - 7, 1, 1, shade(col, 0.5));
+      rect(g, x, y - 4, 1, 2, shade(col, -0.25));
+      rect(g, x - 1, y - 2, 3, 1, shade(col, -0.25));
+    });
+  });
+}
+
+/** No accents on the board: at 10 px pitch, the one of « ZOÉ » turns the O above it into a Q. */
+function boardName(name: string): string {
+  return normalizeSign(name).normalize('NFD').replace(/\p{M}/gu, '').slice(0, 7);
+}
+
+/** Screen-facing board: the season, then five rows « 1 ELISE 1584 » with a small arrow for the week's move. */
+export function leagueBoardProp(rows: readonly { name: string; rating: number; delta7d: number }[], season: number): Baked {
+  const W = 86;
+  const H = 82;
+  const faceH = 66;
+  return bake(null, W, H, Math.floor(W / 2), H - 2, (g) => {
+    for (const x of [13, 70]) {
+      rect(g, x, faceH - 4, 3, H - faceH + 2, PAL.woodDark);
+      rect(g, x, faceH - 4, 1, H - faceH + 2, PAL.wood);
+      rect(g, x - 1, H - 3, 5, 2, PAL.woodDeep);
+    }
+    rect(g, 0, 0, W, faceH, PAL.outline);
+    rect(g, 2, 2, W - 4, faceH - 4, '#fff6e3');
+    rect(g, 2, 2, W - 4, 10, '#7c6cf0');
+    const title = `SAISON ${season}`;
+    drawPixelText(g, title, Math.floor((W - textWidth(title)) / 2), 4, '#ffffff');
+    rows.slice(0, 5).forEach((r, i) => {
+      const y = 15 + i * 10;
+      const rating = String(Math.round(r.rating));
+      if (i) rect(g, 4, y - 2, W - 8, 1, '#efe2c6');
+      drawPixelText(g, String(i + 1), 4, y, '#7c6cf0');
+      drawPixelText(g, boardName(r.name), 11, y, '#2a1f3d');
+      drawPixelText(g, rating, 76 - textWidth(rating), y, '#2a1f3d');
+      const c = r.delta7d > 0 ? '#22a35a' : r.delta7d < 0 ? '#ef4444' : '#b9ae9c';
+      if (r.delta7d === 0) rect(g, 78, y + 3, 4, 1, c);
+      else {
+        const up = r.delta7d > 0;
+        rect(g, 79, up ? y + 1 : y + 5, 2, 1, c);
+        rect(g, 78, y + 2 + (up ? 1 : 0), 4, 1, c);
+        rect(g, 79, up ? y + 4 : y + 2, 2, 1, c);
+      }
+    });
+  });
+}
+
+/** Round table for two, a stool on each side, red and blue pennants. */
+export function duelTableProp(): Baked {
+  return bakeIso('dueltable', -0.8, -0.4, 0.8, 0.4, 20, (g, ox, oy) => {
+    const stool = (a: number, c: string) => {
+      const b = stoolProp(c);
+      const [x, y] = P(ox, oy, a, 0, 0);
+      g.drawImage(b.c, x - b.ox, y - b.oy);
+    };
+    stool(-0.55, '#ef4444');
+    const [cx, cy] = P(ox, oy, 0, 0, 0);
+    ellipse(g, cx, cy, 7, 3, 'rgba(40,30,60,0.18)');
+    rect(g, cx - 2, cy - 1, 5, 1, '#4a4556');
+    rect(g, cx, cy - 7, 1, 7, '#4a4556');
+    cylinder(g, cx, cy - 7, 7, 3.5, 2, '#fff6e3', shade('#fff6e3', -0.2), shade('#fff6e3', -0.32));
+    for (const [dx, c, dir] of [[-4, '#ef4444', -1], [4, '#3b82f6', 1]] as const) {
+      rect(g, cx + dx, cy - 17, 1, 8, '#4a4556');
+      for (let i = 0; i < 5; i++) rect(g, cx + dx + dir * (i + 1), cy - 17 + Math.floor(i / 2), 1, 5 - i, i ? c : shade(c, 0.25));
+    }
+    stool(0.55, '#3b82f6');
+  });
+}
+
+/** Screen-facing totem: the channel's glyph and colour, a lamp, its share of the budget. */
+export function channelTotemProp(chip: { glyph: string; color: string; state: string; share: number }): Baked {
+  const W = 16;
+  const H = 36;
+  const banned = chip.state === 'banned';
+  const color = banned ? mix(chip.color, '#6f7487', 0.75) : chip.color;
+  return bake(null, W, H, Math.floor(W / 2), H - 2, (g) => {
+    rect(g, 7, 20, 2, 14, PAL.woodDark);
+    rect(g, 7, 20, 1, 14, PAL.wood);
+    rect(g, 5, 33, 6, 2, PAL.woodDeep);
+    rect(g, 0, 1, W, 20, PAL.outline);
+    rect(g, 1, 2, W - 2, 18, color);
+    rect(g, 1, 2, W - 2, 1, shade(color, 0.35));
+    rect(g, 1, 18, W - 2, 2, shade(color, -0.25));
+    const glyph = normalizeSign(chip.glyph).slice(0, 2);
+    drawPixelText(g, glyph, Math.floor((W - textWidth(glyph)) / 2), 6, '#ffffff');
+    rect(g, 3, 15, 10, 2, shade(color, -0.45));
+    rect(g, 3, 15, Math.round(Math.max(0, Math.min(1, chip.share)) * 10), 2, '#ffffff');
+    rect(g, 12, 3, 2, 2, chip.state === 'open' ? '#4ade80' : chip.state === 'verifying' ? '#fbbf24' : '#3c404c');
+    if (banned) {
+      for (let i = 0; i < 16; i++) {
+        rect(g, 1 + (i * 12) / 15, 3 + i, 2, 2, '#ef4444');
+        rect(g, 13 - (i * 12) / 15, 3 + i, 2, 2, '#ef4444');
+      }
+    }
+  });
+}
+
+/** Planks of l'Accueil: painted into the island's ground like a bridge deck, so walkers stay on top of it. */
+export function dockProp(): Baked {
+  return bakeIso('dock', 0, 0, 1.2, 2.1, 12, (g, ox, oy) => {
+    flat(g, ox, oy, 0, 0, 1.2, 2.1, 0, PAL.woodDeep);
+    let i = 0;
+    for (let b = 0.02; b < 2.08; b += 0.24, i++) {
+      const r = hash2(i, 1, 41);
+      flat(g, ox, oy, 0.03, b, 1.14, Math.min(0.2, 2.08 - b), 0, r < 0.33 ? PAL.wood : r < 0.66 ? PAL.woodLight : '#c48a52');
+    }
+    for (const [a, b] of [[0.02, 0.05], [1.1, 0.05], [0.02, 1.0], [1.1, 1.0], [0.02, 2.0], [1.1, 2.0]] as const) box(g, ox, oy, a, b, 0.08, 0.08, 0, 11, tones(PAL.woodDark, 0.2, -0.2));
+  });
+}
+
+/** Yellow tag on a stick above a desk nobody sits at yet. */
+export function vacancyTagProp(): Baked {
+  const text = 'POSTE';
+  const w = textWidth(text) + 4;
+  const h = 18;
+  return bake('vacancy', w, h, Math.floor(w / 2), h - 1, (g, cx) => {
+    rect(g, cx, 11, 1, h - 11, PAL.woodDark);
+    rect(g, 0, 0, w, 11, PAL.outline);
+    rect(g, 1, 1, w - 2, 9, '#ffd166');
+    drawPixelText(g, text, 2, 2, '#5c3a20');
   });
 }

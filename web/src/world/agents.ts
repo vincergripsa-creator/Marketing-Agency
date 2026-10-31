@@ -3,14 +3,14 @@
 import type { Activity, AgentState, CompanySnapshot, Place } from '../../../shared/types';
 import { facingFrom, screenDist, type Facing, type Pt } from './iso';
 import { faceTowards } from './islands';
-import { homeDept } from './layout';
+import { applyDeskVisibility, deskIndexes, homeDept } from './layout';
 import type { IslandModel, Rect, Seat, WorldLayout } from './model';
 import { inRect } from './model';
 import { hashStr } from './pixel';
 import { getSheet } from './sprites';
 
 export type Pose = 'sit' | 'stand' | 'coffee';
-type SpotKind = 'seat' | 'cafe' | 'fountain' | 'meeting' | 'visitor' | 'wander' | 'visit';
+type SpotKind = 'seat' | 'cafe' | 'fountain' | 'meeting' | 'visitor' | 'wander' | 'visit' | 'dock';
 
 export interface Waypoint extends Pt { island: string; cross?: boolean }
 
@@ -36,6 +36,12 @@ interface Override {
 export interface AgentVis {
   id: string;
   state: AgentState;
+  /** Only a sprite of the team follows the snapshot: one on its way out or in has its own life cycle. */
+  role: 'staff' | 'leaving' | 'arriving';
+  carry: 'box' | 'bag' | null;
+  /** A short gesture, held until `poseUntil`. */
+  pose?: 'cheer' | 'slump' | 'shake' | null;
+  poseUntil?: number;
   sheet: HTMLCanvasElement;
   pos: Pt;
   island: string;
@@ -94,6 +100,19 @@ function expand(r: Rect, m: number): Rect {
   return { x0: r.x0 - m, y0: r.y0 - m, x1: r.x1 + m, y1: r.y1 + m };
 }
 
+/**
+ * The plaza's two front corners hold the stage, and a straight walk from a side bridge to the `y+` path crosses them.
+ * So whoever takes that path joins it at the foot of the fountain ring, on the path itself.
+ */
+function frontPathGate(isl: IslandModel, a: Pt, b: Pt): Pt | null {
+  const f = isl.fountain;
+  const mouth = isl.edges['y+'];
+  if (!f || !mouth) return null;
+  const gate = { tx: mouth.tx, ty: f.center.ty + f.ring };
+  const onPath = (p: Pt) => p.ty > gate.ty && Math.abs(p.tx - mouth.tx) < 0.8;
+  return onPath(a) === onPath(b) ? null : gate;
+}
+
 /** Shortest walk around a rectangle obstacle via its (expanded) corners. */
 function aroundRect(a: Pt, b: Pt, r: Rect, m: number): Pt[] {
   const hit = expand(r, m * 0.55);
@@ -128,6 +147,8 @@ export class AgentSim {
   layout: WorldLayout | null = null;
   readonly agents = new Map<string, AgentVis>();
   private groups = new Map<string, Map<string, number>>();
+  /** Desk of each agent inside its department, recomputed on each sync: the layout knows no one. */
+  private desks = new Map<string, number>();
   private started = false;
 
   setLayout(layout: WorldLayout): void {
@@ -147,6 +168,10 @@ export class AgentSim {
     const L = this.layout;
     if (!L) return;
     const states = snapshot?.company.agents ?? [];
+    const departments = snapshot?.company.departments ?? [];
+    const chiefs = new Map<string, string>(departments.map((d) => [d.id, d.chiefId]));
+    this.desks = deskIndexes(states, (dept) => chiefs.get(dept));
+    applyDeskVisibility(L, this.desks, states, departments);
     const seen = new Set<string>();
     for (const st of states) {
       seen.add(st.id);
@@ -154,7 +179,7 @@ export class AgentSim {
       if (!v) {
         const h = hashStr(st.id);
         v = {
-          id: st.id, state: st, sheet: getSheet(st.avatar), pos: { ...L.plaza.center }, island: 'plaza', path: [], spot: null,
+          id: st.id, state: st, role: 'staff', carry: null, sheet: getSheet(st.avatar), pos: { ...L.pier.center }, island: L.pier.id, path: [], spot: null,
           facing: 'se', moving: false, walkT: 0, speed: BASE_SPEED * (0.9 + ((h % 100) / 100) * 0.25), phase: (h % 1000) / 160,
           override: null, wanderAt: now + 3 + (h % 7), wanderIdx: h % 97, lastVisit: -999, arrived: true,
         };
@@ -164,9 +189,15 @@ export class AgentSim {
         v.state = st;
       }
     }
-    for (const id of [...this.agents.keys()]) if (!seen.has(id)) this.agents.delete(id);
+    for (const [id, v] of this.agents) if (!seen.has(id) && v.role === 'staff') this.agents.delete(id);
     this.retargetAll(now, !this.started);
     this.started = true;
+  }
+
+  /** The walk from a point to the dock, the only way off the map. */
+  routeToDock(from: Pt, island: string): Waypoint[] {
+    const pier = this.layout!.pier;
+    return this.route(from, island, { key: 'dock', kind: 'dock', island: pier, pos: pier.pier?.dock ?? pier.center, pose: 'stand', facing: 'se' });
   }
 
   /** React to a fresh activity (brain visits, delegation calls, walks). */
@@ -248,6 +279,14 @@ export class AgentSim {
     return L.deptIsland.get(homeDept(st, depts)) ?? L.plaza;
   }
 
+  /** This agent's desk on its island. None past the island's last desk: a Direction agent the office cannot seat stands. */
+  seatOf(st: AgentState): { island: IslandModel; seat: Seat; desk: number } | null {
+    const island = this.homeIsland(st);
+    const desk = this.desks.get(st.id);
+    const seat = desk === undefined ? undefined : island.seats[desk];
+    return seat ? { island, seat, desk: desk! } : null;
+  }
+
   private desired(v: AgentVis, now: number): { kind: SpotKind; island: IslandModel } {
     const L = this.layout!;
     const st = v.state;
@@ -277,7 +316,7 @@ export class AgentSim {
       case 'idle':
         return { kind: 'wander', island: isl };
       default:
-        return { kind: L.seatOf.has(st.id) ? 'seat' : 'visitor', island: isl };
+        return { kind: this.seatOf(st) ? 'seat' : 'visitor', island: isl };
     }
   }
 
@@ -346,8 +385,9 @@ export class AgentSim {
     const idx = this.groups.get(`${kind}:${isl.id}`)?.get(v.id) ?? 0;
     const plaza = L.plaza;
     if (kind === 'seat') {
-      const s = L.seatOf.get(v.id);
-      if (s) return { key: `seat:${v.id}`, kind, island: s.island, pos: s.seat.pos, approach: s.seat.aisle, pose: 'sit', facing: s.seat.facing, seat: s.seat };
+      const s = this.seatOf(v.state);
+      // the key names the desk: a new chief walks to desk 0 like any target change
+      if (s) return { key: `seat:${v.id}:${s.desk}`, kind, island: s.island, pos: s.seat.pos, approach: s.seat.aisle, pose: 'sit', facing: s.seat.facing, seat: s.seat };
       kind = 'visitor';
     }
     if (kind === 'cafe' && plaza.cafe) {
@@ -502,6 +542,11 @@ export class AgentSim {
   }
 
   private outside(isl: IslandModel, a: Pt, b: Pt): Pt[] {
+    const gate = frontPathGate(isl, a, b);
+    return gate ? [...this.leg(isl, a, gate), ...this.leg(isl, gate, b)] : this.leg(isl, a, b);
+  }
+
+  private leg(isl: IslandModel, a: Pt, b: Pt): Pt[] {
     const pts: Pt[] = [];
     const f = isl.fountain;
     if (f && segDistToPoint(a, b, f.center) < f.radius + 0.55) {

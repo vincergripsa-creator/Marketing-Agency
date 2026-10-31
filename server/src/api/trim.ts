@@ -1,14 +1,18 @@
 /**
- * Pure snapshot builder (no runtime dependency, unit-tested).
+ * Pure snapshot builder (unit-tested): a read of the world, no draw, no write.
  * Turns the full WorldState into the UI-safe, size-bounded CompanySnapshot.
  */
 import { summarizeLedger } from '../core/index.js';
 import type {
-  AdCreative, AdTotals, AgentId, ArchiveCounters, Campaign, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DailyKpi, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, DesignSpec, FinanceSnapshot,
-  InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, QualityReport, TalentTruthView, Task, TaskKind, TaskStats, TaskTotals, VisualReport, WorldState,
+  AdCreative, AdTotals, AdWeekRow, ArchiveCounters, Campaign, CatalogueTotals, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DailyKpi, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, DesignSpec, FinanceSnapshot,
+  GrowthState, InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, QualityReport, Task, TaskKind, TaskStats, TaskTotals, VisualReport, WorldState,
 } from '../shared.js';
+import { channelOf, kpiBaselineOf } from '../shared.js';
 import { addAdTotals } from '../sim/adTotals.js';
+import { audienceView } from '../sim/audience.js';
+import { lastClosedDay } from '../sim/finance.js';
 import { announcedOutageDays } from '../sim/outage.js';
+import { sceneOf, talentViews } from './views.js';
 
 export interface SnapshotLimits {
   doneTasks: number;          // finished tasks kept (most recent)
@@ -28,6 +32,7 @@ export interface SnapshotLimits {
   threadPerMessage: number;
   adStatsDays: number;
   commentsPerStat: number;
+  adComments: number;         // all rows together, the latest first
   organicPosts: number;
   creators: number;
   partnerships: number;
@@ -36,6 +41,8 @@ export interface SnapshotLimits {
   ledger: number;
   activity: number;
   stringMax: number;          // max length of free strings inside task input/output
+  growthWeeks: number;        // company.growth, scale §8: GET /api/growth keeps them all
+  growthDecisions: number;
   light: boolean;             // products and ads without what only their files show, daily figures without their channels, no VoC or competitors
   live: boolean;              // live view: finished tasks without their payload, no playbooks
 }
@@ -43,16 +50,19 @@ export interface SnapshotLimits {
 export const DEFAULT_LIMITS: SnapshotLimits = {
   doneTasks: 200, openTasks: 400, taskLog: 10, deliverables: 250, lessons: 150, chatsPerAgent: 30, missions: 80,
   creatives: 120, campaigns: 400, pnl: 8, experiments: 60, kpis: 400, reviewsPerProduct: 25, inbox: 80, threadPerMessage: 12, adStatsDays: 14,
-  commentsPerStat: 6, organicPosts: 30, creators: 80, partnerships: 120, events: 40, orders: 100, ledger: 150, activity: 200,
-  stringMax: 400, light: false, live: false,
+  commentsPerStat: 6, adComments: Number.POSITIVE_INFINITY, organicPosts: 30, creators: 80, partnerships: 120, events: 40, orders: 100, ledger: 150, activity: 200,
+  stringMax: 400, growthWeeks: 52, growthDecisions: 30, light: false, live: false,
 };
+
+/** Every « 7 j » of Publicité. The same closed days as Canaux, so one figure reads the same on both tabs. */
+const AD_WEEK_DAYS = 7;
 
 /** Fallback when the default snapshot would exceed the size budget. */
 export const TIGHT_LIMITS: SnapshotLimits = {
   doneTasks: 60, openTasks: 150, taskLog: 4, deliverables: 120, lessons: 60, chatsPerAgent: 12, missions: 30,
   creatives: 40, campaigns: 40, pnl: 2, experiments: 25, kpis: 120, reviewsPerProduct: 8, inbox: 40, threadPerMessage: 6, adStatsDays: 5,
-  commentsPerStat: 2, organicPosts: 20, creators: 40, partnerships: 50, events: 25, orders: 60, ledger: 100, activity: 120,
-  stringMax: 200, light: true, live: false,
+  commentsPerStat: 2, adComments: Number.POSITIVE_INFINITY, organicPosts: 20, creators: 40, partnerships: 50, events: 25, orders: 60, ledger: 100, activity: 120,
+  stringMax: 200, growthWeeks: 52, growthDecisions: 30, light: true, live: false,
 };
 
 /**
@@ -62,9 +72,12 @@ export const TIGHT_LIMITS: SnapshotLimits = {
 export const LIVE_LIMITS: SnapshotLimits = {
   ...TIGHT_LIMITS, activity: 60, reviewsPerProduct: 5, live: true,
   creatives: 30, campaigns: 20, pnl: 1, doneTasks: 40, deliverables: 60, lessons: 30, inbox: 30, commentsPerStat: 1, adStatsDays: 3, kpis: 60,
+  growthWeeks: 12, growthDecisions: 10,
 };
 export const LIVE_TIGHT_LIMITS: SnapshotLimits = {
-  ...LIVE_LIMITS, creatives: 15, campaigns: 10, doneTasks: 20, deliverables: 30, lessons: 15, inbox: 20, activity: 40,
+  ...LIVE_LIMITS, creatives: 15, campaigns: 10, doneTasks: 15, deliverables: 30, lessons: 15, inbox: 15, activity: 40, growthWeeks: 4, growthDecisions: 5,
+  adStatsDays: 2, adComments: 14, reviewsPerProduct: 2, threadPerMessage: 3, ledger: 50, orders: 30, creators: 20, missions: 15,
+  experiments: 10, organicPosts: 10, events: 15, partnerships: 20, taskLog: 2,
 };
 
 export const SNAPSHOT_BUDGET_BYTES = 700_000;
@@ -165,7 +178,7 @@ function publicVisual(visual: VisualReport): VisualReport {
 }
 
 /** A stopped guide under light limits: what the catalogue shows of it. Its text and scores weigh more than a live guide's figures. */
-function stubProduct({ brief: _brief, pagePrint: _pagePrint, visual: _visual, ...p }: Product): Product {
+export function stubProduct({ brief: _brief, pagePrint: _pagePrint, visual: _visual, ...p }: Product): Product {
   return {
     ...p, subtitle: '', audience: '', problem: '', content: null, design: null, salesPage: null, quality: null, salesQuality: null, priceHistory: [],
     files: { pdf: p.files?.pdf ?? null, cover: p.files?.cover ?? null, salesPage: p.files?.salesPage ?? null }, stats: { ...p.stats, reviews: [] },
@@ -197,16 +210,22 @@ export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS)
   return p.status === 'paused' || p.status === 'killed' ? stubProduct(trimmed) : cardProduct(trimmed);
 }
 
-/** Killed guides that light limits still show. */
-const SHOWN_KILLED = 12;
+/** GET /api/product/:id: the whole guide, which no snapshot carries. What only the company reads stays behind, as in every view. */
+export function fullProduct({ hooks: _hooks, feedback: _feedback, artExplored: _artExplored, paidRead: _paidRead, ...p }: Product): Product {
+  return p.visual ? { ...p, visual: publicVisual(p.visual) } : p;
+}
 
-/** Light limits drop the killed guides past the latest ones (scale §7.2): the catalogue only grows. */
+/** Stopped guides that light limits still show. */
+const SHOWN_STOPPED = 12;
+
+const isStopped = (p: Product): boolean => p.status === 'paused' || p.status === 'killed';
+
+/** Light limits drop the stopped guides past the latest ones (ui §3.1, scale §7.2): the catalogue only grows, and `counts` keeps the total. */
 function shownProducts(products: Product[], limits: SnapshotLimits): Product[] {
   const all = arr(products);
   if (!limits.light) return all;
-  const killed = all.filter((p) => p.status === 'killed');
-  const shown = new Set(killed.slice(-SHOWN_KILLED));
-  return all.filter((p) => p.status !== 'killed' || shown.has(p));
+  const shown = new Set(all.filter(isStopped).slice(-SHOWN_STOPPED));
+  return all.filter((p) => !isStopped(p) || shown.has(p));
 }
 
 /** A light ad: its figures, its preview and what its cut measured (video §13), without the script, the beats or the detail of its score. */
@@ -246,8 +265,8 @@ const isAdFrame = (d: Deliverable) => d.kind === 'ad_storyboard' || d.kind === '
 
 /** Light views stop here too: the gallery reads the whole run elsewhere, and guides, covers and reports only grow. */
 const LIGHT_WORKS = 120;
-/** The live view counts everything together: ui §3.1. */
-const LIVE_DELIVERABLES = 120;
+/** The live view counts everything together, twice its ad frames: ui §3.1. */
+const LIVE_WORKS_PER_FRAME = 2;
 
 /** Ad frames, by far the most numerous, are cut to the latest ones. They never push out guides, covers, pages or reports, which have their own bound in a light view. */
 function trimDeliverables(deliverables: Deliverable[], limits: SnapshotLimits): Deliverable[] {
@@ -258,13 +277,18 @@ function trimDeliverables(deliverables: Deliverable[], limits: SnapshotLimits): 
   let ads = 0;
   let works = 0;
   const kept = all.filter((d) => (isAdFrame(d) ? ads++ >= firstAd : works++ >= firstWork));
-  return limits.live ? kept.slice(-LIVE_DELIVERABLES) : kept;
+  return limits.live ? kept.slice(-LIVE_WORKS_PER_FRAME * limits.deliverables) : kept;
 }
 
 /** Light rows: the channels of a day are read on the server (ui §3.2), and they are three quarters of a row. */
 function trimKpis(kpis: DailyKpi[], limits: SnapshotLimits): DailyKpi[] {
   const rows = lastN(kpis, limits.kpis);
   return limits.light ? rows.map(({ channels: _channels, ...k }) => k) : rows;
+}
+
+/** D34: the one pillar state a snapshot carries, for the stage and « last seen ». The niches and the whole history stay on the server. */
+function trimGrowth(g: GrowthState, limits: SnapshotLimits): GrowthState {
+  return { ...g, niches: {}, weeks: lastN(g.weeks, limits.growthWeeks), decisions: lastN(g.decisions, limits.growthDecisions) };
 }
 
 export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LIMITS): CompanyState {
@@ -295,6 +319,7 @@ export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LI
     pendingApprovals: arr(c.pendingApprovals),
     budget: c.budget ?? null,
     pnl: lastN(c.pnl, limits.pnl),
+    ...(c.growth ? { growth: trimGrowth(c.growth, limits) } : {}),
   };
 }
 
@@ -315,15 +340,37 @@ export function trimInbox(inbox: InboxMessage[], limits: SnapshotLimits = DEFAUL
   return keptMessages(inbox, limits).map(({ intent: _truth, ...m }) => ({ ...m, thread: lastN(m.thread, limits.threadPerMessage) }));
 }
 
+/** The latest rows keep their comments up to `adComments`: the tab prints a handful, and thousands of ads run past them. */
 export function trimAdStats(stats: DailyAdStats[], day: number, limits: SnapshotLimits = DEFAULT_LIMITS): DailyAdStats[] {
   const minDay = day - limits.adStatsDays + 1;
+  let left = limits.adComments;
   return arr(stats)
     .filter((s) => s.day >= minDay)
-    .map((s) => ({ ...s, comments: arr(s.comments).slice(0, limits.commentsPerStat) }));
+    .reverse()
+    .map((s) => {
+      const comments = arr(s.comments).slice(0, Math.min(limits.commentsPerStat, left));
+      left -= comments.length;
+      return { ...s, comments };
+    })
+    .reverse();
 }
 
-/** Figures of the whole run: what the market retired plus the rows it holds, for the creatives a snapshot keeps. */
-export function adTotalsOf(market: WorldState['market'] | undefined, creatives: AdCreative[]): AdTotals {
+function addAdWeek(rows: Map<string, AdWeekRow>, s: DailyAdStats): void {
+  const channel = channelOf(s);
+  const key = `${s.campaignId}|${s.creativeId}|${channel}`;
+  const row = rows.get(key);
+  if (!row) {
+    rows.set(key, { campaignId: s.campaignId, creativeId: s.creativeId, channel, spend: s.spend, impressions: s.impressions, clicks: s.clicks, landingViews: s.landingViews, purchases: s.purchases, revenue: s.revenue, frequency: s.frequency });
+    return;
+  }
+  Object.assign(row, {
+    spend: r2(row.spend + s.spend), impressions: row.impressions + s.impressions, clicks: row.clicks + s.clicks, landingViews: row.landingViews + s.landingViews,
+    purchases: row.purchases + s.purchases, revenue: r2(row.revenue + s.revenue), frequency: Math.max(row.frequency, s.frequency),
+  });
+}
+
+/** Figures of the whole run: what the market retired plus the rows it holds, for the creatives a snapshot keeps. `week` ends on `toDay`, the last closed day. */
+export function adTotalsOf(market: WorldState['market'] | undefined, creatives: AdCreative[], toDay: number): AdTotals {
   const wanted = new Set(creatives.map((c) => c.id));
   const totals: Record<string, CreativeAdTotals> = {};
   for (const id of wanted) {
@@ -331,14 +378,16 @@ export function adTotalsOf(market: WorldState['market'] | undefined, creatives: 
     if (retired) totals[id] = { ...retired };
   }
   const days = new Map<number, AdTotals['days'][number]>();
+  const week = new Map<string, AdWeekRow>();
   for (const s of arr(market?.adStats)) {
     let row = days.get(s.day);
     if (!row) days.set(s.day, row = { day: s.day, spend: 0, revenue: 0 });
     row.spend = r2(row.spend + s.spend);
     row.revenue = r2(row.revenue + s.revenue);
     if (wanted.has(s.creativeId)) addAdTotals(totals, s);
+    if (s.day > toDay - AD_WEEK_DAYS && s.day <= toDay) addAdWeek(week, s);
   }
-  return { days: [...days.values()].sort((a, b) => a.day - b.day), creatives: totals };
+  return { days: [...days.values()].sort((a, b) => a.day - b.day), creatives: totals, week: [...week.values()] };
 }
 
 /** The whole run: what the world still holds plus what compaction counted on its way out. */
@@ -354,20 +403,24 @@ export function estimateFinance(world: WorldState): FinanceSnapshot {
   return finance;
 }
 
-const fr2 = (n: number) => n.toFixed(2).replace('.', ',');
+/** What the tiles of Produits add up: stopped guides leave a light snapshot, not the catalogue. */
+function catalogueOf(products: Product[]): CatalogueTotals {
+  const stats = products.map((p) => p.stats);
+  const rated = stats.filter((s) => (s?.rating ?? 0) > 0);
+  const total = (read: (s: Product['stats']) => number): number => stats.reduce((n, s) => n + (s ? read(s) : 0), 0);
+  return {
+    stopped: products.filter(isStopped).length, revenue: r2(total((s) => s.revenue)), sales: total((s) => s.sales), refunds: total((s) => s.refunds),
+    rating: rated.length ? r2(total((s) => s.rating) / rated.length) : 0,
+  };
+}
 
-/** True talent of everyone who ever held a skill: « plafond 0,71, élève de Sarah ». Only `godModeOf` reads this field. */
-function talentViews(world: WorldState): Record<AgentId, TalentTruthView> {
-  const entries = world.company?.league?.entries ?? {};
-  const out: Record<AgentId, TalentTruthView> = {};
-  for (const [id, a] of Object.entries(world.talentTruth?.agents ?? {})) {
-    const skill = entries[id]?.primary;
-    const truth = skill ? a.talent[skill] : undefined;
-    if (!skill || truth === undefined) continue;
-    const teacher = a.lineage ? entries[a.lineage]?.name ?? a.lineage : null;
-    out[id] = { truth, note: [`plafond ${fr2(a.ceiling[skill] ?? truth)}`, ...(teacher ? [`élève de ${teacher}`] : [])].join(', ') };
-  }
-  return out;
+/** Whole-run totals, built like taskStats: the lists of a snapshot are trimmed, these never are (ui §3.1). */
+function countsOf(world: WorldState): NonNullable<CompanySnapshot['counts']> {
+  const c = world.company;
+  return {
+    creatives: arr(c?.creatives).length + (c?.archive?.creatives ?? 0), deliverables: arr(c?.deliverables).length + (c?.archive?.deliverables ?? 0),
+    lessons: arr(c?.lessons).length, messages: arr(world.market?.inbox).length, products: arr(c?.products).length, catalogue: catalogueOf(arr(c?.products)),
+  };
 }
 
 /** Hidden truth served to god mode only. `intents` covers the messages of the same snapshot. */
@@ -378,7 +431,7 @@ export function godModeOf(world: WorldState, limits: SnapshotLimits = DEFAULT_LI
     ...(world.talentTruth ? { talent: talentViews(world) } : {}),
     niches: arr(world.market?.niches).map((n) => ({
       id: n.id, name: n.name, demand: n.demand, wtp: n.wtp, competition: n.competition,
-      tiktokAffinity: n.tiktokAffinity, hookAffinity: n.hookAffinity,
+      tiktokAffinity: n.tiktokAffinity, hookAffinity: n.hookAffinity, ...(n.channels ? { channels: n.channels } : {}),
     })),
     intents,
   };
@@ -452,15 +505,20 @@ export function buildSnapshot(world: WorldState, finance: FinanceSnapshot, god =
       orders: lastN(m?.orders, limits.orders),
       adAccount: m?.adAccount ?? { strikes: 0, banned: false, bannedUntilDay: 0 },
       customersCount: arr(m?.customers).length + (world.company?.archive?.customers ?? 0),
+      ...(m?.channels ? { channelAccounts: { tiktok: { ...m.adAccount, openDay: 1 }, ...m.channels.accounts } } : {}),
+      ...(m?.audience ? { audience: audienceView(world) } : {}),
     },
     finance,
     ledger: lastN(world.ledger, limits.ledger),
     activity: lastN(world.activity, limits.activity),
     taskStats: taskStatsOf(world.company?.tasks, world.day, world.company?.taskTotals),
-    adTotals: adTotalsOf(m, company.creatives),
+    adTotals: adTotalsOf(m, company.creatives, lastClosedDay(world)),
+    kpiBaseline: kpiBaselineOf(arr(world.company?.kpis)),
     deliverableCounts: deliverableCountsOf(world.company?.deliverables, world.company?.archive?.deliverableKinds),
     goalReachedDay: world.company?.goalReachedDay ?? arr(m?.events).find((e) => e.kind === 'goal_reached')?.day ?? null,
     ...(world.company?.archive ? { archive: world.company.archive } : {}),
+    scene: sceneOf(world),
+    counts: countsOf(world),
   };
   if (god) snap.godMode = godModeOf(world, limits);
   return snap;
@@ -486,7 +544,7 @@ export function serializeLiveSnapshot(world: WorldState, finance: FinanceSnapsho
   let json = '';
   for (const limits of [LIVE_LIMITS, LIVE_TIGHT_LIMITS]) {
     json = JSON.stringify({ ...buildSnapshot(world, finance, god, limits), ...extra });
-    if (json.length <= LIVE_BUDGET_BYTES) break;
+    if (Buffer.byteLength(json) <= LIVE_BUDGET_BYTES) break;
   }
   return json;
 }

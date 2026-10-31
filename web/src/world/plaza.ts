@@ -1,6 +1,7 @@
 // Central plaza: pink paved circle, the glowing "Cerveau" crystal fountain, the café corner
-// (counter, espresso machine, red parasol, checkered floor) and the fenced Direction office.
-import type { AgentState, DeptDef } from '../../../shared/types';
+// (counter, espresso machine, red parasol, checkered floor), the fenced Direction office
+// and the league's stage: podium and trophy wall on the right, board and duel table on the left.
+import type { DeptDef } from '../../../shared/types';
 import { isoX, isoY, type Facing, type Pt } from './iso';
 import { Occupancy, deskSlots, faceTowards, gateCorridor } from './islands';
 import type { Gate, IslandModel, Light, Rect, Seat, Side, Sprite } from './model';
@@ -8,8 +9,8 @@ import { place } from './model';
 import { PAL, hexToRgb, mix, shade } from './palette';
 import { blob, bake, cylinder, ellipse, hash2, rect, type Baked, type P2 } from './pixel';
 import {
-  benchProp, bushProp, cafeTableProp, chairProp, coolerProp, counterProp, deskProp, fenceProp, flowerBedProp, globeProp,
-  lampProp, meetingTableProp, menuBoardProp, parasolProp, plantProp, plaqueProp, signProp, treeProp,
+  TROPHY_WALL_W, benchProp, bushProp, cafeTableProp, chairProp, coolerProp, counterProp, deskProp, duelTableProp, fenceProp,
+  flowerBedProp, globeProp, lampProp, meetingTableProp, menuBoardProp, parasolProp, plantProp, plaqueProp, podiumProp, signProp, treeProp,
 } from './props';
 import { SIDE_DEPTH, paintFloor, paintPath, paintTerrain } from './terrain';
 
@@ -20,6 +21,23 @@ export const RING_R = 2.75;
 const OFFICE: Rect = { x0: 0.6, y0: 0.6, x1: 5.2, y1: 5.2 };
 const CAFE: Rect = { x0: 10.0, y0: 0.6, x1: 14.4, y1: 4.8 };
 const OFFICE_GATES: Side[] = ['x+', 'y+'];
+// The stage, local tiles: the plaza's two front corners, which `frontPathGate` keeps walkers out of.
+const PODIUM: Rect = { x0: 11.3, y0: 11.6, x1: 13.5, y1: 12.8 };
+const WALL: Rect = { x0: 11.4, y0: 10.85, x1: 11.4 + TROPHY_WALL_W, y1: 11.1 };
+const BOARD: Pt = { tx: 2.0, ty: 12.0 };
+const DUEL: Pt = { tx: 4.2, ty: 11.0 };
+const DUEL_SPOTS: [Pt, Pt] = [{ tx: 3.5, ty: 11.0 }, { tx: 4.9, ty: 11.0 }];
+const CHANNEL_SLOTS: Pt[] = [
+  { tx: 8.7, ty: 14.45 }, { tx: 10.0, ty: 14.45 }, { tx: 11.3, ty: 14.45 }, { tx: 12.6, ty: 14.45 },
+  { tx: 14.45, ty: 10.0 }, { tx: 14.45, ty: 11.3 }, { tx: 14.45, ty: 13.0 }, { tx: 14.45, ty: 8.7 },
+];
+/** What walkers must keep out of, local tiles: the stage's footprints and the two duellists. */
+export const STAGE_ZONES: Rect[] = [
+  PODIUM, WALL,
+  { x0: BOARD.tx - 0.3, y0: BOARD.ty - 0.15, x1: BOARD.tx + 0.3, y1: BOARD.ty + 0.15 },
+  { x0: DUEL.tx - 0.55, y0: DUEL.ty - 0.35, x1: DUEL.tx + 0.55, y1: DUEL.ty + 0.35 },
+  ...DUEL_SPOTS.map((p) => ({ x0: p.tx - 0.2, y0: p.ty - 0.2, x1: p.tx + 0.2, y1: p.ty + 0.2 })),
+];
 
 function fountainProp(): Baked {
   return bake('fountain', 96, 92, 48, 70, (g, cx, cy) => {
@@ -64,10 +82,9 @@ export interface PlazaInput {
   color: string;
   center: Pt;
   bridgeSides: Side[];
-  agents: AgentState[]; // direction team, chief first
 }
 
-export function buildPlaza(inp: PlazaInput, seatOf: Map<string, { island: IslandModel; seat: Seat }>): IslandModel {
+export function buildPlaza(inp: PlazaInput): IslandModel {
   const N = PLAZA_SIZE;
   const x0 = inp.center.tx - N / 2;
   const y0 = inp.center.ty - N / 2;
@@ -124,7 +141,7 @@ export function buildPlaza(inp: PlazaInput, seatOf: Map<string, { island: Island
   const occ = new Occupancy(OFFICE);
   const mid = (OFFICE.x0 + OFFICE.x1) / 2;
   for (const s of OFFICE_GATES) occ.mark(gateCorridor(s, OFFICE, mid));
-  const slots = deskSlots(OFFICE, occ, Math.max(3, Math.min(4, inp.agents.length)));
+  const slots = deskSlots(OFFICE, occ, 4); // constant, whoever is in: the office fits 3, the others stand at the table
   const seats: Seat[] = [];
   slots.forEach((s, i) => {
     const desk = deskProp(s.facing, i === 0 ? '#d9b58a' : '#f2efe9', i + 2, i === 0 && s.desk.x1 - s.desk.x0 > 1.2);
@@ -132,8 +149,8 @@ export function buildPlaza(inp: PlazaInput, seatOf: Map<string, { island: Island
     sprites.push(spr);
     const wx = isoX(s.desk.x0 + x0, s.desk.y0 + y0);
     const wy = isoY(s.desk.x0 + x0, s.desk.y0 + y0);
-    seats.push({ pos: W(s.seat), facing: s.facing, aisle: W(s.aisle), screen: desk.screen.map(([px, py]) => [wx + px, wy + py] as P2), deskDepth: spr.depth, chief: i === 0 });
     add(chairProp(s.facing, i === 0 ? '#7a3b5e' : mix(shade(color, -0.4), '#4b4f63', 0.5)), s.seat.tx, s.seat.ty, 0.05);
+    seats.push({ pos: W(s.seat), facing: s.facing, aisle: W(s.aisle), screen: desk.screen.map(([px, py]) => [wx + px, wy + py] as P2), deskDepth: spr.depth, chief: i === 0, sprites: [spr, sprites[sprites.length - 1]!] });
   });
   const table: Pt = { tx: 3.55, ty: 3.65 };
   add(meetingTableProp('#e9d3b1'), table.tx, table.ty);
@@ -202,22 +219,25 @@ export function buildPlaza(inp: PlazaInput, seatOf: Map<string, { island: Island
   }
 
   // ── plaza decor
-  const lampSpots: Pt[] = [{ tx: 9.1, ty: 1.2 }, { tx: 13.9, ty: 9.1 }, { tx: 9.1, ty: 13.9 }, { tx: 1.1, ty: 9.1 }];
+  const lampSpots: Pt[] = [{ tx: 9.1, ty: 1.2 }, { tx: 13.9, ty: 9.1 }, { tx: 9.1, ty: 13.9 }, { tx: 1.6, ty: 8.1 }];
   for (const p of lampSpots) {
     add(lampProp(), p.tx, p.ty);
     lights.push({ x: isoX(p.tx + x0, p.ty + y0), y: isoY(p.tx + x0, p.ty + y0, 29), r: 36, color: '#ffd27a', kind: 'lamp' });
   }
   addAt(benchProp('x'), 2.2, 12.3, 1.1, 0.4);
-  addAt(benchProp('y'), 12.4, 10.2, 0.4, 1.1);
   addAt(flowerBedProp(1), 4.6, 13.7, 1, 0.5);
   addAt(flowerBedProp(2), 13.7, 5.4, 0.5, 1);
   add(treeProp('round', 0), 0.6, 14.3);
-  add(treeProp('blossom', 1), 14.3, 14.3);
+  add(bushProp(1), 14.3, 14.3);
   add(treeProp('pine', 0), 0.45, 5.9);
   add(bushProp(1), 6.0, 14.45);
   add(bushProp(2), 14.45, 6.0);
   add(bushProp(0), 14.5, 12.0);
   add(treeProp('round', 2), 2.4, 14.4);
+
+  // ── league stage: the wall, the board and the totems change with the data, see stage.ts
+  addAt(podiumProp(), PODIUM.x0, PODIUM.y0, PODIUM.x1 - PODIUM.x0, PODIUM.y1 - PODIUM.y0);
+  add(duelTableProp(), DUEL.tx, DUEL.ty);
 
   // ── spots
   const officeFree: Pt[] = [];
@@ -234,7 +254,7 @@ export function buildPlaza(inp: PlazaInput, seatOf: Map<string, { island: Island
     const r = 3.4 + (i % 3) * 0.7;
     const p = { tx: C + Math.cos(a) * r, ty: C + Math.sin(a) * r };
     const out = (q: Rect) => p.tx > q.x0 - 0.4 && p.tx < q.x1 + 0.4 && p.ty > q.y0 - 0.4 && p.ty < q.y1 + 0.4;
-    if (out(OFFICE) || out(CAFE)) continue;
+    if (out(OFFICE) || out(CAFE) || STAGE_ZONES.some(out) || Math.hypot(p.tx - DUEL.tx, p.ty - DUEL.ty) < 1.1) continue;
     wanderSpots.push(W(p));
   }
   const edges: Partial<Record<Side, Pt>> = {
@@ -284,10 +304,17 @@ export function buildPlaza(inp: PlazaInput, seatOf: Map<string, { island: Island
       spots: cafeSpots, facing: cafeFacing, machine: cw, area: { x0: CAFE.x0 + x0, y0: CAFE.y0 + y0, x1: CAFE.x1 + x0, y1: CAFE.y1 + y0 },
       anchor: { x: isoX(tables[0].tx + x0, tables[0].ty + y0), y: isoY(tables[0].tx + x0, tables[0].ty + y0, 50) },
     },
+    stage: {
+      podium: {
+        centre: W({ tx: 12.4, ty: 12.2 }),
+        tops: [{ place: 1, at: W({ tx: 12.4, ty: 12.2 }), z: 14 }, { place: 2, at: W({ tx: 11.65, ty: 12.2 }), z: 10 }, { place: 3, at: W({ tx: 13.15, ty: 12.2 }), z: 6 }],
+        champion: W({ tx: 12.4, ty: 13.3 }),
+      },
+      wall: W({ tx: WALL.x0, ty: WALL.y0 }),
+      board: W(BOARD),
+      duel: { centre: W(DUEL), spots: [W(DUEL_SPOTS[0]), W(DUEL_SPOTS[1])], facing: [faceTowards(DUEL_SPOTS[0], DUEL), faceTowards(DUEL_SPOTS[1], DUEL)] },
+      channelSlots: CHANNEL_SLOTS.map(W),
+    },
   };
-  inp.agents.forEach((a, i) => {
-    const seat = seats[i];
-    if (seat) seatOf.set(a.id, { island: plaza, seat });
-  });
   return plaza;
 }

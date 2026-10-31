@@ -8,14 +8,17 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { basename, extname, join, relative } from 'node:path';
 import { onActivity, repoRoot } from '../core/index.js';
-import type { AdRatio, ApproveResponse, ChatResponse, ControlResponse, CreativeVideo, MissionResponse, ScenarioConfig, SessionInfo, VideoIndex, WorldState } from '../shared.js';
+import type { AdRatio, ApproveResponse, ChatResponse, ControlResponse, CreativeVideo, Deliverable, GrowthState, MissionResponse, ScenarioConfig, SessionInfo, VideoIndex, WorldState } from '../shared.js';
+import { readArchive } from './archive.js';
 import { isEntryPoint } from './entry.js';
 import { config, mindModeLabel } from './env.js';
 import {
   applyCors, errorStatus, HttpError, isSafeRelativePath, isServerOnlyFile, mimeFor, parseControl, readJsonBody, requireText, safeResolve,
   sanitizeScenario, sendError, sendJson, sendRawJson, type ControlAction, type Speed,
 } from './http.js';
-import { flushSaves, isValidRunId, runsDir } from './persist.js';
+import { flushSaves, isValidRunId, readSessionLog, runsDir, scheduleSave } from './persist.js';
+import type { AgencySession } from './session.js';
+import { safeFinance, viewOf, type ViewName } from './snapshot.js';
 import { SseHub } from './sse.js';
 
 /** Live session state as sent to the UI (CompanySnapshot.session, /api/control). */
@@ -43,6 +46,8 @@ export interface SessionLike {
   requestVideo?(creativeId: string, ratio?: AdRatio): Promise<CreativeVideo>;
   extendRun?(): Promise<SessionInfoLike>;
   setWatchers?(n: number): void;
+  view?(name: ViewName, query: URLSearchParams): Promise<unknown>;
+  digestSeen?(): GrowthState['founder'] | null;
 }
 
 export interface AgencyServerOptions {
@@ -64,6 +69,10 @@ export const PORT_BUSY_EXIT = 78;
 const RUN_PREFIX = '/runs/';
 const VIDEO_RATIOS: readonly unknown[] = ['9:16', '4:5', '1:1', '2:3'] satisfies Exclude<AdRatio, 'text'>[];
 const NO_VIDEOS: VideoIndex = { level: 'storyboard_only', reason: null, items: {} };
+const NO_VIEWS = 'Vue indisponible sur ce serveur.';
+const PRODUCT_ROUTE = /^\/api\/product\/([^/]+)$/;
+
+const RANGE = /^bytes=(\d*)-(\d*)$/;
 
 /** Raw path of the request (not dot-segment-normalised, so traversal attempts stay visible). */
 function rawPath(req: IncomingMessage): string {
@@ -96,14 +105,30 @@ function serveFile(req: IncomingMessage, res: ServerResponse, file: string, cach
     'Content-Length': size,
     'Cache-Control': cache,
     'X-Content-Type-Options': 'nosniff',
+    'Accept-Ranges': 'bytes',
   };
   if (type === 'application/pdf') headers['Content-Disposition'] = `inline; filename="${basename(file).replace(/"/g, '')}"`;
-  res.writeHead(200, headers);
+  // `<video>` cannot seek without a range. Anything but one plain range gets the whole file, as the RFC allows.
+  const range = RANGE.exec(String(req.headers.range ?? ''));
+  let span: { start: number; end: number } | undefined;
+  if (range && (range[1] || range[2])) {
+    const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+    const end = range[1] && range[2] ? Math.min(size - 1, Number(range[2])) : size - 1;
+    if (start > end || start >= size) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+      res.end();
+      return true;
+    }
+    span = { start, end };
+    res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': end - start + 1 });
+  } else {
+    res.writeHead(200, headers);
+  }
   if (req.method === 'HEAD') {
     res.end();
     return true;
   }
-  const stream = createReadStream(file);
+  const stream = createReadStream(file, span);
   stream.on('error', () => res.destroy());
   stream.pipe(res);
   return true;
@@ -145,6 +170,11 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
   const webDist = opts.webDist ?? join(repoRoot(), 'web', 'dist');
   const hub = new SseHub(session, opts.sse);
   hub.onClients((n) => session.setWatchers?.(n));
+
+  function readView(name: ViewName, query: URLSearchParams): Promise<unknown> {
+    if (!session.view) throw new HttpError(503, NO_VIEWS);
+    return session.view(name, query);
+  }
 
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = req.method ?? 'GET';
@@ -256,8 +286,34 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           if (!session.requestVideo) throw new HttpError(503, 'Rendu vidéo indisponible sur ce serveur.');
           return sendJson(res, 200, await session.requestVideo(creativeId, body.ratio as AdRatio | undefined));
         }
-        default:
-          throw new HttpError(404, `Route inconnue : ${method} ${path}`);
+        case '/api/org':
+        case '/api/league':
+        case '/api/channels':
+        case '/api/growth':
+        case '/api/digest':
+        case '/api/deliverables':
+          if (!isGet) break;
+          return sendJson(res, 200, await readView(path.slice('/api/'.length) as ViewName, url.searchParams));
+        case '/api/playbook':
+          if (!isGet) break;
+          requireText(url.searchParams.get('agentId'), 'agentId', 80);
+          return sendJson(res, 200, await readView('playbook', url.searchParams));
+        case '/api/digest/seen': {
+          if (!isPost) break;
+          if (!session.digestSeen) throw new HttpError(503, NO_VIEWS);
+          const founder = session.digestSeen();
+          hub.snapshotSoon();
+          return sendJson(res, 200, { ok: true, founder });
+        }
+        default: {
+          const product = PRODUCT_ROUTE.exec(path);
+          if (!product) throw new HttpError(404, `Route inconnue : ${method} ${path}`);
+          if (!isGet) break;
+          const id = safeDecode(product[1]!) ?? '';
+          const found = await readView('product', new URLSearchParams({ id }));
+          if (found === null) throw new HttpError(404, `Produit inconnu : ${id}`);
+          return sendJson(res, 200, found);
+        }
       }
       throw new HttpError(405, `Méthode ${method} non autorisée sur ${path}.`);
     }
@@ -341,6 +397,30 @@ function safeDecode(s: string): string | null {
   }
 }
 
+/**
+ * The tabs' reads of a mounted run, and the founder's « vu ». The session has neither: `world` and the disk are all they need, and
+ * « vu » moves a field the tick never reads. It is the wall clock's only way into a save, and no draw ever sees it.
+ */
+export function sessionViews(live: Pick<AgencySession, 'world' | 'videoIndex' | 'paths'>): Required<Pick<SessionLike, 'view' | 'digestSeen'>> {
+  return {
+    view: async (name, query) => {
+      const { world } = live;
+      return viewOf(world, name, query, {
+        ...(name === 'deliverables' ? { videos: live.videoIndex().items, archived: await readArchive(live.paths.root, 'deliverables') as Deliverable[] } : {}),
+        ...(name === 'digest' ? { stays: await readSessionLog(world.runId) } : {}),
+      });
+    },
+    digestSeen: () => {
+      const { world } = live;
+      const growth = world.company.growth;
+      if (!growth) return null;
+      growth.founder = { lastSeenDay: world.day, lastSeenAt: new Date().toISOString() };
+      scheduleSave(world, 2000, { finance: () => safeFinance(world) });
+      return growth.founder;
+    },
+  };
+}
+
 /** Placeholder used when the agency itself could not start: the API answers 503 with the reason. */
 export function unavailableSession(reason: string): SessionLike {
   return closedSession(`L'agence n'a pas pu démarrer : ${reason}`);
@@ -366,6 +446,8 @@ function closedSession(message: string): SessionLike {
     videoIndex: fail,
     requestVideo: async () => fail(),
     extendRun: async () => fail(),
+    view: async () => fail(),
+    digestSeen: fail,
   };
 }
 
@@ -456,6 +538,7 @@ export async function startServer(port = config.port): Promise<AgencyServer> {
       requestVideo: (id, ratio) => live.requestVideo(id, ratio),
       extendRun: () => live.extendRun(),
       setWatchers: (n) => live.setWatchers(n),
+      ...sessionViews(live),
     } satisfies SessionLike);
     installCrashGuards(() => live.saveAfterCrash());
     shutdownSession = () => live.shutdown();
