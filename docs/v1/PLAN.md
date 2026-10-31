@@ -1688,3 +1688,12 @@ Attack on this plan against the real code, working tree of `be75c2c`. Each line 
 31. Founder's asks: « agents improve » had no acceptance row, A11 now reads `samples`. « Facebook » was only `meta` in the UI, D59. A4 and A5 now state the filter `runtime.test.ts` really uses: `at`, `createdAt`, `bytes`.
 
 Checked and left alone: stream numbers against `DAY_PHASES`, 119 literal lines, 47 kinds, 35 roles, 7,60 €/day, S0 to S13 write overlaps (none after these edits), `summarizeLedger` with `salary`, `lastClosedLedgerDay` after the payroll line, `scorePdf` reading `design` as a truthy flag only, bounded replacements (2 per season, 28 days on a role).
+
+## 8. Decisions taken during the build
+
+Taken by the orchestrator after reading each stage gate. They rank with §1.
+
+- D63. `QA.maxSec` is 60, not the 34 of video §10: most real voice-overs run past 34 s and were lost to QA at S6.
+- D64. `Product.visual.explored` is never shown: it reads the designer's hidden talent out. The line of pdf §17 is dropped, the hidden-truth guardrail wins.
+- D65. The cut ladder of §6 stays unused unless a real limit appears. Its clock was an estimate, the founder set no deadline.
+- D66. A polish stage runs after S13 and before S14, judged by eye on real frames and pages: the composition of 9:16 frames, real guide pages in most voiced ads, the review card, half-empty guide pages. It lands before S14 because how often a cut shows a page moves the video score.
