@@ -3,6 +3,7 @@ import { clamp, round2 } from '../core/index.js';
 import type { DifficultyProfile, Rng } from '../contracts.js';
 import type { AdFormat, CreatorProfile, Difficulty, HookStyle, MarketState, NicheTruth, ScenarioConfig, WorldState } from '../shared.js';
 import { CREATORS, DIFFICULTY, NICHE_VARIATION } from './balance.js';
+import { ensureChannelMarket } from './channels.js';
 import { FEMALE_NAMES, FIRST_NAMES, MALE_NAMES } from './customers.js';
 import { NICHE_CATALOG, cloneNiche } from './niches.js';
 import { lognormal, norm, uniform } from './text.js';
@@ -175,7 +176,7 @@ export function createMarketState(scenario: ScenarioConfig, rng: Rng): MarketSta
   const niches = NICHE_CATALOG.map((n) => varyNiche(cloneNiche(n), rng));
   const used = new Set<string>();
   const creators = niches.flatMap((n) => makeCreators(n, rng, scenario?.difficulty ?? 'normal', used));
-  return {
+  const market: MarketState = {
     niches,
     customers: [],
     orders: [],
@@ -189,4 +190,6 @@ export function createMarketState(scenario: ScenarioConfig, rng: Rng): MarketSta
     adAccount: { strikes: 0, banned: false, bannedUntilDay: 0 },
     creativeImpressions: {},
   };
+  ensureChannelMarket({ market, scenario }); // draws on the seed, never on `rng`
+  return market;
 }

@@ -442,6 +442,7 @@ Recherche client : ${json(vocBrief(input.voc))}`,
 
   async writeAd(input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[]; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<AdDraft> {
     const fb = await this.h.writeAd(input, ctx);
+    if (input.format === 'static_image') return fb; // one frame: this prompt and nAd only know a script of 4 to 6 scenes
     return this.run({
       method: 'writeAd', ctx, schema: SCHEMAS.ad, maxTokens: 4000, effort: 'low', fallback: fb, extraBanned: input.bannedClaims ?? [],
       normalize: (raw, f) => nAd(raw, f, input),

@@ -2,15 +2,17 @@
  * MarketTools over the virtual market. This is the seam where the real world plugs in later:
  * the company only ever talks to these functions.
  */
-import { clamp, emit, nextId, round2 } from '../core/index.js';
-import type { AdReviewResult, ChannelAccountStatus, MarketTools, Rng, ToolResult } from '../contracts.js';
+import { clamp, emit, nextId, round2, streamRng } from '../core/index.js';
+import type { AdReviewResult, ChannelAccountStatus, MarketTools, PlatformReportRow, Rng, ShopAttributionRow, ToolResult } from '../contracts.js';
 import type {
-  AdFormat, AudienceView, Campaign, CampaignInputShape, ChannelId, CompetitorProduct, CreatorProfile, HookStyle, InboxMessage, NicheBrief, Partnership,
+  AdCreative, AdFormat, AudienceView, Campaign, CampaignInputShape, ChannelAccountState, ChannelId, ChannelMarketState, CompetitorProduct, CreatorProfile, HookStyle, InboxMessage, NicheBrief, Partnership,
   ReplyOutcome, SupportReplyInput, TrendSignal, VoiceOfCustomer, WorldState,
 } from '../shared.js';
-import { CHANNELS, CHANNEL_IDS } from '../shared.js';
+import { CHANNELS, CHANNEL_IDS, acceptance, channelOf } from '../shared.js';
 import { ADS, ORGANIC, RESEARCH, SCAM } from './balance.js';
-import { findBannedClaims } from './compliance.js';
+import { CHANNEL_SIM, CHANNEL_STREAM, type PaidChannel } from './channelBalance.js';
+import { accountBanned, accountOf, approvedOn, channelSignals, learningAfterUpdate } from './channels.js';
+import { channelViolationWord, findBannedClaims, findChannelViolation } from './compliance.js';
 import { customerById, displayName } from './customers.js';
 import { cashOf, recordLedger } from './finance.js';
 import { reaction, scamAmount, type ReactionKey } from './inbox.js';
@@ -26,6 +28,15 @@ const ok = (message: string, id?: string): ToolResult => ({ ok: true, message, .
 
 /** Share of the price given back by a goodwill gesture. */
 const GOODWILL_SHARE = 0.4;
+
+/** What a channel takes, for the message that refuses a creative. */
+function wantedBy(ch: ChannelId): string {
+  const ratio = CHANNELS[ch].accepts[0]!.ratio;
+  return ratio === 'text' ? 'du texte' : `du ${ratio}`;
+}
+
+/** The creative's number, a key of its moderation stream. */
+const idNum = (c: AdCreative): number => Number(c.id.replace(/\D/g, '')) || 0;
 
 export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
   const m = () => world.market;
@@ -126,16 +137,95 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     return ok(`« ${short(p.title)} » est en pause (plus de ventes ni de diffusion pub).`, p.id);
   }
 
-  // ───────────── TikTok ads ─────────────
+  // ───────────── ads ─────────────
 
   function banActive(): boolean {
-    const acc = m().adAccount;
-    return acc.banned && world.day < acc.bannedUntilDay;
+    return accountBanned(m(), 'tiktok', world.day);
   }
 
-  function submitCreative(creativeId: string): AdReviewResult {
+  /** A channel's own account. TikTok's is `adAccount`, open since day one. Undefined on a TikTok-only world. */
+  function ownAccount(ch: PaidChannel): ChannelAccountState | undefined {
+    return m().channels?.accounts[CHANNELS[ch].account as keyof ChannelMarketState['accounts']];
+  }
+
+  function accountState(ch: ChannelId): ChannelAccountStatus['state'] {
+    if (accountBanned(m(), ch, world.day)) return 'banned';
+    if (ch === 'tiktok') return 'open';
+    const openDay = ownAccount(ch)?.openDay ?? null;
+    return openDay === null ? 'closed' : world.day < openDay ? 'verifying' : 'open';
+  }
+
+  /** Why a channel's account cannot act today, null when it can. */
+  function accountBlock(ch: PaidChannel): string | null {
+    const { label } = CHANNELS[ch];
+    const acc = ownAccount(ch);
+    switch (accountState(ch)) {
+      case 'open': return null;
+      case 'banned': return `Compte ${label} suspendu jusqu'au jour ${acc!.bannedUntilDay}.`;
+      case 'verifying': return `Compte ${label} en vérification, ouverture au jour ${acc!.openDay}.`;
+      case 'closed': return `${label} n'est pas ouvert à l'agence.`;
+    }
+  }
+
+  /** One strike on the channel's account: every channel of that account pays for it, and no other. */
+  function strikeAccount(ch: PaidChannel, refs: { creativeId: string; productId: string; nicheId: string | null }): string {
+    const acc = ownAccount(ch)!;
+    const { strikes, banDays } = CHANNEL_SIM[ch];
+    if (acc.banned) Object.assign(acc, { banned: false, strikes: 0 }); // a ban that ran its term: the account starts over
+    acc.strikes += 1;
+    if (acc.strikes >= strikes) {
+      acc.banned = true;
+      acc.bannedUntilDay = world.day + banDays;
+      const stopped = CHANNEL_IDS.filter((id) => CHANNELS[id].account === CHANNELS[ch].account).map((id) => CHANNELS[id].label).join(' et ');
+      pushEvent(world, 'channel_account_banned', `Compte ${stopped} suspendu`,
+        `${strikes} refus pour règles enfreintes : plus aucune campagne ${stopped} d'ici le jour ${acc.bannedUntilDay}.`, 'danger', refs);
+    }
+    return ` Avertissement ${Math.min(acc.strikes, strikes)}/${strikes}.`;
+  }
+
+  /** Every channel but TikTok, in the order of channels §6: account, format, banned claims, the channel's rules, false positive. */
+  function submitToChannel(c: AdCreative, ch: PaidChannel): AdReviewResult {
+    const { label } = CHANNELS[ch];
+    const reject = (reason: string, strike: boolean, rule?: string): AdReviewResult => {
+      (c.channelReviews ??= {})[ch] = { status: 'rejected', reason, day: world.day, ...(rule ? { rule } : {}) };
+      return { status: 'rejected', reason, strike, channel: ch, ...(rule ? { rule } : {}) };
+    };
+    const blocked = accountBlock(ch);
+    if (blocked) return reject(`${blocked} Aucune soumission possible.`, false);
+    if (acceptance(ch, c) === null) return reject(`${label} refuse ce format : il faut ${wantedBy(ch)}.`, false);
+    const p = productById(world, c.productId);
+    const niche = p ? findNiche(world, p.nicheId) : undefined;
+    const refs = { creativeId: c.id, productId: c.productId, nicheId: p?.nicheId ?? null };
+    // keywords bid and never show: they are not the ad's text
+    const texts = c.search ? [...c.search.headlines, ...c.search.descriptions]
+      : [c.hook, ...(c.scenes ?? []).flatMap((s) => [s.onScreenText, s.voiceover]), c.caption, c.cta, ...(c.hashtags ?? [])];
+    const banned = findBannedClaims(texts, niche?.voc.bannedClaims ?? []);
+    if (banned.length) {
+      pushEvent(world, 'ad_rejected', `Pub refusée par ${label}`, `« ${short(c.hook, 60)} » : allégation « ${banned[0]} » interdite.`, 'warn', refs);
+      return reject(`Refusée par ${label} : l'allégation « ${banned[0]} » est interdite.${strikeAccount(ch, refs)}`, true);
+    }
+    const rule = p ? findChannelViolation(c, ch, p) : null;
+    if (rule) {
+      const word = channelViolationWord(c, rule, p!);
+      pushEvent(world, 'ad_rejected', `Pub refusée par ${label}`, `« ${short(c.hook, 60)} » : ${rule.label} (« ${word} »).`, 'warn', refs);
+      return reject(`Refusée par ${label} : ${rule.label} (« ${word} »).${rule.strike ? strikeAccount(ch, refs) : ''}`, rule.strike, rule.id);
+    }
+    // as on TikTok, an approved creative is never re-rolled
+    if (c.channelReviews?.[ch]?.status === 'approved') return { status: 'approved', reason: null, strike: false, channel: ch };
+    const review = streamRng(world.scenario.seed, CHANNEL_STREAM.reviews, world.day, idNum(c));
+    if (niche && review.chance(CHANNEL_SIM[ch].falsePositive * niche.complianceRisk)) {
+      emit(world, { agentId: null, kind: 'ad', text: `Pub « ${short(c.hook, 50)} » bloquée par la modération automatique de ${label} (sans avertissement).`, refs: { creativeId: c.id, productId: c.productId } });
+      return reject(`Refusée par la modération automatique de ${label} : reformulez plus prudemment puis soumettez à nouveau (sans avertissement).`, false);
+    }
+    (c.channelReviews ??= {})[ch] = { status: 'approved', reason: null, day: world.day };
+    emit(world, { agentId: null, kind: 'ad', text: `Pub « ${short(c.hook, 50)} » approuvée par ${label}.`, refs: { creativeId: c.id, productId: c.productId } });
+    return { status: 'approved', reason: null, strike: false, channel: ch };
+  }
+
+  function submitCreative(creativeId: string, channel: ChannelId = 'tiktok'): AdReviewResult {
     const c = creativeById(world, creativeId);
     if (!c) return { status: 'rejected', reason: 'Créatif introuvable.', strike: false };
+    if (channel !== 'tiktok') return submitToChannel(c, channel);
     const acc = m().adAccount;
     if (banActive()) {
       const reason = `Compte publicitaire suspendu jusqu'au jour ${acc.bannedUntilDay} : aucune soumission possible.`;
@@ -178,24 +268,30 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     return { status: 'approved', reason: null, strike: false };
   }
 
-  function approvedFor(productId: string, ids: readonly string[]): string[] {
+  function approvedFor(productId: string, ids: readonly string[], ch: ChannelId): string[] {
     const out: string[] = [];
     for (const id of ids ?? []) {
       const c = creativeById(world, id);
-      if (c && c.productId === productId && c.review.status === 'approved' && !out.includes(id)) out.push(id);
+      if (c && c.productId === productId && acceptance(ch, c) !== null && approvedOn(c, ch) && !out.includes(id)) out.push(id);
     }
     return out;
   }
 
   function createCampaign(input: CampaignInputShape): ToolResult {
-    if (banActive()) return fail(`Compte publicitaire suspendu jusqu'au jour ${m().adAccount.bannedUntilDay} : impossible de créer une campagne.`);
+    const ch = channelOf(input ?? {});
+    if (ch === 'tiktok' && banActive()) return fail(`Compte publicitaire suspendu jusqu'au jour ${m().adAccount.bannedUntilDay} : impossible de créer une campagne.`);
+    const blocked = ch === 'tiktok' ? null : accountBlock(ch);
+    if (blocked) return fail(`${blocked} Impossible de créer une campagne.`);
     const p = productById(world, input?.productId);
     if (!p) return fail('Produit introuvable.');
     if (p.status !== 'live') return fail(`« ${short(p.title)} » n'est pas en ligne : publiez-le avant de lancer des pubs.`, p.id);
-    const creativeIds = approvedFor(p.id, input.creativeIds);
+    const asked = (input.creativeIds ?? []).map((id) => creativeById(world, id)).filter((c): c is AdCreative => c?.productId === p.id);
+    if (asked.length && asked.every((c) => acceptance(ch, c) === null)) return fail(`Aucune créa acceptée par ${CHANNELS[ch].label} : il faut ${wantedBy(ch)}.`, p.id);
+    const creativeIds = approvedFor(p.id, input.creativeIds, ch);
     if (!creativeIds.length) return fail("Aucun créatif approuvé pour ce produit : soumettez d'abord les pubs à la modération.", p.id);
     const budget = round2(Number(input.dailyBudget));
-    if (!Number.isFinite(budget) || budget < ADS.minDailyBudget) return fail(`Budget quotidien minimum : ${fmtEur(ADS.minDailyBudget)}.`, p.id);
+    const minBudget = ch === 'tiktok' ? ADS.minDailyBudget : CHANNELS[ch].minDailyBudget;
+    if (!Number.isFinite(budget) || budget < minBudget) return fail(`Budget quotidien minimum : ${fmtEur(minBudget)}.`, p.id);
     if (budget > ADS.maxDailyBudget) return fail(`Budget quotidien maximum : ${fmtEur(ADS.maxDailyBudget)}.`, p.id);
     const cash = cashOf(world);
     if (cash < budget) return fail(`Trésorerie insuffisante (${fmtEur(cash)}) pour un budget de ${fmtEur(budget)} par jour.`, p.id);
@@ -211,6 +307,9 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
       targeting: { interests: [...(t.interests ?? [])], ageMin, ageMax: Math.round(clamp(t.ageMax ?? 55, ageMin, 65)) },
       startDay: world.day,
       createdBy: input.createdBy,
+      ...(ch === 'tiktok' ? {} : { channel: ch }),
+      ...(CHANNELS[ch].learning ? { learning: { events: 0, exitedDay: null } } : {}),
+      ...(input.test ? { test: true } : {}),
     };
     world.company.campaigns.push(campaign);
     const dropped = (input.creativeIds?.length ?? 0) - creativeIds.length;
@@ -221,35 +320,45 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     const c = campaignById(world, campaignId);
     if (!c) return fail('Campagne introuvable.');
     if (c.status === 'ended' || c.status === 'rejected') return fail(`La campagne « ${c.name} » est terminée.`, c.id);
+    const ch = channelOf(c);
+    const minBudget = ch === 'tiktok' ? ADS.minDailyBudget : CHANNELS[ch].minDailyBudget;
+    // every field is checked before any is written: a refused patch changes nothing, not even its budget
+    const before = { dailyBudget: c.dailyBudget, creativeIds: c.creativeIds };
+    const next = { dailyBudget: c.dailyBudget, creativeIds: c.creativeIds, status: c.status };
     const changes: string[] = [];
     if (patch.dailyBudget !== undefined) {
       const b = round2(Number(patch.dailyBudget));
-      if (!Number.isFinite(b) || b < ADS.minDailyBudget || b > ADS.maxDailyBudget) return fail(`Budget invalide (entre ${fmtEur(ADS.minDailyBudget)} et ${fmtEur(ADS.maxDailyBudget)}).`, c.id);
+      if (!Number.isFinite(b) || b < minBudget || b > ADS.maxDailyBudget) return fail(`Budget invalide (entre ${fmtEur(minBudget)} et ${fmtEur(ADS.maxDailyBudget)}).`, c.id);
       if (b !== c.dailyBudget) changes.push(`budget ${fmtEur(c.dailyBudget)} → ${fmtEur(b)}`);
-      c.dailyBudget = b;
+      next.dailyBudget = b;
     }
     if (patch.creativeIds) {
-      const ids = approvedFor(c.productId, patch.creativeIds);
+      const ids = approvedFor(c.productId, patch.creativeIds, ch);
       if (!ids.length) return fail('Aucun des créatifs proposés n\'est approuvé.', c.id);
-      c.creativeIds = ids;
+      next.creativeIds = ids;
       changes.push(`${ids.length} créatif(s)`);
     }
     if (patch.status === 'active' && c.status !== 'active') {
       const p = productById(world, c.productId);
       if (!p || p.status !== 'live') return fail('Impossible de réactiver : le produit n\'est pas en ligne.', c.id);
-      if (banActive()) return fail(`Compte publicitaire suspendu jusqu'au jour ${m().adAccount.bannedUntilDay}.`, c.id);
-      c.status = 'active';
+      if (ch === 'tiktok' && banActive()) return fail(`Compte publicitaire suspendu jusqu'au jour ${m().adAccount.bannedUntilDay}.`, c.id);
+      const blocked = ch === 'tiktok' ? null : accountBlock(ch);
+      if (blocked) return fail(blocked, c.id);
+      next.status = 'active';
       changes.push('réactivée');
     } else if (patch.status === 'paused' && c.status !== 'paused') {
-      c.status = 'paused';
+      next.status = 'paused';
       changes.push('mise en pause');
     }
+    Object.assign(c, next);
+    learningAfterUpdate(c, before);
     return ok(changes.length ? `Campagne « ${c.name} » : ${changes.join(', ')}.` : `Campagne « ${c.name} » inchangée.`, c.id);
   }
 
-  function getAdStats(sinceDay?: number) {
+  /** One channel's rows, TikTok's by default: a CTR only compares with the CTRs of its own channel. */
+  function getAdStats(sinceDay?: number, channel: ChannelId = 'tiktok') {
     const since = sinceDay ?? 0;
-    return m().adStats.filter((s) => s.day >= since);
+    return m().adStats.filter((s) => s.day >= since && channelOf(s) === channel);
   }
 
   // ───────────── organic + creators ─────────────
@@ -490,18 +599,60 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     return ok(`Commande ${order.id} remboursée (${fmtEur(amount)}).`, order.id);
   }
 
-  // ───────────── channels, audience: TikTok alone and no list, until P4.1 and P10.2 ─────────────
+  // ───────────── channels ─────────────
 
   function channelStatus(): ChannelAccountStatus[] {
-    const a = m().adAccount;
-    return CHANNEL_IDS.map((id) => id === 'tiktok'
-      ? { id, state: a.banned ? 'banned' : 'open', openDay: 1, strikes: a.strikes, bannedUntilDay: a.bannedUntilDay }
-      : { id, state: 'closed', openDay: null, strikes: 0, bannedUntilDay: 0 });
+    return CHANNEL_IDS.map((id) => {
+      const acc = accountOf(m(), id);
+      return { id, state: accountState(id), openDay: id === 'tiktok' ? 1 : ownAccount(id)?.openDay ?? null, strikes: acc?.strikes ?? 0, bannedUntilDay: acc?.bannedUntilDay ?? 0 };
+    });
   }
 
+  /** Starts the account's review. YouTube and Search are one account: the second one finds it verified. */
   function requestChannel(channel: ChannelId): ToolResult {
-    return fail(`${CHANNELS[channel].label} n'est pas ouvert à l'agence.`);
+    const { label, verificationDays } = CHANNELS[channel];
+    if (channel === 'tiktok') return ok(`${label} est déjà ouvert.`);
+    const acc = ownAccount(channel);
+    if (!acc) return fail(`${label} n'est pas ouvert à l'agence.`);
+    const state = accountState(channel);
+    if (state === 'banned') return fail(`Compte ${label} suspendu jusqu'au jour ${acc.bannedUntilDay}.`);
+    if (state === 'open') return ok(`${label} est déjà ouvert.`);
+    if (state === 'closed') acc.openDay = world.day + verificationDays;
+    return ok(`Compte ${label} en vérification, ouverture au jour ${acc.openDay}.`);
   }
+
+  /** The ad manager: what the platform says it did, day by day and campaign by campaign. */
+  function getPlatformReport(channel: ChannelId, sinceDay?: number): PlatformReportRow[] {
+    const rows = new Map<string, PlatformReportRow>();
+    for (const s of getAdStats(sinceDay, channel)) {
+      const key = `${s.day}:${s.campaignId}`;
+      const row = rows.get(key) ?? { day: s.day, channel, campaignId: s.campaignId, spend: 0, claimedPurchases: 0, claimedRevenue: 0 };
+      row.spend = round2(row.spend + s.spend);
+      row.claimedPurchases += s.claimedPurchases ?? s.purchases;
+      row.claimedRevenue = round2(row.claimedRevenue + (s.claimedRevenue ?? s.revenue));
+      rows.set(key, row);
+    }
+    return [...rows.values()];
+  }
+
+  /** The shop's own orders, by last click. An order that came straight from an ad names its campaign, any other one reads null. */
+  function getShopAttribution(sinceDay?: number): ShopAttributionRow[] {
+    const since = sinceDay ?? 0;
+    const rows = new Map<string, ShopAttributionRow>();
+    for (const o of m().orders) {
+      if (o.day < since) continue;
+      const channel = channelOf(o);
+      const campaignId = o.source === 'ads' ? o.campaignId : null;
+      const key = `${o.day}:${channel}:${campaignId}`;
+      const row = rows.get(key) ?? { day: o.day, channel, campaignId, sales: 0, revenue: 0 };
+      row.sales += 1;
+      row.revenue = round2(row.revenue + o.price);
+      rows.set(key, row);
+    }
+    return [...rows.values()];
+  }
+
+  // ───────────── audience: no list until P10.2 ─────────────
 
   function listStats(): AudienceView {
     return { size: 0, leads: 0, buyers: 0, byNiche: [], unsubscribed: 0, dailyCost: 0, recent: [], sequences: [] };
@@ -513,7 +664,7 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     submitCreative, createCampaign, updateCampaign, getAdStats,
     postOrganic, listCreators, proposePartnership,
     listInbox, replyToMessage, issueRefund,
-    channelStatus, requestChannel, channelSignals: () => [], getPlatformReport: () => [], getShopAttribution: () => [],
+    channelStatus, requestChannel, channelSignals: (nicheId) => channelSignals(world, nicheId), getPlatformReport, getShopAttribution,
     listStats, activateSequence: () => fail('Aucune liste e-mail pour le moment.'), sendBroadcast: () => fail('Aucune liste e-mail pour le moment.'),
   };
 }

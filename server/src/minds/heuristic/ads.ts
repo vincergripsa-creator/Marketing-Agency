@@ -1,5 +1,5 @@
 /**
- * Growth: TikTok hooks (one per style, ≤ 90 chars), full ad scripts (4-6 scenes, 12-30 s) and
+ * Growth: TikTok hooks (one per style, ≤ 90 chars), full ad scripts (4-6 scenes, 12-30 s), one-frame pins, Search ads and
  * creator outreach DMs. Without a learned rule, hype-ish styles sometimes slip a risky word —
  * that is how the agency gets ads rejected, and learns.
  * An ad never carries the price (it changes, the ad stays) and never shows a named person with a result:
@@ -7,9 +7,9 @@
  * Talent (talent §4.2) acts through `t` and `flaw`: absent, this file writes today's text, draw for draw.
  */
 import type { AdFormat, AdScene, CreatorProfile, HookStyle, Product, Review, VoiceOfCustomer } from '../../shared.js';
-import type { AdDraft, UpsellContext } from '../../contracts.js';
+import type { AdDraft, SearchAdDraft, UpsellContext } from '../../contracts.js';
 import { NAMED_CASE, RISK_RULES, RISKY_AD_PHRASES } from '../lexicon.js';
-import { AD_FORMATS, conflictsWith, HOOK_STYLES } from '../playbook.js';
+import { AD_FORMATS, conflictsWith, containsBanned, HOOK_STYLES } from '../playbook.js';
 import { bare, bestLabel, cap, clauseLabel, clean, fit, fmtEur, fmtNum, fmtPct, labelOf, lf, lowerFirst, norm, ofAud, plainTitle, q, theUnit, uniqStrings, withArticle, type LocalRng } from '../util.js';
 import { nicheFromProduct } from './commerce.js';
 import { buildNicheCtx, de, FALLBACK, isInfinitive, looksLikeClause, type NicheCtx } from './niche.js';
@@ -17,6 +17,9 @@ import { inline } from './studio.js';
 
 const HOOK_MAX = 90;
 const SCREEN_MAX = 50;
+const STATIC_HOOK_MAX = 60;
+const HEADLINE_MAX = 30;
+const DESCRIPTION_MAX = 90;
 const MIN_NAMED_HOOKS = 3;
 
 /** Whole customer phrases (never cut): ≤ max chars, no inner colon. */
@@ -415,6 +418,8 @@ export function heuristicAd(
   rng: LocalRng,
   rules: { banned: string[]; preferredFormats: AdFormat[]; t?: number; flaw?: number; flawRng?: LocalRng },
 ): AdDraft {
+  // tested before AD_FORMATS, the four bandit arms: past that line a pin would turn into a TikTok format
+  if (input.format === 'static_image') return heuristicStaticAd(input, rng, rules);
   const c = buildNicheCtx(nicheFromProduct(input.product, input.voc), input.voc, input.upsellOf ?? null);
   const style: HookStyle = HOOK_STYLES.includes(input.hookStyle) ? input.hookStyle : 'question';
   const format: AdFormat = AD_FORMATS.includes(input.format) ? input.format : (rules.preferredFormats[0] ?? 'faceless_voiceover');
@@ -507,6 +512,107 @@ export function heuristicAd(
   while (total > 30) { const longest = scenes.reduce((a, b) => (b.durationSec > a.durationSec ? b : a)); longest.durationSec -= 1; total -= 1; }
   while (total < 12) { scenes[2]!.durationSec += 1; total += 1; }
   return draft;
+}
+
+/** One frame over the guide's cover, no voice: a pin or a feed image, never a script cut down to a scene. */
+function heuristicStaticAd(
+  input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; upsellOf?: UpsellContext | null },
+  rng: LocalRng,
+  rules: { t?: number; flaw?: number; flawRng?: LocalRng },
+): AdDraft {
+  const c = buildNicheCtx(nicheFromProduct(input.product, input.voc), input.voc, input.upsellOf ?? null);
+  const style: HookStyle = HOOK_STYLES.includes(input.hookStyle) ? input.hookStyle : 'question';
+  const written = clean(input.hook) || makeHook(style, c, rng, bonusOf(input.product), undefined, rules.t);
+  // no voice to catch up: a line that names neither the problem nor the reader gives way to the problem itself
+  const line = relevance(written, c) > 0 ? written : cap(c.pbShort ?? c.pbClause);
+  const hook = line.length <= STATIC_HOOK_MAX ? line : screenText(line);
+  const title = plainTitle(clean(input.product?.title)) || 'le guide';
+  const scene: AdScene = { visual: VISUALS.static_image[0]!, onScreenText: screenText(hook), voiceover: '', durationSec: 5 };
+  const draft: AdDraft = {
+    hook,
+    hookStyle: style,
+    format: 'static_image',
+    scenes: [scene],
+    caption: fit(`${hook} Le guide « ${title} », à télécharger.`, 260),
+    hashtags: hashtags(c, rng),
+    cta: 'Télécharge le guide',
+  };
+  if (rules.flaw && rules.flawRng) applyStaticFlaws(scene, draft, rules.flawRng, rules.flaw, c);
+  return draft;
+}
+
+/** A weak writer's image: too much text to read in a feed, a hook that fits any guide, no way out. */
+function applyStaticFlaws(scene: AdScene, draft: AdDraft, flawRng: LocalRng, f: number, c: NicheCtx): void {
+  const [longScreen, noHook, weakCta] = [f, f / 2, f / 2].map((p) => flawRng.chance(p));
+  if (longScreen) scene.onScreenText = `1. ${bare(c.steps[0] ?? FALLBACK.steps[0])}, puis ${lowerFirst(bare(c.steps[1] ?? FALLBACK.steps[1]))}, une étape à la fois, sans sauter la suivante`;
+  if (noHook) { draft.hook = 'Deux secondes de ton temps'; scene.onScreenText = draft.hook; }
+  if (weakCta) draft.cta = '';
+}
+
+/** Titles any guide can sign: they fill a thin ad, they never lead one. */
+const SAFE_HEADLINES: readonly string[] = ['Guide PDF à télécharger', 'Un plan clair, pas à pas', 'Checklist à chaque chapitre', 'Les erreurs à éviter'];
+
+/** What a buyer types for this guide: the niche's own words, spelled as the research spells them. */
+function searchHead(input: { product: Product; voc: VoiceOfCustomer }, c: NicheCtx): { typed: string; spelled: string } {
+  const slug = norm(input.product?.nicheId ?? input.voc?.nicheId ?? '').split(/[^a-z0-9]+/).filter(Boolean);
+  const words = slug.filter((w) => w.length >= 2).length >= 2 ? slug
+    : norm(plainTitle(clean(input.product?.title))).split(/[^a-z0-9]+/).filter((w) => w.length >= 4).slice(0, 3);
+  const research = [clean(input.product?.title), c.niche.problem, c.niche.audience, ...c.pains, ...c.phrases, ...c.outcomes, ...c.tips, ...c.mistakes, ...c.facts]
+    .join(' ').split(/[^\p{L}\p{N}]+/u);
+  const spell = (w: string): string => {
+    const forms = research.filter((x) => norm(x) === w);
+    const seen = (f: string): number => forms.filter((x) => x === f).length;
+    return forms.slice().sort((a, b) => seen(b) - seen(a) || Number(a === w) - Number(b === w))[0] ?? w;
+  };
+  return { typed: words.join(' '), spelled: words.map(spell).join(' ') };
+}
+
+/** A weak writer's ad: the title forgets what was searched, the end fits any guide or leads nowhere. */
+function applySearchFlaws(ad: SearchAdDraft, flawRng: LocalRng, f: number): void {
+  const [lostKeyword, cliche, noCta] = [f, f, f / 2].map((p) => flawRng.chance(p));
+  if (lostKeyword) ad.headlines = uniqStrings([SAFE_HEADLINES[0], ...ad.headlines.slice(1)]);
+  if (cliche) ad.descriptions[1] = `${flawRng.pick(AD_CLICHES)} Télécharge le guide.`;
+  if (noCta) ad.descriptions[1] = 'Un plan clair, une étape à la fois.';
+}
+
+/**
+ * A Search ad: 3 to 5 titles of 30 characters and 2 descriptions of 90 (channels §7.5). The first title says what was typed.
+ * A refused word leaves the text and stays in the keywords: a platform lets you bid on what it will not let you write.
+ */
+export function heuristicSearchAd(
+  input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] },
+  rng: LocalRng,
+  rules: { banned: string[]; t?: number; flaw?: number; flawRng?: LocalRng },
+): SearchAdDraft {
+  const c = buildNicheCtx(nicheFromProduct(input.product, input.voc), input.voc, null);
+  const refused = uniqStrings(input.bannedClaims ?? []);
+  const banned = uniqStrings([...refused, ...rules.banned]);
+  const usable = (s: string): boolean => !containsBanned(s, banned);
+  const { typed, spelled } = searchHead(input, c);
+  const { n, unit } = c.dur;
+  const others = rng.shuffle(uniqStrings([
+    c.outcomes.map(bare).find((o) => usable(o) && o.length <= HEADLINE_MAX),
+    c.pbShort ? told(c.pbShort, HEADLINE_MAX) : null,
+    `Plan de ${n} ${unit}, pas à pas`,
+    `${c.stepCount} étapes concrètes`,
+    c.pairs.length >= 3 ? `${c.pairs.length} erreurs à éviter` : null,
+  ]));
+  const headlines = uniqStrings([`Guide ${spelled}`, ...others, ...SAFE_HEADLINES])
+    .filter((h) => usable(h) && h.length <= HEADLINE_MAX && !/[!:]/.test(h)).slice(0, rng.int(4, 5));
+
+  const plan = `Le plan de ${n} ${unit}, étape par étape.`;
+  const quoted = shortPhrases(c, 44).filter((p) => usable(p) && !RISK_RULES.some((x) => x.re.test(p))).map((p) => `${qKeep(p)} ${plan}`);
+  const opening = rng.chance(rules.t === undefined ? 0.7 : 0.35 + 0.6 * rules.t) ? rng.shuffle(quoted) : [];
+  const painLine = c.pbShort ? [`${cap(lf(c.pbShort))} : ${lowerFirst(plan)}`] : [];
+  const first = [...opening, ...painLine, plan].find((d) => usable(d) && d.length <= DESCRIPTION_MAX) ?? plan;
+  const second = [`Télécharge le guide PDF : ${c.stepCount} étapes, les erreurs à éviter et une checklist par chapitre.`, 'Télécharge le guide PDF : le plan complet, étape par étape.']
+    .find((d) => usable(d) && d.length <= DESCRIPTION_MAX) ?? 'Télécharge le guide PDF.';
+
+  const keywords = uniqStrings([typed, `guide ${typed}`, `${typed} pdf`, `methode ${typed}`, c.pbShort ? norm(bare(c.pbShort)) : null])
+    .filter((k) => !containsBanned(k, refused));
+  const ad: SearchAdDraft = { headlines, descriptions: [first, second], keywords };
+  if (rules.flaw && rules.flawRng) applySearchFlaws(ad, rules.flawRng, rules.flaw);
+  return ad;
 }
 
 function sentence(s: string): string {

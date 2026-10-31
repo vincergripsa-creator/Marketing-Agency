@@ -2,7 +2,9 @@
  * The accountant's books: the daily reconciliation of the ledger against what each system says it did (orders, ad
  * platform, refunds) and the profit and loss per product. Reads the company's own records only.
  */
-import type { LedgerEntry, ProductPnl, WeeklyPnl, WorldState } from '../shared.js';
+import { adSpendByChannel, reconcile } from '../learning/attribution.js';
+import { CHANNEL_IDS, CHANNELS, channelOf } from '../shared.js';
+import type { ChannelId, LedgerEntry, ProductPnl, WeeklyPnl, WorldState } from '../shared.js';
 import { eur, round2, sum } from './util.js';
 
 /** Rounding of the daily sums (cents booked per line), not a real gap. */
@@ -22,7 +24,7 @@ export interface Reconciliation {
 }
 
 /**
- * One closed day, line by line: the sales against the revenue booked, the ad platform against the ad spend, every
+ * One closed day, line by line: the sales against the revenue booked, each ad platform against what it was booked, every
  * refund against its entry, and no order given back more than once.
  */
 export function reconcileDay(world: WorldState, day: number): Reconciliation {
@@ -43,7 +45,12 @@ export function reconcileDay(world: WorldState, day: number): Reconciliation {
   const orders = world.market.orders;
   const sold = orders.filter((o) => o.day === day);
   compare('ventes du jour', round2(sum(sold.map((o) => o.price))), revenue);
-  compare('facture TikTok', round2(sum(world.market.adStats.filter((s) => s.day === day).map((s) => s.spend))), adSpend);
+  // one invoice per channel with spend, so a gap names its platform; a day without ads still checks TikTok's, at zero
+  const stats = world.market.adStats.filter((s) => s.day === day);
+  const invoiced = (ch: ChannelId) => round2(sum(stats.filter((s) => channelOf(s) === ch).map((s) => s.spend)));
+  const booked = adSpendByChannel(world, day, day);
+  const billing = CHANNEL_IDS.filter((ch) => invoiced(ch) > 0 || booked.has(ch));
+  for (const ch of billing.length ? billing : (['tiktok'] as const)) compare(`facture ${CHANNELS[ch].label}`, invoiced(ch), booked.get(ch) ?? 0);
   checks++;
   if (sold.length && !entries.some((e) => e.type === 'payment_fee')) gaps.push(`${sold.length} vente(s) sans frais de paiement enregistrés`);
   for (const o of orders) {
@@ -130,8 +137,23 @@ export function productPnls(world: WorldState, fromDay: number, toDay: number, s
   return { products, unallocated: round2(roundedTotal - sum(products.map((p) => p.profit))), total: roundedTotal };
 }
 
+/** Each channel over [fromDay, toDay]: its spend as the ledger booked it, its revenue reconciled, so Σ revenue = the shop's. */
+export function channelPnls(world: WorldState, fromDay: number, toDay: number): NonNullable<WeeklyPnl['channels']> {
+  const reconciled = new Map(reconcile(world.market.adStats.filter((s) => s.day >= fromDay && s.day <= toDay)).map((a) => [a.channel, a.reconciledRevenue]));
+  const booked = adSpendByChannel(world, fromDay, toDay);
+  return CHANNEL_IDS.filter((ch) => reconciled.has(ch) || booked.has(ch)).map((channel) => {
+    const spend = booked.get(channel) ?? 0;
+    const reconciledRevenue = reconciled.get(channel) ?? 0;
+    return { channel, spend, reconciledRevenue, roas: spend > 0 ? round2(reconciledRevenue / spend) : null };
+  });
+}
+
 export function weeklyPnl(world: WorldState, fromDay: number, toDay: number): WeeklyPnl {
-  return { week: Math.max(1, Math.ceil(toDay / 7)), fromDay, toDay, ...productPnls(world, fromDay, toDay) };
+  const channels = channelPnls(world, fromDay, toDay);
+  return {
+    week: Math.max(1, Math.ceil(toDay / 7)), fromDay, toDay, ...productPnls(world, fromDay, toDay),
+    ...(channels.some((c) => c.channel !== 'tiktok') ? { channels } : {}),
+  };
 }
 
 /** Latest weekly P&L of a product (null before its first report): what the kill decision can read. */

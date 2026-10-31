@@ -626,7 +626,145 @@ export function scoreSalesPage(sp: SalesPage, product: Product, voc?: VoiceOfCus
 const SOLUTION_RE = /guide|methode|pdf|etapes?|plan|routine|programme|checklist|fiches?|astuces?|technique/;
 const CTA_RE = /lien|bio|telecharg|clique|decouvr|recupere|commande|profil|guide/;
 
+/** A still is read in a second: the hook must fit under the eye, the screen must stay short. */
+const STATIC_AD = { hookMax: 60, hookMin: 15, screenChars: 70, screenWords: 12 } as const;
+/** A search ad's limits: 3 to 5 titles of 30 characters, 2 descriptions of 90. */
+const SEARCH_AD = { titles: { min: 3, max: 5, chars: 30 }, descriptions: { count: 2, chars: 90 }, keywords: { min: 3, max: 15 } } as const;
+
+/** A Pinterest pin or a Meta feed image: one frame, no voice. New format, it never reads the video rules below. */
+export function scoreStaticAd(c: AdCreative, product: Product, voc?: VoiceOfCustomer): QualityReport {
+  const issues = new IssueList();
+  const hook = (c?.hook ?? '').trim();
+  const screen = (c?.scenes?.[0]?.onScreenText ?? '').trim();
+  const visible = `${hook} ${screen}`;
+  const allText = [hook, screen, c?.caption, c?.cta, (c?.hashtags ?? []).join(' ')].join('\n');
+  const normAll = norm(allText);
+  const stems = stemSet(visible);
+
+  issues.section('specificity');
+  const rel = Math.max(overlap(keyTokens(product.audience), stems), overlap([...keyTokens(product.problem), ...keyTokens(product.title)], stems));
+  let spec = 50 * Math.min(1, rel * 3);
+  if (rel === 0) issues.block('L\'image ne parle ni du problème ni de la cible : on doit se reconnaître d\'un coup d\'œil.');
+  const vocHits = vocPhraseHits(normAll, voc);
+  spec += voc ? Math.min(30, vocHits * 15) : 15;
+  if (voc && vocHits === 0) issues.push('Aucun mot de client repris : une image vit de la phrase qu\'on reconnaît.');
+  spec += (c?.hashtags?.length ?? 0) >= 3 ? 10 : 0;
+  spec += genericPhraseHits(norm(hook)).total ? 0 : 10;
+
+  issues.section('structure');
+  let struct = 0;
+  if (hook.length >= STATIC_AD.hookMin && hook.length <= STATIC_AD.hookMax) struct += 60;
+  else if (hook.length > 0 && hook.length <= 90) { struct += 25; issues.push(`Accroche de ${hook.length} caractères : visez moins de ${STATIC_AD.hookMax} sur une image.`); }
+  else issues.block('Accroche absente ou beaucoup trop longue pour une image.');
+  if ((c?.scenes?.length ?? 0) === 1) struct += 40;
+  else issues.push('Une image fixe, c\'est une seule scène.');
+
+  issues.section('actionability');
+  const ctaOk = (c?.cta ?? '').length > 3 && CTA_RE.test(norm(c.cta));
+  if (!ctaOk) issues.block('Pas d\'appel à l\'action sur l\'image (« télécharge le guide »).');
+
+  issues.section('humanTone');
+  let human = 80 - Math.min(40, genericPhraseHits(normAll).total * 10);
+  if (voc) human += Math.min(20, vocHits * 8);
+  const hype = countHype([hook, screen, c?.caption]);
+  human -= Math.min(20, hype * 6);
+
+  issues.section('design');
+  let design = 0;
+  const legible = screen.length > 0 && screen.length <= STATIC_AD.screenChars && countWords(screen) <= STATIC_AD.screenWords;
+  if (legible) design += 70; else issues.push(`Texte de l'image illisible en miniature : ${STATIC_AD.screenWords} mots maximum.`);
+  if ((c?.scenes?.[0]?.visual ?? '').length >= 10) design += 30;
+
+  issues.section('promiseMatch');
+  const promiseMatch = 100 - hype * 15;
+  if (hype >= 2) issues.push('Trop de superlatifs (« incroyable », « secret »…) : ça sonne arnaque et augmente les refus.');
+
+  issues.section('compliance');
+  const banned = findBannedClaims([allText], voc?.bannedClaims ?? []);
+  const compliance = 100 - banned.length * 30;
+  if (banned.length) issues.block(`Refus probable : ${quote(banned, 4)}.`);
+
+  return report(
+    { specificity: spec, structure: struct, actionability: ctaOk ? 100 : 0, humanTone: human, design, promiseMatch, compliance },
+    { specificity: 0.25, structure: 0.2, actionability: 0.15, humanTone: 0.1, design: 0.15, promiseMatch: 0.05, compliance: 0.1 },
+    issues,
+    compliance < 60 ? 35 + compliance / 2 : undefined,
+  );
+}
+
+/**
+ * A Search ad: what the buyer typed must come back in a title. That is why a word the platform refuses has a price: the
+ * keyword stays bid on, the title loses it, the score falls and the click costs more (channels §6).
+ */
+export function scoreSearchAd(c: AdCreative, product: Product, voc?: VoiceOfCustomer): QualityReport {
+  const issues = new IssueList();
+  const { headlines = [], descriptions = [], keywords = [] } = c?.search ?? {};
+  const titles = headlines.join('\n');
+  const body = descriptions.join('\n');
+  const shown = `${titles}\n${body}`;
+  const titleStems = stemSet(titles);
+
+  issues.section('specificity');
+  const head = keyTokens(keywords[0] ?? '');
+  const headHit = overlap(head, titleStems);
+  let spec = 40 * headHit;
+  if (headHit === 0) issues.block('Le mot-clé principal n\'apparaît dans aucun titre : l\'annonce ne répond pas à la recherche.');
+  const allKeys = keyTokens(keywords.join(' '));
+  spec += 20 * Math.min(1, overlap(allKeys, titleStems) * 2);
+  const probTok = [...keyTokens(product.problem), ...keyTokens(product.title)];
+  const rel = overlap(probTok, stemSet(shown));
+  spec += 25 * Math.min(1, rel * 3);
+  if (rel === 0) issues.push('L\'annonce ne dit pas le problème du lecteur.');
+  const vocHits = vocPhraseHits(norm(shown), voc);
+  spec += voc ? Math.min(15, vocHits * 15) : 8;
+
+  issues.section('structure');
+  let struct = 0;
+  const { titles: t, descriptions: d, keywords: k } = SEARCH_AD;
+  const titlesFit = headlines.length >= t.min && headlines.length <= t.max && headlines.every((h) => h.length > 0 && h.length <= t.chars);
+  if (titlesFit) struct += 40; else issues.block(`Titres hors limites : ${t.min} à ${t.max} titres de ${t.chars} caractères maximum.`);
+  const descFit = descriptions.length === d.count && descriptions.every((x) => x.length > 0 && x.length <= d.chars);
+  if (descFit) struct += 40; else issues.block(`Descriptions hors limites : ${d.count} descriptions de ${d.chars} caractères maximum.`);
+  if (keywords.length >= k.min && keywords.length <= k.max) struct += 20; else issues.push(`${keywords.length} mot(s)-clé(s) : visez ${k.min} à ${k.max} requêtes.`);
+
+  issues.section('actionability');
+  const ctaOk = CTA_RE.test(norm(body));
+  if (!ctaOk) issues.block('Pas d\'appel à l\'action dans les descriptions (« télécharge le guide »).');
+  const solOk = SOLUTION_RE.test(norm(shown));
+  if (!solOk) issues.push('L\'annonce ne dit pas ce qu\'on vend (le guide, la méthode).');
+
+  issues.section('humanTone');
+  let human = 85 - Math.min(40, genericPhraseHits(norm(shown)).total * 15);
+  const hype = countHype([shown]);
+  human -= Math.min(20, hype * 6);
+  if (voc) human += Math.min(15, vocHits * 8);
+
+  issues.section('design');
+  const shouts = headlines.filter((h) => /!|\p{Lu}{6}/u.test(h)).length;
+  const repeats = headlines.length - new Set(headlines.map(norm)).size;
+  const design = 100 - shouts * 25 - repeats * 25;
+  if (shouts) issues.push('Pas de point d\'exclamation ni de mot en capitales dans un titre.');
+  if (repeats) issues.push('Deux titres identiques : chaque titre doit apporter autre chose.');
+
+  issues.section('promiseMatch');
+  const promiseMatch = 100 - hype * 15;
+
+  issues.section('compliance');
+  const banned = findBannedClaims([shown], voc?.bannedClaims ?? []);
+  const compliance = 100 - banned.length * 30;
+  if (banned.length) issues.block(`Refus probable : ${quote(banned, 4)}.`);
+
+  return report(
+    { specificity: spec, structure: struct, actionability: (ctaOk ? 70 : 0) + (solOk ? 30 : 0), humanTone: human, design, promiseMatch, compliance },
+    { specificity: 0.35, structure: 0.2, actionability: 0.15, humanTone: 0.1, design: 0.05, promiseMatch: 0.05, compliance: 0.1 },
+    issues,
+    compliance < 60 ? 35 + compliance / 2 : undefined,
+  );
+}
+
 export function scoreCreative(c: AdCreative, product: Product, voc?: VoiceOfCustomer): QualityReport {
+  if (c?.format === 'static_image') return scoreStaticAd(c, product, voc);
+  if (c?.format === 'search_text') return scoreSearchAd(c, product, voc);
   const issues = new IssueList();
   const scenes = c?.scenes ?? [];
   const hook = (c?.hook ?? '').trim();

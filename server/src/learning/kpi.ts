@@ -1,6 +1,7 @@
 /** Daily KPI aggregation from the ledger, ad stats, orders, inbox, tasks and lessons. */
 import type { DailyKpi, WorldState } from '../shared.js';
 import { finite, round, safeDiv } from './text.js';
+import { channelDayKpi } from './attribution.js';
 import { amountOf, isHoldEntry, isProfitEntry, refundCountOnDay } from './data.js';
 
 /** Scores of the support replies sent on a day (0..100). */
@@ -76,6 +77,7 @@ export function computeDailyKpi(world: WorldState, day: number): DailyKpi {
   const adOrders = ordersToday.filter((o) => o.source === 'ads').length;
   const adPurchases = purchases > 0 ? purchases : adOrders;
   const spendBase = statsSpend > 0 ? statsSpend : adSpend;
+  const channels = channelDayKpi(world, day);
 
   return {
     day,
@@ -97,6 +99,7 @@ export function computeDailyKpi(world: WorldState, day: number): DailyKpi {
     liveProducts: (world.company.products ?? []).filter((p) => p.status === 'live').length,
     tasksDone: (world.company.tasks ?? []).filter((t) => t.dayDone === day && t.status === 'done').length,
     lessonsLearned: (world.company.lessons ?? []).filter((l) => l.day === day).length,
+    ...(channels ? { channels } : {}),
   };
 }
 

@@ -4,11 +4,18 @@
  */
 import { clamp, emit, nextId, round2, streamRng } from '../core/index.js';
 import type { DifficultyProfile, MarketDayResult, Rng } from '../contracts.js';
+import { CHANNELS, CHANNEL_IDS, channelOf } from '../shared.js';
 import type {
-  AdCreative, Customer, DailyAdStats, InboxMessage, MessageIntent, NicheTruth, Order, Product, QualityReport, WorldEvent, WorldEventKind, WorldState,
+  AdCreative, Campaign, ChannelId, Customer, DailyAdStats, InboxMessage, MessageIntent, NicheTruth, Order, Product, QualityReport, WorldEvent, WorldEventKind, WorldState,
 } from '../shared.js';
 import { addAdTotals } from './adTotals.js';
 import { ADS, CONVERSION, CREATORS, ESCALATION, FEES, INBOX, ORGANIC, REFUNDS, REVIEWS, SCAM, STATS, UPSELL } from './balance.js';
+import { nichePool, poolSaturation } from './capacity.js';
+import { CHANNEL_STREAM } from './channelBalance.js';
+import {
+  accountBanned, accountOf, addImpressions, approvedOn, deliverSearch, deliverySpec, familyPrior, overlapOf, reachOf, rollChannelEvents, runPaidTails, searchCampaigns, updateWarmth,
+  type DeliverySpec,
+} from './channels.js';
 import { runClaims } from './claims.js';
 import { findBannedClaims } from './compliance.js';
 import { buyerArchetype, createCustomer, customerById, senderArchetype } from './customers.js';
@@ -32,6 +39,7 @@ interface Traffic {
   partnershipId: string | null;
   postId: string | null;
   stat: DailyAdStats | null;
+  channel: ChannelId;           // TikTok organic and creators sit in TikTok's pool
 }
 
 const NEUTRAL_REPORT: QualityReport = {
@@ -49,8 +57,10 @@ class Day {
   readonly newOrders: Order[] = [];
   readonly notes: string[] = [];
   readonly eventIds: string[] = [];
-  sales = 0; revenue = 0; upsells = 0; refunds = 0; refundAmount = 0; adSpend = 0; impressions = 0; clicks = 0; messages = 0;
+  sales = 0; revenue = 0; upsells = 0; refunds = 0; refundAmount = 0; adSpend = 0; messages = 0;
   chargebacks = 0; badReviews = 0;
+  /** The day's ads per channel, for the summary. */
+  readonly ads = new Map<ChannelId, { spend: number; impressions: number; clicks: number }>();
   readonly outage: boolean;
   readonly boost: boolean;
   readonly storeRating: number;
@@ -70,6 +80,12 @@ class Day {
   }
 
   niche(p: Product): NicheTruth { return nicheOf(this.world, p); }
+
+  adsOf(ch: ChannelId): { spend: number; impressions: number; clicks: number } {
+    let t = this.ads.get(ch);
+    if (!t) this.ads.set(ch, t = { spend: 0, impressions: 0, clicks: 0 });
+    return t;
+  }
 
   /** O(1) customer lookup (customers created during the tick fall back to a scan, then get cached). */
   customer(id: string): Customer | undefined {
@@ -212,71 +228,103 @@ function baseCvr(d: Day, p: Product): number {
 
 // ───────────────────────────── 1. paid ads ─────────────────────────────
 
+/** One row of the day and the traffic it sends to the shop. Returns what it spent: the campaign books one ledger line. */
+function addAdRow(d: Day, camp: Campaign, c: AdCreative, ch: ChannelId, spec: DeliverySpec, row: Pick<DailyAdStats, 'spend' | 'impressions' | 'clicks' | 'landingViews' | 'frequency' | 'comments'>): number {
+  const { spend, impressions, clicks, landingViews, frequency, comments } = row;
+  const stat: DailyAdStats = {
+    day: d.day, campaignId: camp.id, creativeId: c.id, productId: camp.productId,
+    spend, impressions, clicks,
+    ctr: impressions > 0 ? Math.round((clicks / impressions) * 10000) / 10000 : 0,
+    cpc: clicks > 0 ? round2(spend / clicks) : 0,
+    cpm: impressions > 0 ? round2((spend / impressions) * 1000) : 0,
+    landingViews, purchases: 0, revenue: 0, roas: 0, frequency, comments,
+    ...(ch === 'tiktok' ? {} : { channel: ch }),
+  };
+  d.world.market.adStats.push(stat);
+  d.traffic.push({ productId: camp.productId, source: 'ads', landingViews, cvrMult: spec.intent, campaignId: camp.id, creativeId: c.id, creatorId: null, partnershipId: null, postId: null, stat, channel: ch });
+  const t = d.adsOf(ch);
+  t.impressions += impressions;
+  t.clicks += clicks;
+  return spend;
+}
+
+/** Free clicks of paid pins: they reach runSales the same day, on a stream of their own. */
+function addPaidTails(d: Day): void {
+  if (!d.world.market.channels) return;
+  for (const stat of runPaidTails(d.world, streamRng(d.dayKey, CHANNEL_STREAM.tails))) {
+    const ch = channelOf(stat);
+    const cvrMult = deliverySpec(d.niche(productById(d.world, stat.productId)!), ch).intent;
+    d.traffic.push({ productId: stat.productId, source: 'ads', landingViews: stat.landingViews, cvrMult, campaignId: stat.campaignId, creativeId: stat.creativeId, creatorId: null, partnershipId: null, postId: null, stat, channel: ch });
+  }
+}
+
 function runAds(d: Day): void {
   const { world, diff } = d;
   const key = d.rng.int(0, 0x7fffffff);
   const m = world.market;
-  const banned = m.adAccount.banned && d.day < m.adAccount.bannedUntilDay;
-  const eventCpm = m.modifiers.cpmUntilDay >= d.day ? m.modifiers.cpmMultiplier : 1;
+  const eventCpm = m.modifiers.cpmUntilDay >= d.day ? m.modifiers.cpmMultiplier : 1; // the cpm_spike event stays TikTok's (D22)
   const dowCpm = ADS.dayOfWeekCpm[(d.day - 1) % 7] ?? 1;
-  let blocked = 0; let capped = false;
+  const blocked = new Map<ChannelId, number>(); let capped = false;
   for (const [index, camp] of world.company.campaigns.entries()) {
     if (camp.status !== 'active') continue;
     const p = productById(world, camp.productId);
     if (!p || p.status !== 'live') continue;
-    const creatives = camp.creativeIds.map((id) => creativeById(world, id)).filter((c): c is AdCreative => !!c && c.review.status === 'approved' && c.productId === p.id);
+    const ch = channelOf(camp);
+    const creatives = camp.creativeIds.map((id) => creativeById(world, id)).filter((c): c is AdCreative => !!c && approvedOn(c, ch) && c.productId === p.id);
     if (!creatives.length) continue;
-    if (banned) { blocked++; continue; }
+    if (accountBanned(m, ch, d.day)) { blocked.set(ch, (blocked.get(ch) ?? 0) + 1); continue; }
     const rng = d.focus(key, index);
     const wanted = Math.max(0, camp.dailyBudget) * uniform(rng, ADS.deliveryMin, ADS.deliveryMax);
     const spendTotal = round2(Math.min(wanted, Math.max(0, d.cash)));
     if (spendTotal < wanted - 0.01) capped = true;
     if (spendTotal < 0.5) continue;
     const n = d.niche(p);
+    const spec = deliverySpec(n, ch, camp);
     const narrow = (camp.targeting?.ageMax ?? 55) - (camp.targeting?.ageMin ?? 18) < 10 ? ADS.narrowAgeCpm : 1;
-    const reach = ADS.reachBase + ADS.reachDemand * n.demand;
+    const reach = reachOf(n);
+    const event = ch === 'tiktok' ? eventCpm : 1;
+    const search = CHANNELS[ch].buying === 'cpc';
     let campSpend = 0;
     for (const c of creatives) {
       const spend = round2(spendTotal / creatives.length);
       if (spend <= 0) continue;
-      const cpm = Math.max(ADS.minCpm, n.cpmBase * diff.cpmMultiplier * eventCpm * dowCpm * narrow * d.noise(ADS.cpmNoiseSd));
-      const impressions = Math.floor((spend / cpm) * 1000);
       const q = d.adQ(c, p);
-      const prior = m.creativeImpressions[c.id] ?? 0;
-      const fatigue = 1 / (1 + prior / ADS.fatigueImpressions);
+      if (search) {
+        const buy = deliverSearch(world, n, spec, q.overall, spend, creatives.length * searchCampaigns(world, n.id), rng);
+        campSpend += addAdRow(d, camp, c, ch, spec, { ...buy, landingViews: rng.binomial(buy.clicks, spec.landingRate), frequency: 1, comments: [] });
+        continue;
+      }
+      const cpm = Math.max(ADS.minCpm, spec.cpmBase * diff.cpmMultiplier * event * dowCpm * narrow * spec.learningCpm * d.noise(ADS.cpmNoiseSd));
+      const impressions = Math.floor((spend / cpm) * 1000);
+      const prior = familyPrior(m, c, ch);
+      const fatigue = 1 / (1 + prior / spec.fatigue);
       const ctrRaw = ADS.baseCtr * Math.pow(Math.max(1, q.overall) / ADS.qualityRef, ADS.qualityExp)
-        * Math.pow((n.hookAffinity[c.hookStyle] ?? 1) * (n.formatAffinity[c.format] ?? 1), ADS.affinityExp) * (0.6 + 0.8 * n.tiktokAffinity)
-        * fatigue * d.noise(ADS.ctrNoiseSd);
+        * Math.pow((n.hookAffinity[c.hookStyle] ?? 1) * spec.formatFit(c), spec.affinityExp) * (0.6 + 0.8 * spec.fit)
+        * spec.ctrScale * spec.ratioFit(c) * spec.learningCtr * fatigue * d.noise(ADS.ctrNoiseSd);
       const ctr = clamp(ctrRaw, ADS.minCtr, ADS.maxCtr);
       const clicks = rng.binomial(impressions, ctr);
-      const landingViews = rng.binomial(clicks, ADS.landingRate);
-      m.creativeImpressions[c.id] = prior + impressions;
+      const landingViews = rng.binomial(clicks, spec.landingRate);
+      addImpressions(m, c, ch, impressions);
       const nComments = Math.min(ADS.maxCommentsPerRow, rng.poisson(impressions / ADS.commentsPerImpressions));
-      const stat: DailyAdStats = {
-        day: d.day, campaignId: camp.id, creativeId: c.id, productId: p.id,
-        spend, impressions, clicks,
-        ctr: impressions > 0 ? Math.round((clicks / impressions) * 10000) / 10000 : 0,
-        cpc: clicks > 0 ? round2(spend / clicks) : 0,
-        cpm: impressions > 0 ? round2((spend / impressions) * 1000) : 0,
-        landingViews, purchases: 0, revenue: 0, roas: 0,
-        frequency: round2(1 + (prior + impressions) / reach),
+      campSpend += addAdRow(d, camp, c, ch, spec, {
+        spend, impressions, clicks, landingViews,
+        frequency: round2(1 + (prior + impressions) / (reach * spec.poolShare)),
         comments: adComments(rng, nComments, q.overall, p.salesPage?.hypeLevel ?? 0.5, diff.annoyingShare, n, p.audience),
-      };
-      m.adStats.push(stat);
-      d.traffic.push({ productId: p.id, source: 'ads', landingViews, cvrMult: 1, campaignId: camp.id, creativeId: c.id, creatorId: null, partnershipId: null, postId: null, stat });
-      campSpend += spend;
-      d.impressions += impressions;
-      d.clicks += clicks;
+      });
     }
     if (campSpend > 0) {
-      recordLedger(world, { type: 'ad_spend', amount: -campSpend, memo: `TikTok Ads — ${short(camp.name, 50)}`, ref: camp.id });
+      recordLedger(world, { type: 'ad_spend', amount: -campSpend, memo: `${CHANNELS[ch].label} Ads — ${short(camp.name, 50)}`, ref: camp.id });
       d.cash = round2(d.cash - campSpend);
       d.adSpend = round2(d.adSpend + campSpend);
+      const t = d.adsOf(ch);
+      t.spend = round2(t.spend + campSpend);
     }
   }
-  if (blocked) d.notes.push(`Compte publicitaire suspendu jusqu'au jour ${m.adAccount.bannedUntilDay} : ${plural(blocked, 'campagne bloquée', 'campagnes bloquées')}.`);
+  for (const [ch, count] of blocked) {
+    d.notes.push(`Compte ${ch === 'tiktok' ? 'publicitaire' : CHANNELS[ch].label} suspendu jusqu'au jour ${accountOf(m, ch)?.bannedUntilDay} : ${plural(count, 'campagne bloquée', 'campagnes bloquées')}.`);
+  }
   if (capped) d.notes.push('Trésorerie insuffisante : la diffusion des pubs a été plafonnée.');
-  runPaidTails(d);
+  addPaidTails(d);
 }
 
 // ───────────────────────────── 2. organic ─────────────────────────────
@@ -322,7 +370,7 @@ function runOrganic(d: Day): void {
     const rate = post.viral ? uniform(rng, ORGANIC.viralClickRate.min, ORGANIC.viralClickRate.max) : uniform(rng, ORGANIC.clickRate.min, ORGANIC.clickRate.max);
     post.clicks = p && p.status === 'live' ? rng.binomial(post.views, rate) : 0;
     if (p && post.clicks > 0) {
-      d.traffic.push({ productId: p.id, source: 'organic', landingViews: rng.binomial(post.clicks, ADS.landingRate), cvrMult: CONVERSION.organicCvrMultiplier, campaignId: null, creativeId: null, creatorId: null, partnershipId: null, postId: post.id, stat: null });
+      d.traffic.push({ productId: p.id, source: 'organic', landingViews: rng.binomial(post.clicks, ADS.landingRate), cvrMult: CONVERSION.organicCvrMultiplier, campaignId: null, creativeId: null, creatorId: null, partnershipId: null, postId: post.id, stat: null, channel: 'tiktok' });
     }
     if (post.viral) {
       const ev = pushEventSafe(d, 'viral_organic', 'Vidéo organique virale !', `« ${short(post.hook, 60)} » dépasse ${fmtInt(post.views)} vues sur TikTok.`, 'good',
@@ -363,7 +411,7 @@ function runCreators(d: Day): void {
     const views = Math.round(creator.avgViews * CREATORS.tail[k]! * match * d.noise(0.35));
     const clicks = p.status === 'live' ? rng.binomial(views, uniform(rng, CREATORS.clickRate.min, CREATORS.clickRate.max)) : 0;
     if (clicks > 0) {
-      d.traffic.push({ productId: p.id, source: 'creator', landingViews: rng.binomial(clicks, ADS.landingRate), cvrMult: CREATORS.cvrMultiplier, campaignId: null, creativeId: null, creatorId: creator.id, partnershipId: pt.id, postId: null, stat: null });
+      d.traffic.push({ productId: p.id, source: 'creator', landingViews: rng.binomial(clicks, ADS.landingRate), cvrMult: CREATORS.cvrMultiplier, campaignId: null, creativeId: null, creatorId: creator.id, partnershipId: pt.id, postId: null, stat: null, channel: 'tiktok' });
     }
     if (k === 0) d.notes.push(`@${creator.handle} a publié sa vidéo sur « ${short(p.title, 40)} » (${fmtInt(views)} vues).`);
   }
@@ -371,12 +419,13 @@ function runCreators(d: Day): void {
 
 // ───────────────────────────── 4. sales ─────────────────────────────
 
-function newOrder(d: Day, p: Product, source: Order['source'], t: Pick<Traffic, 'campaignId' | 'creatorId'>, customer?: Customer): Order {
+function newOrder(d: Day, p: Product, source: Order['source'], t: Pick<Traffic, 'campaignId' | 'creatorId'> & { channel?: ChannelId }, customer?: Customer): Order {
   const { world, rng } = d;
   const c = customer ?? createCustomer(world, rng, buyerArchetype(rng, world.scenario?.difficulty ?? 'normal'));
   const o: Order = {
     id: nextId(world, 'ord'), day: d.day, customerId: c.id, productId: p.id, price: p.price, source,
     campaignId: t.campaignId, creatorId: t.creatorId, refunded: false, chargeback: false, charges: 1, downloads: 1,
+    ...(t.channel && t.channel !== 'tiktok' ? { channel: t.channel } : {}),
   };
   c.orders.push(o.id);
   world.market.orders.push(o);
@@ -388,11 +437,12 @@ function newOrder(d: Day, p: Product, source: Order['source'], t: Pick<Traffic, 
   return o;
 }
 
-const SOURCE_LABEL: Record<Order['source'], string> = { ads: 'pubs TikTok', organic: 'TikTok organique', creator: 'créateurs', upsell: 'upsell « La suite est ici »', email: 'e-mails', bump: 'offre à la commande' };
+const SOURCE_LABEL: Record<Exclude<Order['source'], 'ads'>, string> = { organic: 'TikTok organique', creator: 'créateurs', upsell: 'upsell « La suite est ici »', email: 'e-mails', bump: 'offre à la commande' };
 
-function bookRevenue(d: Day, p: Product, source: Order['source'], count: number, amount: number): void {
+function bookRevenue(d: Day, p: Product, source: Order['source'], count: number, amount: number, channel: ChannelId = 'tiktok'): void {
   if (count <= 0 || amount <= 0) return;
-  recordLedger(d.world, { type: 'revenue', amount, memo: `${count} vente${count > 1 ? 's' : ''} « ${short(p.title, 40)} » (${SOURCE_LABEL[source]})`, ref: p.id });
+  const label = source === 'ads' ? `pubs ${CHANNELS[channel].label}` : SOURCE_LABEL[source];
+  recordLedger(d.world, { type: 'revenue', amount, memo: `${count} vente${count > 1 ? 's' : ''} « ${short(p.title, 40)} » (${label})`, ref: p.id });
 }
 
 function runSales(d: Day): void {
@@ -405,19 +455,22 @@ function runSales(d: Day): void {
     list.push(t);
     byProduct.set(t.productId, list);
   }
-  // niche saturation: the daily buyer pool is finite (demand-scaled)
-  const nicheViews = new Map<string, number>();
+  // niche saturation: each channel's daily buyer pool is finite (demand-scaled). Search is capped by its queries instead
+  const pooled = (t: Traffic) => CHANNELS[t.channel].buying === 'cpm';
+  const nicheViews = new Map<string, { n: NicheTruth; views: Map<ChannelId, number> }>();
   for (const t of d.traffic) {
     const p = productById(world, t.productId);
-    if (!p) continue;
-    const id = d.niche(p).id;
-    nicheViews.set(id, (nicheViews.get(id) ?? 0) + t.landingViews);
+    if (!p || !pooled(t)) continue;
+    const n = d.niche(p);
+    const line = nicheViews.get(n.id) ?? { n, views: new Map<ChannelId, number>() };
+    line.views.set(t.channel, (line.views.get(t.channel) ?? 0) + t.landingViews);
+    nicheViews.set(n.id, line);
   }
   const saturation = new Map<string, number>();
-  for (const [id, views] of nicheViews) {
-    const n = world.market.niches.find((x) => x.id === id);
-    const pool = CONVERSION.poolBase + CONVERSION.poolDemand * (n?.demand ?? 0.35);
-    saturation.set(id, views > 0 ? (pool * (1 - Math.exp(-views / pool))) / views : 1);
+  for (const [id, { n, views }] of nicheViews) {
+    let total = 0;
+    for (const v of views.values()) total += v;
+    for (const [ch, v] of views) saturation.set(`${id}:${ch}`, poolSaturation(nichePool(world, n, ch), v, total - v, overlapOf(ch)));
   }
   for (const [productId, entries] of byProduct) {
     const p = productById(world, productId);
@@ -427,17 +480,19 @@ function runSales(d: Day): void {
     if (d.outage || p.status !== 'live') continue;
     const rng = d.focus(key, world.company.products.indexOf(p));
     const cvr0 = baseCvr(d, p) * d.noise(CONVERSION.noiseSd);
-    const sat = saturation.get(d.niche(p).id) ?? 1;
-    const bySource = new Map<Order['source'], { n: number; amount: number }>();
+    const nicheId = d.niche(p).id;
+    const bySource = new Map<string, { source: Order['source']; channel: ChannelId; n: number; amount: number }>();
     for (const t of entries) {
+      const sat = pooled(t) ? saturation.get(`${nicheId}:${t.channel}`) ?? 1 : 1;
       const eff = Math.round(t.landingViews * sat);
       const n = rng.binomial(eff, Math.min(CONVERSION.maxCvr, cvr0 * t.cvrMult));
       if (n <= 0) continue;
       for (let i = 0; i < n; i++) newOrder(d, p, t.source, t);
       const amount = round2(n * p.price);
-      const agg = bySource.get(t.source) ?? { n: 0, amount: 0 };
+      const slot = `${t.source}:${t.channel}`;
+      const agg = bySource.get(slot) ?? { source: t.source, channel: t.channel, n: 0, amount: 0 };
       agg.n += n; agg.amount = round2(agg.amount + amount);
-      bySource.set(t.source, agg);
+      bySource.set(slot, agg);
       if (t.stat) {
         t.stat.purchases += n;
         t.stat.revenue = round2(t.stat.revenue + amount);
@@ -458,7 +513,7 @@ function runSales(d: Day): void {
         }
       }
     }
-    for (const [source, agg] of bySource) bookRevenue(d, p, source, agg.n, agg.amount);
+    for (const agg of bySource.values()) bookRevenue(d, p, agg.source, agg.n, agg.amount, agg.channel);
   }
   if (d.outage) d.notes.push('Panne de paiement de la boutique : aucune vente possible aujourd\'hui malgré le trafic.');
 }
@@ -478,7 +533,7 @@ function runUpsells(d: Day): void {
     if (!up || up.status !== 'live') continue;
     if (!rng.chance(upsellRate((d.pdfQ(p).overall + d.pdfQ(up).overall) / 2, up.price, d.niche(up).wtp))) continue;
     const customer = d.customer(o.customerId);
-    newOrder(d, up, 'upsell', { campaignId: o.campaignId, creatorId: o.creatorId }, customer);
+    newOrder(d, up, 'upsell', { campaignId: o.campaignId, creatorId: o.creatorId, ...(o.channel ? { channel: o.channel } : {}) }, customer);
     p.stats.upsellSales += 1;
     d.upsells += 1;
     const a = agg.get(up.id) ?? { n: 0, amount: 0 };
@@ -655,18 +710,20 @@ function runInbox(d: Day): void {
     d.messages++;
   }
 
-  // c) ad comments that turn into conversations
-  for (const s of world.market.adStats) {
+  // c) ad comments that turn into conversations. Another channel's row draws on its own stream: the follow-ups below keep theirs
+  for (const [index, s] of world.market.adStats.entries()) {
     if (s.day !== d.day) continue;
     const p = productById(world, s.productId);
     if (!p) continue;
+    const tiktok = channelOf(s) === 'tiktok';
+    const rowRng = tiktok ? rng : streamRng(d.dayKey, CHANNEL_STREAM.comments, index);
     for (const cm of s.comments) {
       const chance = INBOX.commentToMessage[cm.tone] ?? 0;
-      if (!chance || !rng.chance(chance)) continue;
+      if (!chance || !rowRng.chance(chance)) continue;
       const intent: MessageIntent = cm.tone === 'troll' ? 'troll' : 'question';
-      const c = createCustomer(world, rng, senderArchetype(rng, intent));
+      const c = createCustomer(world, rowRng, senderArchetype(rowRng, intent));
       c.name = `@${cm.author}`;
-      const msg = createMessage(world, rng, { intent, customer: c, product: p, order: null, niche: d.niche(p), channel: 'commentaire_tiktok' });
+      const msg = createMessage(world, rowRng, { intent, customer: c, product: p, order: null, niche: d.niche(p), channel: tiktok ? 'commentaire_tiktok' : 'commentaire_pub' });
       msg.subject = 'Commentaire sous votre pub';
       msg.body = cm.text;
       msg.thread = [{ from: 'customer', text: cm.text, day: d.day }];
@@ -768,6 +825,14 @@ function housekeeping(d: Day): void {
     d.notes.push('Compte publicitaire réactivé : les campagnes peuvent reprendre.');
     emit(d.world, { agentId: null, kind: 'ad', text: 'Fin de suspension : le compte publicitaire TikTok est réactivé.' });
   }
+  for (const [id, acc] of Object.entries(m.channels?.accounts ?? {})) {
+    if (!acc.banned || d.day < acc.bannedUntilDay) continue;
+    acc.banned = false;
+    acc.strikes = 0;
+    const label = id === 'google' ? 'Google' : CHANNELS[id as ChannelId].label; // the account also carries YouTube
+    d.notes.push(`Compte ${label} réactivé : les campagnes peuvent reprendre.`);
+    emit(d.world, { agentId: null, kind: 'ad', text: `Fin de suspension : le compte publicitaire ${label} est réactivé.` });
+  }
   if (m.modifiers.cpmUntilDay < d.day && m.modifiers.cpmMultiplier !== 1) m.modifiers.cpmMultiplier = 1;
   const released = releaseHolds(d.world);
   if (released > 0) {
@@ -790,14 +855,16 @@ function prune(d: Day): void {
 
 function summarize(d: Day, result: MarketDayResult): void {
   const { world } = d;
-  if (d.adSpend > 0) {
-    const ctr = d.impressions > 0 ? d.clicks / d.impressions : 0;
-    const adRevenue = world.market.adStats.filter((s) => s.day === d.day).reduce((s, x) => s + x.revenue, 0);
-    const roas = d.adSpend > 0 ? adRevenue / d.adSpend : 0;
-    const line = `Pubs TikTok : ${fmtEur(d.adSpend)} dépensés, ${fmtInt(d.impressions)} impressions, ${fmtInt(d.clicks)} clics (CTR ${fmtPct(ctr)}), ROAS ${fmtNum(roas, 2)}.`;
-    d.notes.unshift(line);
-    emit(world, { agentId: null, kind: 'ad', text: line });
+  const adLines: string[] = [];
+  for (const ch of CHANNEL_IDS) {
+    const t = d.ads.get(ch);
+    if (!t || t.spend <= 0) continue;
+    const ctr = t.impressions > 0 ? t.clicks / t.impressions : 0;
+    const adRevenue = world.market.adStats.filter((s) => s.day === d.day && channelOf(s) === ch).reduce((s, x) => s + x.revenue, 0);
+    adLines.push(`Pubs ${CHANNELS[ch].label} : ${fmtEur(t.spend)} dépensés, ${fmtInt(t.impressions)} impressions, ${fmtInt(t.clicks)} clics (CTR ${fmtPct(ctr)}), ROAS ${fmtNum(adRevenue / t.spend, 2)}.`);
   }
+  d.notes.unshift(...adLines);
+  for (const line of adLines) emit(world, { agentId: null, kind: 'ad', text: line });
   const live = world.company.products.some((p) => p.status === 'live');
   if (d.sales > 0) {
     const line = `${plural(d.sales, 'vente', 'ventes')} aujourd'hui (${fmtEur(d.revenue)})${d.upsells ? `, dont ${plural(d.upsells, 'upsell', 'upsells')}` : ''}.`;
@@ -828,18 +895,12 @@ function summarize(d: Day, result: MarketDayResult): void {
 // ───────────────────────────── phases still empty ─────────────────────────────
 // Their place and stream are already fixed in DAY_PHASES: the package that fills one writes its body and shifts nothing.
 
-/** P4.1. Called by runAds on its own stream: its free clicks must reach runSales the same day. */
-function runPaidTails(_d: Day): void { /* empty */ }
 /** P10.2 */
 function runEmail(_d: Day): void { /* empty */ }
 /** P10.2 */
 function runCapture(_d: Day): void { /* empty */ }
 /** P10.2 */
 function runBumps(_d: Day): void { /* empty */ }
-/** P4.1 */
-function updateWarmth(_d: Day): void { /* empty */ }
-/** P4.1 */
-function rollChannelEvents(_d: Day): void { /* empty */ }
 /** P10.2 */
 function runRivals(_d: Day): void { /* empty */ }
 
@@ -874,9 +935,9 @@ export const DAY_PHASES: readonly { run: (d: Day) => void; stream: number | null
   { run: runInbox, stream: 9 },
   { run: runEscalations, stream: 10 },
   { run: (d) => runClaims(d.world, d.rng), stream: 1004 },
-  { run: updateWarmth, stream: null },
+  { run: (d) => updateWarmth(d.world), stream: null },
   { run: rollDayEvents, stream: 11 },
-  { run: rollChannelEvents, stream: 1005 },
+  { run: (d) => rollChannelEvents(d.world, d.rng), stream: 1005 },
   { run: runRivals, stream: 101 },
 ];
 

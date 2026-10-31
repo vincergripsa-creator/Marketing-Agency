@@ -11,7 +11,7 @@ import type {
 } from '../../contracts.js';
 import { parsePlaybook, scrubDeep, type PlaybookRules } from '../playbook.js';
 import { deepClone, seededRng, type LocalRng } from '../util.js';
-import { heuristicAd, heuristicHooks, heuristicOutreach } from './ads.js';
+import { heuristicAd, heuristicHooks, heuristicOutreach, heuristicSearchAd } from './ads.js';
 import { heuristicRedTeam, heuristicSalesPage } from './commerce.js';
 import { heuristicChat, heuristicMemo, heuristicMission } from './direction.js';
 import { heuristicFactCheck, heuristicHumanize } from './editing.js';
@@ -172,11 +172,13 @@ export class HeuristicEngine implements ContentEngine {
     return scrubDeep(heuristicMemo(input), rules.banned);
   }
 
-  // Land with P4.2 (writeSearchAd) and P11.2 (the other three). Nothing calls them before.
-
-  async writeSearchAd(_input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] }, _ctx: MindContext): Promise<SearchAdDraft> {
-    throw new Error('not landed');
+  async writeSearchAd(input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] }, ctx: MindContext): Promise<SearchAdDraft> {
+    const { rng, flawRng, rules } = this.begin('writeSearchAd', ctx, productSubjects(input.product), input.product?.title);
+    const { keywords, ...text } = heuristicSearchAd(input, rng, { banned: rules.banned, ...craftRules(ctx, flawRng) });
+    return { ...scrubDeep(text, [...rules.banned, ...(input.bannedClaims ?? [])]), keywords }; // keywords bid, they never show
   }
+
+  // Land with P11.2. Nothing calls them before.
 
   async writeLeadMagnet(_input: { product: Product; content: PdfContent; voc: VoiceOfCustomer }, _ctx: MindContext): Promise<PdfContent> {
     throw new Error('not landed');

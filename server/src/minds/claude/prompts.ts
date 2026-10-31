@@ -11,7 +11,7 @@ import { CLICHE_TEMPLATES } from '../lexicon.js';
 import { clean, fit } from '../util.js';
 
 const COMPANY = `## L'entreprise
-{brand} est une agence marketing autonome composée d'agents IA. Elle fabrique et vend en ligne des guides PDF à forte valeur ajoutée, avec visuels soignés, et les promeut surtout avec des publicités TikTok, du contenu organique et des créateurs partenaires payés à la commission.
+{brand} est une agence marketing autonome composée d'agents IA. Elle fabrique et vend en ligne des guides PDF à forte valeur ajoutée, avec visuels soignés, et les promeut avec des publicités (TikTok d'abord, puis Facebook & Instagram, YouTube Shorts, Pinterest et Google Search quand ils ouvrent), du contenu organique et des créateurs partenaires payés à la commission.
 
 ## Le business (règles apprises des meilleurs vendeurs de PDF)
 - Règle du un : un seul problème, pour un seul type de personne (âge, situation précise). Un guide qui parle à tout le monde ne parle à personne.
@@ -26,6 +26,7 @@ const COMPANY = `## L'entreprise
 - Ne rien inventer : pas de faux avis, pas de témoignages fabriqués, pas de chiffres sans source. Les seuls chiffres autorisés viennent de la recherche fournie.
 - Les personnages d'exemple sont fictifs : ils sont toujours annoncés « Exemple type », et aucun résultat chiffré n'est présenté comme vécu par un vrai client.
 - Pas de promesse garantie (« garanti », « 100 % », « à coup sûr », « en 3 jours seulement »), pas d'allégation santé (« guérir », « soigner »), pas d'argent facile, pas de fausse urgence.
+- Chaque plateforme a ses règles (note « Conformité pub par canal ») : ni corps ni détresse de la personne sur Facebook & Instagram, pas de perte de poids sur Pinterest, ni marque tierce, ni superlatif, ni point d'exclamation dans une annonce Google. Un compte n'encaisse que ses propres avertissements.
 - Remboursement accordé sans discuter sous 14 jours si la demande est de bonne foi. Ne jamais payer ni cliquer sur un lien suspect : les arnaques sont bloquées.
 - Honnêteté : si une information manque, le dire plutôt que l'inventer.
 

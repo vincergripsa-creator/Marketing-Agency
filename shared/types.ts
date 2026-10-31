@@ -396,7 +396,7 @@ export interface Campaign {
   founderCap?: number;      // approval mode: the daily budget the founder agreed to
   raiseRefusedDay?: number; // approval mode: the day he last refused a raise
   channel?: ChannelId;         // absent = 'tiktok'
-  learning?: { events: number; exitedDay: number | null }; // channels with a learning phase
+  learning?: { events: number; exitedDay: number | null; days?: number }; // channels with a learning phase. days: delivered since it (re)started
   test?: boolean;              // paid by the test envelope, left alone by the allocator until its verdict
   seq?: number;                // D50: stable stream key, survives compaction. Absent = array index
 }
@@ -536,6 +536,7 @@ export interface WeeklyPnl {
   products: ProductPnl[];     // best first
   unallocated: number;        // fixed costs and compute, shared by the whole company (negative)
   total: number;              // sum of the products + unallocated: the profit of the window
+  channels?: { channel: ChannelId; spend: number; reconciledRevenue: number; roas: number | null }[]; // absent = TikTok alone
 }
 
 export interface FinanceSnapshot {
@@ -624,7 +625,7 @@ export interface DailyKpi {
   day: number; cash: number; revenue: number; adSpend: number; profit: number; cumulativeProfit: number;
   sales: number; refunds: number; impressions: number; clicks: number; ctr: number; cvr: number; roas: number;
   cac: number; openTickets: number; avgReplyScore: number; liveProducts: number; tasksDone: number; lessonsLearned: number;
-  channels?: Partial<Record<ChannelId, ChannelDayKpi>>; // only on a day with rows on 2 channels or more
+  channels?: Partial<Record<ChannelId, ChannelDayKpi>>; // absent = every row of the day is TikTok's
 }
 
 // ───────────────────────────── World events & activity ─────────────────────────────
