@@ -4,6 +4,7 @@
  * that is how the agency gets ads rejected, and learns.
  * An ad never carries the price (it changes, the ad stays) and never shows a named person with a result:
  * the only social proof it may use is a review a buyer really left on the product.
+ * Talent (talent §4.2) acts through `t` and `flaw`: absent, this file writes today's text, draw for draw.
  */
 import type { AdFormat, AdScene, CreatorProfile, HookStyle, Product, Review, VoiceOfCustomer } from '../../shared.js';
 import type { AdDraft, UpsellContext } from '../../contracts.js';
@@ -171,7 +172,7 @@ function relevance(hook: string, c: NicheCtx): number {
   return norm(hook).split(/[^a-z0-9]+/).filter((w) => key.has(w)).length;
 }
 
-export function makeHook(style: HookStyle, c: NicheCtx, rng: LocalRng, bonus: string | null = null, used: ReadonlySet<string> = new Set()): string {
+export function makeHook(style: HookStyle, c: NicheCtx, rng: LocalRng, bonus: string | null = null, used: ReadonlySet<string> = new Set(), t?: number): string {
   const every = rng.shuffle(uniqStrings(hookCandidates(style, c, rng, bonus)).filter((x) => x.length <= HOOK_MAX));
   // a hook this product already said comes back only when nothing else is left
   const fresh = every.filter((h) => !used.has(h));
@@ -183,7 +184,7 @@ export function makeHook(style: HookStyle, c: NicheCtx, rng: LocalRng, bonus: st
   const named = fitting.map((h) => ({ h, r: relevance(h, c) })).filter((x) => x.r > 0).sort((a, b) => b.r - a.r);
   if (named.length < MIN_NAMED_HOOKS) return fitting[0]!;
   const best = named.slice(0, Math.max(MIN_NAMED_HOOKS, Math.ceil(named.length / 2)));
-  return rng.chance(0.7) ? rng.pick(best).h : fitting[0]!;
+  return rng.chance(t === undefined ? 0.7 : 0.35 + 0.6 * t) ? rng.pick(best).h : fitting[0]!;
 }
 
 /** Short hooks (≤ 90 chars) used only when every niche-specific candidate is too long. */
@@ -202,6 +203,7 @@ export function heuristicHooks(
   input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[]; upsellOf?: UpsellContext | null; usedHooks?: string[] },
   rng: LocalRng,
   preferred: HookStyle[],
+  t?: number,
 ): { hookStyle: HookStyle; hook: string }[] {
   const c = buildNicheCtx(nicheFromProduct(input.product, input.voc), input.voc, input.upsellOf ?? null);
   const asked = (input.styles ?? []).filter((s) => HOOK_STYLES.includes(s));
@@ -209,7 +211,7 @@ export function heuristicHooks(
   const bonus = bonusOf(input.product);
   const used = new Set(input.usedHooks ?? []);
   return styles.map((s) => {
-    const hook = makeHook(s, c, rng, bonus, used);
+    const hook = makeHook(s, c, rng, bonus, used, t);
     used.add(hook);
     return { hookStyle: s, hook };
   });
@@ -376,16 +378,48 @@ function quotableReviews(p: Product | null | undefined): Review[] {
     && !/support|service client/i.test(r.text) && !RISK_RULES.some((x) => x.re.test(r.text)));
 }
 
+/** Stock lines of a tired writer: each holds a cliché the scorer really counts. */
+export const AD_CLICHES: readonly string[] = [
+  'Chaque petit pas compte.',
+  'La patience est la clé.',
+  'Ça peut faire toute la différence.',
+  'Alors lance-toi sans plus attendre.',
+  'En fin de compte, tout se joue là.',
+  'Un véritable atout au quotidien.',
+];
+
+/**
+ * What a weak writer gets wrong (talent §4.2): each site changes the text, the scorer does the rest. A4 and A5 fire half
+ * as often and block, so the reviewer sends them back. Runs on the script, before the durations are clamped.
+ */
+function applyAdFlaws(scenes: AdScene[], draft: AdDraft, flawRng: LocalRng, f: number, c: NicheCtx): void {
+  const [lostWords, cliche, longScreen, noHook, weakCta] = [f, f, f, f / 2, f / 2].map((p) => flawRng.chance(p));
+  const middle = scenes[flawRng.int(1, scenes.length - 2)]!;
+  const line = flawRng.pick(AD_CLICHES);
+  // A1: the customer's words give way to a line that fits any guide
+  if (lostWords) Object.assign(scenes[1]!, { onScreenText: 'Tu te reconnais ?', voiceover: 'Si toi aussi tu en as assez, reste deux secondes.' });
+  if (cliche) middle.voiceover = `${middle.voiceover} ${line}`; // A2
+  // A3: the step goes on screen whole
+  if (longScreen) scenes[2]!.onScreenText = `1. ${bare(c.steps[0] ?? FALLBACK.steps[0])}, puis ${lowerFirst(bare(c.steps[1] ?? FALLBACK.steps[1]))}, une étape à la fois, sans sauter la suivante`;
+  // A4: the first screen forgets the hook
+  if (noHook) Object.assign(scenes[0]!, { onScreenText: 'Deux secondes de ton temps', voiceover: 'Deux secondes de ton temps, pas plus.' });
+  // A5: the ad ends without saying where to go
+  if (weakCta) {
+    Object.assign(scenes[scenes.length - 1]!, { onScreenText: 'À toi de jouer', voiceover: 'À toi de jouer maintenant.' });
+    draft.cta = '';
+  }
+}
+
 export function heuristicAd(
   input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[]; upsellOf?: UpsellContext | null },
   rng: LocalRng,
-  rules: { banned: string[]; preferredFormats: AdFormat[] },
+  rules: { banned: string[]; preferredFormats: AdFormat[]; t?: number; flaw?: number; flawRng?: LocalRng },
 ): AdDraft {
   const c = buildNicheCtx(nicheFromProduct(input.product, input.voc), input.voc, input.upsellOf ?? null);
   const style: HookStyle = HOOK_STYLES.includes(input.hookStyle) ? input.hookStyle : 'question';
   const format: AdFormat = AD_FORMATS.includes(input.format) ? input.format : (rules.preferredFormats[0] ?? 'faceless_voiceover');
   const bonus = bonusOf(input.product);
-  const hook = fit(clean(input.hook) || makeHook(style, c, rng, bonus), HOOK_MAX);
+  const hook = fit(clean(input.hook) || makeHook(style, c, rng, bonus, undefined, rules.t), HOOK_MAX);
   const vis = VISUALS[format];
   const title = plainTitle(clean(input.product?.title)) || 'le guide';
   const phrases = shortPhrases(c, 44);
@@ -446,7 +480,7 @@ export function heuristicAd(
 
   // hype-ish styles occasionally slip a risky claim, unless the agency learned to avoid it
   const banned = [...(input.bannedClaims ?? []), ...rules.banned].map(clean).filter(Boolean);
-  if ((style === 'before_after' || style === 'stat') && rng.chance(0.25)) {
+  if ((style === 'before_after' || style === 'stat') && rng.chance(rules.t === undefined ? 0.25 : 0.45 * (1 - rules.t))) {
     const allowed = RISKY_AD_PHRASES.filter((p) => !conflictsWith(p, banned));
     if (allowed.length) {
       const r = riskyLine(rng.pick(allowed), c);
@@ -456,13 +490,8 @@ export function heuristicAd(
     }
   }
 
-  // total 12-30 s
-  let total = scenes.reduce((s, x) => s + x.durationSec, 0);
-  while (total > 30) { const longest = scenes.reduce((a, b) => (b.durationSec > a.durationSec ? b : a)); longest.durationSec -= 1; total -= 1; }
-  while (total < 12) { scenes[2]!.durationSec += 1; total += 1; }
-
   const caption = fit(`${hook} Le guide « ${title} » est en lien dans la bio. Sauvegarde pour ce soir.`, 260);
-  return {
+  const draft: AdDraft = {
     hook,
     hookStyle: style,
     format,
@@ -471,6 +500,13 @@ export function heuristicAd(
     hashtags: hashtags(c, rng),
     cta: format === 'carousel' ? 'Swipe jusqu’au bout et télécharge le guide (lien en bio)' : 'Télécharge le guide (lien en bio)',
   };
+  if (rules.flaw && rules.flawRng) applyAdFlaws(scenes, draft, rules.flawRng, rules.flaw, c);
+
+  // total 12-30 s
+  let total = scenes.reduce((s, x) => s + x.durationSec, 0);
+  while (total > 30) { const longest = scenes.reduce((a, b) => (b.durationSec > a.durationSec ? b : a)); longest.durationSec -= 1; total -= 1; }
+  while (total < 12) { scenes[2]!.durationSec += 1; total += 1; }
+  return draft;
 }
 
 function sentence(s: string): string {

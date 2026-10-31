@@ -145,7 +145,7 @@ export class ClaudeEngine implements ContentEngine {
       this.warnOnce('budget', `[minds] Plafond de calcul atteint (${this.opts.maxComputeEur} €) : les agents repassent en mode heuristique.`);
       return finish(spec.fallback);
     }
-    const tier: ModelTier = spec.ctx?.agent?.tier ?? 'sonnet';
+    const tier: ModelTier = spec.ctx?.craft?.tier ?? spec.ctx?.agent?.tier ?? 'sonnet'; // talent §4.9: a weak hand writes on the tier below
     const model = this.model(tier);
     const brand = resolveBrand(this.opts.brand, spec.ctx);
     try {
@@ -154,7 +154,7 @@ export class ClaudeEngine implements ContentEngine {
         max_tokens: spec.maxTokens,
         system: systemBlocks(spec.ctx, brand),
         messages: [{ role: 'user', content: spec.prompt }],
-        output_config: { effort: spec.effort, format: { type: 'json_schema', schema: spec.schema } },
+        output_config: { effort: spec.ctx?.craft?.effort ?? spec.effort, format: { type: 'json_schema', schema: spec.schema } },
       };
       const reqOpts: RequestOpts = { timeout: spec.timeoutMs ?? 180_000 };
       const msg = spec.stream && typeof this.client.messages.stream === 'function'

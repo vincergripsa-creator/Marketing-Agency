@@ -8,6 +8,7 @@ import { emit, nextId } from '../core/index.js';
 import { ROLES } from './org/catalog.js';
 import { officerId, reviewerFor } from './org/officers.js';
 import { deptFor, fitOf, isLean, speedFor, workFor } from './org/reconcile.js';
+import { routeBonus } from './talent/evidence.js';
 import { short, idNum } from './util.js';
 
 export interface KindMeta {
@@ -244,7 +245,8 @@ function farBehind(a: AgentState, b: AgentState): boolean {
 /**
  * Chiefs delegate every ready, unassigned task to the capable member who would finish it first, with energy > 20
  * (chiefs work too: among equally loaded specialists, a member far behind the others takes the next task, so a
- * team of three never leaves one of them idle for weeks). Emits 'delegate' (chief → assignee) and 'walk'.
+ * team of three never leaves one of them idle for weeks). In a league the observed rating comes off the load: the
+ * better rated gets the work, nobody starves (talent §6.4). Emits 'delegate' (chief → assignee) and 'walk'.
  */
 export function assignReady(world: WorldState): number {
   let assigned = 0;
@@ -256,7 +258,7 @@ export function assignReady(world: WorldState): number {
     const guard = isGuardKind(world, task.kind);
     const candidates = capableAgents(world, task.kind, task.dept, taskChannel(task)).filter((a) => guard || a.energy > 20);
     if (!candidates.length) continue;
-    const finish = new Map(candidates.map((a) => [a.id, (agentLoad(world, a.id) + task.workLeft) / speedFor(world, a, task.kind)]));
+    const finish = new Map(candidates.map((a) => [a.id, (agentLoad(world, a.id) - routeBonus(world, a, task.kind) + task.workLeft) / speedFor(world, a, task.kind)]));
     candidates.sort((a, b) => {
       const la = finish.get(a.id)!, lb = finish.get(b.id)!;
       if (la !== lb) return la - lb;

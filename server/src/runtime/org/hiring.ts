@@ -5,7 +5,7 @@
  */
 import type { AgentId, AgentState, Candidate, LedgerType, OrgDecision, Position, PositionReason, RolePressure, RoleId, Task, TaskKind, WorldState } from '../../shared.js';
 import { isHold, nextId, streamRng } from '../../core/index.js';
-import { addRule, writePlaybookNotes } from '../../learning/playbooks.js';
+import { addRule, noLearning, writePlaybookNotes } from '../../learning/playbooks.js';
 import { FEES } from '../../sim/balance.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { agentOf, incident, nameOf, say, speak } from '../ctx.js';
@@ -14,7 +14,7 @@ import { computeBudget } from '../metrics.js';
 import { sim } from '../modules.js';
 import { SEED_PLAYBOOKS } from '../roster.js';
 import { STREAM } from '../streams.js';
-import { scoreCandidates } from '../talent/challenge.js';
+import { scoreCandidates, seedHire } from '../talent/challenge.js';
 import { createTask, isOpen, KIND_META, taskById } from '../tasks.js';
 import { dec, errorText, eur, round2, short, slugify } from '../util.js';
 import { CANDIDATES, ROLES } from './catalog.js';
@@ -238,7 +238,7 @@ export function drawCandidates(ctx: RuntimeCtx, role: RoleId, positionIndex: num
 }
 
 /** Best real test wins. Ties: the named candidate, then the id (D16). */
-function rank(candidates: readonly Candidate[]): Candidate[] {
+export function rankCandidates(candidates: readonly Candidate[]): Candidate[] {
   const named = (c: Candidate): number => (CANDIDATES[c.id] ? 1 : 0);
   return [...candidates].sort((a, b) => b.interview - a.interview || named(b) - named(a) || a.id.localeCompare(b.id));
 }
@@ -253,7 +253,7 @@ export async function bestCandidate(ctx: RuntimeCtx, position: Position): Promis
     await scoreCandidates(ctx, position.roleId, position.candidates);
     free = position.candidates;
   }
-  return rank(free)[0]!;
+  return rankCandidates(free)[0]!;
 }
 
 // ───────────────────────────── The hire ─────────────────────────────
@@ -265,10 +265,15 @@ const ruleText = (rule: string): string => rule.replace(/\s+/g, ' ').trim();
  * Without this the learned hook, price and banned words would be lost on the first hire.
  */
 function inheritRules(w: WorldState, agent: AgentState): void {
+  const book = (w.company.playbooks[agent.id] ??= []);
+  if (noLearning(w)) { // addRule writes nothing in that arm: a hire starts as the founders did, from the seeds and from nobody's lessons
+    book.push(...SEED_PLAYBOOKS[agent.dept]);
+    return;
+  }
   const owners = ownersOfAny(w, ROLES[agent.roleId].core).filter((a) => a.id !== agent.id);
   for (const rule of SEED_PLAYBOOKS[agent.dept]) addRule(w, agent.id, rule);
   for (const owner of owners) for (const rule of w.company.playbooks[owner.id] ?? []) addRule(w, agent.id, rule);
-  const held = new Set((w.company.playbooks[agent.id] ?? []).map(ruleText));
+  const held = new Set(book.map(ruleText));
   for (const lesson of w.company.lessons) {
     if (held.has(ruleText(lesson.insight)) && !lesson.appliesTo.includes(agent.id)) lesson.appliesTo.push(agent.id);
   }
@@ -281,20 +286,27 @@ function rebalance(w: WorldState, wearers: ReadonlyMap<TaskKind, ReadonlySet<Age
   }
 }
 
-export async function hireAgent(ctx: RuntimeCtx, position: Position, c: Candidate): Promise<AgentState> {
-  const w = ctx.world;
-  const org = w.company.org!;
+/** The person a candidate is on their first day. The real test seats a copy of it. */
+export function agentFrom(w: WorldState, c: Candidate): AgentState {
   const role = ROLES[c.roleId];
   const def = CANDIDATES[c.id];
-  const wearers = new Map(role.core.map((k) => [k, new Set(w.company.agents.filter((a) => a.hatKinds.includes(k)).map((a) => a.id))]));
-  const agent: AgentState = {
+  return {
     id: c.id, name: c.name, role: def?.role ?? role.title, dept: role.dept, isChief: false, tier: c.tier, persona: c.persona, skills: [...c.skills],
     tools: def ? [...def.tools] : toolsOf(c.roleId), taskKinds: [...role.core, ...role.assist], avatar: { ...c.avatar },
     roleId: c.roleId, gender: c.gender, founder: false,
     status: 'idle', place: role.dept, currentTaskId: null, energy: 100, level: 1, xp: 0, perf: { done: 0, approved: 0, rejected: 0, failed: 0, score: 50 }, bubble: null,
     hatKinds: [], hatDepts: [], hiredDay: w.day, rampUntilDay: w.day + ORG.rampDays, notice: null,
   };
+}
+
+export async function hireAgent(ctx: RuntimeCtx, position: Position, c: Candidate): Promise<AgentState> {
+  const w = ctx.world;
+  const org = w.company.org!;
+  const role = ROLES[c.roleId];
+  const wearers = new Map(role.core.map((k) => [k, new Set(w.company.agents.filter((a) => a.hatKinds.includes(k)).map((a) => a.id))]));
+  const agent = agentFrom(w, c);
   w.company.agents.push(agent);
+  seedHire(w, agent, c);
   inheritRules(w, agent);
   const pay = payOf(agent);
   if (w.scenario.org?.payroll) sim.recordLedger(w, { type: 'recruiting', amount: -round2(ORG.recruitingDays * pay), memo: `Recrutement de ${c.name} (${role.title})`, ref: `hire:${c.id}` });

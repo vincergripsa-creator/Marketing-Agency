@@ -15,7 +15,7 @@ import { heuristicAd, heuristicHooks, heuristicOutreach } from './ads.js';
 import { heuristicRedTeam, heuristicSalesPage } from './commerce.js';
 import { heuristicChat, heuristicMemo, heuristicMission } from './direction.js';
 import { heuristicFactCheck, heuristicHumanize } from './editing.js';
-import { heuristicRanking } from './research.js';
+import { heuristicRanking, valueWeightOf } from './research.js';
 import { heuristicOutline, heuristicPdfContent, heuristicTitles } from './studio.js';
 import { heuristicSupportReply } from './support.js';
 
@@ -46,6 +46,12 @@ export function productSubjects(p: Partial<Product> | null | undefined): string[
   return [p?.nicheId, p?.title, p?.problem, p?.audience].filter((x): x is string => typeof x === 'string' && x.length > 0);
 }
 
+/** Talent's part of a generator's options (talent §4). A call without craft carries none of it: every lever then reads as today. */
+function craftRules(ctx: MindContext | undefined, flawRng: LocalRng): { t?: number; flaw?: number; flawRng?: LocalRng; draw?: number } {
+  const c = ctx?.craft;
+  return { ...(c ? { t: c.t, flaw: c.flaw, flawRng } : {}), ...(ctx?.draw ? { draw: ctx.draw } : {}) };
+}
+
 export class HeuristicEngine implements ContentEngine {
   readonly mode: MindMode = 'heuristic';
   private readonly counters: Usage = { calls: 0, inputTokens: 0, outputTokens: 0, costEur: 0, fallbacks: 0 };
@@ -57,10 +63,12 @@ export class HeuristicEngine implements ContentEngine {
  * Keys name what a text is about (title, customer's words), never a generated id: one more sale shifts every id
  * after it, and a product id in the key would rewrite the page and the ads of every later product.
  */
-  private begin(method: string, ctx: MindContext | undefined, subjects: readonly (string | null | undefined)[], ...keys: (string | number | null | undefined)[]): { rng: LocalRng; rules: PlaybookRules } {
+  private begin(method: string, ctx: MindContext | undefined, subjects: readonly (string | null | undefined)[], ...keys: (string | number | null | undefined)[]): { rng: LocalRng; flawRng: LocalRng; rules: PlaybookRules } {
     this.counters.calls += 1;
+    const key = [ctx?.agent?.id ?? '', ctx?.day ?? 0, ...keys, ...(ctx?.draw ? [ctx.draw] : [])]; // draw 0 is the text of a single draft
     return {
-      rng: seededRng(this.opts.seed, method, ctx?.agent?.id ?? '', ctx?.day ?? 0, ...keys),
+      rng: seededRng(this.opts.seed, method, ...key),
+      flawRng: seededRng(this.opts.seed, 'flaw', method, ...key),
       rules: parsePlaybook(ctx?.playbook, subjects),
     };
   }
@@ -72,7 +80,7 @@ export class HeuristicEngine implements ContentEngine {
   async rankOpportunities(input: { signals: TrendSignal[]; competitors: Record<string, CompetitorProduct[]>; voc: Record<string, VoiceOfCustomer>; excludeNicheIds: string[] }, ctx: MindContext): Promise<OpportunityRanking> {
     const { rules } = this.begin('rankOpportunities', ctx, []);
     const priceFor = (s: TrendSignal) => parsePlaybook(ctx?.playbook, [s.nicheId, s.name, s.audience]).targetPrice;
-    return scrubDeep(heuristicRanking(input, priceFor), rules.banned);
+    return scrubDeep(heuristicRanking(input, priceFor, { valueWeight: valueWeightOf(ctx?.craft?.t) }), rules.banned);
   }
 
   async writeTitles(input: { niche: NicheBrief; voc: VoiceOfCustomer; count: number; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<string[]> {
@@ -86,8 +94,8 @@ export class HeuristicEngine implements ContentEngine {
   }
 
   async writePdfContent(input: { title: string; outline: Outline; niche: NicheBrief; voc: VoiceOfCustomer; upsellTitle: string | null; upsellOf?: UpsellContext | null; revision?: number }, ctx: MindContext): Promise<PdfContent> {
-    const { rng, rules } = this.begin('writePdfContent', ctx, nicheSubjects(input.niche), input.title, input.niche?.nicheId, (input.outline?.chapters ?? []).map((c) => c.title).join('|'), ...(input.revision ? [input.revision] : []));
-    return heuristicPdfContent(input, rng, { banned: rules.banned });
+    const { rng, flawRng, rules } = this.begin('writePdfContent', ctx, nicheSubjects(input.niche), input.title, input.niche?.nicheId, (input.outline?.chapters ?? []).map((c) => c.title).join('|'), ...(input.revision ? [input.revision] : []));
+    return heuristicPdfContent(input, rng, { banned: rules.banned, ...craftRules(ctx, flawRng) });
   }
 
   async humanize(input: { content: PdfContent; flagged: string[]; voc: VoiceOfCustomer; gaps?: GuideGaps | null }, ctx: MindContext): Promise<PdfContent> {
@@ -107,18 +115,18 @@ export class HeuristicEngine implements ContentEngine {
   }
 
   async writeSalesPage(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<SalesPage> {
-    const { rng, rules } = this.begin('writeSalesPage', ctx, productSubjects(input.product), input.product?.title, input.hype);
-    return scrubDeep(heuristicSalesPage(input, rng, { maxHype: rules.maxHype, banned: rules.banned, brand: this.brand(ctx) }), rules.banned);
+    const { rng, flawRng, rules } = this.begin('writeSalesPage', ctx, productSubjects(input.product), input.product?.title, input.hype);
+    return scrubDeep(heuristicSalesPage(input, rng, { maxHype: rules.maxHype, banned: rules.banned, brand: this.brand(ctx), ...craftRules(ctx, flawRng) }), rules.banned);
   }
 
   async writeAdHooks(input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[]; upsellOf?: UpsellContext | null; usedHooks?: string[] }, ctx: MindContext): Promise<{ hookStyle: HookStyle; hook: string }[]> {
     const { rng, rules } = this.begin('writeAdHooks', ctx, productSubjects(input.product), input.product?.title, (input.styles ?? []).join(','));
-    return scrubDeep(heuristicHooks(input, rng, rules.preferredHooks), rules.banned);
+    return scrubDeep(heuristicHooks(input, rng, rules.preferredHooks, ctx?.craft?.t), rules.banned);
   }
 
   async writeAd(input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[]; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<AdDraft> {
-    const { rng, rules } = this.begin('writeAd', ctx, productSubjects(input.product), input.product?.title, input.hook, input.hookStyle, input.format);
-    const draft = heuristicAd(input, rng, { banned: rules.banned, preferredFormats: rules.preferredFormats });
+    const { rng, flawRng, rules } = this.begin('writeAd', ctx, productSubjects(input.product), input.product?.title, input.hook, input.hookStyle, input.format);
+    const draft = heuristicAd(input, rng, { banned: rules.banned, preferredFormats: rules.preferredFormats, ...craftRules(ctx, flawRng) });
     return scrubDeep(draft, [...rules.banned, ...(input.bannedClaims ?? [])]);
   }
 
@@ -129,6 +137,7 @@ export class HeuristicEngine implements ContentEngine {
       agent: ctx?.agent?.name || 'L’équipe',
       brand: this.brand(ctx),
       playbook: ctx?.playbook ?? [],
+      t: ctx?.craft?.t,
     });
     return scrubDeep(r, rules.banned);
   }

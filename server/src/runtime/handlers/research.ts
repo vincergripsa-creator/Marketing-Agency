@@ -1,13 +1,15 @@
 /** Recherche + Red Team: trends → voice of customer + competitors → opportunity (rule of one) → kill attempt. */
-import type { Product, TaskKind, TrendSignal, VoiceOfCustomer } from '../../shared.js';
+import type { Product, Task, TaskKind, TrendSignal, VoiceOfCustomer } from '../../shared.js';
+import type { MindContext } from '../../contracts.js';
 import { nextId } from '../../core/index.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { addDeliverable, nameOf, nicheBriefOf, nicheName, productOf, say, vocOf, writeNote } from '../ctx.js';
 import { learning } from '../modules.js';
 import { createTask, isOpen } from '../tasks.js';
 import { launchHold } from '../holds.js';
-import { officerId } from '../org/officers.js';
+import { officerId, officerOf } from '../org/officers.js';
 import { createProductPipeline, excludedNiches, killProduct } from '../pipeline.js';
+import { armSharp, craftFor } from '../talent/craft.js';
 import { guideGaps, pdfFingerprint, redTeamFacts, settleRedTeam } from '../redteam.js';
 import { productInNiche } from '../missions.js';
 import { nicheSlug, productNote, writeNicheNote } from '../notes.js';
@@ -59,9 +61,15 @@ function ideaSummary(ctx: RuntimeCtx, product: Product): string {
   return parts.filter(Boolean).join(' ');
 }
 
+/** The CEO signs the pick, whoever prepared it: the bandit is read through her eyes (talent §4.6). */
+function ceoSharp(ctx: RuntimeCtx, task: Task, mind: MindContext): ReturnType<typeof armSharp> {
+  const ceo = officerOf(ctx.world, 'ceo');
+  return armSharp(ctx, ceo, { ...mind, agent: ceo, craft: craftFor(ctx.world, ceo, task.kind) }, 'niche');
+}
+
 export const researchHandlers: HandlerMap = {
   scan_trends: {
-    async run(ctx, task, agent) {
+    async run(ctx, task, agent, mind) {
       const query = str(task.input.query);
       const signals = ctx.tools.searchTrends(query);
       const { research } = ctx.world.company;
@@ -71,7 +79,8 @@ export const researchHandlers: HandlerMap = {
       }
       const excluded = new Set(excludedNiches(ctx, { includeActive: true }));
       const ranked = [...signals].sort((a, b) => signalScore(b) - signalScore(a));
-      const top = ranked.filter((s) => !excluded.has(s.nicheId)).slice(0, 3);
+      // A better researcher follows up on more niches: more of the ranking then has a known price (talent §4.6).
+      const top = ranked.filter((s) => !excluded.has(s.nicheId)).slice(0, 3 + Math.round(2 * (mind.craft?.t ?? 0)));
       const body = [
         `# Tendances — jour ${ctx.world.day}`,
         '',
@@ -186,7 +195,7 @@ export const researchHandlers: HandlerMap = {
       const top = ranked.slice(0, 3);
       const stats = learning.armStats(ctx.world, 'niche');
       const tried = top.some((r) => stats.some((s) => s.key === r.nicheId && s.pulls > 0));
-      const chosenId = forced ?? (tried ? learning.chooseArm(ctx.world, 'niche', top.map((r) => r.nicheId), ctx.rng) : top[0]!.nicheId);
+      const chosenId = forced ?? (tried ? learning.chooseArm(ctx.world, 'niche', top.map((r) => r.nicheId), ctx.rng, ceoSharp(ctx, task, mind)) : top[0]!.nicheId);
       const brief = nicheBriefOf(ctx, chosenId);
       // The ranking may leave out a requested niche it has no signal for: the founder's brief stands in for it.
       const pick = ranked.find((r) => r.nicheId === chosenId) ?? { nicheId: chosenId, score: 0, why: 'Demandé par le fondateur.', angle: '', audience: brief.audience, problem: brief.problem, suggestedPrice: 0 };

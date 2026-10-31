@@ -4,8 +4,8 @@
  */
 import { summarizeLedger } from '../core/index.js';
 import type {
-  AdCreative, AdTotals, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, FinanceSnapshot,
-  InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, Task, TaskKind, TaskStats, WorldState,
+  AdCreative, AdTotals, AgentId, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, FinanceSnapshot,
+  InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, TalentTruthView, Task, TaskKind, TaskStats, WorldState,
 } from '../shared.js';
 import { addAdTotals } from '../sim/adTotals.js';
 import { announcedOutageDays } from '../sim/outage.js';
@@ -287,11 +287,28 @@ export function estimateFinance(world: WorldState): FinanceSnapshot {
   return finance;
 }
 
+const fr2 = (n: number) => n.toFixed(2).replace('.', ',');
+
+/** True talent of everyone who ever held a skill: « plafond 0,71, élève de Sarah ». Only `godModeOf` reads this field. */
+function talentViews(world: WorldState): Record<AgentId, TalentTruthView> {
+  const entries = world.company?.league?.entries ?? {};
+  const out: Record<AgentId, TalentTruthView> = {};
+  for (const [id, a] of Object.entries(world.talentTruth?.agents ?? {})) {
+    const skill = entries[id]?.primary;
+    const truth = skill ? a.talent[skill] : undefined;
+    if (!skill || truth === undefined) continue;
+    const teacher = a.lineage ? entries[a.lineage]?.name ?? a.lineage : null;
+    out[id] = { truth, note: [`plafond ${fr2(a.ceiling[skill] ?? truth)}`, ...(teacher ? [`élève de ${teacher}`] : [])].join(', ') };
+  }
+  return out;
+}
+
 /** Hidden truth served to god mode only. `intents` covers the messages of the same snapshot. */
 export function godModeOf(world: WorldState, limits: SnapshotLimits = DEFAULT_LIMITS): NonNullable<CompanySnapshot['godMode']> {
   const intents: Record<string, MessageIntent> = {};
   for (const m of keptMessages(world.market?.inbox ?? [], limits)) intents[m.id] = m.intent;
   return {
+    ...(world.talentTruth ? { talent: talentViews(world) } : {}),
     niches: arr(world.market?.niches).map((n) => ({
       id: n.id, name: n.name, demand: n.demand, wtp: n.wtp, competition: n.competition,
       tiktokAffinity: n.tiktokAffinity, hookAffinity: n.hookAffinity,

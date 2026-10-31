@@ -1,7 +1,7 @@
 /** Pub TikTok: hooks (bandit + exploration), 9:16 creatives, compliance submission, campaigns, stop-loss/scale, organic. */
-import type { AdCreative, AdFormat, Campaign, HookStyle, Product, Task, TaskKind } from '../../shared.js';
+import type { AdCreative, AdFormat, AgentState, Campaign, HookStyle, Product, Task, TaskKind } from '../../shared.js';
 import { nextId } from '../../core/index.js';
-import type { MindContext } from '../../contracts.js';
+import type { AdDraft, MindContext } from '../../contracts.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { addDeliverable, incident, nameOf, nicheBriefOf, nicheName, productOf, say, vocOf, writeRunFile, doneOutputs } from '../ctx.js';
 import { deliverables, learning, sim } from '../modules.js';
@@ -11,6 +11,8 @@ import { adHistory, companyPaidBlock, cooldownDays, launchableCreatives, MIN_CAM
 import { adsHold, REFUSAL_COOLDOWN_DAYS } from '../holds.js';
 import { officerId, ownersOfAny, roleHolders } from '../org/officers.js';
 import { dropTask } from '../pipeline.js';
+import { armSharp, bestDraft, pruneRead, shrunkRoas } from '../talent/craft.js';
+import { onStrike } from '../talent/evidence.js';
 import { createTask, isOpen, openTasks } from '../tasks.js';
 import { upsellContextOf } from '../upsell.js';
 import { clamp, dec, eur, idNum, keywords, numOf, pct, round2, short, str, uniq } from '../util.js';
@@ -33,6 +35,11 @@ function isHookStyle(v: unknown): v is HookStyle {
 }
 function isFormat(v: unknown): v is AdFormat {
   return typeof v === 'string' && (AD_FORMATS as readonly string[]).includes(v);
+}
+
+/** A rework halves the flaws: the reviewer's notes help (talent §4.2). */
+export function reworkCraft(task: Task, mind: MindContext): MindContext {
+  return task.attempts > 0 && mind.craft ? { ...mind, craft: { ...mind.craft, flaw: mind.craft.flaw / 2 } } : mind;
 }
 
 /** Every hook written for a product, newest first. */
@@ -125,20 +132,20 @@ function usedHooksOf(ctx: RuntimeCtx, product: Product): string[] {
  * used first, the bandit's favourite first when it was not used in the last two posts), fresh hooks from
  * writeAdHooks and the creatives, and never a text already posted (any product) in the last 7 days.
  */
-async function pickOrganicHook(ctx: RuntimeCtx, product: Product, agentId: string, mind: MindContext): Promise<HookItem | null> {
+async function pickOrganicHook(ctx: RuntimeCtx, product: Product, agent: AgentState, mind: MindContext): Promise<HookItem | null> {
   const w = ctx.world;
   const posts = w.market.organicPosts;
   const mine = posts.filter((p) => p.productId === product.id).sort((a, b) => b.day - a.day || idNum(b.id) - idNum(a.id));
   const usedToday = new Set(mine.filter((p) => p.day === w.day).map((p) => p.hookStyle));
   const lastUsed = (s: HookStyle) => mine.find((p) => p.hookStyle === s)?.day ?? Number.NEGATIVE_INFINITY;
   let order = HOOK_STYLES.filter((s) => !usedToday.has(s)).sort((a, b) => lastUsed(a) - lastUsed(b) || HOOK_STYLES.indexOf(a) - HOOK_STYLES.indexOf(b));
-  const favourite = learning.chooseArm(w, `hook_style:${product.nicheId}`, HOOK_STYLES, ctx.rng);
+  const favourite = learning.chooseArm(w, `hook_style:${product.nicheId}`, HOOK_STYLES, ctx.rng, armSharp(ctx, agent, mind, 'hook'));
   const lastTwo = mine.slice(0, 2).map((p) => p.hookStyle);
   if (isHookStyle(favourite) && order.includes(favourite) && !lastTwo.includes(favourite)) order = [favourite, ...order.filter((s) => s !== favourite)];
   if (!order.length) return null;
   const recent = new Set(posts.filter((p) => p.day > w.day - ORGANIC_REPEAT_WINDOW_DAYS).map((p) => hookKey(p.hook)));
   const everMine = new Set(mine.map((p) => hookKey(p.hook)));
-  const banned = bannedFor(ctx, product, agentId);
+  const banned = bannedFor(ctx, product, agent.id);
   const usable = (h: HookItem) => !!h.hook.trim() && !recent.has(hookKey(h.hook)) && !bannedHits(h.hook, banned).length;
   const choose = (pool: HookItem[]): HookItem | null => {
     for (const s of order) {
@@ -222,8 +229,9 @@ export const growthHandlers: HandlerMap = {
       if (d.hook) styles.push(d.hook);
       const exp = runningExperiment(ctx, 'hook_style', product.nicheId);
       if (exp) for (const v of exp.variants) if (isHookStyle(v)) styles.push(v);
+      const sharp = armSharp(ctx, agent, mind, 'hook');
       for (let i = 0; i < 8 && uniq(styles).length < 4; i++) {
-        const s = learning.chooseArm(ctx.world, dim, HOOK_STYLES, ctx.rng);
+        const s = learning.chooseArm(ctx.world, dim, HOOK_STYLES, ctx.rng, sharp);
         if (isHookStyle(s)) styles.push(s);
       }
       const pulled = new Set(learning.armStats(ctx.world, dim).filter((s) => s.pulls > 0).map((s) => s.key));
@@ -300,9 +308,10 @@ export const growthHandlers: HandlerMap = {
       let hook = wanted ? candidates.find((h) => h.hookStyle === wanted) ?? reusable.find((h) => h.hookStyle === wanted) : undefined;
       if (!hook) {
         const stylesInPool = uniq(reusable.map((h) => h.hookStyle));
-        const pick = stylesInPool.length > 1 ? learning.chooseArm(ctx.world, `hook_style:${product.nicheId}`, stylesInPool, ctx.rng) : stylesInPool[0];
+        const pick = stylesInPool.length > 1 ? learning.chooseArm(ctx.world, `hook_style:${product.nicheId}`, stylesInPool, ctx.rng, armSharp(ctx, agent, mind, 'hook')) : stylesInPool[0];
         hook = candidates.find((h) => h.hookStyle === pick) ?? reusable.find((h) => h.hookStyle === pick) ?? candidates[variant % candidates.length]!;
       }
+      const angle = hook;
       // Format: playbook preference for the first ad, experiment variants, else the bandit.
       const d = directivesOf(ctx.world, agent.id, nicheName(ctx, product.nicheId));
       const fmtExp = runningExperiment(ctx, 'ad_format', product.nicheId);
@@ -310,20 +319,25 @@ export const growthHandlers: HandlerMap = {
       if (fmtExp && forced && isFormat(forced) && fmtExp.variants.includes(forced)) format = forced;
       else if (fmtExp && fmtExp.variants.length && isFormat(fmtExp.variants[variant % fmtExp.variants.length])) format = fmtExp.variants[variant % fmtExp.variants.length] as AdFormat;
       else if (d.format && variant === 0) format = d.format;
-      else { const f = learning.chooseArm(ctx.world, `ad_format:${product.nicheId}`, AD_FORMATS, ctx.rng); format = isFormat(f) ? f : 'text_slideshow'; }
+      else { const f = learning.chooseArm(ctx.world, `ad_format:${product.nicheId}`, AD_FORMATS, ctx.rng, armSharp(ctx, agent, mind, 'format')); format = isFormat(f) ? f : 'text_slideshow'; }
       const bannedClaims = uniq([...bannedFor(ctx, product, agent.id), ...COMPLIANCE_WORDS]);
       const notes = reworkNotes(task).map((n) => `Correction demandée par ${nameOf(ctx, officerId(ctx.world, 'growth'))} : ${n}`);
-      const draft = await ctx.engine.writeAd({ product, voc, hook: hook.hook, hookStyle: hook.hookStyle, format, bannedClaims, upsellOf: upsellContextOf(ctx.world, product) }, mindWith(mind, notes));
-      const creative: AdCreative = existing ?? {
-        id: nextId(ctx.world, 'cre'), productId: product.id, hook: '', hookStyle: hook.hookStyle, format, scenes: [], caption: '', hashtags: [], cta: '',
+      const upsellOf = upsellContextOf(ctx.world, product);
+      const shell = (id: string): AdCreative => ({
+        id, productId: product.id, hook: '', hookStyle: angle.hookStyle, format, scenes: [], caption: '', hashtags: [], cta: '',
         files: { storyboard: [], preview: null }, quality: null, review: { status: 'pending', reason: null, day: null }, createdDay: ctx.world.day, createdBy: agent.id,
-      };
-      Object.assign(creative, {
-        hook: draft.hook || hook.hook, hookStyle: isHookStyle(draft.hookStyle) ? draft.hookStyle : hook.hookStyle,
-        format: isFormat(draft.format) ? draft.format : format, scenes: Array.isArray(draft.scenes) ? draft.scenes : [],
-        caption: draft.caption ?? '', hashtags: Array.isArray(draft.hashtags) ? draft.hashtags : [], cta: draft.cta ?? '',
-        review: { status: 'pending', reason: null, day: null }, createdBy: agent.id,
       });
+      const written = (ad: AdDraft) => ({
+        hook: ad.hook || angle.hook, hookStyle: isHookStyle(ad.hookStyle) ? ad.hookStyle : angle.hookStyle,
+        format: isFormat(ad.format) ? ad.format : format, scenes: Array.isArray(ad.scenes) ? ad.scenes : [],
+        caption: ad.caption ?? '', hashtags: Array.isArray(ad.hashtags) ? ad.hashtags : [], cta: ad.cta ?? '',
+      });
+      // Each draft is read as a creative with the company's own VoC: no id is spent on the ones left in the drawer.
+      const { draft } = await bestDraft(ctx, agent, reworkCraft(task, mindWith(mind, notes)), 'ad',
+        (m) => ctx.engine.writeAd({ product, voc, hook: angle.hook, hookStyle: angle.hookStyle, format, bannedClaims, upsellOf }, m),
+        (ad) => sim.scoreCreative({ ...shell('draft'), ...written(ad) }, product, voc).overall);
+      const creative: AdCreative = existing ?? shell(nextId(ctx.world, 'cre'));
+      Object.assign(creative, { ...written(draft), review: { status: 'pending', reason: null, day: null }, createdBy: agent.id });
       if (!existing) ctx.world.company.creatives.push(creative);
       const design = ensureDesign(ctx, product);
       const board = deliverables.renderAdStoryboard({ creative, product, design, brand: ctx.world.company.name });
@@ -363,6 +377,7 @@ export const growthHandlers: HandlerMap = {
       } else {
         const hits = learnFromRejection(ctx, creative, product);
         const reason = res.reason ?? 'non conforme';
+        if (res.strike) onStrike(ctx.world, creative);
         incident(ctx, `Pub refusée par TikTok (« ${short(creative.hook, 50)} ») : ${reason}${hits.length ? ` — mots en cause : ${hits.join(', ')}` : ''}`);
         say(ctx, growth, `TikTok refuse la pub « ${short(creative.hook, 50)} » : ${short(reason, 70)}${res.strike ? ' — avertissement sur le compte !' : ''}`, 'ad', { creativeId: creative.id, productId: product.id });
         if (hits.length) say(ctx, officerId(ctx.world, 'hr'), `Leçon immédiate : l'équipe pub n'écrira plus jamais « ${hits.join(' », « ')} »`, 'lesson');
@@ -438,7 +453,7 @@ export const growthHandlers: HandlerMap = {
   },
 
   optimize_ads: {
-    async run(ctx, task, agent) {
+    async run(ctx, task, agent, mind) {
       if (task.input.raiseTo !== undefined) return runRaise(ctx, task);
       for (const t of openTasks(ctx.world, (x) => x.kind === 'optimize_ads' && x.input.raiseTo !== undefined && x.status === 'awaiting_founder')) {
         if (!activeCampaigns(ctx.world).some((c) => c.id === t.input.campaignId)) dropTask(ctx, t, 'la campagne ne tourne plus');
@@ -448,6 +463,7 @@ export const growthHandlers: HandlerMap = {
       if (!campaigns.length) return { summary: 'Aucune campagne active.', skipReview: true, output: { actions: [] } };
       const stats = ctx.tools.getAdStats(Math.max(1, ctx.world.day - 7));
       const all = ctx.tools.getAdStats(1);
+      const t = mind.craft?.t;
       const actions: string[] = [];
       const pause = (c: Campaign, why: string) => {
         const r = ctx.tools.updateCampaign(c.id, { status: 'paused' });
@@ -480,7 +496,17 @@ export const growthHandlers: HandlerMap = {
         }
         // 2. Survival mode: only clearly profitable campaigns keep running.
         if (budget.survival && recent.spend >= 10 && recent.roas < 1.2) { pause(c, `mode survie, ROAS ${dec(recent.roas)}`); continue; }
-        // 3. Creative fatigue / weak creatives (the last one stays until its replacement is approved).
+        // 3. The losing creatives this buyer can read in the last 4 days go (talent §4.5): a reduction, so free in approval
+        //    mode, and each stays approved for another campaign. Then fatigue / weak creatives (the last one stays until its
+        //    replacement is approved).
+        const losing = t === undefined ? [] : pruneRead(life.rows, c.creativeIds, t);
+        if (losing.length) {
+          const kept = c.creativeIds.filter((id) => !losing.includes(id));
+          if (ctx.tools.updateCampaign(c.id, { creativeIds: kept }).ok) {
+            c.creativeIds = kept;
+            actions.push(`${losing.length} créa(s) perdante(s) retirée(s) de ${c.name}`);
+          }
+        }
         const keep: string[] = [];
         const dropped: string[] = [];
         let tired = 0;
@@ -503,13 +529,15 @@ export const growthHandlers: HandlerMap = {
           requestCreatives(ctx, product, task, { produce: Math.max(1, Math.min(2, tired)), attachTo: c.id, why: tired ? `${tired} créa(s) fatiguée(s)` : `CTR en baisse (${pct(recent.ctr, 2)})` });
         }
         // 4. Scale winners (+30 % max) while the last day still holds, trim the lukewarm ones — inside the CFO envelope.
+        //    A buyer with talent discounts a thin sample before reading it (talent §4.5); what protects the money reads the raw number.
+        const read = t === undefined ? recent.roas : shrunkRoas(recent.revenue, recent.spend, t);
         const room = Math.max(0, scalingRoom(ctx.world, product, budget.adCap) - committedAdBudget(ctx.world, c.id));
         let next = c.dailyBudget;
-        if (recent.spend >= 10 && recent.roas >= 1.8 && (yesterday.spend < 5 || yesterday.roas >= 1.4)) next = round2(c.dailyBudget * 1.3);
+        if (recent.spend >= 10 && read >= 1.8 && (yesterday.spend < 5 || yesterday.roas >= 1.4)) next = round2(c.dailyBudget * 1.3);
         // Brake: a big budget that collapsed yesterday (CPM spike, saturated audience) is halved at once.
         else if (yesterday.spend >= 30 && yesterday.roas < 0.5) next = round2(c.dailyBudget * 0.5);
         // Trim the lukewarm only: under the stop-loss, tomorrow's sample decides, a smaller budget would only delay it.
-        else if (recent.spend >= 20 && recent.roas < 1.3 && recent.roas >= STOP_LOSS_ROAS) next = round2(c.dailyBudget * 0.7);
+        else if (recent.spend >= 20 && read < 1.3 && recent.roas >= STOP_LOSS_ROAS) next = round2(c.dailyBudget * 0.7);
         next = round2(Math.max(5, Math.min(next, room)));
         if (room < 5) { pause(c, `enveloppe CFO épuisée (${eur(budget.adCap)})`); continue; }
         // Approval mode: reductions and pauses stay free, more than the founder agreed to waits for his yes.
@@ -546,7 +574,7 @@ export const growthHandlers: HandlerMap = {
       if (today.length >= ORGANIC_MAX_PER_PRODUCT_DAY) {
         return { summary: `Déjà ${today.length} posts aujourd'hui sur ce produit : on n'en rajoute pas.`, skipReview: true, output: { skipped: true, reason: 'quota' } };
       }
-      const pick = await pickOrganicHook(ctx, product, agent.id, mind);
+      const pick = await pickOrganicHook(ctx, product, agent, mind);
       if (!pick) {
         say(ctx, agent.id, `${agent.name} n'a pas de hook neuf pour « ${short(product.title, 40)} » : pas de post plutôt qu'une redite`, 'thought', { productId: product.id });
         return { summary: 'Pas de hook neuf : aucun post plutôt qu’un doublon.', skipReview: true, output: { skipped: true, reason: 'no_fresh_hook' } };

@@ -2,12 +2,14 @@
  * The founder's orders, executed on the spot: a stop is a standing hold the plan and the handlers respect until he lifts
  * it, not a task that may or may not reach its goal. An order that cannot be carried out is said so, never closed as done.
  */
-import type { Mission, Task } from '../shared.js';
+import type { AgentState, Mission, Task } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
-import { addHold, liftHolds } from './holds.js';
+import { addHold, firingHold, liftHolds } from './holds.js';
 import { committedAdBudget, currentBudget } from './metrics.js';
-import type { FounderOrder, OrderAction } from './missions.js';
+import type { FounderOrder, OrderAction, PersonOrder } from './missions.js';
 import { tellFounder } from './missions.js';
+import { isLegacyOrg } from './org/constants.js';
+import { requestDeparture } from './org/departure.js';
 import { officerId } from './org/officers.js';
 import { closeProductMissions, dropTask, killProduct, shelveProduct, stopPaidAds } from './pipeline.js';
 import { redTeamGate } from './redteam.js';
@@ -23,6 +25,22 @@ const ASKED_FR: Partial<Record<OrderAction, string>> = {
   resume_product: 'Je n’ai rien remis en ligne',
 };
 
+const PERSON_FR: Record<PersonOrder, string> = {
+  pin_agent: 'je n’ai protégé personne',
+  unpin_agent: 'je n’ai rien changé',
+  fire_agent: 'je n’ai renvoyé personne',
+};
+
+/** His latest word: a pin does not protect someone from the founder who set it. */
+async function fireAgent(ctx: RuntimeCtx, agent: AgentState): Promise<{ text: string; left: boolean }> {
+  const w = ctx.world;
+  if (isLegacyOrg(w)) return { text: `Je ne peux pas : l'équipe de cette partie est fixe, ${agent.name} reste.`, left: false };
+  const outcome = await requestDeparture(ctx, agent.id, `ordre du fondateur du jour ${w.day}`, 'founder', 'founder_order');
+  if (outcome === 'refused') return { text: `Je ne peux pas renvoyer ${agent.name} : personne ne peut reprendre son poste.`, left: false };
+  liftHolds(w, (h) => h.kind === 'pin' && h.agentId === agent.id);
+  return { text: outcome === 'left' ? `C'est fait : ${agent.name} quitte l'agence.` : `C'est noté : ${agent.name} part dès que sa relève arrive, le recrutement est ouvert.`, left: true };
+}
+
 function stopAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'stop_ads' }, when: string): string {
   const { product } = order;
   const { paused, cancelled } = stopPaidAds(ctx, product?.id ?? null, `ordre du fondateur du jour ${ctx.world.day}`);
@@ -30,7 +48,21 @@ function stopAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'stop_ads' }, 
   return `C'est fait${when} : ${paused} campagne(s) en pause, ${cancelled} tâche(s) de pub annulée(s). Aucune pub ne repartira${product ? ` sur « ${short(product.title, 50)} »` : ''} tant que tu ne me dis pas « reprends les pubs ».`;
 }
 
-export async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): Promise<void> {
+/** Every order of one sentence on one mission: he reads each answer, and one refused order shows on it. */
+export async function executeOrders(ctx: RuntimeCtx, m: Mission, orders: readonly FounderOrder[]): Promise<void> {
+  const answers: string[] = [];
+  const statuses: Mission['status'][] = [];
+  for (const order of orders) {
+    m.status = 'open';
+    await executeOrder(ctx, m, order);
+    answers.push(m.outcome ?? '');
+    statuses.push(m.status);
+  }
+  m.outcome = answers.join(' ');
+  m.status = statuses.includes('failed') ? 'failed' : statuses.includes('open') ? 'open' : 'done';
+}
+
+async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): Promise<void> {
   const w = ctx.world;
   const ceo = officerId(w, 'ceo');
   const done = (text: string): void => { m.status = 'done'; tellFounder(ctx, ceo, m, text); };
@@ -39,6 +71,44 @@ export async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOr
     case 'no_target': {
       const titles = w.company.products.filter((p) => p.status !== 'killed').slice(-4).map((p) => `« ${short(p.title, 50)} »`);
       refuse(`${ASKED_FR[order.asked] ?? 'Je n’ai rien fait'} : ${order.topic ? `je ne trouve aucun guide sur « ${order.topic} »` : 'je ne sais pas de quel guide tu parles'}.${titles.length ? ` Nos guides : ${titles.join(', ')}.` : ''}`);
+      return;
+    }
+    case 'no_agent':
+      refuse(order.left ? `${order.left.name} a quitté l'agence le jour ${order.left.leftDay} : ${PERSON_FR[order.asked]}.` : `Personne ne s'appelle ${order.name} dans l'équipe : ${PERSON_FR[order.asked]}.`);
+      return;
+    case 'stop_firing':
+      if (!firingHold(w)) addHold(w, { kind: 'firing', productId: null, until: null, reason: `aucun départ ni remplacement sur ordre du fondateur (jour ${w.day})` });
+      done('C’est noté : personne ne part tant que tu ne me dis pas « tu peux virer ». Ni remplacement, ni licenciement, ni nouveau plan d’amélioration.');
+      return;
+    case 'allow_firing':
+      done(liftHolds(w, (h) => h.kind === 'firing').length ? 'C’est noté : la ligue reprend ses remplacements à la prochaine clôture de saison.' : 'Rien à lever : aucun gel des départs n’était en cours.');
+      return;
+    case 'stop_hiring':
+      liftHolds(w, (h) => h.kind === 'hiring'); // a refusal's cooldown ends by itself, his order does not
+      addHold(w, { kind: 'hiring', productId: null, until: null, reason: `embauches gelées sur ordre du fondateur (jour ${w.day})` });
+      done('C’est noté : plus aucune embauche tant que tu ne me dis pas « reprends les embauches ». Seule la relève d’un départ reste possible.');
+      return;
+    case 'resume_hiring':
+      liftHolds(w, (h) => h.kind === 'hiring');
+      done('C’est noté : les embauches reprennent, aux conditions habituelles du CFO.');
+      return;
+    case 'pin_agent': {
+      const { agent } = order;
+      liftHolds(w, (h) => h.kind === 'pin' && h.agentId === agent.id); // a refused swap pins for 14 days, his order does not end
+      addHold(w, { kind: 'pin', productId: null, until: null, agentId: agent.id, reason: `${agent.name} ne part pas, sur ordre du fondateur (jour ${w.day})` });
+      done(`C’est noté : ${agent.name} ne passera ni en plan d’amélioration ni en remplacement tant que tu ne me dis pas le contraire.`);
+      return;
+    }
+    case 'unpin_agent': {
+      const { agent } = order;
+      const lifted = liftHolds(w, (h) => h.kind === 'pin' && h.agentId === agent.id);
+      if (lifted.length) done(`C’est noté : ${agent.name} repasse sous les règles de la ligue.`);
+      else refuse(`${agent.name} n’était pas ${agent.gender === 'f' ? 'protégée' : 'protégé'} : je n’ai rien changé.`);
+      return;
+    }
+    case 'fire_agent': {
+      const { text, left } = await fireAgent(ctx, order.agent);
+      if (left) done(text); else refuse(text);
       return;
     }
     case 'stop_ads':

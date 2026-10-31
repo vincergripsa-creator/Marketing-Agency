@@ -2,7 +2,7 @@
  * The founder's standing decisions: an order (« coupe toutes les pubs ») holds until he lifts it, a refusal holds for
  * a cooldown. They stay on record once ended: a week without ads because he said so proves nothing about a guide.
  */
-import type { FounderHold, WorldState } from '../shared.js';
+import type { AgentId, FounderHold, WorldState } from '../shared.js';
 import { nextId } from '../core/index.js';
 
 /** Days a refused campaign or budget raise is not asked for again. */
@@ -34,6 +34,16 @@ export function productHold(world: WorldState, productId: string): FounderHold |
 /** Nobody new joins while it stands: a refused hire, or the founder's freeze. */
 export function hiringHold(world: WorldState): FounderHold | null {
   return holdsOf(world, 'hiring').find((h) => holding(h, world.day)) ?? null;
+}
+
+/** Nobody is dismissed while it stands: plans, challenges and layoffs read it. */
+export function firingHold(world: WorldState): FounderHold | null {
+  return holdsOf(world, 'firing').find((h) => holding(h, world.day)) ?? null;
+}
+
+/** This person stays out of plans and challenges: « garde Sarah », or a replacement he refused. */
+export function pinHold(world: WorldState, agentId: AgentId): FounderHold | null {
+  return holdsOf(world, 'pin').find((h) => holding(h, world.day) && h.agentId === agentId) ?? null;
 }
 
 /** Holds in force, newest first: what the company tells whoever asks. */

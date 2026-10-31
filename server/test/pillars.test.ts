@@ -58,9 +58,8 @@ vi.mock('../src/runtime/compaction.js', async (importOriginal) => {
   return { ...real, compactWorld: vi.fn(real.compactWorld) };
 });
 
-/** Shrinks as packages land: P3.5 league_review, P5.1 and P5.2 the channels, P11.1 and P11.2 the rest. Empty at the end. */
+/** Shrinks as packages land: P5.1 and P5.2 the channels, P11.1 and P11.2 the rest. Empty at the end. */
 const NOT_LANDED: TaskKind[] = [
-  'league_review',
   'open_channel', 'adapt_creative', 'write_search_ads', 'reconcile_channels', 'allocate_channels',
   'write_lead_magnet', 'write_email_sequence', 'send_broadcast', 'design_bump', 'portfolio_review',
 ];
@@ -328,16 +327,15 @@ describe('stubs answer like today (D47)', () => {
   const agent = world.company.agents[0]!;
   const ctx = { world, rng: createRng(1) } as unknown as RuntimeCtx;
 
-  it('talent is off whatever the scenario says', async () => {
-    const lean = legacyWorld(7, { talent: 'league' });
-    expect(talentMode(lean)).toBe('off');
-    expect(effectiveT(lean, agent, 'copy')).toBeUndefined();
-    expect(craftFor(lean, agent, 'produce_ad')).toBeUndefined();
-    expect(routeBonus(lean, agent, 'produce_ad')).toBe(0);
+  it('talent off answers like today', async () => {
+    expect(talentMode(world)).toBe('off');
+    expect(effectiveT(world, agent, 'copy')).toBeUndefined();
+    expect(craftFor(world, agent, 'produce_ad')).toBeUndefined();
+    expect(routeBonus(world, agent, 'produce_ad')).toBe(0);
     expect(armSharp(ctx, agent, {} as never, 'hook')).toBeUndefined();
     expect(pruneRead([], ['a', 'b'], 0.8)).toEqual([]);
-    expect(shrunkRoas(30, 10, 0.8)).toBe(3);
-    expect(shrunkRoas(30, 0, 0.8)).toBe(0);
+    expect(shrunkRoas(30, 10, 0)).toBe(3);
+    expect(shrunkRoas(30, 0, 0)).toBe(0);
     const out = await bestDraft(ctx, agent, {} as never, 'test', async () => 'brouillon', () => 72);
     expect(out).toEqual({ draft: 'brouillon', drawn: 1, realScore: 72 });
     const candidates = [{ interview: 0, deliverable: 'x' }] as unknown as Candidate[];

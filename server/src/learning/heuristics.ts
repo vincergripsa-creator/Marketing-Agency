@@ -863,7 +863,7 @@ function fmtExpValue(e: Experiment, v: number): string {
 function experiments(inp: RetroInput): HeuristicDraft[] {
   const out: HeuristicDraft[] = [];
   for (const e of inp.concluded) {
-    if (!e.winner) continue;
+    if (!e.winner || e.dimension === 'agent_duel') continue; // a duel is not a lesson about the market
     const w = e.winner;
     const others = Object.entries(e.results).filter(([k, r]) => k !== w && r.n > 0);
     others.sort((a, b) => (lowerIsBetter(e) ? b[1].value - a[1].value : a[1].value - b[1].value));

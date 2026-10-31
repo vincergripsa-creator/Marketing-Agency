@@ -53,7 +53,12 @@ export function sampleBeta(a: number, b: number, rng: Rng): number {
   return s > 0 ? x / s : 0.5;
 }
 
-export function chooseArm(world: WorldState, dimension: string, arms: readonly string[], rng: Rng): string {
+/**
+ * Thompson sampling. `sharp` is talent reading the same posterior (talent §4.8): each arm's first sample comes from `rng`
+ * exactly as without it, the others from `sharp.rng`, and their mean has the posterior's mean with a tighter spread. A weak
+ * read explores by accident, a strong one exploits what the company learned. It knows nothing more.
+ */
+export function chooseArm(world: WorldState, dimension: string, arms: readonly string[], rng: Rng, sharp?: { samples: number; rng: Rng }): string {
   let keys = [...new Set((arms ?? []).map((a) => String(a)).filter(Boolean))];
   if (keys.length === 0) keys = (banditsOf(world)[dimension] ?? []).map((a) => a.key);
   if (keys.length === 0) return '';
@@ -62,11 +67,17 @@ export function chooseArm(world: WorldState, dimension: string, arms: readonly s
     return keys[0]!;
   }
   const stored = ensureArms(world, dimension, keys);
+  if (world.scenario?.control?.noLearning) return rng.pick(keys);
   let best = keys[0]!;
   let bestDraw = -1;
+  const extra = Math.max(0, (sharp?.samples ?? 1) - 1);
   for (const key of keys) {
     const arm = stored.find((a) => a.key === key)!;
-    const draw = sampleBeta(arm.alpha, arm.beta, rng);
+    let draw = sampleBeta(arm.alpha, arm.beta, rng);
+    if (extra > 0) {
+      for (let i = 0; i < extra; i++) draw += sampleBeta(arm.alpha, arm.beta, sharp!.rng);
+      draw /= extra + 1;
+    }
     if (draw > bestDraw) {
       bestDraw = draw;
       best = key;

@@ -41,7 +41,7 @@ export function experimentValueKind(e: Pick<Experiment, 'dimension' | 'metric'>)
 }
 
 /** Dimensions measured on a product's market data (and therefore scoped to its niche). */
-const NICHE_SCOPED: ReadonlySet<Experiment['dimension']> = new Set(['hook_style', 'ad_format', 'price', 'sales_hype']);
+const NICHE_SCOPED: ReadonlySet<Experiment['dimension']> = new Set(['hook_style', 'ad_format', 'price', 'sales_hype', 'agent_duel']);
 
 /**
  * Niche an experiment is about. An explicit `nicheId` (even null = global) wins; otherwise it is inferred
@@ -153,6 +153,7 @@ export function computeExperimentResults(world: WorldState, e: Experiment): Reco
   const nicheId = experimentNiche(world, e);
   const inScope = (p: { nicheId: string } | undefined): boolean => !nicheId || p?.nicheId === nicheId;
   const aggs = new Map<string, VariantAgg>(e.variants.map((v) => [v, emptyVariant()]));
+  const duelId = e.dimension === 'agent_duel' ? world.company.league?.duels.find((d) => d.experimentId === e.id)?.id : undefined;
   for (const r of adRows(world, e.day, world.day)) {
     const product = productOfRow(ix, r);
     if (!inScope(product)) continue;
@@ -162,6 +163,7 @@ export function computeExperimentResults(world: WorldState, e: Experiment): Reco
     else if (e.dimension === 'price') key = product ? nearestArm(priceOnDay(product, r.day), e.variants) : null;
     else if (e.dimension === 'sales_hype') key = product?.salesPage ? nearestArm(product.salesPage.hypeLevel, e.variants) : null;
     else if (e.dimension === 'niche') key = product?.nicheId ?? null;
+    else if (e.dimension === 'agent_duel') { const c = ix.creatives.get(r.creativeId); key = duelId && c?.duelId === duelId ? c.createdBy : null; }
     const agg = key ? aggs.get(key) : undefined;
     if (agg) addRow(agg, r);
   }
@@ -243,7 +245,8 @@ export function updateExperiments(world: WorldState): Experiment[] {
     e.status = 'concluded';
     e.endDay = world.day;
     e.winner = pickWinner(e);
-    concluded.push(e);
+    // A duel speaks through talent/duels.ts: the retro has no lesson, no journal line and no feed line to draw from it.
+    if (e.dimension !== 'agent_duel') concluded.push(e);
   }
   return concluded;
 }

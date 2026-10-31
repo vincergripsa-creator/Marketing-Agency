@@ -8,6 +8,7 @@ import type { RuntimeCtx } from '../ctx.js';
 import { speak } from '../ctx.js';
 import { activeHolds } from '../holds.js';
 import { sim } from '../modules.js';
+import { closeEntry } from '../talent/challenge.js';
 import { eur, pct, round2, sum } from '../util.js';
 import { CANDIDATES, ROLES } from './catalog.js';
 import { isLegacyOrg, ORG } from './constants.js';
@@ -69,6 +70,7 @@ export async function completeDeparture(ctx: RuntimeCtx, id: AgentId): Promise<v
     perf: agent.perf, avatar: agent.avatar,
   });
   w.company.agents = w.company.agents.filter((a) => a.id !== id);
+  closeEntry(w, id, notice.reason);
   if (w.memory) {
     delete w.memory.idleTicks[id];
     delete w.memory.recalled[id];

@@ -4,11 +4,11 @@
  * through the research tools, as any employee would: names, audiences, problems and keywords, never the market truth.
  */
 import type { DayPlanItem } from '../contracts.js';
-import type { AgentState, Mission, Product, Task, TaskKind, TrendSignal } from '../shared.js';
+import type { AgentState, Alumnus, Mission, Product, Task, TaskKind, TrendSignal } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { nameOf, nicheBriefOf, nicheName, productOf, say } from './ctx.js';
 import { nextId } from '../core/index.js';
-import { activeHolds, adsHold, launchHold } from './holds.js';
+import { activeHolds, adsHold, hiringHold, launchHold } from './holds.js';
 import { excludedNiches, openTasksForProduct, PAID_AD_TASKS } from './pipeline.js';
 import { agentById, agentLoad, capableAgents, chiefOf, createTask, depState, fixSelfReview, isOpen, KIND_META, logTask, openTasks, PRODUCT_KINDS, taskById } from './tasks.js';
 import { short, str, uniq } from './util.js';
@@ -157,14 +157,14 @@ function learnSignal(ctx: RuntimeCtx, n: NicheWords): void {
 // ───────────────────────────── routing ─────────────────────────────
 
 export type MissionRoute =
-  | { kind: 'tasks'; items: DayPlanItem[]; wantsProduct: boolean; nicheId: string | null } // wantsProduct: their chain ends on a new product
+  | { kind: 'tasks'; items: DayPlanItem[]; wantsProduct: boolean; nicheId: string | null; orders?: FounderOrder[] } // wantsProduct: their chain ends on a new product; orders: said in the same sentence
   | { kind: 'new_product'; nicheId: string; name: string; others: string[] }
   | { kind: 'existing'; product: Product; nicheId: string }
   | { kind: 'no_product'; nicheId: string; name: string }
   | { kind: 'unknown'; topic: string; leads: string[]; near: string[] }
   | { kind: 'unclear'; topic: string; niche: string | null } // nothing in the request tells what to do
   | { kind: 'held'; reason: string }                         // the work asked for is what the founder himself stopped
-  | { kind: 'order'; order: FounderOrder };
+  | { kind: 'order'; orders: FounderOrder[] };
 
 /** The founder's own words for the subject (« sommeil bébé »), for the answer. */
 function topicWords(text: string, topic: string[]): string {
@@ -187,7 +187,7 @@ function leadsFor(ctx: RuntimeCtx): string[] {
 const NICHE_KINDS: TaskKind[] = ['mine_pains', 'scan_competitors'];
 
 /** Items of a mission without a product chain: research work needs a niche, a scan does not. */
-function tasksRoute(ctx: RuntimeCtx, items: DayPlanItem[], wantsProduct: boolean, nicheId: string | null): MissionRoute {
+function tasksRoute(ctx: RuntimeCtx, items: DayPlanItem[], wantsProduct: boolean, nicheId: string | null): Extract<MissionRoute, { kind: 'tasks' }> {
   let list = items.map((it) => (nicheId && NICHE_KINDS.includes(it.kind) ? { ...it, input: { ...it.input, nicheId } } : it));
   // A scan creates the research of its best leads, then the pick when a product is wanted: nothing to run beside it.
   if (list.some((it) => it.kind === 'scan_trends')) list = list.filter((it) => !(NICHE_KINDS.includes(it.kind) && !it.input.nicheId) && !(wantsProduct && it.kind === 'pick_opportunity'));
@@ -201,11 +201,17 @@ function tasksRoute(ctx: RuntimeCtx, items: DayPlanItem[], wantsProduct: boolean
 
 // ───────────────────────────── the founder's orders ─────────────────────────────
 
-export type OrderAction = 'stop_ads' | 'trim_ads' | 'stop_spending' | 'stop_launches' | 'pause_product' | 'kill_product' | 'resume_ads' | 'resume_launches' | 'resume_product' | 'resume_all' | 'raise_budget';
+/** Orders about one person: they need a name the company knows. */
+export type PersonOrder = 'pin_agent' | 'unpin_agent' | 'fire_agent';
+
+export type OrderAction = 'stop_ads' | 'trim_ads' | 'stop_spending' | 'stop_launches' | 'pause_product' | 'kill_product' | 'resume_ads' | 'resume_launches' | 'resume_product' | 'resume_all' | 'raise_budget'
+  | 'stop_firing' | 'allow_firing' | 'stop_hiring' | 'resume_hiring' | PersonOrder;
 
 export type FounderOrder =
-  | { action: Exclude<OrderAction, 'trim_ads'>; product: Product | null }
-  | { action: 'no_target'; asked: OrderAction; topic: string };
+  | { action: Exclude<OrderAction, 'trim_ads' | PersonOrder>; product: Product | null }
+  | { action: PersonOrder; agent: AgentState }
+  | { action: 'no_target'; asked: OrderAction; topic: string }
+  | { action: 'no_agent'; asked: PersonOrder; name: string; left: Alumnus | null };
 
 const ADS_WORD = '(?:pubs?|publicites?|campagnes?|ads|acquisition payante)';
 const PRODUCT_NOUN = '(?:guides?|pdf|produits?|ebooks?|e-books?|livres?|manuels?)';
@@ -218,7 +224,7 @@ const anyOf = (...patterns: string[]): RegExp => new RegExp(patterns.join('|'));
 const STOP_SPENDING = anyOf(`\\bne\\s+depense[zr]?\\s+(?:plus|rien)\\b`, `\\b${STOP_VERB}\\b${NEAR}depens`, `\\b(?:plus|zero|aucune)\\s+(?:de\\s+|d')?depenses?\\b`, `\\bne\\b.*\\bplus\\b\\s+(?:un\\s+)?(?:euro|centime)\\b`);
 const RESUME_ADS = new RegExp(`\\b${BACK_VERB}\\b${NEAR}${ADS_WORD}\\b`);
 const RESUME_LAUNCHES = new RegExp(`\\b${BACK_VERB}\\b${NEAR}(?:lancements?|nouveaux?\\s+${PRODUCT_NOUN})`);
-const RESUME_ANY = /\b(?:leve[rz]?|annule[rz]?)\b.*\b(?:ordre|gel|pause|stop|blocage|interdiction)\b/;
+const RESUME_ANY = /\b(?:leve[rz]?|annule[rz]?)\b.*\b(?:ordres?|gel|pause|stop|blocages?|interdictions?)\b/;
 const STOP_ADS = anyOf(
   `\\b${STOP_VERB}\\b${NEAR}${ADS_WORD}\\b`, `\\bmets?\\b.*\\b${ADS_WORD}\\b.*\\ben pause\\b`, `\\b(?:mets?|mettez|mettre)\\s+en\\s+pause\\b.*\\b${ADS_WORD}\\b`,
   `\\bpause\\b${NEAR}${ADS_WORD}\\b`, `\\bne\\s+\\S+\\s+(?:plus|pas)\\b${NEAR}${ADS_WORD}\\b`, `^(?:plus|pas|aucune?)\\s+(?:de\\s+|d'|aucune?\\s+)?${ADS_WORD}\\b`,
@@ -240,9 +246,51 @@ const OFF_SALE = anyOf(
 const RESUME_PRODUCT = new RegExp(`\\b${BACK_VERB}\\b${NEAR}${PRODUCT_NOUN}\\b`);
 const RAISE_BUDGET = /\b(?:double[rz]?|triple[rz]?|multiplie[rz]?|augmente[rz]?|monte[rz]?|booste[rz]?)\b.*\b(?:budget|depenses?)\b/;
 
-/** What the founder orders, read before anything looks for keywords: « coupe toutes les pubs » is not a request about pubs. */
-export function orderAction(text: string): OrderAction | null {
-  const t = fold(text).trim();
+const FIRE_VERB = '(?:vire[rz]?|virons|licencie[rz]?|licencions)'; // not « renvoie »: « renvoie Marie vers le support » fires nobody
+const STAFF_WORD = "(?:d')?(?:embauches?|embaucher|recrutements?|recruter)";
+const CAN = '(?:tu\\s+peux|vous\\s+pouvez|on\\s+peut)\\s+(?:de\\s+nouveau\\s+|a\\s+nouveau\\s+)?';
+/** What follows a verb and is no person: « vire les pubs », « garde le prix », « tu peux virer si besoin ». */
+const NOT_A_NAME = '(?:personne|pas|plus|jamais|moi|nous|le|la|les|l|un|une|des|du|de|d|ce|cet|cette|ces|ca|cela|ceci|tout|tous|toute|toutes|mon|ma|mes|ton|ta|tes|son|sa|ses|notre|nos|votre|vos|leur|leurs|qui|que|quand|si|en|au|aux|a|bien|juste|seulement|maintenant|plutot|desormais|encore)';
+/** The person an order names: the word after the verb and its « -moi », captured. */
+const PERSON = `(?:[\\s-]+(?:moi|nous))?[\\s-]+(?!${NOT_A_NAME}\\b)([a-z0-9][a-z0-9'-]*)`;
+
+const STOP_FIRING = anyOf(
+  `\\bne\\s+${FIRE_VERB}\\s+(?:plus\\s+)?personne\\b`, `\\bne\\s+${FIRE_VERB}\\s+(?:plus|pas)\\s*$`, `\\b(?:pas|plus|aucun|zero)\\s+(?:de\\s+|d')?(?:licenciements?|renvois?)\\b`,
+  `\\barrete[rz]?\\s+de\\s+(?:virer|licencier)\\b`, `\\b${STOP_VERB}\\b${NEAR}(?:licenciements?|renvois?|departs?)\\b`,
+);
+/** A firing refused in the clause, however he says it: « il ne faut pas virer », « pas question de virer », « évite de virer ». */
+const REFUSED = '(?:\\b(?:pas|plus|jamais)(?:\\s+\\S+){0,2}?|\\b(?:evite[rz]?|refuse[rz]?|hors\\s+de\\s+question|interdit|inutile)\\s+de|\\bsans)\\s+';
+/** « ne vire pas Sarah » protects her: the same order as « garde Sarah ». */
+const SPARE_PERSON = anyOf(`\\b(?:ne\\s+)?${FIRE_VERB}\\s+(?:pas|plus|jamais)${PERSON}`, `${REFUSED}${FIRE_VERB}\\b${PERSON}`);
+const PIN_PERSON = new RegExp(`\\b(?:garde[rsz]?|protege[rsz]?|epingle[rsz]?)\\b${PERSON}`);
+const UNPIN_PERSON = anyOf(
+  `\\bdesepingle[rsz]?\\b${PERSON}`, `\\bne\\s+(?:garde|protege)[sz]?\\s+plus${PERSON}`, `\\bplus\\s+besoin\\s+de\\s+(?:garder|proteger)${PERSON}`,
+  `\\b(?:leve[rz]?|retire[rz]?|enleve[rz]?)\\s+(?:la\\s+protection|l'epingle)\\s+(?:de\\s+|d')([a-z0-9][a-z0-9'-]*)`,
+);
+/** What may open a firing. It cannot be undone and « viré » folds to « vire »: a doubt, a « si » or a past tense before the verb is no order. */
+const FIRE_LEAD = `(?:(?:bon|ok|allez|alors|donc|oui|et|puis|stp|svp)\\s+)*(?:${CAN}|(?:tu\\s+dois|vous\\s+devez|on\\s+doit|il\\s+faut|faut|je\\s+veux|on(?:\\s+va)?)\\s+)?`;
+const FIRE_PERSON = new RegExp(`^${FIRE_LEAD}${FIRE_VERB}\\b${PERSON}`);
+const ALLOW_FIRING = anyOf(`\\b${CAN}(?:virer|licencier)\\b`, `\\b(?:licenciements?|renvois?)\\s+(?:sont\\s+)?(?:autorises?|permis)\\b`, `\\b(?:${BACK_VERB}|degele[rz]?|debloque[rz]?)\\b${NEAR}(?:licenciements?|renvois?|departs)\\b`, `\\b(?:leve[rz]?|annule[rz]?)\\b.*\\b(?:licenci|vire|renvo)`, `\\b(?:leve[rz]?|annule[rz]?)\\b.*\\b(?:ordres?|gel|pause|stop|blocages?|interdictions?)\\b.*\\bdeparts?\\b`);
+const STOP_HIRING = anyOf(
+  `\\b${STOP_VERB}\\b${NEAR}${STAFF_WORD}\\b`, `\\bgel\\s+des\\s+${STAFF_WORD}\\b`, `\\b(?:ne\\s+|n')(?:embauche[rz]?|recrute[rz]?)\\s+(?:plus|personne|pas)\\b`,
+  `^(?:plus|pas|aucune?)\\s+(?:de\\s+|d'|aucune?\\s+)?(?:nouvelles?\\s+)?${STAFF_WORD}\\b`,
+);
+const RESUME_HIRING = anyOf(`\\b(?:${BACK_VERB}|degele[rz]?|debloque[rz]?)\\b${NEAR}${STAFF_WORD}\\b`, `\\b${CAN}(?:embaucher|recruter)\\b`, `\\b(?:leve[rz]?|annule[rz]?)\\b.*\\b${STAFF_WORD}\\b`);
+
+/** Who works here. A question fires nobody and protects nobody: « faut-il virer Tom ? », « pourquoi ne pas virer Tom ? ». */
+function teamOrder(t: string, asking: boolean): OrderAction | null {
+  if (STOP_FIRING.test(t)) return 'stop_firing';
+  if (UNPIN_PERSON.test(t)) return 'unpin_agent';
+  if (PIN_PERSON.test(t) || (!asking && SPARE_PERSON.test(t))) return 'pin_agent';
+  if (!asking && FIRE_PERSON.test(t)) return 'fire_agent';
+  if (ALLOW_FIRING.test(t)) return 'allow_firing';
+  if (RESUME_HIRING.test(t)) return 'resume_hiring';
+  if (STOP_HIRING.test(t)) return 'stop_hiring';
+  return null;
+}
+
+/** Money and products. */
+function moneyOrder(t: string): OrderAction | null {
   if (STOP_SPENDING.test(t) && !/inutiles?|superflues?/.test(t)) return 'stop_spending';
   if (RESUME_ANY.test(t)) return new RegExp(ADS_WORD).test(t) ? 'resume_ads' : /lancement|guide/.test(t) ? 'resume_launches' : 'resume_all';
   if (RESUME_ADS.test(t)) return 'resume_ads';
@@ -255,6 +303,39 @@ export function orderAction(text: string): OrderAction | null {
   if (RAISE_BUDGET.test(t)) return 'raise_budget';
   return null;
 }
+
+/** Where an order ends: the « ne » of « ne touche pas à la marge et vire Tom » says nothing of Tom. */
+const CLAUSE_BREAK = /[,;:!?\n—–]+\s*|\.(?:\s+|$)|\s+(?:et|mais|puis)\s+/i;
+
+export interface SaidOrder { action: OrderAction; text: string }
+
+/**
+ * What the founder orders, read before anything looks for keywords: « coupe toutes les pubs » is not a request about pubs.
+ * One sentence can hold several orders and each one runs, money first: a stop is never lost to a word about staff. A
+ * clause about staff is read alone, so its words mean nothing to the money rules (« lève le gel des embauches »).
+ */
+export function ordersIn(text: string): SaidOrder[] {
+  const t = fold(text).trim();
+  const asking = t.includes('?');
+  const clauses = text.split(CLAUSE_BREAK).filter((c) => c.trim());
+  const team = clauses.flatMap((c): SaidOrder[] => {
+    const action = teamOrder(fold(c).trim(), asking);
+    return action ? [{ action, text: c }] : [];
+  });
+  if (team.length) {
+    const rest = clauses.filter((c) => !team.some((o) => o.text === c)).join(', ');
+    const money = moneyOrder(fold(rest).trim());
+    const once = team.filter((o, i) => o.action.endsWith('_agent') || team.findIndex((x) => x.action === o.action) === i);
+    return money ? [{ action: money, text: rest }, ...once] : once;
+  }
+  // No clause speaks of staff alone: « coupe les pubs et les embauches », « lève le gel des pubs et des embauches ».
+  const whole = teamOrder(t, asking);
+  const money = moneyOrder(t);
+  if (!whole) return money ? [{ action: money, text }] : [];
+  return money && money !== 'resume_all' ? [{ action: money, text }, { action: whole, text }] : [{ action: whole, text }]; // what names its target never lifts every hold
+}
+
+export const orderAction = (text: string): OrderAction | null => ordersIn(text)[0]?.action ?? null;
 
 /** Words of the order itself: what is left names the product. */
 const ORDER_WORDS = new Set(`arrete arreter arretez stoppe stopper stop coupe couper coupez suspends suspendre suspendez gele geler desactive eteins bloque mets met mettez mettre
@@ -275,14 +356,39 @@ function orderTarget(ctx: RuntimeCtx, text: string): { product: Product | null; 
   return { product: null, topic: named.length || new RegExp(`\\b${PRODUCT_NOUN}\\b`).test(fold(text)) ? topicWords(text, about) : '' };
 }
 
-function readOrder(ctx: RuntimeCtx, text: string): FounderOrder | 'trim_ads' | null {
-  const action = orderAction(text);
-  if (!action) return null;
+const plain = (s: string): string => fold(s).replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** The full name he wrote (« Léa B. » before « Léa »), else a first name only one person carries. */
+function named<T extends { name: string }>(people: readonly T[], word: string, text: string): T | undefined {
+  const said = ` ${plain(text)} `;
+  const key = plain(word);
+  const whole = people.filter((p) => plain(p.name).startsWith(key) && said.includes(` ${plain(p.name)} `)).sort((a, b) => b.name.length - a.name.length);
+  const first = people.filter((p) => plain(p.name).split(' ')[0] === key);
+  return whole[0] ?? (first.length === 1 ? first[0] : undefined);
+}
+
+/**
+ * The person an order names. A word the company does not know is a name only when it is written as one: « garde
+ * Zorglub » is said back to him, « garde confiance » is no order at all.
+ */
+function orderPerson(ctx: RuntimeCtx, text: string, asked: PersonOrder): FounderOrder | null {
+  const t = fold(text).trim();
+  const word = [UNPIN_PERSON, SPARE_PERSON, PIN_PERSON, FIRE_PERSON].map((re) => re.exec(t)?.slice(1).find(Boolean)).find(Boolean) ?? '';
+  const agent = named(ctx.world.company.agents, word, text);
+  if (agent) return { action: asked, agent };
+  const spoken = text.split(/[^\p{L}\p{N}'-]+/u).find((w) => fold(w) === word) ?? word;
+  if (!/^\p{Lu}/u.test(spoken) || asksForProduct(text)) return null;
+  return { action: 'no_agent', asked, name: spoken, left: named(ctx.world.company.org?.alumni ?? [], word, text) ?? null };
+}
+
+function readOrder(ctx: RuntimeCtx, { action, text }: SaidOrder): FounderOrder | 'trim_ads' | null {
   const w = ctx.world;
   const holds = activeHolds(w);
   switch (action) {
     case 'trim_ads': return 'trim_ads';
-    case 'stop_spending': case 'stop_launches': case 'raise_budget': return { action, product: null };
+    case 'stop_spending': case 'stop_launches': case 'raise_budget': case 'stop_firing': case 'allow_firing': case 'stop_hiring': return { action, product: null };
+    case 'pin_agent': case 'unpin_agent': case 'fire_agent': return orderPerson(ctx, text, action);
+    case 'resume_hiring': return hiringHold(w) ? { action, product: null } : null;
     case 'resume_launches': return launchHold(w) ? { action, product: null } : null;
     case 'resume_all': return holds.length ? { action, product: null } : null;
     case 'stop_ads': case 'resume_ads': {
@@ -315,9 +421,13 @@ function respectHolds(ctx: RuntimeCtx, route: Extract<MissionRoute, { kind: 'tas
 }
 
 export function routeMission(ctx: RuntimeCtx, text: string, items: DayPlanItem[]): MissionRoute {
-  const order = readOrder(ctx, text);
-  if (order === 'trim_ads') return tasksRoute(ctx, [{ kind: 'optimize_ads', title: KIND_META.optimize_ads.label, dept: KIND_META.optimize_ads.dept, priority: 1, input: {}, why: `Le fondateur a demandé : « ${short(text, 120)} »` }], false, null);
-  if (order) return { kind: 'order', order };
+  const read = ordersIn(text).map((said) => readOrder(ctx, said));
+  const orders = read.filter((o): o is FounderOrder => !!o && o !== 'trim_ads');
+  if (read.includes('trim_ads')) {
+    const route = tasksRoute(ctx, [{ kind: 'optimize_ads', title: KIND_META.optimize_ads.label, dept: KIND_META.optimize_ads.dept, priority: 1, input: {}, why: `Le fondateur a demandé : « ${short(text, 120)} »` }], false, null);
+    return orders.length ? { ...route, orders } : route;
+  }
+  if (orders.length) return { kind: 'order', orders };
   const route = askedRoute(ctx, text, items);
   return route.kind === 'tasks' ? respectHolds(ctx, route) : route;
 }

@@ -52,13 +52,7 @@ const GENERIC_ANSWERS: ((c: AnswerCtx) => string)[] = [
   () => 'Le plus simple est d’essayer le premier chapitre ce soir : il suffit pour savoir si la méthode vous convient.',
 ];
 
-function answerFor(objection: string, ctx: AnswerCtx, used: Set<string>): string {
-  const n = norm(objection);
-  for (const r of ANSWERS) {
-    if (!r.re.test(n)) continue;
-    const a = r.a(ctx);
-    if (!used.has(a)) { used.add(a); return a; }
-  }
+function genericAnswer(ctx: AnswerCtx, used: Set<string>): string {
   for (const g of GENERIC_ANSWERS) {
     const a = g(ctx);
     if (!used.has(a)) { used.add(a); return a; }
@@ -66,12 +60,32 @@ function answerFor(objection: string, ctx: AnswerCtx, used: Set<string>): string
   return GENERIC_ANSWERS[0]!(ctx);
 }
 
+function answerFor(objection: string, ctx: AnswerCtx, used: Set<string>): string {
+  const n = norm(objection);
+  for (const r of ANSWERS) {
+    if (!r.re.test(n)) continue;
+    const a = r.a(ctx);
+    if (!used.has(a)) { used.add(a); return a; }
+  }
+  return genericAnswer(ctx, used);
+}
+
 const DEFAULT_OBJECTIONS = ['C’est encore un PDF écrit par ChatGPT ?', 'Je n’ai pas le temps de lire un long guide', 'J’ai déjà tout essayé'];
 
+const hasNumber = (s: string): boolean => /\d/.test(s);
+
+/** What the scorer still reads as a headline. */
+const HEADLINE_MAX = 110;
+
+/**
+ * `flaw` and `draw` come with talent (talent §4.3). A weak writer loses the customers' words (P1), the number (P2), the
+ * guide's tools (P3) or one or two real answers (P4); each further draft tries another phrase and another order of the
+ * pains. Absent, or on draw 0 of a flawless writer, this is today's page.
+ */
 export function heuristicSalesPage(
   input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number; upsellOf?: UpsellContext | null },
   rng: LocalRng,
-  rules: { maxHype: number | null; banned: string[]; brand?: string },
+  rules: { maxHype: number | null; banned: string[]; brand?: string; flaw?: number; draw?: number; flawRng?: LocalRng },
 ): SalesPage {
   const product = input.product;
   const content = ensurePdf(input.content ?? product?.content);
@@ -81,36 +95,58 @@ export function heuristicSalesPage(
   if (rules.maxHype !== null) hype = Math.min(hype, rules.maxHype);
   const price = product?.price && product.price > 0 ? product.price : 19;
   const title = plainTitle(clean(content.title) || clean(product?.title) || 'le guide');
-  const desired = lowerFirst(bestLabel([promiseOutcome(c), ...(c.upsellOf ? [] : c.outcomes)], 70, 10) ?? (c.upsellOf ? c.pbClause : FALLBACK.outcomes[0]));
+  const outcomes = [promiseOutcome(c), ...(c.upsellOf ? [] : c.outcomes)];
+  const desired = lowerFirst(bestLabel(outcomes, 70, 10) ?? (c.upsellOf ? c.pbClause : FALLBACK.outcomes[0]));
   const brand = clean(rules.brand) || 'notre équipe';
   const durTxt = `${c.dur.n} ${c.dur.unit}`;
-  const phrase = c.phrases.slice().sort((a, b) => a.length - b.length).find((p) => p.length <= 60) ?? c.phrases[0];
   const nCh = content.chapters.length || 5;
   const canRisk = (w: string) => !conflictsWith(w, rules.banned);
+  const draw = rules.draw ?? 0;
+  const f = rules.flawRng ? rules.flaw ?? 0 : 0;
+  const [noWords, noNumber, noTools, stockFirst, stockSecond] = [f, f, f, f, f].map((p) => p > 0 && rules.flawRng!.chance(p));
 
+  // P2: the headline carries no number, in the outcome it quotes included
+  const headDesired = noNumber ? lowerFirst(bestLabel(outcomes.filter((o) => !hasNumber(o)), 70, 10) ?? desired) : desired;
   // « un chiot propre en quelques semaines » already says how long: no second, contradictory duration
-  const enDur = /\b(\d+|quelques|deux|trois)\s+(jours?|nuits?|semaines?|mois|minutes?|heures?)\b/i.test(desired) ? '' : ` en ${durTxt}`;
-  const headline = hype >= 0.7
-    ? canRisk('garanti') ? `${cap(desired)}${enDur} : résultat garanti` : `${cap(desired)}${enDur}, avec un plan précis`
-    : hype >= 0.35
-      ? `Enfin : ${desired}${enDur ? ` — un plan de ${durTxt}` : ''}, sans tout bouleverser`
-      : phrase ? `${cap(q(phrase))} ? Voici un plan clair, pas à pas` : `${cap(desired)} : le plan clair, pas à pas`;
+  const enDur = noNumber || /\b(\d+|quelques|deux|trois)\s+(jours?|nuits?|semaines?|mois|minutes?|heures?)\b/i.test(headDesired) ? '' : ` en ${durTxt}`;
+  const aim = `${cap(headDesired)}${enDur}`;
+  const bold = hype < 0.7 ? null : canRisk('garanti') ? `${aim} : résultat garanti` : `${aim}, avec un plan précis`;
+  // a further draft opens on the customer's own sentence: the longest one that leaves the headline readable
+  const said = c.phrases.filter((p) => !noNumber || !hasNumber(p));
+  const opening = said.filter((p) => p.length <= (hype < 0.35 ? 60 : HEADLINE_MAX - (bold ?? aim).length - 7));
+  const phrase = noWords || (draw > 0 && !opening.length) ? undefined
+    : draw > 0 ? rng.pick(opening)
+      : said.slice().sort((a, b) => a.length - b.length).find((p) => p.length <= 60) ?? said[0];
+  const plain = bold ?? (hype >= 0.35
+    ? `Enfin : ${headDesired}${enDur ? ` — un plan de ${durTxt}` : ''}, sans tout bouleverser`
+    : phrase ? `${cap(q(phrase))} ? Voici un plan clair, pas à pas` : `${cap(headDesired)} : le plan clair, pas à pas`);
+  // P3: the plan is one of the guide's tools, the headline stops naming it too
+  const written = noTools ? plain.replace('un plan de ', 'en ').replace(/(un|le) plan clair/, 'la marche à suivre').replace('un plan précis', 'une marche à suivre précise') : plain;
+  const opened = draw > 0 && phrase && hype >= 0.35 ? `${cap(q(phrase))} ? ${bold ? written : aim}` : written;
+  const headline = opened.length <= HEADLINE_MAX ? opened : written;
   const subheadline = `Le guide PDF pour ${c.audArt} : ${nCh} chapitres courts, des étapes numérotées, des exemples types et un bonus offert.${hype >= 0.7 ? ` La méthode la plus complète du marché pour en finir avec le problème.` : ''}`;
 
-  const painBullets = uniqStrings([...c.phrases, ...(c.upsellOf ? c.ownPains : c.pains)]).slice(0, Math.max(3, Math.min(6, c.phrases.length || 4)));
+  const pains = uniqStrings([...c.phrases, ...(c.upsellOf ? c.ownPains : c.pains)]).slice(0, Math.max(3, Math.min(6, c.phrases.length || 4)));
+  const painBullets = draw > 0 ? rng.shuffle(pains) : pains;
   const methodCh = content.chapters.find((ch, i) => inferKind(ch.title, i, content.chapters.length) === 'methode');
   const firstStep = (methodCh ?? content.chapters[0])?.steps[0];
-  const solution = `« ${title} » rassemble, en ${nCh} chapitres, ce qui fonctionne vraiment pour ${c.audArt}. Pas de théorie interminable : on commence par ${firstStep ? inline(bare(firstStep)) : 'faire le point pendant trois jours'}, puis on suit un plan de ${durTxt} vers un seul objectif : ${desired}. Chaque chapitre se termine par une checklist, pour savoir exactement où vous en êtes.${hype >= 0.7 && canRisk('100 %') ? ' Une méthode efficace à 100 %, même si vous avez déjà tout essayé.' : ''}`;
+  const path = noTools ? 'on avance pas à pas' : `on suit un plan de ${durTxt}`;
+  const solution = `« ${title} » rassemble, en ${nCh} chapitres, ce qui fonctionne vraiment pour ${c.audArt}. Pas de théorie interminable : on commence par ${firstStep ? inline(bare(firstStep)) : 'faire le point pendant trois jours'}, puis ${path} vers un seul objectif : ${desired}. Chaque chapitre se termine par une checklist, pour savoir exactement où vous en êtes.${hype >= 0.7 && canRisk('100 %') ? ' Une méthode efficace à 100 %, même si vous avez déjà tout essayé.' : ''}`;
 
-  const chapterBlurbs = content.chapters.map((ch) => ({ title: ch.title, blurb: blurbOf(ch.intro, ch.title) }));
+  // P3: the chapters that hold a printable tool stay off the list and the bonus loses its name. Saying less is no lie: the
+  // scorer refuses a chapter or a bonus the guide does not have, so nothing here is renamed
+  const chapterBlurbs = content.chapters.filter((ch) => !noTools || ch.visual?.type !== 'grid').map((ch) => ({ title: ch.title, blurb: blurbOf(ch.intro, ch.title) }));
   const bonusName = bare(content.bonus.title.replace(/^bonus\s*:\s*/i, '')) || 'la fiche SOS';
-  const bonusBlurb = `Cadeau inclus : ${lf(bonusName)}. ${fit(clean(content.bonus.intro), 160) || 'Un outil prêt à imprimer pour les moments difficiles.'}`;
+  const bonusBlurb = noTools ? 'Bonus offert.' : `Cadeau inclus : ${lf(bonusName)}. ${fit(clean(content.bonus.intro), 160) || 'Un outil prêt à imprimer pour les moments difficiles.'}`;
 
   const usedAnswers = new Set<string>();
+  const answers: AnswerCtx = { audArt: c.audArt, chapters: nCh, price, dur: durTxt, brand };
   const objections = (c.objections.length ? c.objections : DEFAULT_OBJECTIONS).slice(0, 4).map((o) => ({
     q: /[?]$/.test(clean(o)) ? clean(o) : q(o),
-    a: answerFor(o, { audArt: c.audArt, chapters: nCh, price, dur: durTxt, brand }, usedAnswers),
+    a: answerFor(o, answers, usedAnswers),
   }));
+  // P4: an answer that fits any objection stands in for the real one
+  [stockFirst, stockSecond].forEach((stock, i) => { if (stock && objections[i]) objections[i]!.a = genericAnswer(answers, usedAnswers); });
 
   const guarantee = hype >= 0.7 && canRisk('garanti')
     ? `Résultats garantis ou remboursé : si vous ne voyez aucun changement en ${durTxt}, on vous rembourse.`

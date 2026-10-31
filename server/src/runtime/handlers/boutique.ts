@@ -10,11 +10,13 @@ import { redTeamGate, reopenGate } from '../redteam.js';
 import { productNote } from '../notes.js';
 import { officerId } from '../org/officers.js';
 import { followUpLimit, parentOf, priceCeiling } from '../metrics.js';
+import { armSharp, bestDraft } from '../talent/craft.js';
 import { linkUpsell, nicheCollision, pickUpsellSubject, upsellContextOf } from '../upsell.js';
 import { eur, median, numOf, round2, short, str } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { NO_PRODUCT, requireProduct, studioMind } from './common.js';
 import { coverSvgFor, ensureCoverFile, ensureDesign } from './creation.js';
+import { reworkCraft } from './growth.js';
 
 const HYPES = HYPE_ARMS.map(Number).sort((a, b) => a - b);
 const PRICES = PRICE_ARMS.map(Number).sort((a, b) => a - b);
@@ -72,7 +74,8 @@ export const boutiqueHandlers: HandlerMap = {
     async run(ctx, task, agent, mind) {
       const product = requireProduct(ctx, task);
       if (!product) return NO_PRODUCT;
-      if (!product.content) return { fail: 'Impossible d’écrire la page : le guide n’existe pas encore.', summary: 'Pas de contenu.' };
+      const content = product.content;
+      if (!content) return { fail: 'Impossible d’écrire la page : le guide n’existe pas encore.', summary: 'Pas de contenu.' };
       const voc = vocOf(ctx, product.nicheId);
       const cap = directivesOf(ctx.world, agent.id, nicheName(ctx, product.nicheId)).maxHype;
       let hype: number;
@@ -86,13 +89,16 @@ export const boutiqueHandlers: HandlerMap = {
         const exp = runningExperiment(ctx, 'sales_hype');
         const arm = exp && exp.variants.length
           ? exp.variants[ctx.world.company.products.filter((p) => p.salesPage).length % exp.variants.length]!
-          : learning.chooseArm(ctx.world, 'hype', HYPE_ARMS, ctx.rng);
+          : learning.chooseArm(ctx.world, 'hype', HYPE_ARMS, ctx.rng, armSharp(ctx, agent, mind, 'hype'));
         hype = Number(arm); source = exp ? 'expérience en cours' : 'bandit';
       }
       if (!Number.isFinite(hype)) hype = 0.4;
       if (cap !== null && hype > cap) { hype = floorArm(HYPES, cap); source += ` (plafonné à ${cap})`; }
       const before = task.input.reason === 'lesson' && product.salesPage ? { page: product.salesPage, quality: sim.scoreSalesPage(product.salesPage, product, voc) } : null;
-      const sp = await ctx.engine.writeSalesPage({ product, content: product.content, voc, hype, upsellOf: upsellContextOf(ctx.world, product) }, studioMind(ctx, task, mind));
+      const upsellOf = upsellContextOf(ctx.world, product);
+      const { draft: sp } = await bestDraft(ctx, agent, reworkCraft(task, studioMind(ctx, task, mind)), 'page',
+        (m) => ctx.engine.writeSalesPage({ product, content, voc, hype, upsellOf }, m),
+        (d) => sim.scoreSalesPage({ ...d, hypeLevel: hype }, product, voc).overall);
       sp.hypeLevel = hype;
       sp.priceWritten = product.price;
       product.salesPage = sp;

@@ -1,10 +1,13 @@
 /** Service client: replies (tone bandit, anti-scam guard, founder gate on big refunds) and refunds. */
-import type { InboxMessage, Order, SupportReplyInput } from '../../shared.js';
+import type { AgentId, InboxMessage, Order, ReplyOutcome, SupportReplyInput, Task } from '../../shared.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { incident, productOf, say } from '../ctx.js';
 import { learning, sim } from '../modules.js';
 import { claimedMessageIds } from '../metrics.js';
 import { directivesOf, SUPPORT_TONES, withTone } from '../playbook.js';
+import { TALENT } from '../talent/constants.js';
+import { armSharp } from '../talent/craft.js';
+import { recordEvidence, recordScore } from '../talent/evidence.js';
 import { createTask } from '../tasks.js';
 import { eur, includesCI, short, str, strArr } from '../util.js';
 import type { HandlerMap } from './common.js';
@@ -89,18 +92,38 @@ export function openMessages(ctx: RuntimeCtx): InboxMessage[] {
   return list.filter((m) => m.status === 'open');
 }
 
+/** Messages of reply tasks that have not started: a faster agent can clear them first, those tasks keep what is left. */
+function plannedAhead(ctx: RuntimeCtx, task: Task): Set<string> {
+  return new Set(ctx.world.company.tasks.filter((t) => t.kind === 'reply_inbox' && t.status === 'pending' && t.id !== task.id).flatMap((t) => strArr(t.input.messageIds)));
+}
+
+/**
+ * What this task clears. The plan cuts batches of 6 without knowing who answers, so talent acts here (talent §4.7): the
+ * agent gets through 4 + round(4 t) messages, its plan's first, and a leftover is planned again once the task closes.
+ * No talent, today's rule: the plan's batch as it stands, else the 6 most urgent nobody claimed.
+ */
+function batchFor(ctx: RuntimeCtx, task: Task, open: readonly InboxMessage[], t: number | undefined): InboxMessage[] {
+  const wanted = strArr(task.input.messageIds);
+  const planned = wanted.map((id) => open.find((m) => m.id === id)).filter((m): m is InboxMessage => !!m);
+  if (wanted.length && t === undefined) return planned;
+  const claimed = claimedMessageIds(ctx.world);
+  const ahead = t === undefined ? new Set<string>() : plannedAhead(ctx, task);
+  const free = open.filter((m) => !claimed.has(m.id) || ahead.has(m.id)).sort((a, b) => urgency(b, ctx.world.day) - urgency(a, ctx.world.day) || a.day - b.day);
+  return [...planned, ...free].slice(0, t === undefined ? 6 : 4 + Math.round(4 * t));
+}
+
+/** A reply says little, a chargeback right after it says more (talent §5.2). */
+function supportEvidence(ctx: RuntimeCtx, agentId: AgentId, msg: InboxMessage, outcome: ReplyOutcome): void {
+  recordScore(ctx.world, agentId, 'support', 'reply', outcome.score, `Réponse à « ${short(msg.subject, 40)} » : ${Math.round(outcome.score)}/100`);
+  if (outcome.consequence === 'chargeback') recordEvidence(ctx.world, agentId, 'support', 'chargeback', 0, TALENT.weight['support:chargeback']!, `Chargeback malgré la réponse à « ${short(msg.subject, 40)} »`);
+}
+
 export const supportHandlers: HandlerMap = {
   reply_inbox: {
     async run(ctx, task, agent, mind) {
-      const open = openMessages(ctx);
-      const wanted = strArr(task.input.messageIds);
-      let batch: InboxMessage[];
-      if (wanted.length) batch = wanted.map((id) => open.find((m) => m.id === id)).filter((m): m is InboxMessage => !!m);
-      else {
-        const claimed = claimedMessageIds(ctx.world);
-        batch = open.filter((m) => !claimed.has(m.id)).sort((a, b) => urgency(b, ctx.world.day) - urgency(a, ctx.world.day) || a.day - b.day).slice(0, 6);
-      }
+      const batch = batchFor(ctx, task, openMessages(ctx), mind.craft?.t);
       if (!batch.length) return { summary: 'Boîte de réception vide : rien à répondre.', skipReview: true, output: { replies: [] } };
+      const sharp = armSharp(ctx, agent, mind, 'tone');
       const learnedTone = directivesOf(ctx.world, agent.id).tone;
       const exp = runningToneExperiment(ctx);
       const policy = [...SUPPORT_POLICY, ...mind.playbook.filter((r) => !/^Ne jamais écrire/.test(r))];
@@ -110,7 +133,7 @@ export const supportHandlers: HandlerMap = {
       for (const [i, msg] of batch.entries()) {
         const product = productOf(ctx, msg.productId) ?? null;
         const order: Order | null = msg.orderId ? ctx.world.market.orders.find((o) => o.id === msg.orderId) ?? null : null;
-        const tone = exp && exp.variants.length ? exp.variants[(offset + i) % exp.variants.length]! : learnedTone ?? learning.chooseArm(ctx.world, 'support_tone', SUPPORT_TONES, ctx.rng);
+        const tone = exp && exp.variants.length ? exp.variants[(offset + i) % exp.variants.length]! : learnedTone ?? learning.chooseArm(ctx.world, 'support_tone', SUPPORT_TONES, ctx.rng, sharp);
         const toneMind = mindWith({ ...mind, playbook: withTone(mind.playbook, tone) }, []);
         const cust = ctx.world.market.customers.find((c) => c.id === msg.customerId);
         const customer = cust ? { name: cust.name, archetype: cust.archetype } : msg.customerName ? { name: msg.customerName, archetype: 'normal' } : null;
@@ -151,6 +174,7 @@ export const supportHandlers: HandlerMap = {
         const outcome = ctx.tools.replyToMessage(msg.id, reply, agent.id);
         learning.rewardArm(ctx.world, 'support_tone', tone, Math.max(0, Math.min(1, outcome.score / 100)));
         scoreSum += outcome.score;
+        if (mind.craft) supportEvidence(ctx, agent.id, msg, outcome);
         const label = INTENT_LABELS[reply.detectedIntent] ?? reply.detectedIntent;
         say(ctx, agent.id, `${agent.name} répond à ${customerName(ctx, msg)} (${label}, ton ${tone}) : ${short(outcome.customerReaction, 70)} (score ${Math.round(outcome.score)}/100)`, 'message', { messageId: msg.id, ...(msg.productId ? { productId: msg.productId } : {}) });
         if (outcome.consequence === 'refund' || reply.action === 'refund') say(ctx, agent.id, `Remboursement accordé à ${customerName(ctx, msg)}${outcome.cost > 0 ? ` (${eur(outcome.cost)})` : ''}`, 'refund', { messageId: msg.id });

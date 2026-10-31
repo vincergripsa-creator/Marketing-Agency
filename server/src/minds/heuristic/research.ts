@@ -10,21 +10,30 @@ import { knownProfile } from './profiles.js';
 
 export const PRICE_LADDER = [9, 14, 19, 24, 29, 39, 49] as const;
 
+/** The price a niche is known to pay: the median of the company's own anchors, else of the competitors' prices. */
+function medianKnownPrice(anchors: readonly number[], competitorPrices: readonly number[]): number | null {
+  const pool = (anchors.length ? anchors : competitorPrices).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
+  return pool.length ? pool[Math.floor((pool.length - 1) / 2)]! : null;
+}
+
 /** Start low (brain: « commencer bas »): the ladder step just below the median anchor. */
 export function suggestPrice(anchors: readonly number[], competitorPrices: readonly number[], target: number | null): number {
   if (target !== null && Number.isFinite(target)) return Math.round(clampNum(target, 9, 49, 19));
-  const pool = (anchors.length ? anchors : competitorPrices).filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
-  if (pool.length === 0) return 14;
-  const mid = pool[Math.floor((pool.length - 1) / 2)]!;
+  const mid = medianKnownPrice(anchors, competitorPrices);
+  if (mid === null) return 14;
   const below = PRICE_LADDER.filter((p) => p <= mid);
   return below.length ? below[below.length - 1]! : 9;
 }
 
 const COMPETITION_PENALTY: Record<TrendSignal['competitionHint'], number> = { faible: 0, moyenne: 12, forte: 26 };
 
+/** Buzz is not value (talent §4.6): a better researcher looks at the price a niche pays. No talent = 0 = today. */
+export const valueWeightOf = (t: number | undefined): number => 1.2 * (t ?? 0);
+
 export function heuristicRanking(
   input: { signals: TrendSignal[]; competitors: Record<string, CompetitorProduct[]>; voc: Record<string, VoiceOfCustomer>; excludeNicheIds: string[] },
   targetPrice: number | null | ((s: TrendSignal) => number | null),
+  opts?: { valueWeight: number },
 ): OpportunityRanking {
   const priceRule = (s: TrendSignal): number | null => (typeof targetPrice === 'function' ? targetPrice(s) : targetPrice);
   const exclude = new Set(input.excludeNicheIds ?? []);
@@ -58,6 +67,8 @@ export function heuristicRanking(
       score += voc.depth === 'deep' ? 4 : 0;
       score -= Math.min(8, voc.bannedClaims.length * 2);
     }
+    const known = medianKnownPrice(voc?.priceAnchors ?? [], comps.map((c) => c.price));
+    if (opts?.valueWeight && known !== null) score += opts.valueWeight * (known - 19);
     score = Math.round(clampNum(score, 0, 100, 0));
 
     const audienceBase = clean(s.audience) || 'un public précis';

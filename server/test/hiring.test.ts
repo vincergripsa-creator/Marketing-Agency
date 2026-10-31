@@ -570,6 +570,15 @@ describe('what a hire inherits (org test 16)', () => {
     expect(l.world.company.playbooks.tom).toEqual(expect.arrayContaining(SEED_PLAYBOOKS.crm)); // the rules of a department nobody had opened
   });
 
+  it('under control.noLearning a hire starts from the seed rules alone, and the audit stays empty', async () => {
+    const l = await lab({ control: { noLearning: true } });
+    const w = l.world;
+    w.company.playbooks.leo!.push('Ne jamais écrire « miracle »');
+    await hire(l, 'community_manager');
+    expect(w.company.playbooks.tom).toEqual(SEED_PLAYBOOKS.crm); // the founder's lesson stayed with him
+    expect(auditOrg(w)).toEqual([]);
+  });
+
   it('the leaver\'s banned word reaches the remaining owner', async () => {
     const l = await lab();
     const w = l.world;

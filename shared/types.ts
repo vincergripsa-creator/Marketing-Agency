@@ -1022,6 +1022,7 @@ export interface SkillRating {
   n: number;                   // evidence events, all time
   seasonN: number;             // this season (weighted sum)
   metric: number | null;       // the role's readable number: mean QA score, reply score…
+  metricBase?: { season: number; sum: number; w: number }; // what `metric` is the mean of: it restarts with each season (P3.4)
   history: { day: number; rating: number }[]; // one point per week plus the hire, max 40
 }
 export type LeagueStatus = 'active' | 'probation' | 'gone';

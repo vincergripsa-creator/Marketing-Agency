@@ -25,7 +25,7 @@ import {
 import { buildHeuristicPlan, keywordMission, materialize, mergePlans, normalizeItem, prepareFounderItem, reactToOutage } from './strategy.js';
 import { addHold, liftHolds, productHold, REFUSAL_COOLDOWN_DAYS } from './holds.js';
 import { linkProductTasks, productInNiche, routeMission, startNicheChain, tellFounder, type MissionRoute } from './missions.js';
-import { executeOrder } from './orders.js';
+import { executeOrders } from './orders.js';
 import { shelveProduct, cancelProductTasks } from './pipeline.js';
 import { situationFor } from './situation.js';
 import { CANDIDATES } from './org/catalog.js';
@@ -199,8 +199,13 @@ export class Company implements CompanyApi {
       for (const h of liftHolds(w, (x) => x.kind === 'launches')) speak(this.ctx, 'ceo', `ton ordre du jour ${h.day} de ne plus lancer de guides est levé par cette demande.`, 'founder');
     }
     const created = route.kind === 'tasks' || route.kind === 'new_product' ? this.missionTasks(mission, route, items, target) : [];
-    if (route.kind === 'order') await executeOrder(this.ctx, mission, route.order);
+    if (route.kind === 'order') await executeOrders(this.ctx, mission, route.orders);
     else this.answerMission(mission, route, created.length);
+    if (route.kind === 'tasks' && route.orders) {
+      const { status } = mission; // his tasks go on: the order said beside them closes nothing
+      await executeOrders(this.ctx, mission, route.orders);
+      mission.status = status;
+    }
     if (created.length) {
       if (owner.id !== ceo.id) emit(w, { agentId: ceo.id, toAgentId: owner.id, kind: 'delegate', text: `${ceo.name} confie la mission du fondateur à ${owner.name} (${created.length} tâche(s))` });
       emit(w, { agentId: owner.id, kind: 'thought', text: `${owner.name} : « ${short(created.map((t) => t.title).join(', '), 120)} » — on s'y met en priorité.` });

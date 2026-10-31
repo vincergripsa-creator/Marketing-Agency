@@ -168,10 +168,13 @@ function answerQuestion(text: string, c: ReplyCtx): string[] {
   return [`Bonne question. Le plus simple : dites-moi en une phrase votre situation, et je vous indique le chapitre de « ${c.title} » qui y répond directement.`];
 }
 
+/** Chance of taking an ambiguous message for its second reading (talent §4.7). No talent is today's 10 %, which is also t = .55. */
+const misreadChance = (t: number | undefined): number => (t === undefined ? 0.1 : 0.22 * (1 - t));
+
 export function heuristicSupportReply(
   input: { message: InboxMessage; product: Product | null; order: Order | null; policy: string[]; customer?: { name: string; archetype: string } | null },
   rng: LocalRng,
-  opts: { tone: SupportTone; agent: string; brand: string; playbook: string[] },
+  opts: { tone: SupportTone; agent: string; brand: string; playbook: string[]; t?: number | undefined },
 ): SupportReplyInput {
   const msg = input.message;
   const g = guessIntent(msg);
@@ -179,7 +182,7 @@ export function heuristicSupportReply(
   if (g.ambiguous) {
     const ranked = (Object.keys(g.scores) as MessageIntent[]).sort((a, b) => g.scores[b] - g.scores[a]);
     const alt = ranked.find((i) => i !== intent && g.scores[i] > 0) ?? (intent === 'question' ? 'compliment' : 'question');
-    if (!covered(opts.playbook, g, alt) && rng.chance(0.1)) intent = alt;
+    if (!covered(opts.playbook, g, alt) && rng.chance(misreadChance(opts.t))) intent = alt;
   }
   const product = input.product;
   const order = input.order;

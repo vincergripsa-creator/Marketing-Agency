@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DailyKpi, TaskKind } from '../src/shared.js';
+import type { DailyKpi, ScenarioConfig, TaskKind } from '../src/shared.js';
 import type { BrainVault, ContentEngine, RunPaths } from '../src/contracts.js';
 import { buildTeam } from '../src/runtime/org/catalog.js';
 import { LEGACY_ORG } from '../src/runtime/org/constants.js';
@@ -673,22 +673,22 @@ describe.skipIf(!modulesPresent)('acquisition policy, organic posts and mind con
 });
 
 describe.skipIf(!modulesPresent)('a reloaded run', () => {
-  async function mount(seed: number) {
+  async function mount(seed: number, scenario: Partial<ScenarioConfig> = LEGACY) {
     const { createWorld, defaultScenario, Company } = await import('../src/runtime/index.js');
     const minds = (await import('../src/minds/index.js')) as unknown as { createContentEngine: (o: { mode: 'heuristic'; maxComputeEur: number; seed: number }) => ContentEngine };
     const learning = (await import('../src/learning/index.js')) as unknown as { createBrainVault: (p: RunPaths) => BrainVault };
     const root = mkdtempSync(join(tmpdir(), 'pixel-agency-reload-'));
     const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
     const opts = { paths, engine: minds.createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed }), brain: learning.createBrainVault(paths) };
-    const world = createWorld(defaultScenario({ ...LEGACY, seed, mindMode: 'heuristic', horizonDays: 90 }), 'test-reload');
+    const world = createWorld(defaultScenario({ ...scenario, seed, mindMode: 'heuristic', horizonDays: 90 }), 'test-reload');
     return { world, company: new Company(world, opts), reload: (w: typeof world) => new Company(w, opts), root };
   }
 
   /** Everything the run decided: only the wall clock, and what it stamps in a PDF, may differ. */
   const decisions = (world: unknown): string => JSON.stringify(world, (k, v: unknown) => (k === 'at' || k === 'createdAt' || k === 'bytes' ? undefined : v));
 
-  async function play(seed: number, ticks: number, reloadEvery: number): Promise<string> {
-    const m = await mount(seed);
+  async function play(seed: number, ticks: number, reloadEvery: number, scenario?: Partial<ScenarioConfig>): Promise<string> {
+    const m = await mount(seed, scenario);
     try {
       let { world, company } = m;
       for (let i = 1; i <= ticks; i++) {
@@ -708,6 +708,12 @@ describe.skipIf(!modulesPresent)('a reloaded run', () => {
     const ticks = 14 * 12;
     const straight = await play(7, ticks, 0);
     expect(await play(7, ticks, 7) === straight).toBe(true); // 7 and 12 share no divisor: reloads fall on every tick of the day
+  }, 120_000);
+
+  it.each(['flat', 'league'] as const)('and so does the lean company in talent mode `%s`, through a season close', async (talent) => {
+    const ticks = 20 * 12;
+    const straight = await play(7, ticks, 0, { talent });
+    expect(await play(7, ticks, 7, { talent }) === straight).toBe(true);
   }, 120_000);
 
   it('a café break draws from its own stream: the company draws the same with or without it', async () => {

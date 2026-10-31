@@ -44,6 +44,9 @@ function ruleKey(rule: string): string {
   return fold(rule).replace(/\s+/g, ' ').trim();
 }
 
+/** Benchmark arm: playbooks stay what they are, nothing the company measures reaches them. */
+export const noLearning = (world: WorldState): boolean => world.scenario?.control?.noLearning === true;
+
 /** Short human title of a lesson (first clause of the insight). */
 export function lessonTitle(l: Pick<Lesson, 'insight'>): string {
   const first = String(l.insight ?? '').split(/\s:\s|\.\s/)[0] ?? '';
@@ -150,6 +153,7 @@ export function directiveSlot(rule: string): string | null {
  * `replacePrefix`: an existing rule starting with it is replaced in place (one coaching rule per agent).
  */
 export function addRule(world: WorldState, agentId: string, rule: string, replacePrefix?: string): 'added' | 'present' | 'replaced' | 'skipped' {
+  if (noLearning(world)) return 'skipped';
   const text = String(rule ?? '').replace(/\s+/g, ' ').trim();
   if (!text) return 'present';
   const books = (world.company.playbooks ??= {});
@@ -197,6 +201,7 @@ export function handOverRules(world: WorldState, fromId: string, toIds: readonly
 
 /** Replaces a revised rule everywhere it appears. Returns the agents whose playbook changed. */
 export function replaceRuleEverywhere(world: WorldState, oldRule: string, newRule: string): string[] {
+  if (noLearning(world)) return [];
   const changed: string[] = [];
   const oldKey = ruleKey(oldRule);
   for (const [agentId, pb] of Object.entries(world.company.playbooks ?? {})) {
@@ -214,6 +219,7 @@ export function replaceRuleEverywhere(world: WorldState, oldRule: string, newRul
  * this one (a measured lesson also beats an unmeasured seed rule). Returns the agents whose playbook changed.
  */
 export function syncDirective(world: WorldState, rule: string): string[] {
+  if (noLearning(world)) return [];
   const slot = directiveSlot(rule);
   if (!slot) return [];
   const changed: string[] = [];
