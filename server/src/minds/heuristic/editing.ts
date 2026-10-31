@@ -172,35 +172,42 @@ function fillGaps(out: PdfContent, gaps: GuideGaps, known: Material, reserve: re
   }
 }
 
-export function heuristicHumanize(contentIn: PdfContent, flagged: string[], vocIn: VoiceOfCustomer, rng: LocalRng, gaps: GuideGaps | null = null): PdfContent {
+/** `reach` comes with an editor's talent (talent §4.4): the share of the flat text one pass really fixes. Absent, a pass fixes it all. */
+export interface HumanizeOptions { reach?: number; flawRng?: LocalRng }
+
+export function heuristicHumanize(contentIn: PdfContent, flagged: string[], vocIn: VoiceOfCustomer, rng: LocalRng, gaps: GuideGaps | null = null, opts: HumanizeOptions = {}): PdfContent {
   const voc = safeVoc(vocIn);
   const content = ensurePdf(contentIn);
-  const isFlat = flagMatcher(flagged);
+  const flat = flagMatcher(flagged);
+  const { reach, flawRng } = opts;
+  // only a flat sentence draws, once: what an editor misses moves no other text
+  const isFlat = (s: string): boolean => flat(s) && (reach === undefined || !flawRng || flawRng.chance(reach));
   const bank = new DetailBank(voc, rng, squash(allText(content)));
   const { known, reserve } = materialOf(voc, squash(allText(content)));
   const stepPool = [...known.steps.map((s) => s.text), ...known.tips].map(sentence);
   let stepI = 0;
 
-  const fixProse = (text: string): string => {
+  const fixProse = (text: string, fixed: (s: string) => boolean = isFlat): string => {
     const sents = splitSentences(text);
     if (sents.length === 0) return text;
     const kept: string[] = [];
     const tail: string[] = [];
     sents.forEach((s, i) => {
-      if (!isFlat(s)) { kept.push(s); return; }
+      if (!fixed(s)) { kept.push(s); return; }
       const rep = bank.next(text);
       // a detail replacing the opening sentence goes to the end: « Situation n°3 : … » must still open its paragraph
       if (rep) (i === 0 && sents.length > 1 ? tail : kept).push(rep);
     });
     return varyOpenings([...kept, ...tail], rng).join(' ');
   };
-  const fixShort = (text: string): string => (isFlat(text) ? (stepPool[stepI++] ?? '') : text);
+  // the roll is taken: with nothing in the pool the item is still fixed, it just goes the way of a sentence
+  const fixShort = (text: string): string => (isFlat(text) ? stepPool[stepI++] || fixProse(text, flat) : text);
 
   const out = forEachText(content, (text, loc) => {
     if (!text) return text;
     // titles stay as they are; list items are replaced whole; prose sentence by sentence
     if (loc === 'Titre' || loc === 'Sous-titre') return text;
-    return splitSentences(text).length > 1 || text.length > 140 ? fixProse(text) : (isFlat(text) ? fixShort(text) || fixProse(text) : text);
+    return splitSentences(text).length > 1 || text.length > 140 ? fixProse(text) : fixShort(text);
   });
   // never leave a chapter without prose
   for (const ch of [...out.chapters, out.bonus]) {

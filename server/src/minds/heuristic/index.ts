@@ -99,8 +99,8 @@ export class HeuristicEngine implements ContentEngine {
   }
 
   async humanize(input: { content: PdfContent; flagged: string[]; voc: VoiceOfCustomer; gaps?: GuideGaps | null }, ctx: MindContext): Promise<PdfContent> {
-    const { rng, rules } = this.begin('humanize', ctx, [input.content?.title, input.voc?.nicheId], input.content?.title, (input.flagged ?? []).join('|'));
-    return scrubDeep(heuristicHumanize(input.content, input.flagged ?? [], input.voc, rng, input.gaps ?? null), rules.banned);
+    const { rng, flawRng, rules } = this.begin('humanize', ctx, [input.content?.title, input.voc?.nicheId], input.content?.title, (input.flagged ?? []).join('|'));
+    return scrubDeep(heuristicHumanize(input.content, input.flagged ?? [], input.voc, rng, input.gaps ?? null, ctx?.craft ? { reach: ctx.craft.reach, flawRng } : {}), rules.banned);
   }
 
   async factCheck(input: { content: PdfContent; voc: VoiceOfCustomer }, ctx: MindContext): Promise<{ issues: string[]; content: PdfContent; claims?: string[] }> {

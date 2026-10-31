@@ -132,9 +132,18 @@ export function onStrike(w: WorldState, creative: AdCreative): void {
   recordEvidence(w, creative.createdBy, 'copy', 'rejected', 0, TALENT.weight['copy:rejected']!, `« ${short(creative.hook, 50)} » : refusée, avertissement sur le compte pub`);
 }
 
-/** A polish is the points it gained, less what it left: `output.left` is the share of the flagged text still there, 0 as long as one pass fixes all it sees. */
+/**
+ * What leaves the studio, read on the public report: `output.visual` exists under the visual model only, and a guide
+ * printed again for a link says nothing more about its designer.
+ * A polish is the points it gained, less what it left: `output.left` is the share of the flagged text still there, 0 as
+ * long as one pass fixes all it sees.
+ */
 export function onDone(ctx: RuntimeCtx, task: Task): void {
-  if (task.kind !== 'humanize_pdf' || !task.assignee) return;
+  if (!task.assignee) return;
+  if (task.kind === 'render_pdf' && typeof task.output?.visual === 'number' && task.input.reason !== 'upsell_link') {
+    recordScore(ctx.world, task.assignee, 'design', 'visual', task.output.visual, `« ${short(task.title, 50)} » : ${Math.round(task.output.visual)}/100 en visuel`);
+  }
+  if (task.kind !== 'humanize_pdf') return;
   const { flagged, before, after, kept, left } = (task.output ?? {}) as { flagged?: number; before?: number; after?: number; kept?: boolean; left?: number };
   if (!flagged || before === undefined || after === undefined) return; // nothing to fix says nothing about the editor
   recordScore(ctx.world, task.assignee, 'polish', 'qa', after - before - LEFT_COST * (kept === false ? 1 : left ?? 0), `« ${short(task.title, 50)} » : qualité ${before} → ${after}`);

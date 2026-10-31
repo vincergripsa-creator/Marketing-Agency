@@ -50,7 +50,8 @@ function keepWith(b: Block | undefined): number {
   switch (b.t) {
     case 'para': return (b.lines.length <= 4 ? b.lines.length : 3) * lineOf(b);
     case 'steps': return b.items[0]?.h ?? 0;
-    case 'checklist': return b.rows.slice(0, CHECK_SIDE).reduce((a, r) => a + r.h, 0);
+    // a list too short to leave `CHECK_SIDE` rows on each side of a page break moves whole: the heading goes with all of it
+    case 'checklist': return b.rows.slice(0, b.rows.length < 2 * CHECK_SIDE ? b.rows.length : CHECK_SIDE).reduce((a, r) => a + r.h, 0);
     case 'example': return b.h;
     default: return 0;
   }

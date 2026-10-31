@@ -92,7 +92,7 @@ const keepUp: Para = (d) => {
 };
 
 /** A ready-to-copy model, placed in the chapter where it is used. */
-const modelPara: Para = (d) => d.model();
+const modelPara: Para = (d) => { const m = d.model(); return m ? `Modèle à copier : ${m}` : null; };
 
 /** A research fact with a neutral lead: what follows a fact must fit any fact. */
 const nextFact = (lead: string): Para => (d) => {
@@ -1024,6 +1024,485 @@ const VOICES: Record<GuideArchetype, SuiteVoice> = {
 };
 
 /**
+ * What a follow-up says beyond its research items, authored per sub-problem (pdf §10.1). The items alone stop near 1,800 words,
+ * and a floor is never met by repeating text. A guide on a free pain has none: it stays 5 chapters.
+ */
+interface TopicDepth {
+  start: { title: string; intro: string; look: string[] };
+  examples?: string[];  // worked cases, used once the research has none left
+  spare: string[];      // reserve: printed only when the research sampled for this guide leaves it under the floor
+  angle: string[]; gear: string[]; fault?: string[]; cases: string[]; plan: string[];
+}
+
+const TOPIC_DEPTH: Record<string, TopicDepth> = {
+  siestes: {
+    spare: [],
+    start: {
+      title: 'Où en sont vos siestes aujourd’hui',
+      intro: 'Une sieste courte ne se corrige pas à l’aveugle : il faut d’abord voir à quelle heure elle arrive et ce qui la précède.',
+      look: [
+        'Commencez par relever trois journées ordinaires, sans rien modifier : l’heure du lever, le début et la fin de chaque sieste, l’endroit où elle a eu lieu. Trois jours suffisent à montrer si les siestes courtes tombent toujours au même moment, ou seulement après une matinée agitée. Une sieste du matin qui tient et une sieste d’après-midi qui casse ne demandent pas la même réponse qu’une journée où tout s’écourte.',
+        'Regardez ensuite ce qui se passe juste avant. Un bébé couché en plein jeu ne s’endort pas comme un bébé qui a eu cinq minutes calmes. Notez aussi ce qui se passe au réveil : un bébé qui se réveille gai après 35 minutes n’a pas le même besoin qu’un bébé qui pleure et se frotte les yeux. Le premier a peut-être assez dormi pour cette fois, le second n’a pas enchaîné.',
+      ],
+    },
+    examples: [
+      'Camille relève trois journées de sa fille Lou, 9 mois : la sieste du matin dure 1 h 10, celle de 15 h ne dépasse jamais 30 minutes. Elle ne touche pas au matin et avance seulement la seconde sieste de 20 minutes.',
+    ],
+    angle: ['Le réveil au bout de 30 ou 40 minutes n’a rien d’un caprice. Bébé remonte à la surface entre deux cycles, regarde si tout est comme au moment où il s’est endormi, et il repart ou non selon ce qu’il trouve. Ce passage se travaille la journée de la même façon que la nuit : un endormissement au calme, un décor qui ne change pas, et un adulte qui laisse à bébé le temps d’essayer.'],
+    gear: [
+      'Tenez ces gestes dans l’ordre où ils sont écrits. Les horaires repères viennent d’abord, parce qu’un bébé trop fatigué ou pas assez fatigué n’enchaîne pas ses cycles, quoi qu’on fasse ensuite. Le mini-rituel vient après, et l’attente de 10 minutes seulement quand le reste tient. Si vous démarrez tout le même jour, vous ne saurez pas ce qui a aidé.',
+      'Parlez de ce plan à tous ceux qui s’occupent de bébé, mamie comprise. Il n’est pas nécessaire que chacun fasse exactement pareil : il suffit que l’heure repère et le mini-rituel restent reconnaissables. Un bébé s’adapte très bien à deux lieux différents tant que les grandes lignes de sa journée ne changent pas.',
+    ],
+    fault: [
+      'Le point commun de ces erreurs est de réagir à la sieste d’aujourd’hui au lieu de regarder la semaine. Une sieste ratée ne dit presque rien, trois journées lues ensemble disent beaucoup. Avant de changer un horaire, relisez la feuille et demandez-vous si le problème revient vraiment.',
+      'Observez aussi votre propre fatigue. Quand bébé dort, la tentation est de tout rattraper. Gardez au moins une sieste par jour pour souffler, même dix minutes : un parent reposé attend plus facilement la fin d’un réveil et tient mieux le cadre de ces deux semaines.',
+    ],
+    cases: [
+      'Un rhume, une poussée dentaire ou une nouvelle acquisition peuvent raccourcir les siestes pendant quelques jours. Ne reprenez pas le plan à zéro : gardez les horaires repères, aidez bébé autant qu’il en a besoin, puis revenez à la ligne du plan où vous étiez dès que la journée redevient normale. Si bébé paraît souffrir, ou si quelque chose vous inquiète, parlez-en au professionnel qui le suit.',
+      'Gardez aussi une place pour les journées ordinaires de la vie de famille. Une sieste en poussette pendant une course, une sieste écourtée par un rendez-vous, cela arrive chaque semaine. Le plan tient compte de ces journées : ce qui compte est le retour au rythme le lendemain, pas une semaine parfaite.',
+    ],
+    plan: [
+      'À mi-parcours, comparez deux choses : le total de sommeil de la journée, et l’humeur de bébé en fin d’après-midi. La longueur de chaque sieste vient ensuite. Une journée qui devient prévisible est déjà un progrès, même si certaines siestes restent courtes.',
+      'Quand les deux horaires repères tiennent depuis quelques jours, ne les changez plus pour gagner dix minutes. Bébé a besoin de retrouver le même enchaînement pour que le signal fasse son travail. Les ajustements viendront d’eux-mêmes, quand sa fenêtre d’éveil s’allongera : vous le verrez sur la feuille, avec des premiers signes de fatigue qui arrivent plus tard.',
+    ],
+  },
+  allergenes: {
+    spare: [
+      'Choisissez la forme de l’aliment avec soin. Un allergène se propose adapté à l’âge : cuit quand il doit l’être, en poudre ou en purée lisse plutôt qu’en morceau, jamais entier quand il présente un risque d’étouffement. Le professionnel qui suit bébé peut vous dire quelle forme convient pour commencer, et vous évitez ainsi de mélanger deux inquiétudes le même jour.',
+      'Pensez aussi aux journées qui suivent un essai réussi. Un aliment bien passé reste un aliment à reproposer : écrivez à côté de sa ligne la date du prochain repas où il reviendra. Cette petite organisation évite qu’il disparaisse du menu pendant des semaines parce qu’un autre sujet a pris toute la place.',
+      'Parlez-en aussi entre adultes avant de commencer. Si l’un des deux est plus inquiet, il peut choisir de faire les essais avec l’autre, ou de préparer le carnet. Une répartition claire évite les tensions à table. Bébé sent très bien quand tout le monde retient son souffle : un repas ordinaire se passe mieux dans une ambiance ordinaire.',
+      'Prévenez les personnes qui gardent bébé de ce qui a été introduit et de ce qui ne l’a pas encore été. Une simple note sur le frigo ou dans le sac de crèche suffit. Elle évite qu’un nouvel aliment soit proposé le jour où vous n’êtes pas là pour regarder comment il se passe.',
+      'Lisez les étiquettes des produits du commerce pendant ces semaines. Les allergènes y figurent en évidence dans la liste des ingrédients, et certains se cachent là où on ne les attend pas : biscuits, sauces, plats préparés. Tant qu’un aliment n’a pas été introduit, gardez la main sur ce que bébé reçoit.',
+      'Gardez une trace de tout ce qui s’est bien passé, pas seulement des doutes. Quand un autre enfant arrivera, ou qu’une nouvelle personne s’occupera de bébé, ce carnet répondra à bien des questions. Il rassure aussi le jour où un professionnel vous demande ce qui a déjà été proposé.',
+    ],
+    start: {
+      title: 'Avant le premier essai : ce qu’il faut vérifier',
+      intro: 'Un allergène se prépare avant le repas : on sait ce qu’on propose, à quel moment, et qui appeler si quelque chose vous inquiète.',
+      look: [
+        'Regardez d’abord le terrain de votre enfant. Eczéma important, allergie déjà connue, allergie chez un parent ou un frère : ces points se disent au professionnel qui suit bébé avant tout essai, car ils peuvent changer le calendrier. Sans aucun de ces signes, la liste reste la même, et c’est l’ordre qui se décide avec vous.',
+        'Vérifiez ensuite ce que bébé mange déjà sans difficulté. Un allergène s’introduit plus facilement dans un aliment bien accepté : une texture connue, à un moment de la journée où il mange de bon appétit. Choisissez aussi votre créneau : un jour calme, en matinée ou à midi, avec un adulte disponible pendant les heures qui suivent. Bébé doit être en forme ce jour-là : pas d’essai s’il couve quelque chose.',
+        'Préparez enfin ce qui rassure : le numéro à appeler affiché dans la cuisine, le carnet ouvert, et la liste écrite des signes à surveiller. En cas de gêne pour respirer, de gonflement ou de malaise, on appelle le 15 sans attendre. Le savoir avant le repas permet de garder une table calme.',
+      ],
+    },
+    examples: [
+      'Nadia et Paul notent sur le carnet : mardi, 11 h 30, œuf bien cuit écrasé dans la purée de Sami, 7 mois, une toute petite quantité. Rien à signaler l’après-midi, ils recommencent jeudi avec un peu plus.',
+    ],
+    angle: ['La peur vient souvent d’un mélange : on ne sait plus ce qui est normal et ce qui doit inquiéter. Une petite rougeur autour de la bouche après une tomate n’a pas le même sens qu’un gonflement du visage. Ce guide sépare ces situations, pour que chaque essai reste un repas ordinaire, préparé à l’avance, et non une épreuve pour toute la famille.'],
+    gear: ['Écrivez votre ordre d’introduction sur une feuille et n’y touchez plus chaque matin. Moins il reste de décisions à prendre au moment du repas, plus vous êtes disponible pour regarder votre enfant. Un essai reporté parce que bébé est fatigué n’est pas un retard : la liste reprend simplement à la ligne suivante, un autre jour calme.'],
+    cases: ['Quand un doute reste après un essai, notez l’heure, la quantité et ce que vous avez vu, prenez une photo si la peau a réagi, et gardez ces éléments pour le rendez-vous. N’essayez pas de refaire le test seul pour vérifier : c’est le professionnel qui dit quand et comment reprendre. Les autres essais attendent son avis.'],
+    plan: ['Au fil des semaines, le carnet devient le vrai outil : chaque ligne dit ce qui est acquis et reste au menu. Relisez-le avant chaque rendez-vous, il répond à la plupart des questions qu’on vous posera. Un allergène toléré qui disparaît des repas pendant longtemps mérite de revenir régulièrement.'],
+  },
+  solitude: {
+    spare: [
+      'Pensez à ce que votre chiot entend quand vous n’êtes pas là. Une radio à faible volume, un rideau tiré sur le passage du couloir ou un parc éloigné de la porte d’entrée réduisent ce qui le met en alerte. Un chiot qui ne guette pas chaque bruit de l’immeuble se pose beaucoup plus vite.',
+      'Faites participer toute la maison. Si un seul adulte s’entraîne et que l’autre reprend le chiot dans ses bras à la première plainte, le travail ne tient pas. Fixez ensemble les règles du retour, du coin calme et de la porte : quelques phrases écrites sur le frigo suffisent à ce que tout le monde applique la même chose.',
+      'Acceptez aussi que les progrès ne soient pas réguliers. Une absence très bien vécue peut être suivie d’une mauvaise, sans raison apparente : un bruit, une dent qui pousse, une journée trop excitante. Reprenez simplement la durée de l’avant-veille et remontez ensuite.',
+    ],
+    start: {
+      title: 'Ce qui se passe vraiment quand vous fermez la porte',
+      intro: 'Vous voyez le résultat à votre retour, pas ce qui s’est passé pendant l’absence : c’est ce vide qu’il faut combler d’abord.',
+      look: [
+        'Filmez deux ou trois départs ordinaires avec un téléphone posé dans la pièce. Vous cherchez trois choses : combien de temps le chiot met à réagir, ce qu’il fait pendant les premières minutes, et s’il finit par se poser. Un chiot qui gémit une minute puis s’endort n’a pas le même besoin qu’un chiot qui fait les cent pas devant la porte jusqu’à votre retour.',
+        'Notez aussi ce qui précède le départ. Les clés, les chaussures, le manteau : beaucoup de chiots ont compris ces signaux bien avant que vous ayez touché la poignée. S’il s’agite dès que vous prenez votre sac, le travail commence par là, avant même de parler de durée d’absence.',
+        'Regardez enfin ce qu’il détruit et à quel endroit. Des dégâts près de la porte parlent d’une envie de vous rejoindre, des dégâts au milieu de la pièce parlent plutôt d’ennui ou d’énergie à dépenser. Une flaque peut venir d’une vessie encore petite plutôt que du stress : comptez le temps écoulé depuis la dernière sortie.',
+      ],
+    },
+    examples: [
+      'Léa filme Pixel, 4 mois, pendant trois départs : il pleure 2 minutes, s’allonge devant la porte, puis dort. Le problème est plus léger qu’elle ne le pensait, et elle commence par rendre le départ plus banal.',
+      'Marc et Inès habitent au 3e, avec un voisin qui travaille de nuit. Ils préviennent celui-ci, placent le parc loin du mur mitoyen et gardent les premières absences en journée, quand un aboiement gêne le moins.',
+    ],
+    angle: ['Un chiot ne fait pas de dégâts par vengeance. Il vient de quitter sa portée, il n’a jamais été seul, et sa seule stratégie est d’appeler ou de s’occuper avec ce qui se trouve sous ses dents. Ce qui semble être une bêtise est le plus souvent une émotion mal gérée ou un trop-plein d’énergie. C’est pour cela que la punition n’apprend rien : au moment où vous rentrez, il ne relie plus votre colère à ce qu’il a fait une heure plus tôt.'],
+    gear: [
+      'Le plus important est le rythme. Une absence réussie est une absence dont il sort calme : c’est elle qui compte, pas sa durée. Mieux vaut cinq sorties de deux minutes bien vécues qu’une heure subie. Quand il se met à pleurer systématiquement avant votre retour, vous êtes allé trop loin : redescendez d’un cran pendant deux jours, puis reprenez plus lentement.',
+      'Rendez aussi les départs et les retours ennuyeux. Pas de grands adieux, pas de fête à votre retour : vous entrez, vous posez vos affaires, et vous le saluez quand il s’est calmé. Le coin calme doit servir à d’autres moments que vos absences, sinon il devient le signal du départ. Donnez-lui son jouet à mâcher quand vous êtes là, pendant que vous lisez ou que vous cuisinez.',
+    ],
+    fault: ['Ces erreurs ont un point commun : elles partent de la culpabilité. On le garde contre soi parce qu’il pleure, on le gronde parce qu’on a eu peur pour le canapé, on ouvre parce que les voisins entendent. Le chiot apprend alors que son bruit fait revenir l’humain. Tenez plutôt la règle inverse : on ouvre pendant un moment de silence, même très court.'],
+    cases: ['Quand une journée de travail ne peut pas se faire autrement, ne laissez pas tout le plan s’effondrer. Prévoyez une solution de repli pour ces jours-là : une pause à midi, un voisin, un proche, un promeneur. Une longue absence imposée ne détruit pas le travail, à condition de reprendre ensuite les absences courtes. Si le chiot se blesse, salive beaucoup ou ne mange plus quand vous êtes parti, parlez-en au vétérinaire.'],
+    plan: ['Lisez le plan comme un escalier et non comme un calendrier. Une ligne se passe en une journée si tout reste calme, en trois si le chiot a besoin de temps. À la fin de chaque semaine, regardez la dernière vidéo : il doit se poser plus vite que la semaine précédente. C’est ce délai, plus que la durée totale, qui montre que l’apprentissage avance.'],
+  },
+  nuits: {
+    spare: [
+      'Pensez aussi au matin. Si le chat apprend que vous vous levez à 6 h pour remplir la gamelle, il attend ce moment avec impatience et commence à réclamer plus tôt. Décalez le premier repas quelques minutes après votre lever, le temps de boire un café. Il comprendra que votre réveil ne déclenche pas son repas, et les appels de l’aube perdront leur intérêt.',
+      'Regardez enfin la chambre elle-même. Une porte fermée attire plus qu’une porte ouverte pour beaucoup de chats, qui veulent simplement vérifier ce qui se passe de l’autre côté. Si vous pouvez le laisser entrer sans gêne pour votre sommeil, essayez quelques nuits : certains chats cessent de griffer dès que la pièce n’est plus interdite.',
+      'Fermez aussi ce qui peut entretenir le jeu. Une gamelle automatique réglée à heure fixe, posée loin de la chambre, retire votre personne du lien entre le réveil et le repas : le chat apprend que la nourriture arrive sans que vous vous leviez. Ce simple déplacement suffit parfois à calmer les réveils de l’aube.',
+      'Occupez sa journée, même si vous travaillez. Un arbre à chat près d’une fenêtre, un carton à explorer, quelques friandises cachées avant de partir : un chat qui a vécu quelque chose le jour dort mieux la nuit. Changez ces petits décors de temps en temps pour garder son intérêt.',
+      'Si vous avez plusieurs chats, regardez qui lance les réveils. L’un réclame et l’autre suit, ou l’un provoque l’autre pour jouer. Le jeu du soir se fait alors séparément, chacun avec son propre jouet, pour que le plus timide en profite aussi et que chacun soit bien fatigué au moment d’éteindre.',
+    ],
+    start: {
+      title: 'Ce qui réveille vraiment la maison',
+      intro: 'À 3 h du matin, tout se ressemble. Sur le papier, ces réveils ont souvent une heure et une cause.',
+      look: [
+        'Pendant trois nuits, notez l’heure de chaque réveil et ce que vous avez cru comprendre : le chat griffe la porte, réclame sa gamelle, court, ou appelle. Ajoutez l’heure du dernier repas et celle du dernier jeu. Ces deux chiffres expliquent souvent pourquoi il a tant d’énergie quand vous éteignez la lumière.',
+        'Regardez ensuite comment se passe sa journée. Un chat seul de 8 h à 18 h a dormi pendant que vous travailliez : il se lève au moment où vous vous couchez. Comptez le temps de jeu réel, celui où il court et attrape quelque chose. Un jouet posé par terre ne compte pas. Si ce temps est proche de zéro, le plan commencera là.',
+        'Vérifiez enfin ce qui a pu changer. Un déménagement, un nouveau voisin à quatre pattes sur le palier, un changement d’horaire de la gamelle peuvent suffire. Si le comportement est apparu d’un coup, ou si votre chat est âgé, boit plus, maigrit ou semble désorienté, un passage chez le vétérinaire vient avant tout le reste.',
+      ],
+    },
+    examples: [
+      'Julie note trois nuits : Moka griffe la porte à 3 h 10, 3 h 30 et 2 h 50. Son dernier repas tombe à 19 h et il dort toute la soirée sur le canapé. Elle déplace le repas à 22 h 30, juste après une partie de plumeau.',
+    ],
+    angle: ['Le chat ne vous provoque pas. Il répète ce qui a fonctionné : un jour il a griffé et quelqu’un s’est levé, a parlé ou a rempli la gamelle. Pour lui, cette réponse vaut une récompense, même quand elle vient avec une voix agacée. Tant que la porte finit par répondre une nuit sur quelques-unes, il continue, parce qu’il sait que ça peut marcher.'],
+    gear: [
+      'L’enchaînement du soir compte plus que la durée. Une dizaine de minutes de jeu qui imite la chasse, un repas juste après, et le chat va naturellement faire sa toilette puis dormir. Tenez cet ordre tous les soirs, à la même heure, y compris le week-end. Si vous ne devez garder qu’un seul réglage de ce guide les soirs chargés, gardez celui-là.',
+      'La nuit doit aussi lui offrir quelque chose sans vous : une fenêtre avec un perchoir, un griffoir placé près de la porte qu’il griffe, quelques croquettes cachées dans un jouet distributeur. Le griffoir au bon endroit répond à deux choses à la fois : il protège la porte et donne une issue à son envie de griffer.',
+    ],
+    fault: ['Ces erreurs viennent toutes de la fatigue. À 5 h, on se lève parce que c’est la solution la plus rapide pour dormir encore un peu. Le prix se paie le lendemain : la scène est rejouée, souvent plus tôt. Si vous vivez à deux, décidez ensemble avant de vous coucher : aucun des deux ne répond, et personne ne cède pour l’autre.'],
+    cases: ['Attendez-vous à une nuit ou deux plus bruyantes au début : quand une réponse disparaît, le chat insiste avant de renoncer. C’est le signe que la règle commence à compter, pas que le plan échoue. Si cette période vous fait craindre pour les voisins, prévenez-les, et placez un tapis épais ou une protection sur le bas de la porte pour étouffer le bruit.'],
+    plan: ['Pour lire vos progrès, comparez l’heure du premier réveil d’une semaine à l’autre et le nombre de fois où le chat a insisté. Une nuit difficile au milieu d’une bonne série ne remet rien en cause : cherchez seulement si le jeu du soir a sauté ce jour-là. Une fois les nuits calmes, gardez le rituel du soir plusieurs semaines avant de l’assouplir.'],
+  },
+  situations: {
+    spare: [
+      'Observez les soignants que vous croisez, si vous en avez l’occasion : en stage, à l’hôpital, en maison de retraite ou chez un proche. La façon de frapper à une porte, de se présenter, d’expliquer un geste avant de le faire nourrit vos réponses bien mieux qu’un cours appris par cœur. Le jury sent tout de suite ce qui vient de l’observation réelle.',
+      'Préparez aussi quelques exemples tirés de votre vie à vous. Une aide apportée à un parent âgé, un moment où vous avez dû rester calme, une erreur que vous avez reconnue : ces souvenirs donnent du poids à vos réponses. Une phrase vraie vaut mieux qu’une formule que tous les candidats ont lue au même endroit.',
+      'Pensez enfin à votre posture pendant que vous écoutez. Le jury vous regarde aussi quand il parle : un regard posé, des mains calmes, une écoute jusqu’au bout de la question. Reformuler la situation en une phrase avant de répondre montre que vous avez entendu, et vous laisse quelques secondes pour organiser votre pensée.',
+    ],
+    start: {
+      title: 'Votre point de départ : comment vous raisonnez aujourd’hui',
+      intro: 'Avant de travailler les réponses, il faut entendre comment vous répondez aujourd’hui, sans préparation et à voix haute.',
+      look: [
+        'Prenez trois situations au hasard : un refus de toilette, une chute, une famille mécontente. Répondez à voix haute, en deux minutes, en vous enregistrant avec votre téléphone. Ne préparez rien. Réécoutez ensuite sans vous juger, et notez ce que vous avez fait en premier. La question à poser est simple : ai-je regardé la personne, ou ai-je tout de suite cherché la solution ?',
+        'Comptez ensuite ce qui revient dans vos réponses. Parlez-vous de sécurité, de dignité, de consentement ? Citez-vous l’infirmier ? Un candidat qui oublie d’appeler peut avoir un excellent sens du contact. Un autre appelle tout de suite et n’a pas un mot pour le patient. Chacun perd des points à un endroit différent, et c’est ce repérage qui oriente l’entraînement.',
+        'Notez enfin ce qui vous fait perdre vos moyens : le silence du jury, une question inattendue, la peur de dire une bêtise médicale. Ces trois peurs ne se travaillent pas de la même façon. La première demande de la répétition devant une personne, la deuxième une méthode qui se déroule toute seule, la troisième de savoir clairement ce qui n’est pas de votre rôle.',
+      ],
+    },
+    examples: [
+      'Sonia s’enregistre sur le refus de toilette : elle parle 1 minute 30 de technique et ne dit jamais ce qu’elle ferait pour comprendre le refus. Elle note cette ligne sur sa fiche, et c’est par là qu’elle commence.',
+      'Karim répond très bien sur la chute, mais il oublie à chaque fois de dire qu’il prévient l’infirmier. Sa sœur tient une liste des quatre temps et lève la main à chaque oubli pendant ses répétitions.',
+    ],
+    angle: [
+      'Une mise en situation n’a pas de bonne réponse à réciter. Le jury regarde dans quel ordre vous pensez : est-ce que vous observez avant d’agir, est-ce que vous parlez à la personne, est-ce que vous restez dans votre rôle, est-ce que vous transmettez. C’est pour cela qu’une réponse courte et bien ordonnée vaut mieux qu’une longue démonstration de connaissances.',
+      'Quand la question semble vous piéger, c’est souvent qu’elle teste une limite : ce qui relève de l’infirmier, ce qui relève du secret, ce qu’on ne fait pas seul. Dire « je ne décide pas cela seule, j’appelle l’infirmière » n’est jamais un aveu de faiblesse dans ce métier : c’est très exactement la réponse d’une professionnelle.',
+    ],
+    gear: [
+      'Travaillez toujours à voix haute. On croit savoir une réponse tant qu’elle reste dans la tête, et on découvre le contraire dès qu’il faut la dire devant quelqu’un. Chronométrez-vous sans chercher la vitesse : deux minutes posées disent mieux votre sérieux que quatre minutes précipitées. Une phrase d’attaque toujours identique, comme « je commence par observer la personne », évite le trou du début.',
+      'Variez ensuite les situations plutôt que de perfectionner une seule carte. Le jour de l’oral, la question ressemblera à vos cartes sans être exactement l’une d’elles. La méthode en quatre temps doit donc tenir quand le détail change : un patient, un résident, une famille, un collègue. Si vous déroulez les quatre temps sur une situation que vous n’aviez pas prévue, vous êtes prêt.',
+    ],
+    fault: ['Ces pièges ont le même défaut : ils montrent ce que vous savez au lieu de montrer comment vous travaillez. Un jury préfère une candidate qui dit ce qu’elle observe et qui transmet à une candidate qui propose un diagnostic. Quand vous hésitez entre deux réponses, gardez celle qui protège la personne et qui respecte votre rôle.'],
+    cases: ['Si vous bloquez devant le jury, nommez ce qui se passe plutôt que de vous taire : « je reprends, je commence par la sécurité de la personne ». Vous avez le droit de prendre quelques secondes. Le silence paraît toujours plus long à celui qui parle qu’à celui qui écoute, et une reprise calme montre justement la maîtrise que le jury cherche chez une future soignante.'],
+    plan: ['Gardez une trace de chaque répétition : la carte travaillée, le temps, et le point à reprendre. À la fin de la deuxième semaine, refaites les trois situations du premier jour et réécoutez les deux enregistrements l’un après l’autre. La différence s’entend tout de suite, et elle vous servira le matin de l’épreuve, au moment où le doute arrive.'],
+  },
+  impots: {
+    spare: [
+      'Faites relire votre calendrier une fois par une personne qui connaît le sujet, si vous en avez l’occasion : une chambre de métiers, une chambre de commerce, un service d’aide aux créateurs. Ces interlocuteurs répondent souvent sans frais à une question précise. Préparez votre question par écrit, avec vos chiffres sous les yeux.',
+      'Prévoyez un rendez-vous d’une heure avec vous-même en fin d’année. Vous y relisez ce qui a été payé, ce qui reste dû et ce qui change pour l’année suivante. Une fin d’année préparée évite les mauvaises surprises de janvier et vous donne une vision claire de ce que votre activité vous a réellement laissé.',
+      'Gardez une méthode simple pour vos paiements : une date fixe pour chaque échéance, un rappel une semaine avant, une confirmation enregistrée dans le dossier. Si vous passez par un prélèvement automatique, vérifiez que le compte sera approvisionné ce jour-là. Un rejet de paiement coûte plus de temps que le paiement lui-même.',
+      'En cas de changement dans votre situation, comme une activité ajoutée, un déménagement ou un mariage, posez-vous la question fiscale tout de suite. Ces événements peuvent modifier votre foyer, votre commune ou vos options. Mieux vaut vérifier le jour même sur les sites officiels que de le découvrir au moment de la déclaration.',
+    ],
+    start: {
+      title: 'Où vous en êtes de votre première année',
+      intro: 'Une première année se pilote avec quelques dates et quelques chiffres, à condition de savoir lesquels vous concernent.',
+      look: [
+        'Rassemblez d’abord ce que vous avez déjà : la date de création, votre activité exacte, l’attestation de l’ACRE si vous l’avez obtenue, le chiffre d’affaires encaissé depuis le début. Ces éléments décident de presque tout le reste. Une date de création en cours d’année, par exemple, change la période sur laquelle portent vos premières obligations.',
+        'Vérifiez ensuite dans quels espaces vous êtes inscrit. Il en faut deux : celui de l’URSSAF pour vos déclarations de chiffre d’affaires, celui des impôts pour votre déclaration de revenus et votre avis de CFE. Beaucoup de créateurs n’ouvrent le second qu’au moment où un courrier les inquiète. Ouvrez-le aujourd’hui, même si aucune somme n’est encore due : tout y arrive sans prévenir.',
+        'Faites enfin le tri entre ce qui est décidé et ce qui reste ouvert. L’ACRE a-t-elle été demandée ? Le versement libératoire a-t-il été choisi ? Votre activité est-elle bien classée ? Une ligne « je ne sais pas » sur votre fiche n’est pas un problème : c’est votre liste de vérifications pour la semaine, à faire sur les sites officiels ou auprès de l’organisme concerné.',
+      ],
+    },
+    examples: [
+      'Thomas crée son activité en mars. Sur sa fiche, il note ses deux espaces en ligne, la date limite de sa déclaration de revenus et le mois où il devra consulter son avis de CFE. Il met un rappel dans son agenda pour chacune.',
+    ],
+    angle: ['La difficulté de la première année ne vient pas des montants. Elle vient de ce que chaque sujet dépend d’un organisme et d’un calendrier différents : l’URSSAF pour les cotisations, les impôts pour le revenu, votre commune pour la CFE. Personne ne vous envoie de vue d’ensemble, et l’on découvre souvent une obligation au moment où elle tombe. Le travail de ce guide consiste à mettre ces trois calendriers sur une seule page.'],
+    gear: ['Traitez chaque rendez-vous au moment où il arrive, pas tous ensemble un dimanche de décembre. Une séance de trente minutes suffit pour la plupart, à condition d’avoir vos chiffres sous la main. Gardez dans un seul dossier chaque avis, chaque attestation et chaque confirmation de dépôt : le jour où on vous demande une pièce, vous la retrouvez en deux minutes.'],
+    fault: ['Ces oublis se ressemblent : on pense qu’une démarche faite auprès d’un organisme vaut pour les autres. Déclarer son chiffre d’affaires à l’URSSAF ne dispense pas de le reporter dans sa déclaration de revenus. Créer son entreprise ne déclenche pas seul l’ACRE dans tous les cas. Avant de cocher une ligne, demandez-vous auprès de qui elle se fait et où vous en gardez la preuve.'],
+    cases: ['Quand une date est passée, le réflexe utile est de régulariser tout de suite et de garder la trace de la démarche. Un organisme traite bien mieux un retard signalé qu’un silence. Si un montant vous semble anormal, lisez l’avis en entier, comparez-le à votre situation et contactez le service indiqué sur le document, en passant par votre espace personnel et jamais par un lien reçu par courriel.'],
+    plan: ['Ce calendrier sert aussi de budget : à chaque ligne qui annonce un paiement, notez une estimation et mettez la somme de côté dès que vous encaissez. Un compte séparé, même modeste, évite de découvrir en décembre que l’argent a déjà été dépensé. Les montants exacts se vérifient chaque année sur les sites officiels.'],
+  },
+  tarif: {
+    spare: [
+      'Regardez aussi ce que votre client achète vraiment. Il paie rarement des jours de travail : il paie un problème réglé, un délai tenu, un risque en moins. Quand vous décrivez votre mission dans ces termes, le prix se compare à ce que coûterait de ne rien faire, et non au tarif d’un autre freelance trouvé en ligne.',
+      'Écrivez vos conditions une fois pour toutes dans un modèle de devis : acompte, nombre d’allers-retours inclus, délai de paiement, ce qui se facture en plus. Vous n’avez plus à les renégocier à chaque mission, et le client les découvre comme une règle normale de votre activité plutôt que comme une demande personnelle.',
+      'Parlez de vos tarifs avec d’autres freelances de votre domaine, quand c’est possible. Un échange honnête entre pairs vous donne un ordre de grandeur bien plus utile qu’un classement trouvé en ligne, et il rassure sur ce que le marché accepte. Gardez vos calculs comme référence : le prix des autres informe, il ne décide pas.',
+      'Préparez une phrase simple pour les demandes de remise. Par exemple : « je peux réduire le prix si nous réduisons le périmètre, voici ce que je propose d’enlever ». Écrite à l’avance, elle vous évite d’improviser, et elle garde la discussion sur le travail à faire. Vous n’avez alors plus à défendre votre valeur.',
+      'Présentez votre prix en dernier, après avoir décrit le problème du client et ce que vous allez livrer. Un chiffre annoncé trop tôt est jugé seul. Le même chiffre, placé après une description précise du résultat attendu, se discute sur la valeur. Cette seule question d’ordre rend la conversation beaucoup plus confortable.',
+      'Entraînez-vous à le dire à voix haute. Annoncez votre tarif devant un miroir ou à un ami, puis taisez-vous. Le silence qui suit est le moment le plus difficile : c’est là que beaucoup de freelances se mettent à se justifier ou à baisser d’eux-mêmes. Quelques répétitions suffisent à le rendre supportable.',
+      'Gardez une trace de ce que vous avez proposé et de ce qui a été accepté ou refusé. Après une dizaine de propositions, vous saurez si votre prix bloque vraiment ou si c’est votre offre qui n’est pas claire. Un taux d’acceptation très élevé est d’ailleurs souvent le signe d’un tarif encore trop bas.',
+    ],
+    start: {
+      title: 'Votre tarif actuel, regardé en face',
+      intro: 'Avant de calculer un nouveau prix, il faut savoir ce que votre tarif actuel vous rapporte vraiment.',
+      look: [
+        'Reprenez vos trois dernières missions et notez le prix facturé, puis le temps réellement passé, réunions, allers-retours et corrections compris. Divisez. Ce chiffre est votre vrai taux, celui qui dit ce que vaut une de vos journées aujourd’hui. Il est souvent plus bas que le tarif affiché, et c’est utile à savoir avant d’entrer dans une négociation.',
+        'Notez ensuite ce qui n’était pas prévu : l’appel en plus, la version en plus, la petite demande glissée à la fin. Ces ajouts sont rarement énormes, mais ils s’additionnent. Regardez aussi combien de temps vous avez mis à être payé, et si un acompte a été versé. Votre prix ne se limite pas à un chiffre : il inclut les conditions dans lesquelles vous travaillez.',
+        'Listez enfin vos clients en face de ce qu’ils vous apportent. Un client qui paie un peu moins, à l’heure, sans surprise, peut valoir mieux qu’un client mieux payé qui remet tout en cause. Vous verrez où un tarif plus élevé est le plus facile à poser : sur un nouveau client, sur une nouvelle mission, ou à la date anniversaire d’un contrat.',
+      ],
+    },
+    examples: [
+      'Sarah facture 450 € par jour, mais sa dernière mission a pris 6 jours au lieu des 5 vendus. Son vrai taux tombe à 375 €. Elle écrit ce chiffre en haut de sa fiche avant de préparer sa prochaine proposition.',
+    ],
+    angle: ['Si vous n’osez pas annoncer votre prix, c’est rarement une question de confiance en vous. C’est qu’il ne repose sur rien de solide : un chiffre vu ailleurs, un ancien salaire, le tarif d’un ami. Un prix calculé se dit plus facilement, parce que vous savez ce qu’il y a derrière. Le jour où un client le discute, vous parlez de ce que vous livrez et non de ce que vous valez.'],
+    gear: ['Faites ces calculs avec vos propres chiffres, même approximatifs, plutôt qu’avec une moyenne trouvée en ligne. Un TJM plancher est une limite pour vous, il ne se montre pas au client : c’est le prix en dessous duquel une mission vous coûte de l’argent. Le TJM cible est celui que vous annoncez. L’écart entre les deux est votre marge de discussion, et elle se dépense contre une contrepartie.'],
+    fault: ['Ces erreurs partent de la peur de perdre le client. Pourtant une remise accordée au premier « c’est cher » apprend surtout au client que votre prix n’était pas vrai. Répondez plutôt par le périmètre : à ce prix-là, voici ce qu’on enlève. Si vous cédez, ce sera en échange de quelque chose : un acompte plus élevé, un délai plus long, une référence.'],
+    cases: ['Quand un client historique paie trop peu, ne changez pas tout d’un coup. Annoncez la hausse à une date fixe, par écrit, en expliquant ce qui évolue, et laissez-lui le temps de s’organiser. Si la réponse est non, vous saurez au moins si cette relation vaut encore la place qu’elle occupe dans votre semaine. Un refus clair libère du temps pour un client mieux payé.'],
+    plan: ['À la fin de ces sept jours, testez votre nouveau tarif sur une vraie proposition, de préférence auprès d’un prospect qui ne vous connaît pas. Notez sa réaction et ce que vous avez répondu. La première fois est la plus difficile : dès la troisième, le chiffre sort tout seul. Revoyez vos calculs une fois par an, ou à chaque changement important dans vos charges.'],
+  },
+  nord: {
+    spare: [
+      'Protégez aussi vos plantes du vent, souvent plus gênant que l’ombre sur un balcon exposé au nord. Un brise-vue léger, une jardinière lourde placée du côté du courant d’air ou un simple treillage suffisent à garder un peu de chaleur autour des salades. La terre sèche moins vite, et les jeunes semis tiennent mieux pendant leurs premières semaines.',
+      'Pensez aussi à la hauteur. Des étagères, une échelle à jardinières ou des suspensions gagnent de la lumière sans prendre de place au sol, et elles laissent passer l’air. Installez les plantes les plus gourmandes en haut, les herbes qui aiment la fraîcheur en bas, et gardez un accès facile pour arroser et cueillir.',
+      'Soignez la terre comme le ferait un jardinier en plein champ. Un terreau neuf et de bonne qualité compense en partie le manque de lumière, parce que les racines trouvent de quoi se développer. Renouvelez une partie du contenant chaque année, et ajoutez un peu de compost si vous en avez, plutôt que d’accumuler les engrais.',
+      'Récoltez souvent, même de petites quantités. Une cueillette régulière relance la plante, et une feuille ramassée jeune a plus de goût qu’une grande feuille restée trop longtemps. Sur un petit balcon, le plaisir vient de ces quelques poignées cueillies au moment de cuisiner, bien plus que d’une grosse récolte.',
+    ],
+    start: {
+      title: 'Ce que votre balcon reçoit vraiment',
+      intro: 'Un balcon au nord n’est pas un balcon sans lumière. Tout dépend de ce qu’il reçoit, et cela se mesure en une journée.',
+      look: [
+        'Choisissez un jour clair et passez sur le balcon à trois moments : le matin, à midi, en fin de journée. Notez sur la fiche quelles zones reçoivent du soleil direct, quelles zones reçoivent seulement une lumière vive, et lesquelles restent sombres. Refaites le tour une fois à la fin du printemps : le soleil monte, et certains coins s’éclairent en mai alors qu’ils étaient dans l’ombre en mars.',
+        'Levez ensuite les yeux. Un mur clair en face, une façade qui renvoie la lumière ou un ciel bien dégagé changent beaucoup de choses, même sans soleil direct. Un balcon du premier étage dans une rue étroite n’offre pas la même lumière qu’un dernier étage ouvert sur le ciel. Regardez aussi l’avancée du balcon du dessus : c’est souvent elle qui plonge le fond dans l’ombre.',
+        'Vérifiez enfin les contraintes pratiques : d’où vient le vent, où l’eau de pluie arrive, ce que le règlement de la copropriété autorise sur la rambarde, et le poids que vous allez poser. Une jardinière humide pèse lourd : placez les plus grands contenants près du mur porteur. Ce relevé prend une heure et il décide de tout ce que vous achèterez.',
+      ],
+    },
+    examples: [
+      'Hélène relève son balcon au 2e étage : la rambarde reçoit une lumière vive toute la journée, le sol reste sombre. Elle accroche ses jardinières de salades à la rambarde et garde le sol pour les outils et la réserve de terreau.',
+      'Nicolas sème des radis et de la roquette début avril sur son balcon nord. Il garde un petit carnet : date du semis, zone, première récolte. L’année suivante, il sait quelle jardinière démarre le plus tôt.',
+    ],
+    angle: ['La plupart des déceptions viennent d’un mauvais choix de plantes, pas d’un mauvais balcon. On reprend ce qui pousse au soleil, on regarde les tomates s’étioler, et l’on en conclut que rien ne pousse ici. Or les plantes dont on mange les feuilles n’ont pas besoin de fabriquer des fruits : elles se contentent de moins de lumière. Changer de liste de plantes change donc tout le résultat.'],
+    gear: [
+      'Accordez à la lumière la meilleure place, même si ce n’est pas la plus jolie. Quelques dizaines de centimètres vers la rambarde peuvent séparer une salade fournie d’une salade filante. Surélevez les jardinières si le garde-corps est plein, et choisissez des pots clairs : ils renvoient un peu de lumière et chauffent moins les racines. Un mur peint en blanc au fond du balcon aide aussi.',
+      'Gardez le même rythme de petites quantités tout au long de la saison. Une jardinière semée toutes les trois semaines donne de quoi cueillir régulièrement, alors qu’un seul grand semis arrive d’un coup puis monte en graines. À l’ombre, tout pousse plus lentement : comptez quelques jours de plus que ce qu’indique le sachet, et n’en concluez pas que quelque chose ne va pas.',
+    ],
+    fault: ['Le piège de l’ombre est de vouloir compenser. On arrose plus parce que ça pousse mal, on ajoute de l’engrais, on rapproche les plants, et les racines finissent par souffrir. À l’ombre, la terre sèche lentement : enfoncez un doigt avant d’arroser, et attendez qu’elle soit sèche en surface. Moins d’eau et plus d’air règlent une bonne partie des soucis.'],
+    cases: ['Une feuille qui s’allonge et pâlit réclame de la lumière, pas de l’eau. Déplacez le contenant vers l’endroit le plus clair, ou changez de plante pour la saison suivante. Quand une culture ne donne rien malgré tout, ne vous acharnez pas : notez la zone et la date, et essayez autre chose. C’est de cette façon qu’un balcon se découvre, année après année.'],
+    plan: ['Tenez un carnet très simple : ce qui a été semé, où, quand, et ce que cela a donné. À la fin de la saison, vous aurez la vraie carte de votre balcon. Elle vaut mieux que n’importe quel tableau de culture, car elle tient compte de votre étage, de votre rue et de votre vent. Commencez l’année suivante avec les trois plantes qui ont le mieux donné.'],
+  },
+  grignotage: {
+    spare: [
+      'Parlez de votre démarche à la personne qui partage vos soirées. Il ne s’agit pas de lui demander de vous surveiller, mais de changer une habitude à deux : un paquet qui reste au placard, une tisane partagée, une promenade courte après le dîner. Ce qui se fait ensemble tient bien mieux qu’une décision prise seule.',
+      'Prévoyez les soirs particuliers : les apéritifs, les dîners dehors, les retours de voyage. Ils ne remettent rien en cause et il n’y a rien à rattraper. Choisissez à l’avance ce qui vous fait vraiment plaisir, savourez-le à table, et revenez le lendemain à vos repères habituels.',
+      'Regardez aussi votre sommeil. Une nuit trop courte rend la soirée suivante bien plus difficile, car la fatigue pousse vers ce qui sucre et ce qui rassure. Avancer le coucher d’un quart d’heure est parfois le geste le plus simple de tout ce plan : on ne grignote pas devant la télé quand on est déjà couché.',
+    ],
+    start: {
+      title: 'Vos soirées, vues de près',
+      intro: 'Le grignotage du soir paraît toujours arriver par hasard. Cinq soirs notés montrent en général le contraire.',
+      look: [
+        'Pendant cinq soirs, sans rien changer à ce que vous mangez, notez l’heure de l’envie, l’endroit où vous êtes et ce que vous ressentez : faim dans le ventre, fatigue, ennui, tension de la journée. Notez aussi ce que vous avez pris. Il ne s’agit pas de compter quoi que ce soit, mais de voir ce qui se répète. La plupart des gens découvrent une heure et un endroit précis.',
+        'Regardez ensuite le reste de la journée. Un déjeuner pris sur le pouce ou un dîner trop léger rendent la soirée difficile, quelle que soit votre motivation. Notez à quelle heure vous avez mangé pour la dernière fois avant l’envie. Si cinq ou six heures se sont écoulées, votre corps a simplement faim, et le problème ne se trouve pas dans le placard.',
+        'Faites enfin le tour de ce qui est à portée de main. Ce qui se trouve à hauteur des yeux dans la cuisine, ce qui reste sur la table basse, ce qui s’achète en grand format : ces détails décident souvent à votre place. Sur votre fiche, entourez les soirs où l’envie est arrivée alors que vous étiez déjà fatiguée : ce sont ceux qui demanderont le plus de préparation.',
+      ],
+    },
+    examples: [
+      'Claire note cinq soirs : l’envie arrive toujours vers 21 h 15, sur le canapé, à la fin de son premier épisode. Elle mange moins bien à midi les jours de réunion. Elle travaille d’abord son déjeuner du mardi et du jeudi.',
+      'Sylvie remplace le paquet ouvert sur la table basse par une tisane et un carré de chocolat servi dans une petite assiette, à table. Elle garde ce qu’elle aime, seulement plus au même endroit.',
+    ],
+    angle: ['Le grignotage du soir n’est pas un manque de volonté. C’est une habitude installée par la répétition : même canapé, même heure, même écran, même récompense à la fin d’une longue journée. Votre cerveau a associé ce moment à quelque chose de bon et il vous le rappelle chaque soir. Lutter de front contre ce rappel fatigue. Le déplacer, lui donner une autre forme, réussit bien mieux.'],
+    gear: [
+      'Commencez par la journée avant de toucher à la soirée. Un dîner qui tient, avec des légumes, de quoi caler et un plaisir, évite une bonne partie des envies de 22 h. Prévoyez aussi les soirs difficiles : quand vous savez à l’avance ce que vous prendrez si la faim est réelle, vous n’avez plus à décider sous le coup de la fatigue.',
+      'Le rituel de fin de journée sert à dire au corps que la journée est finie. Il doit être agréable, sinon il ne tiendra pas : une tisane, une douche, dix minutes de lecture, un appel à une amie. Choisissez-le selon ce que votre journal a montré. Si l’envie vient de la tension, cherchez ce qui détend. Si elle vient de l’ennui, cherchez ce qui occupe les mains.',
+    ],
+    fault: ['Ces erreurs reviennent toutes à se punir. On s’interdit, on saute un repas pour compenser, on culpabilise, et la frustration prépare le prochain soir difficile. Un écart n’appelle aucune réparation : le repas suivant reste un repas normal. Regardez ce qui l’a déclenché, notez-le sans jugement, et reprenez simplement le plan à la ligne du soir suivant.'],
+    cases: ['Certains soirs, rien de tout cela ne suffit, et ce n’est pas grave. Si vous mangez vraiment beaucoup, de façon incontrôlable et souvent, ou si la nourriture occupe une grande place dans vos pensées et votre humeur, parlez-en à votre médecin : il existe de l’aide, et ce guide ne la remplace pas. Pour tous les autres soirs, un seul écart ne dit rien de votre semaine.'],
+    plan: ['Chaque semaine, relisez votre journal et posez-vous deux questions : combien de soirs l’envie est-elle arrivée, et combien de fois avez-vous choisi ce que vous vouliez faire ? La seconde réponse compte le plus. Une envie qui se présente et qui passe est une victoire, même si elle revient le lendemain. Elle deviendra plus discrète à mesure que le nouveau rituel s’installera.'],
+  },
+  listening: {
+    spare: [
+      'Entraînez-vous aussi à reconnaître les pièges de sons proches. Le test aime les mots qui se ressemblent à l’oreille et qui n’ont aucun rapport. Quand une réponse contient un son entendu dans l’enregistrement sans rien avoir à voir avec la situation, méfiez-vous. Noter ces paires dans votre carnet vous aidera à les repérer plus vite.',
+      'Choisissez des contenus proches du test : des annonces d’aéroport, des messages de répondeur, des réunions, de courtes actualités d’entreprise. Le vocabulaire du TOEIC vient du monde du travail, et le reconnaître à l’oreille vous fait gagner du temps sur chaque question. Une série en anglais détend, mais elle ne remplace pas cet entraînement ciblé.',
+      'Notez les mots que vous ne reconnaissez pas à l’oreille alors que vous les connaissez à l’écrit. C’est votre vraie liste de travail. Les nombres, les noms de lieux et les horaires reviennent très souvent et se ressemblent à l’oral : quelques minutes par jour dessus rapportent plus qu’une longue liste de vocabulaire rare.',
+      'Le jour du test, entrez dans la salle avec votre routine en tête : lire, écouter, cocher, passer à la suite. Mangez avant, arrivez en avance et prévoyez une montre si elle est autorisée. Votre attention est votre principale ressource dans cette partie, et un peu de calme avant de commencer vaut plusieurs points.',
+    ],
+    start: {
+      title: 'Où vous perdez vraiment vos points',
+      intro: 'Dire « je ne comprends rien » n’aide pas à progresser. Un test blanc corrigé question par question dit où passent les points.',
+      look: [
+        'Faites une partie Listening complète, en conditions réelles, sans mettre en pause et sans réécouter. Corrigez ensuite question par question et classez chaque erreur : vous n’avez pas compris, vous avez compris mais vous avez choisi trop vite, vous avez perdu le fil à cause de la question d’avant, ou vous n’avez pas eu le temps de lire. Quatre colonnes suffisent, et elles racontent déjà quelque chose.',
+        'Regardez ensuite où se concentrent les pertes. Des erreurs réparties au hasard ne se traitent pas comme une série de questions ratées à la suite, signe d’un décrochage. Notez aussi le type de locuteur et de sujet : des annonces, des réunions, des appels téléphoniques. Beaucoup de candidats découvrent qu’ils comprennent bien les conversations et décrochent sur les monologues de la part 4.',
+        'Testez enfin votre lecture des questions. Dans le silence entre deux enregistrements, avez-vous le temps de lire les trois questions et leurs réponses ? Si ce n’est pas le cas, le problème n’est pas seulement votre oreille : il vient d’une lecture trop lente, ou d’un réflexe qui vous fait revenir sur la question précédente. Ce point se corrige plus vite que le vocabulaire.',
+      ],
+    },
+    examples: [
+      'Mehdi classe ses 26 erreurs de part 3 et 4 : plus de la moitié viennent de questions qu’il n’a pas eu le temps de lire. Il travaille d’abord la lecture anticipée et laisse le vocabulaire pour la deuxième semaine.',
+    ],
+    angle: ['Ce qui va trop vite, ce n’est pas seulement l’anglais. Le cerveau essaie de tout comprendre et de tout traduire, et pendant ce temps la phrase suivante est déjà passée. Le TOEIC ne vous demande pas de tout saisir : il pose des questions précises sur quelques informations. Quand vous savez à l’avance ce que vous cherchez, vous écoutez autrement, et beaucoup de ce qui semblait trop rapide devient suffisant.'],
+    gear: [
+      'Installez une courte séance d’écoute chaque jour plutôt qu’une longue le week-end. L’oreille progresse par fréquence : quinze minutes d’écoute attentive valent mieux qu’une heure en fond sonore. Écoutez une fois sans le texte, une fois avec, puis répétez à voix haute en imitant le rythme. C’est cette dernière étape qui fixe les mots tels qu’ils se prononcent vraiment, et non tels qu’ils s’écrivent.',
+      'Entraînez aussi votre attention à revenir vite. Quand vous ratez une information, choisissez une réponse, cochez, et passez à la question suivante. Cet abandon rapide s’apprend, et il faut le répéter en conditions réelles pour qu’il tienne le jour du test. Sur une série de questions, une réponse sacrifiée coûte beaucoup moins cher que trois réponses perdues en s’y accrochant.',
+    ],
+    fault: ['Ces erreurs ont une cause commune : on écoute les mots et non le sens. Une réponse qui reprend un mot de l’enregistrement est souvent le piège prévu, car le test aime les reformulations. Quand une option semble trop évidente, vérifiez qu’elle répond bien à la question posée. Vous gagnerez plus de points à repérer ces reprises qu’à apprendre une nouvelle liste de vocabulaire.'],
+    cases: ['Il y aura des jours où l’oreille ne suit pas : fatigue, mauvaise nuit, accent qui surprend. Ces séances ne sont pas perdues : raccourcissez-les et revenez à un extrait déjà connu, pour retrouver la sensation de comprendre. Évitez d’enchaîner un test blanc complet les jours de fatigue. Un mauvais score ces jours-là ne mesure pas votre niveau et il ne fait que vous décourager.'],
+    plan: ['Gardez le même type de test pour comparer d’une semaine à l’autre, et regardez le nombre d’erreurs par colonne plutôt que le seul total. Une colonne qui se vide dit ce qui a été acquis. Dans les trois derniers jours, n’ajoutez plus de nouvelles ressources : faites des séries courtes, dormez, et gardez intact le réflexe de lire à l’avance.'],
+  },
+  enfants: {
+    spare: [
+      'Faites les courses et le menu avec eux une fois par semaine. Un enfant qui a choisi la couleur des poivrons ou qui a coché le plat de mardi arrive à table avec une autre disposition. Il ne s’agit pas de lui laisser le menu, mais de lui donner une petite place dans ce qui se décide pour lui.',
+      'Mangez ensemble quand c’est possible, et mangez la même chose. Un enfant apprend beaucoup en regardant les adultes, sans qu’on ait besoin de commenter quoi que ce soit. Un seul repas partagé dans la journée suffit souvent, et il compte plus que le contenu exact de l’assiette de ce soir-là.',
+      'Servez de petites portions et laissez l’enfant se resservir. Une grande assiette décourage avant même de commencer, alors qu’une petite cuillère d’un aliment nouveau à côté d’un plat connu reste abordable. Enlevez l’assiette à la fin du repas, sans remarque, et laissez la prochaine fois arriver naturellement.',
+    ],
+    start: {
+      title: 'Ce que vos enfants mangent déjà',
+      intro: 'On retient les refus et l’on oublie ce qui passe. Le plan part pourtant de ce que chaque enfant accepte aujourd’hui.',
+      look: [
+        'Prenez une semaine ordinaire et notez, pour chaque enfant, ce qu’il mange sans discuter, ce qu’il mange selon les jours, et ce qu’il refuse. Soyez précis : « les carottes crues mais pas cuites » est une information bien plus utile que « il n’aime pas les légumes ». La liste est souvent plus longue qu’on ne le croit, et elle devient la base de vos menus.',
+        'Regardez ensuite le contexte des refus. Arrivent-ils en fin de journée, quand tout le monde est fatigué ? Après un goûter tardif ? Face à un plat mélangé, alors que les mêmes aliments passent séparés ? Beaucoup d’enfants refusent une sauce plutôt qu’un légume, ou un mélange plutôt qu’un ingrédient. Ce simple repérage change la façon de cuisiner le dimanche sans ajouter un plat.',
+        'Faites enfin le point sur vos propres réactions à table. Qui négocie, qui insiste, qui prépare autre chose ? Si deux adultes appliquent deux règles, les enfants le voient très vite. Mettez-vous d’accord sur une seule règle pour le dîner, simple et tenable un soir de fatigue. C’est elle qui rendra la table plus calme, avant même que le contenu de l’assiette ne change.',
+      ],
+    },
+    examples: [
+      'Anaïs note que Léo, 5 ans, refuse le gratin mais mange pommes de terre, jambon et fromage séparés. Le dimanche, elle garde ces trois éléments à part dans une boîte, et le gratin reste pour les adultes et les enfants qui en veulent.',
+    ],
+    angle: ['Un enfant qui refuse n’essaie pas de vous contrarier. Entre 2 et 7 ans, se méfier de ce qui est nouveau fait partie de son développement, et un plat mélangé contient beaucoup d’inconnues à la fois. La pression à table a souvent l’effet inverse de ce qu’on cherche : plus l’aliment devient un enjeu, plus il est refusé. C’est pourquoi ce guide travaille sur ce qui entoure le repas plutôt que sur chaque bouchée.'],
+    gear: ['Gardez la règle la plus simple possible : un élément accepté dans chaque repas, et le reste proposé sans commentaire. L’adulte décide de ce qui est servi, l’enfant décide de ce qu’il en mange et de la quantité. Cela vous évite de cuisiner en double, et cela retire à l’enfant le pouvoir de tout bloquer. Les premiers soirs, il mangera peut-être peu : un repas léger n’a rien de grave.'],
+    fault: ['Ces erreurs viennent toutes de la peur qu’il n’ait pas assez mangé. Alors on négocie, on promet le dessert, on prépare autre chose, et le repas devient une discussion. Regardez plutôt sur la semaine : la plupart des enfants équilibrent bien mieux sur plusieurs jours que sur une assiette. Si son poids ou sa croissance vous inquiètent, c’est un sujet à aborder avec votre médecin.'],
+    cases: ['Pendant un rhume, une rentrée ou une période chargée, les refus reviennent souvent : ne concluez pas que tout est perdu. Revenez quelques jours aux plats les plus sûrs, gardez la règle du repas, et remettez un aliment nouveau au menu quand le rythme reprend. Quand un enfant ne mange presque plus rien, perd l’appétit durablement ou s’étouffe souvent, parlez-en à votre médecin.'],
+    plan: ['Pour suivre vos progrès, relisez votre liste à la fin de chaque semaine et déplacez les aliments d’une colonne à l’autre. Un aliment passé de « pas encore » à « parfois » est une vraie avancée, même s’il n’a été goûté que du bout des lèvres. Comparez aussi l’ambiance : un dîner plus calme compte autant que ce qui reste dans l’assiette.'],
+  },
+  negociation: {
+    spare: [
+      'Gardez enfin une trace des prestataires que vous n’avez pas retenus, avec leur devis. Un refus poli laisse la porte ouverte : si un partenaire se désiste à quelques mois de la date, vous saurez qui rappeler et à quel prix. Remerciez-les d’un court message, cela ne coûte rien et le milieu est souvent plus petit qu’on ne le croit.',
+      'Pensez aussi à regrouper. Un même prestataire qui assure deux prestations, un lieu qui inclut le mobilier, un traiteur qui fournit la vaisselle : un ensemble se négocie souvent mieux que des lignes séparées. Demandez ce que coûterait une formule groupée, puis comparez-la ligne par ligne avec vos autres devis avant de décider.',
+      'Regardez aussi ce qui peut se faire autrement qu’avec de l’argent. Un prestataire accepte parfois une date moins demandée, des horaires plus souples, le droit d’utiliser ses photos, une recommandation écrite. Ces contreparties ne vous coûtent rien et elles comptent pour lui. Pensez-y avant de demander une baisse sèche.',
+      'Répartissez les rôles à deux. L’un suit les chiffres et le tableau, l’autre garde le contact avec le prestataire. Vous évitez ainsi les messages contradictoires et vous avez toujours quelqu’un pour dire « je dois en parler à l’autre avant de décider ». Cette phrase vous donne le temps de réfléchir quand on vous presse.',
+      'Terminez toujours un échange par un écrit. Un simple message qui reprend ce qui a été dit : le montant, ce qui est inclus, la date. Il évite les malentendus et il protège les deux côtés. Un bon prestataire appréciera cette clarté, et un prestataire que cela dérange vous aura appris quelque chose d’utile.',
+    ],
+    start: {
+      title: 'Vos devis, posés sur la table',
+      intro: 'Avant de négocier, il faut savoir ce qui vous tient à cœur et ce que chaque devis comprend vraiment.',
+      look: [
+        'Commencez sans regarder les prix : chacun écrit de son côté les trois éléments qui comptent le plus pour lui, puis vous comparez. Ces trois lignes sont votre boussole. Elles disent où vous pouvez dépenser sans regret et où vous êtes prêts à réduire. Sans ce travail, on négocie partout de la même façon et l’on finit par rogner sur ce qui comptait vraiment.',
+        'Reprenez ensuite vos devis déjà reçus et cherchez ce qui n’y figure pas. La durée de présence, le déplacement, l’installation, les heures supplémentaires, le service, la TVA, le repas du prestataire : ce sont ces lignes qui font varier un total. Deux devis au même prix peuvent cacher des prestations très différentes. Une ligne vide est une question à poser, pas une économie.',
+        'Regardez enfin votre calendrier. Votre date tombe-t-elle en pleine saison, ou un vendredi, ou en basse saison ? Avez-vous encore du temps avant les dates limites ? Votre marge de négociation dépend beaucoup de ce recul. Notez pour chaque poste la date à laquelle vous devez avoir choisi : vous négocierez sans vous laisser presser par une offre valable quelques jours.',
+      ],
+    },
+    examples: [
+      'Emma et Yanis comparent deux traiteurs à 58 € par personne. Le premier compte le service et la vaisselle, le second les facture à part. Sur leur tableau, l’écart apparaît tout de suite, et ils repartent de cette ligne pour discuter.',
+      'Pauline et Karim décident que la musique et le repas passent avant la décoration. Ils demandent au fleuriste une version réduite aux tables et à la cérémonie, et ils gardent leur budget pour le groupe qu’ils aiment.',
+    ],
+    angle: ['Négocier fait peur parce qu’on croit devoir demander une faveur. Or un prestataire vit de ces discussions : il sait ce que coûte chaque ligne et ce qu’il peut ajuster. La question utile n’est pas « pouvez-vous faire un geste ? », mais « que pouvons-nous enlever pour arriver à ce montant ? ». Vous gardez ainsi son respect, et son travail reste payé à sa juste valeur.'],
+    gear: [
+      'Faites vos demandes par écrit, en phrases courtes et polies : ce que vous avez aimé, ce qui vous pose problème, la solution que vous proposez. Un message écrit laisse au prestataire le temps de regarder ses chiffres, et il garde une trace de ce qui a été convenu. Évitez de négocier au téléphone le soir, fatigués, avec le devis sous les yeux pour la première fois.',
+      'Gardez le plus fort argument pour le moment où vous êtes prêts à signer. Un prestataire accepte plus volontiers un ajustement face à un client décidé qu’à quelqu’un qui compare encore dix options. Dites clairement : « nous aimerions travailler avec vous, voici ce qu’il nous faudrait pour signer cette semaine ». Cela rend la discussion simple pour les deux côtés.',
+    ],
+    fault: ['Ces erreurs ont le même effet : elles vous privent de marge. Annoncer son budget maximum revient à fixer le prix à la place du prestataire. Accepter un accord oral revient à le renégocier le jour où il compte. Avant chaque échange, relisez vos trois priorités : elles vous évitent de gagner quelques euros sur ce qui comptait, et d’en perdre beaucoup sur le reste.'],
+    cases: ['Si la discussion se tend, reprenez les faits : le devis, la prestation, le montant. Vous n’avez pas à justifier votre budget, ni à expliquer votre situation. Quand un prestataire que vous aimez ne bouge vraiment pas, regardez si un autre poste peut compenser avant de renoncer. Certains prix sont justes, et mieux vaut payer le bon professionnel que chercher une économie sur ce qui comptait le plus.'],
+    plan: ['Tenez votre tableau à jour après chaque échange : le montant de départ, le montant obtenu et ce qui a changé dans la prestation. À la fin du mois, additionnez et comparez à votre budget. Si vous êtes encore au-dessus, retirez un poste entier plutôt que de grignoter partout. Gardez aussi une marge pour les imprévus : il y a toujours quelque chose qui dépasse.'],
+  },
+  litiges: {
+    spare: [
+      'Faites enfin le tri dans ce que vous vendez. Certains articles attirent plus de réclamations que d’autres : les vêtements de marque, l’électronique, les pièces très fragiles. Si un type d’objet vous a déjà causé plusieurs soucis, décrivez-le encore plus précisément, ou réservez-le à une remise en main propre lorsque la plateforme le permet.',
+      'Traitez les petites ventes comme les grandes pendant ces deux semaines. C’est en répétant les mêmes gestes sur des articles à quelques euros que la routine s’installe : photo avant fermeture, reçu gardé, message poli à l’envoi. Le jour où vous vendrez un article plus cher, tout sera devenu automatique, et vous n’aurez plus à y penser.',
+      'Prévenez les malentendus au moment de la vente. Un court message après l’achat, qui confirme l’article, le délai d’envoi et le mode de livraison, installe un ton correct et montre que vous êtes sérieux. Un acheteur qui a déjà échangé poliment avec vous ouvre beaucoup moins facilement un litige pour un détail.',
+      'Regardez le profil avant de vendre un article cher : ancienneté, évaluations, premiers messages. Un acheteur pressé qui pose des questions étranges ou veut changer les conditions mérite une réponse prudente. Vous pouvez refuser une transaction : mieux vaut attendre quelques jours de plus qu’entrer dans un litige de plusieurs semaines.',
+      'Gardez tout jusqu’à la clôture de la vente : photos, reçu de dépôt, messages. Une fois la transaction confirmée et les délais passés, vous pouvez trier. Un simple dossier sur le téléphone, avec un sous-dossier par vente importante, suffit largement et vous fera gagner beaucoup de temps le jour où il faudra répondre vite.',
+      'Répondez aussi aux acheteurs satisfaits. Un message de remerciement et un avis laissé rapidement construisent un profil solide, et ce profil pèse dans la confiance des acheteurs suivants. Un vendeur avec de nombreuses évaluations claires attire moins les personnes qui cherchent à profiter d’un profil récent.',
+    ],
+    start: {
+      title: 'Votre façon de vendre, passée au crible',
+      intro: 'La plupart des litiges se gagnent avant la vente : dans l’annonce, dans le colis, et dans les échanges écrits.',
+      look: [
+        'Reprenez vos cinq dernières annonces et lisez-les comme un acheteur méfiant. Le défaut est-il écrit et photographié ? La taille réelle est-elle indiquée ? La matière, l’état, les mesures ? Chaque information absente peut servir de prise le jour d’un désaccord. Sur votre fiche, notez ce qui manque le plus souvent : c’est ce que vous corrigerez d’abord dans votre modèle d’annonce.',
+        'Regardez ensuite comment vous emballez et expédiez. Prenez-vous une photo de l’article avant de fermer le colis ? Gardez-vous le bordereau et le reçu de dépôt jusqu’à la fin de la transaction ? Ces deux gestes prennent une minute et ils changent tout quand un acheteur affirme avoir reçu autre chose ou n’avoir rien reçu.',
+        'Relisez enfin vos anciens échanges difficiles, s’il y en a eu. Combien de temps avez-vous mis à répondre ? Avez-vous répondu sous le coup de l’agacement ? Quel argument de l’acheteur vous a fait céder ? Cette relecture montre vos réflexes. Elle aide aussi à repérer les profils qui posent problème : compte très récent, demandes étranges, insistance pour discuter ailleurs que sur la messagerie.',
+      ],
+    },
+    examples: [
+      'Marine vend un manteau avec un petit accroc sous le bras. Elle le photographie de près et l’écrit dans l’annonce. Trois jours après la vente, l’acheteuse se plaint du défaut : Marine renvoie à la photo n°4 et le dossier se clôt en sa faveur.',
+      'Olivier filme la fermeture de chaque colis de plus de 30 €, le bordereau visible. Le jour où un acheteur déclare avoir reçu un carton vide, il joint la vidéo et le poids indiqué sur le reçu de dépôt.',
+    ],
+    angle: ['Un litige n’est pas une affaire de bonne ou de mauvaise foi : c’est un dossier. La plateforme ne connaît ni vous ni l’acheteur, elle regarde ce qui est écrit, ce qui est photographié et ce qui s’est passé dans ses délais. Celui qui a des preuves claires et qui reste dans la procédure a un avantage très net. C’est une bonne nouvelle : ce sont des habitudes, et elles se prennent en quelques ventes.'],
+    gear: [
+      'Faites de votre annonce un contrat. Quelques photos nettes en lumière du jour, le défaut visible de près, les mesures à plat, une phrase claire sur l’état réel : tout cela prend deux minutes de plus par article et évite des semaines d’échanges. Gardez un modèle d’annonce et de messages, que vous n’avez plus qu’à adapter : on écrit beaucoup mieux au calme qu’au moment où une réclamation arrive.',
+      'Répondez sur la messagerie de la plateforme, jamais ailleurs. Cherchez d’abord à comprendre ce que veut l’acheteur : un remboursement, un geste, ou simplement une réponse. Une réponse courte, polie, avec les faits et une proposition, désamorce la plupart des tensions. Attendez une heure si le message vous a énervé : personne n’a jamais gagné un litige avec une phrase écrite sous le coup de la colère.',
+    ],
+    fault: ['Ces erreurs viennent de l’envie d’en finir vite. On répond à chaud, on accepte un arrangement hors procédure, on cède à une menace d’avis, et l’on perd les protections que la plateforme offrait. Avant toute réponse, demandez-vous si ce que vous allez faire laisse une trace dans le dossier. Si ce n’est pas le cas, ne le faites pas.'],
+    cases: ['Parfois, céder est le bon choix. Un article à quelques euros, un acheteur de bonne foi, une erreur de votre part : un remboursement rapide vous coûte moins que plusieurs jours de messages. Fixez-vous une règle à l’avance, par exemple un montant en dessous duquel vous ne discutez pas. Pour les autres cas, suivez la procédure jusqu’au bout, et contactez le service client avec votre dossier complet.'],
+    plan: ['À la fin de ces deux semaines, vous devez avoir trois outils prêts : un modèle d’annonce, une routine d’expédition et vos réponses types. Gardez un petit tableau des litiges : date, motif, issue, ce que vous changez. Quelques lignes suffisent pour voir si un type d’article ou d’acheteur revient, et décider de ce que vous ne vendez plus de cette façon.'],
+  },
+  'sur-place': {
+    spare: [
+      'Regardez aussi vos habitudes du matin. Un petit-déjeuner pris dans un konbini ou un café de quartier coûte bien moins que celui de l’hôtel, et il vous fait sortir plus tôt. Vous profitez ainsi des temples avant l’arrivée des groupes, et votre journée commence par une petite économie, au lieu d’une dépense faite par habitude.',
+      'Regardez les pass de transport avec votre itinéraire sous les yeux, et non par habitude. Un pass rentable pour un voyageur qui change de ville tous les deux jours peut être une dépense inutile pour un séjour tranquille dans deux villes. Faites le calcul avec vos trajets réels avant de payer, sur les sites officiels des compagnies.',
+      'Gardez une journée libre de temps en temps. Une matinée sans programme, un quartier ordinaire, un parc ou un marché coûtent peu et laissent souvent les meilleurs souvenirs. Elles offrent aussi une pause au budget et aux jambes, ce qui évite les dépenses de fatigue des jours suivants.',
+      'Apprenez quelques mots de politesse et les noms de vos plats préférés. Ils vous ouvrent les petits restaurants de quartier, où les prix sont souvent les plus doux. Une application de traduction hors ligne aide à lire une carte, et un sourire avec un mot de japonais fait le reste dans la plupart des situations.',
+    ],
+    start: {
+      title: 'Votre budget réel, avant de partir',
+      intro: 'Un budget de voyage tient rarement par hasard : il tient parce qu’il est découpé en chiffres simples, avant d’atterrir.',
+      look: [
+        'Prenez votre budget total et retirez ce qui est déjà payé : vols, hébergements réservés, assurance. Divisez ce qui reste par le nombre de jours. Ce chiffre est votre vrai budget quotidien, celui qui couvre les repas, les transports, les visites et les petits achats. Si le résultat vous surprend, mieux vaut le savoir chez vous que le quatrième jour à Kyoto.',
+        'Regardez ensuite votre programme, ville par ville. Les grandes journées de visites coûtent plus cher, les journées de quartier beaucoup moins. Repérez les trajets longs déjà prévus et les entrées payantes qui comptent vraiment pour vous. Ces lignes ne sont pas à supprimer : elles sont à prévoir, pour qu’elles ne viennent pas casser le plafond du jour où elles tombent.',
+        'Préparez enfin votre façon de payer. De quelle carte disposez-vous, avec quels frais ? Combien de liquide emporter pour commencer ? Le Japon reste un pays où certains restaurants et petits temples n’acceptent que l’espèce. Notez les frais de votre banque et votre plafond de retrait sur la fiche, avec le numéro à appeler en cas de carte bloquée.',
+      ],
+    },
+    examples: [
+      'Lucie et Tom partent 14 jours. Une fois les vols et les hôtels retirés, il leur reste de quoi vivre avec 9 000 yens par jour à deux. Ils écrivent ce chiffre sur leur carnet, en première page, et le relisent chaque matin.',
+    ],
+    angle: ['Le budget file rarement à cause d’une grosse dépense. Il s’en va par petites touches : un café pris en passant, un taxi le soir, un déjeuner à côté d’un grand temple. Au Japon, ces écarts paraissent modestes pris un par un, et le pays offre pourtant de très bonnes options bon marché, à condition de savoir où regarder. Il suffit de quelques réflexes pris dès le premier jour.'],
+    gear: [
+      'Faites votre point du matin en deux minutes : où vous êtes, ce qui est prévu, ce qu’il reste dans le plafond. Le soir, notez le total du jour avant de vous coucher, pendant que les tickets sont encore dans votre poche. Un écart repéré le lendemain se rattrape sans effort visible : un déjeuner plus simple, une marche plutôt qu’un métro.',
+      'Mangez bien à midi. Les menus du déjeuner offrent souvent le meilleur rapport entre qualité et prix, dans les mêmes restaurants qui coûtent bien plus cher le soir. Gardez le soir pour un plat simple, un konbini ou un marché quand la journée a été chère. Sortez aussi des rues les plus touristiques : deux rues plus loin, les prix changent et les clients sont des habitués.',
+    ],
+    fault: ['Ces erreurs viennent toutes de la fatigue et de la peur de se tromper. On mange près du grand site parce qu’on a faim, on prend un taxi parce que les jambes ne suivent plus. Prévoyez donc ces moments : un en-cas dans le sac, un arrêt repéré à l’avance, une pause dans l’après-midi. Une journée trop chargée coûte plus cher qu’une journée bien découpée.'],
+    cases: ['Si le budget dérape malgré tout, ne vous privez pas de ce qui justifie le voyage. Regardez ce qu’il reste de jours et divisez à nouveau. Allégez une journée de transport, remplacez une visite payante par un quartier ou un jardin gratuit, et gardez ce qui comptait le plus pour vous. Vous serez bien plus content d’un souvenir choisi que de quelques yens gardés.'],
+    plan: ['Tous les trois jours, comparez le total dépensé au plafond prévu et décidez une seule chose pour la suite : on continue, on allège, ou on se fait plaisir. Ce rendez-vous évite de découvrir l’écart le dernier soir. Gardez une petite réserve pour les derniers jours : les cadeaux et les dernières envies arrivent toujours à la fin du voyage.'],
+  },
+  'grand-oral': {
+    spare: [
+      'Pensez aussi à votre tenue et à votre arrivée. Choisissez des vêtements dans lesquels vous êtes à l’aise, préparés la veille, et prévoyez d’arriver en avance pour marcher un peu avant d’entrer. Vous ne serez pas évalué là-dessus, mais tout ce qui est réglé à l’avance laisse de la place dans votre tête pour ce qui compte.',
+      'Pendant les 20 minutes de préparation, ne réécrivez pas tout. Reprenez votre plan, vos mots-clés et votre phrase d’ouverture, puis relisez la question choisie par le jury. Le support que vous préparez n’est pas noté : il vous sert à vous rassurer et à montrer votre plan. Gardez-le simple et lisible d’un coup d’œil.',
+      'Travaillez votre respiration avant d’entrer. Quelques expirations lentes, debout, épaules basses, ralentissent le rythme et posent la voix. Répétez-les à chaque répétition à la maison, pour qu’elles deviennent un réflexe. Le jour de l’épreuve, elles vous occupent pendant les minutes d’attente où le stress a tendance à monter.',
+      'Variez votre public. Répéter devant un parent, un ami, puis un professeur vous habitue à des regards différents et à des questions inattendues. Une personne qui ne connaît rien au sujet est très utile : si elle comprend votre explication, votre présentation est claire, et le jury suivra sans difficulté.',
+      'Soignez aussi la fin. Beaucoup d’élèves s’arrêtent net ou s’excusent. Préparez une dernière phrase qui reprend votre réponse à la question, puis regardez le jury et attendez. Une fin nette laisse une bonne impression, et elle ouvre l’échange sur ce que vous venez de dire plutôt que sur un flottement.',
+    ],
+    start: {
+      title: 'Où vous en êtes de votre oral',
+      intro: 'Avant de répéter, il faut savoir ce que vous dites aujourd’hui et ce qui vous fait le plus peur dans cette épreuve.',
+      look: [
+        'Prenez une de vos questions et présentez-la à voix haute pendant cinq minutes, sans préparation, en vous enregistrant. Réécoutez sans chercher les défauts de votre voix : cherchez si l’on comprend la question, si vous avez un fil, et si vous arrivez à la fin. Cet enregistrement ne sert qu’à vous : il sera très utile de le réécouter dans trois semaines.',
+        'Faites ensuite la liste de ce qui vous inquiète précisément : parler debout, le regard du jury, le trou de mémoire, la voix qui tremble, les questions de l’échange. Une peur générale de l’oral ne se travaille pas, une liste de petites peurs si. Pour chacune, ce guide propose un exercice. Vous verrez que deux d’entre elles pèsent presque toujours plus que les autres.',
+        'Vérifiez enfin l’état de vos deux questions. Sont-elles assez précises pour tenir en cinq minutes ? Pouvez-vous expliquer pourquoi elles vous intéressent, en une phrase et avec vos mots ? Le lien avec votre projet d’orientation est-il clair ? Si une question vous ennuie déjà, changez-la maintenant : on parle bien mieux de ce qui nous intéresse, et le jury l’entend tout de suite.',
+      ],
+    },
+    examples: [
+      'Inès s’enregistre 5 minutes sur sa question de SVT : elle lit presque tout et finit en 3 minutes 20. Elle note deux priorités sur sa grille : poser ses feuilles, et préparer un exemple de plus pour sa deuxième idée.',
+      'Hugo a surtout peur de l’échange. Son frère lui pose dix questions au hasard sur son sujet. Il répond d’abord en une phrase, puis ajoute un exemple : à la troisième répétition, il attend presque les questions.',
+    ],
+    angle: ['Le Grand oral fait peur parce qu’il ressemble à une performance. Il mesure pourtant autre chose : votre capacité à expliquer ce que vous avez compris, à argumenter, et à échanger avec deux adultes. Le jury ne cherche pas un acteur et il ne vous demande pas de tout savoir. Il cherche quelqu’un qui parle de son sujet avec ses mots. C’est pour cela qu’un élève qui récite perd souvent face à un élève qui hésite un peu, mais qui pense vraiment.'],
+    gear: [
+      'Debout, à voix haute, chronomètre en main : c’est la seule répétition qui compte. Relire ses notes assis donne l’impression d’avancer, mais la bouche et le corps n’ont rien appris. Commencez par des répétitions imparfaites plutôt que d’attendre d’être prêt. Une répétition de cinq minutes par jour dans votre chambre vaut mieux qu’une longue séance la veille de l’épreuve.',
+      'Soignez les trente premières secondes. Sachez exactement comment vous commencez : une phrase pour poser la question, une phrase pour dire pourquoi elle vous intéresse. Ces deux phrases, répétées vingt fois, vous portent au moment où le stress est le plus fort. Le reste vient ensuite, avec vos mots-clés. Regardez vos examinateurs à tour de rôle, comme si vous leur expliquiez quelque chose d’intéressant.',
+    ],
+    fault: ['Ces erreurs partent toutes du besoin de se rassurer. Apprendre par cœur semble plus sûr, mais le moindre oubli fait tout tomber. Une question très large paraît plus facile à remplir, mais elle se transforme vite en récitation de cours. Préférez un plan simple et trois idées que vous savez raconter : si vous perdez une phrase, vous retrouverez toujours la suivante.'],
+    cases: ['Quand une question du jury vous échappe, dites-le simplement : « je n’ai pas étudié ce point précisément, mais voici comment je le relierais à ce que je sais ». C’est une très bonne réponse. Le jury évalue votre raisonnement, pas votre mémoire. Si le stress vous empêche de dormir ou de travailler pendant plusieurs jours, parlez-en à un adulte de confiance, à l’infirmière ou à un professeur.'],
+    plan: ['À la fin de chaque semaine, refaites votre présentation entière devant une personne, et demandez-lui une seule chose à améliorer. Une remarque à la fois suffit. La dernière semaine, réécoutez l’enregistrement du premier jour : vous mesurerez le chemin parcouru. La veille, faites une dernière répétition courte, préparez votre tenue et votre convocation, puis faites autre chose.'],
+  },
+  reparer: {
+    spare: [
+      'Avant de commencer, faites un essai de chaque produit sur une zone cachée : le dessous du plateau, l’arrière d’un tiroir. Vous verrez comment la pâte à bois prend, comment la colle réagit sur ce vieux bois, et combien de temps tout cela met à sécher dans votre pièce. Cet essai de cinq minutes évite une mauvaise surprise sur la face visible.',
+      'Préparez votre poste de travail avant de commencer : une bâche, une bonne lampe, de quoi caler le meuble, les outils à portée de main. Travailler à hauteur évite de mal doser un geste. Quelques tréteaux ou une vieille table suffisent, et votre dos vous remerciera dès le deuxième soir.',
+      'Photographiez le meuble avant de démonter quoi que ce soit, puis à chaque étape. Ces photos vous diront comment remonter une charnière, où allait une cale, dans quel sens tenait un tiroir. Numérotez les pièces au crayon sous les tiroirs et à l’arrière des portes : ce détail évite les mauvaises surprises au remontage.',
+      'Achetez juste ce qu’il faut pour ce meuble, en petites quantités. Un pot de colle à bois, un peu de pâte à bois de la bonne teinte, quelques vis adaptées : un petit panier suffit. Conservez les produits fermés et notés dans un coin : ils serviront pour le prochain meuble ou pour une retouche.',
+    ],
+    start: {
+      title: 'L’état réel de votre meuble',
+      intro: 'Un meuble se juge à l’envers, tiroirs sortis et lumière en main. Ce quart d’heure décide de ce que vous ferez pendant trois soirs.',
+      look: [
+        'Videz le meuble, sortez les tiroirs, retournez-le si vous pouvez. Secouez-le doucement par le haut et regardez ce qui bouge : un pied, un assemblage, un montant. Puis passez la main partout. Une zone qui accroche, un placage qui sonne creux, une colle qui s’effrite : notez tout zone par zone sur votre fiche. Ce relevé évite de découvrir un défaut quand la peinture est déjà posée.',
+        'Cherchez ensuite ce qui pourrait vous arrêter. De petits trous ronds avec de la sciure fraîche signalent des insectes, à traiter avant toute chose. Une odeur de moisi ou une tache noire parlent d’humidité. Un bois qui s’effrite sous l’ongle a perdu sa résistance. Ces cas ne se règlent pas avec de la pâte à bois : ils méritent un traitement adapté ou l’avis d’un artisan.',
+        'Décidez enfin de ce qui se répare et de ce qui se garde. Un meuble ancien a le droit d’avoir vécu : une rayure légère disparaît sous la peinture, alors qu’un pied bancal se verra chaque jour. Classez vos défauts en trois lignes : ce qui touche à la solidité, ce qui se verra, ce qui peut rester. Vous traiterez dans cet ordre, sans y passer une semaine.',
+      ],
+    },
+    examples: [
+      'Julien retourne le buffet de sa grand-mère : le pied arrière gauche bouge, deux tiroirs frottent et le placage se soulève sur 10 cm. Il garde les rayures du plateau, qui passeront sous la peinture, et commence par le pied.',
+    ],
+    angle: ['Un meuble ancien bouge. Le bois travaille avec les saisons et les assemblages d’origine ont été pensés pour accompagner ce mouvement. Si vous bloquez tout avec une colle très rigide, l’effort se reporte ailleurs et le meuble se fend plus tard. C’est pourquoi la réparation part de la structure et respecte ce qui existe : on resserre, on recolle avec une colle adaptée, on garde les pièces d’origine dès que c’est possible.'],
+    gear: [
+      'Respectez les temps de séchage, même si le soir suivant paraît loin. Une colle à bois a besoin d’un serrage et de plusieurs heures pour tenir. Une pâte à bois appliquée trop épaisse se rétracte et se fissure. Travaillez par petites couches et laissez chaque soir faire son travail. C’est pour cela que ce guide se déroule sur trois soirs plutôt qu’en un seul week-end pressé.',
+      'Protégez aussi ce que vous ne réparez pas. Des serre-joints mal placés marquent le bois : glissez une cale de chute entre les mâchoires et le meuble. Essuyez la colle qui déborde avec un chiffon humide avant qu’elle ne sèche, car une trace de colle refuse ensuite la teinte et se voit sous la peinture. Rangez les vis et les ferrures dans une boîte, tiroir par tiroir.',
+    ],
+    fault: ['Ces erreurs viennent de l’impatience de voir la couleur. On a acheté la peinture, on a envie de commencer, et l’on se dit qu’une couche cachera tout. Elle fait le contraire : un pied bancal le reste, et un éclat mal rebouché ressort sous la lumière. Rappelez-vous la règle de ce guide : d’abord solide, ensuite propre, enfin beau.'],
+    cases: ['Quand une réparation vous dépasse, arrêtez-vous avant d’aggraver le problème. Un assemblage cassé, une pièce sculptée fendue, un meuble de valeur méritent l’avis d’un ébéniste : demandez un devis pour cette seule pièce, et faites le reste vous-même. Si vous doutez d’un ancien vernis ou d’une vieille peinture, protégez-vous avant de poncer : une peinture très ancienne peut contenir du plomb.'],
+    plan: ['À la fin du troisième soir, faites le test de contrôle : posez le meuble sur un sol plat, ouvrez chaque tiroir, chaque porte, appuyez sur le plateau, et passez une lampe en lumière rasante. Tout ce qui ne vous convient pas se reprend maintenant, pas après la peinture. Laissez ensuite le meuble reposer une journée complète avant la première couche, dans la pièce où vous allez peindre.'],
+  },
+};
+
+const depthOf = (c: NicheCtx): TopicDepth | null => (c.topic ? TOPIC_DEPTH[c.topic.id] ?? null : null);
+
+/** The reserve of a sub-problem, first in line for the floor: the fillers of its family are the last resort. */
+export const topicFillers = (c: NicheCtx): Para[] => (depthOf(c)?.spare ?? []).map((p) => () => p);
+
+/** The worked cases written for a sub-problem: a chapter of the follow-up gets one when the research runs out. */
+export const topicExamples = (c: NicheCtx): readonly string[] => depthOf(c)?.examples ?? [];
+
+/** The paragraphs of one list of a sub-problem, for the paragraph bank of its chapter. */
+const deep = (pick: (t: TopicDepth) => readonly string[] | undefined): Para[] => [0, 1, 2].map((k) => (d) => { const t = depthOf(d.c); return (t && pick(t)?.[k]) ?? null; });
+
+/**
  * A follow-up guide treats one sub-problem: its own chapters, never the parent's sections, in the words of its
  * family of guides. Its padding comes from that family too: the generic bank is about changing a habit.
  */
@@ -1033,7 +1512,7 @@ function suiteOf(base: ArchetypeDef, s: SuiteVoice): ArchetypeDef {
     stepNoun: s.stepNoun,
     plan: 'phases',
     planColumn: 'Quand',
-    short: { 5: ['angle', 'reglages', 'ecueils', 'resistances', 'mini-plan'], 6: ['angle', 'reglages', 'ecueils', 'resistances', 'mini-plan'] },
+    short: { 5: ['angle', 'reglages', 'ecueils', 'resistances', 'mini-plan'], 6: ['angle', 'point-de-depart', 'reglages', 'ecueils', 'resistances', 'mini-plan'] },
     howTo: s.howTo,
     promise: (c, o) => `un plan ciblé de ${D(c)} pour arriver à ceci : ${o}`,
     subtitle: (c) => `Le guide ciblé pour ${c.audArt} qui veulent régler ce point précis`,
@@ -1050,35 +1529,43 @@ function suiteOf(base: ArchetypeDef, s: SuiteVoice): ArchetypeDef {
         kind: 'angle', role: 'comprendre',
         title: (c) => `Pourquoi ce sujet résiste : ${lf(c.pbShort ?? c.pbClause)}`,
         intro: (c) => `${v(c, ...s.angle)} Point de départ pour ${c.audCore} : ${pb(c)}.`,
-        paras: [(d) => d.facts(2) || null, (d) => d.facts(2) || null, (d) => d.facts(2) || null, (d) => v(d.c, ...s.calm)],
+        paras: [(d) => d.facts(2) || null, (d) => d.facts(2) || null, (d) => d.facts(2) || null, ...deep((t) => t.angle), (d) => v(d.c, ...s.calm)],
         steps: () => ['Noter à quel moment ce sujet vous pose le plus de difficultés', 'Entourer dans ce chapitre ce qui vous surprend', 'Décider du jour où vous commencez'],
         checks: () => ['Je comprends pourquoi ce sujet résiste', 'Je sais à quel moment il se pose', 'Ma date de départ est fixée'],
+      },
+      {
+        kind: 'point-de-depart', role: 'diagnostic',
+        title: (c) => depthOf(c)?.start.title ?? 'Votre point de départ',
+        intro: (c) => `${depthOf(c)?.start.intro ?? 'Avant de changer quoi que ce soit, il faut voir où vous en êtes.'} Ce chapitre aide ${c.audCore} à partir de leur situation réelle.`,
+        paras: [lookFor, ...deep((t) => t.start.look)],
+        steps: () => ['Lire ce chapitre en entier, crayon en main', 'Remplir la fiche de ce chapitre', 'Choisir le premier point à traiter'],
+        checks: () => ['Mon point de départ est noté', 'La fiche est remplie', 'Je sais par quoi je commence'],
       },
       {
         kind: 'reglages', role: 'methode',
         title: (_c, n) => s.gearTitle(n),
         intro: (c) => `${v(c, ...s.gear)} Tout est écrit pour ${c.audCore}.`,
-        paras: [modelPara],
+        paras: [...deep((t) => t.gear), modelPara],
       },
       {
         kind: 'ecueils', role: 'erreurs',
         title: (_c, n) => s.faultTitle(n),
         intro: (c) => `${s.fault} Voici ce que ${c.audCore} rencontrent le plus.`,
-        paras: [],
+        paras: deep((t) => t.fault),
         steps: () => ['Repérer ce qui vous concerne dans cette liste', 'Appliquer la correction dès aujourd’hui', 'Noter la date du changement'],
       },
       {
         kind: 'resistances', role: 'situations',
         title: (_c, n) => s.caseTitle(n),
         intro: (c) => `${s.cases} Ces réponses sont pensées pour ${c.audCore}.`,
-        paras: [],
+        paras: deep((t) => t.cases),
         steps: () => ['Repérer le cas qui vous concerne', 'Appliquer la réponse de ce chapitre', 'Reprendre le plan à la ligne suivante'],
       },
       {
         kind: 'mini-plan', role: 'programme',
         title: (c) => `Votre plan ciblé de ${D(c)}, étape par étape`,
         intro: (c) => `${s.plan} Objectif, sur ${D(c)} : ${lf(c.goal ?? c.pbClause)}.`,
-        paras: [(d) => v(d.c, ...s.planRead), modelPara, keepUp, () => s.planEnd],
+        paras: [(d) => v(d.c, ...s.planRead), modelPara, keepUp, ...deep((t) => t.plan), () => s.planEnd],
         checks: () => ['Plan noté dans l’agenda', 'Fiche imprimée', 'Bilan de fin de plan prévu'],
       },
     ],
@@ -1094,8 +1581,7 @@ export const SUITES = Object.fromEntries((Object.keys(ARCHETYPES) as GuideArchet
 
 /** Chapter defs for a chapter count; an empty result never happens (the 5-chapter list is the minimum). */
 export function chaptersFor(def: ArchetypeDef, count: number): ChapterDef[] {
-  if (def.id === 'suite') return def.chapters;
-  if (count >= 7) return def.chapters;
+  if (count >= 7 && def.id !== 'suite') return def.chapters;
   const kinds = count === 6 ? def.short[6] : def.short[5];
   return kinds.map((k) => def.chapters.find((c) => c.kind === k)!).filter(Boolean);
 }

@@ -80,6 +80,9 @@ export function faceOf(name: FaceName): Face {
   return face;
 }
 
+/** The committed file itself, for a page that embeds it: the unpacked sfnt would distribute a converted font. Throws on a missing file. */
+export const woffOf = (name: FaceName): Buffer => readFileSync(join(fontDir, `${name}.woff`));
+
 /** pdfkit: doc.registerFont(name, face.sfnt) for each face of the voice. Lazy on pdfkit's side: unused faces are never embedded. */
 export function registerVoice(doc: PDFKit.PDFDocument, v: Voice): void {
   for (const name of facesOf(v)) if (!isStdFont(name)) doc.registerFont(name, faceOf(name).sfnt);

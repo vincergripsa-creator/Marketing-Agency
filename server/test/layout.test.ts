@@ -431,7 +431,8 @@ describe('guides as the writers write them', () => {
   });
 
   it('`finish` is what is drawn, and the rail shows only from finish 1', () => {
-    const content = withRail({ ...written[0]!.content, chapters: written[0]!.content.chapters.map((c, k) => (k === 0 ? { ...c, figure: { type: 'decision_tree', title: 'Si ça résiste', labels: ['Il refuse : attendez'], values: [], tree: { question: 'Que s’est-il passé ?', cases: [{ when: 'Il refuse', then: 'Attendez deux minutes.' }, { when: 'Il pleure', then: 'Restez à côté de lui.' }] } } } : c)) });
+    // a second visual of a type no chapter uses as its first: the `visual` of a guide is drawn at every finish, its `figure` from finish 2
+    const content = withRail({ ...written[0]!.content, chapters: written[0]!.content.chapters.map((c, k) => (k === 0 ? { ...c, figure: { type: 'timeline', title: 'Si ça résiste', labels: ['Jour 1 : il refuse', 'Jour 2 : il goûte'], values: [] } } : c)) });
     const at = (t: number) => layoutPdf({ product: productOf('Un guide', content), content, design, brand: 'Pixel Agency', effort: effortFor(t) });
     const has = (g: ReturnType<typeof at>, what: (i: Placed) => boolean) => g.plans.some((p) => p.items.some(what));
     const low = at(0.1);
@@ -442,8 +443,8 @@ describe('guides as the writers write them', () => {
     expect([low, mid, top].map((g) => has(g, rail))).toEqual([false, true, true]);
     expect([low, mid, top].map((g) => has(g, drop))).toEqual([false, true, true]);
     expect([low, mid, top].map((g) => g.plans.some((p) => p.kind === 'memo'))).toEqual([false, false, true]);
-    expect(has(mid, (i) => i.t === 'block' && i.block.t === 'figure' && i.block.kind === 'decision_tree')).toBe(false);
-    expect(has(top, (i) => i.t === 'block' && i.block.t === 'figure' && i.block.kind === 'decision_tree')).toBe(true);
+    expect(has(mid, (i) => i.t === 'block' && i.block.t === 'figure' && i.block.kind === 'timeline')).toBe(false);
+    expect(has(top, (i) => i.t === 'block' && i.block.t === 'figure' && i.block.kind === 'timeline')).toBe(true);
     expect(top.pages.length).toBeGreaterThan(mid.pages.length);
     const printed = (g: ReturnType<typeof at>) => g.pages.flatMap((p) => p.scene.ops).flatMap((o) => (o.k === 'text' ? [o.s] : []));
     expect(printed(top)).toContain('Votre plan sur une page');

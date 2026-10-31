@@ -523,6 +523,8 @@ function auditOf(slots: Slot[], chapters: number, overflow: number, pages: numbe
   const text = slots.map((s) => s.plan).filter((p) => p.kind === 'text' || p.kind === 'figure');
   const figures = text.flatMap((p) => p.items).filter((i) => i.t === 'block' && i.block.t === 'figure');
   const kinds = new Set(figures.map((i) => (i.t === 'block' && i.block.t === 'figure' ? i.block.kind : '')));
+  // a rail hangs off a paragraph: a page of steps or figures has no place for one, and a second figure must not cost the rail points
+  const prose = text.filter((p) => p.items.some((i) => i.t === 'para'));
   let widows = 0;
   let strandedHeadings = 0;
   for (const p of text) {
@@ -540,7 +542,7 @@ function auditOf(slots: Slot[], chapters: number, overflow: number, pages: numbe
     shortPages: text.filter((p) => p.fill < SHORT_PAGE).length,
     fillMean: text.length ? text.reduce((a, p) => a + p.fill, 0) / text.length : 0,
     widows, strandedHeadings,
-    railShare: text.length ? text.filter((p) => p.items.some((i) => i.t === 'rail')).length / text.length : 0,
+    railShare: prose.length ? prose.filter((p) => p.items.some((i) => i.t === 'rail')).length / prose.length : 0,
     figureKinds: kinds.size,
     figuresPerChapter: figures.length / Math.max(1, chapters),
     sheets: slots.filter((s) => s.plan.kind === 'sheet' && s.plan.items[0]?.t === 'sheet' && s.plan.items[0].part === 0).length,

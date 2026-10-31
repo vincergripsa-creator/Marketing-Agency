@@ -5,7 +5,7 @@
 import { summarizeLedger } from '../core/index.js';
 import type {
   AdCreative, AdTotals, AgentId, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, FinanceSnapshot,
-  InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, TalentTruthView, Task, TaskKind, TaskStats, WorldState,
+  InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, TalentTruthView, Task, TaskKind, TaskStats, VisualReport, WorldState,
 } from '../shared.js';
 import { addAdTotals } from '../sim/adTotals.js';
 import { announcedOutageDays } from '../sim/outage.js';
@@ -148,12 +148,19 @@ export function trimContent(content: PdfContent | null | undefined, live = false
   };
 }
 
+/** The public report: `effort` is the designer's talent read out and `explored` counts it (A21). Only the scores leave. */
+function publicVisual(visual: VisualReport): VisualReport {
+  const { effort: _effort, explored: _explored, ...shown } = visual;
+  return shown as VisualReport;
+}
+
 export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS): Product {
   const stats = p.stats ?? { views: 0, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, rating: 0, reviews: [], upsellSales: 0 };
   // What compaction leaves the company to read (scale §7.2): no panel reads it, and at its caps it weighs 9 KB a product.
-  const { hooks: _hooks, feedback: _feedback, ...kept } = p;
+  const { hooks: _hooks, feedback: _feedback, artExplored: _artExplored, ...kept } = p;
   return {
     ...kept,
+    ...(p.visual ? { visual: publicVisual(p.visual) } : {}),
     content: trimContent(p.content, limits.live),
     salesPage: limits.live ? null : p.salesPage,
     stats: { ...stats, reviews: lastN(stats.reviews, limits.reviewsPerProduct) },

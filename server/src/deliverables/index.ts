@@ -9,10 +9,10 @@ import { coverAudit, renderCoverSvg } from './cover.js';
 import { renderPdf } from './pdf.js';
 import { renderSalesPageHtml } from './salesPage.js';
 import { renderAdCut, renderAdStoryboard } from './storyboard.js';
+import { visualReport } from './visualReport.js';
 
-/** Land with P8.2 (visualReport) and P11.2 (renderKit, renderLeadMagnet). Nothing calls them before. */
+/** Land with P11.2. Nothing calls them before. */
 const notLanded = (): never => { throw new Error('not landed'); };
-const visualReport: DeliverablesModule['visualReport'] = notLanded;
 const renderLeadMagnet: DeliverablesModule['renderLeadMagnet'] = notLanded;
 const renderKit: DeliverablesModule['renderKit'] = notLanded;
 

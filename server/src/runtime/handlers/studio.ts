@@ -7,13 +7,15 @@ import { sim } from '../modules.js';
 import { productNote } from '../notes.js';
 import { officerId } from '../org/officers.js';
 import { addPlaybookRule, directivesOf } from '../playbook.js';
+import { bestDraft } from '../talent/craft.js';
 import { titleTaken, upsellContextOf } from '../upsell.js';
 import { capitalize, includesCI, keywords, numOf, short, splitSentences, uniq } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { genericPhrases, NO_PRODUCT, requireProduct, reworkNotes, studioMind } from './common.js';
+import { reworkCraft } from './growth.js';
 
 export function scoreContent(ctx: RuntimeCtx, product: Product, content: PdfContent): QualityReport {
-  return sim.scorePdf(content, { audience: product.audience, problem: product.problem, voc: ctx.world.company.research.voc[product.nicheId], design: product.design });
+  return sim.scorePdf(content, { audience: product.audience, problem: product.problem, voc: ctx.world.company.research.voc[product.nicheId], design: product.design, visual: product.visual });
 }
 
 function chapterTexts(c: ChapterContent): string[] {
@@ -149,7 +151,8 @@ export const studioHandlers: HandlerMap = {
           : await ctx.engine.writeOutline({ title: product.title, niche: productBrief(ctx, product), voc, upsellOf }, m);
         const upsell = productOf(ctx, product.upsellProductId);
         const revision = numOf(task.input.revision);
-        content = await ctx.engine.writePdfContent({ title: product.title, outline, niche: productBrief(ctx, product), voc, upsellTitle: upsell?.title ?? null, upsellOf, ...(revision ? { revision } : {}) }, m);
+        const input = { title: product.title, outline, niche: productBrief(ctx, product), voc, upsellTitle: upsell?.title ?? null, upsellOf, ...(revision ? { revision } : {}) };
+        content = (await bestDraft(ctx, agent, reworkCraft(task, m), 'guide', (w) => ctx.engine.writePdfContent(input, w), (d) => scoreContent(ctx, product, d).overall)).draft;
         mode = task.input.rework === true ? `réécriture v${product.version}` : 'premier jet';
       }
       content = keepUpsellLink(product, content);
@@ -172,24 +175,36 @@ export const studioHandlers: HandlerMap = {
       const voc = vocOf(ctx, product.nicheId);
       const banned = directivesOf(ctx.world, agent.id).banned;
       const before = scoreContent(ctx, product, product.content);
-      const flagged = uniq([...flaggedSentences(product.content, [...genericPhrases(), ...banned]), ...before.issues.filter((i) => /générique|IA|cliché|plat/i.test(i))]);
       const gaps = task.input.gaps && typeof task.input.gaps === 'object' ? task.input.gaps as GuideGaps : null;
-      const improved = keepUpsellLink(product, await ctx.engine.humanize({ content: product.content, flagged, voc, ...(gaps ? { gaps } : {}) }, studioMind(ctx, task, mind)));
-      const after = scoreContent(ctx, product, improved);
-      let kept = true;
-      if (after.overall >= before.overall - 1) {
+      const m = studioMind(ctx, task, mind);
+      // the passes are real because an editor's `reach` leaves text behind (talent §4.4). Claude writes one: a pass there costs money.
+      const passes = ctx.engine.mode === 'claude' ? 1 : mind.craft?.passes ?? 1;
+      const phrases = [...genericPhrases(), ...banned];
+      const seen = flaggedSentences(product.content, phrases).length;
+      let best = before;
+      let kept = false;
+      let fixed = 0;
+      for (let pass = 0; pass < passes; pass++) {
+        const flagged = uniq([...flaggedSentences(product.content, phrases), ...best.issues.filter((i) => /générique|IA|cliché|plat/i.test(i))]);
+        if (pass > 0 && !flagged.length) break;
+        if (pass === 0) fixed = flagged.length;
+        const improved = keepUpsellLink(product, await ctx.engine.humanize({ content: product.content, flagged, voc, ...(gaps && pass === 0 ? { gaps } : {}) }, pass ? { ...m, draw: pass } : m));
+        const after = scoreContent(ctx, product, improved);
+        // a pass stays only if the score did not fall
+        if (after.overall < best.overall - 1) continue;
         product.content = improved;
-        product.quality = after;
-      } else {
-        kept = false;
-        product.quality = before;
+        best = after;
+        kept = true;
       }
+      product.quality = best;
+      // the share of the flat text still printed: what the `polish` evidence charges (talent §5.2)
+      const left = seen ? Math.min(1, flaggedSentences(product.content, phrases).length / seen) : 0;
       say(ctx, agent.id, kept
-        ? `${agent.name} a réécrit ${flagged.length} phrase(s) génériques (ton humain ${before.humanTone} → ${after.humanTone})`
+        ? `${agent.name} a réécrit ${fixed} phrase(s) génériques (ton humain ${before.humanTone} → ${best.humanTone})`
         : `${agent.name} : la passe d'humanisation dégradait le texte, version précédente conservée`, 'thought', { productId: product.id });
       return {
-        summary: `${flagged.length} phrase(s) signalée(s) ; qualité ${before.overall} → ${kept ? after.overall : before.overall}/100.`,
-        output: { flagged: flagged.length, before: before.overall, after: kept ? after.overall : before.overall, kept },
+        summary: `${fixed} phrase(s) signalée(s) ; qualité ${before.overall} → ${best.overall}/100.`,
+        output: { flagged: fixed, before: before.overall, after: best.overall, kept, left },
       };
     },
   },

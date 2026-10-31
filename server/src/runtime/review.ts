@@ -19,6 +19,8 @@ import { creativeText } from './handlers/growth.js';
 import { scoreContent } from './handlers/studio.js';
 
 export const PDF_THRESHOLD = 68;
+/** Under the visual model, what a cover must be worth (pdf §13): a long SEO title pays here, in reworks. */
+const COVER_THRESHOLD = 60;
 /** First try + 2 rework cycles; then closeLoop decides. */
 export const MAX_ATTEMPTS = 3;
 
@@ -103,7 +105,7 @@ export async function reviewTask(ctx: RuntimeCtx, task: Task, reviewer: AgentSta
     }
     case 'render_pdf': {
       if (!runFileExists(ctx, product.files.pdf) || !product.content) return changes(['Le fichier PDF est introuvable : relancer la mise en page.']);
-      const q = sim.scorePdf(product.content, { audience: product.audience, problem: product.problem, voc: vocOf(ctx, product.nicheId), design: product.design });
+      const q = sim.scorePdf(product.content, { audience: product.audience, problem: product.problem, voc: vocOf(ctx, product.nicheId), design: product.design, visual: product.visual });
       product.quality = q;
       const blocked = blockers(q);
       if (blocked.length) return { ...changes(blocked.slice(0, 4), q.overall), noWaiver: q.compliance < 60 };
@@ -122,6 +124,11 @@ export async function reviewTask(ctx: RuntimeCtx, task: Task, reviewer: AgentSta
       const notes: string[] = [];
       if (!runFileExists(ctx, product.files.cover)) return changes(['Le fichier de couverture est introuvable.']);
       if (product.title.length > 80) notes.push(`Titre long (${product.title.length} caractères) : vérifier la lisibilité en miniature.`);
+      const cover = task.output?.cover;
+      if (typeof cover === 'number') {
+        if (cover < COVER_THRESHOLD) return changes([`Couverture trop faible (${Math.round(cover)}/100) : plus d'air, titre plus gros.`, ...notes], cover);
+        return approve(notes, cover);
+      }
       if (product.content) {
         const d = scoreContent(ctx, product, product.content).design;
         if (d < 50) return changes([`Design trop faible (${d}/100) : plus d'air, titre plus gros.`], d);

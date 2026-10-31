@@ -1,8 +1,8 @@
 {
-  "hash": "dc93c9d2173be97aade7336c20a776dd70652baf",
+  "hash": "efab7b77a2fb2a886d24927b06e7b5b86a2afdd4",
   "parts": {
-    "ledger": "245d829cd3db08b1abdbe8f55832c7b18052e8e0",
-    "kpis": "7e891bce28bb798b6a6bbb9ffb097c9158be7123",
+    "ledger": "0644d5440d3d299884eba109d6002165723186cc",
+    "kpis": "9d7ea178c07a2a6e7315415b7647851487cccd36",
     "tasks": "a1b5fa97afcba69f8d182014fe3ebae0a0c00fec",
     "events": "a3d49d11f0034a61fc2b1d7bd713fa63b5c15ceb"
   }

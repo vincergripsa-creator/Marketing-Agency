@@ -2,7 +2,7 @@
 import type { Product } from '../../shared.js';
 import { nextId } from '../../core/index.js';
 import type { RuntimeCtx } from '../ctx.js';
-import { addDeliverable, incident, latestOutput, nicheName, productOf, runFileExists, say, speak, versionDir, vocOf, writeRunFile } from '../ctx.js';
+import { addDeliverable, incident, latestOutput, nicheName, productOf, readRunFile, runFileExists, say, speak, versionDir, vocOf, writeRunFile } from '../ctx.js';
 import { deliverables, learning, sim } from '../modules.js';
 import { directivesOf, HYPE_ARMS, PRICE_ARMS } from '../playbook.js';
 import { createUpsellPipeline, killProduct } from '../pipeline.js';
@@ -45,8 +45,18 @@ function pagePrintOf(product: Product): string {
   return [product.price, reviews.length, rating, reviews[reviews.length - 1]?.id ?? ''].join('|');
 }
 
+/** The real pages `render_pdf` left next to the guide, named after their kind. An old save has none: its page skips the section. */
+async function previewsOf(ctx: RuntimeCtx, product: Product): Promise<{ label: string; svg: string }[]> {
+  const out: { label: string; svg: string }[] = [];
+  for (const rel of product.files.previews ?? []) {
+    const svg = await readRunFile(ctx, rel);
+    if (svg) out.push({ label: /\d+-([^/]+)\.svg$/.exec(rel)?.[1] ?? '', svg });
+  }
+  return out;
+}
+
 async function renderSalesPage(ctx: RuntimeCtx, product: Product, rel: string, coverSvg: string): Promise<void> {
-  const html = deliverables.renderSalesPageHtml({ product, salesPage: product.salesPage!, coverSvg, design: ensureDesign(ctx, product), brand: ctx.world.company.name });
+  const html = deliverables.renderSalesPageHtml({ product, salesPage: product.salesPage!, coverSvg, design: ensureDesign(ctx, product), brand: ctx.world.company.name, previews: await previewsOf(ctx, product) });
   await writeRunFile(ctx, rel, html);
   product.files.salesPage = rel;
   product.pagePrint = pagePrintOf(product);

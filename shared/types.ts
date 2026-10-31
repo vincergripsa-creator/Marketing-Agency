@@ -342,6 +342,8 @@ export interface Product {
   pagePrint?: string;         // what sales-page.html shows of the live product (price, reviews…): when it changes, the page is re-rendered
   decision?: { day: number; status: 'paused' | 'killed'; reason: string }; // why it was last stopped (French), for the founder's questions
   visual?: VisualReport | null;
+  pdfFacts?: { pages: number; sheets: number }; // what the last render really holds: the sales page prints these, and nothing else counts them after compaction
+  artExplored?: number;        // art candidates the current cover really went through, until `visual` holds it. Never in a snapshot
   kind?: 'guide' | 'kit';      // absent = 'guide'
   bumpProductId?: string | null;
   leadMagnet?: { title: string; file: string; day: number } | null;

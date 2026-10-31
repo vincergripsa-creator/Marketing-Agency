@@ -132,7 +132,8 @@ describe('a follow-up is worth what it costs (V-D2)', () => {
   it('a follow-up is capped below a deeper guide, and never above it', async () => {
     const { parent, follow } = await guides('urssaf-micro');
     const world = createWorld(defaultScenario({ ...LEGACY, seed: 3 }), 'test-cap');
-    const up = product({ id: 'prd_up', content: follow, nicheId: 'urssaf-micro' });
+    // a follow-up from the writers is as deep as its parent since pdf §10.1: the cap is read on one that stayed thin
+    const up = product({ id: 'prd_up', content: { ...follow, chapters: follow.chapters.slice(0, 3) }, nicheId: 'urssaf-micro' });
     const main = product({ id: 'prd_main', content: parent, nicheId: 'urssaf-micro', price: 24, upsellProductId: 'prd_up' });
     world.company.products.push(main, up);
     expect(followUpLimit(world, main)).toBeNull();
@@ -326,7 +327,7 @@ describe('smaller leftovers (V-D9 to V-D13)', () => {
       const out = heuristicHumanize(parent, [], voc, seededRng(1, id), { pains: voc.pains, chapters: [] });
       const errors = out.chapters.flatMap((c) => c.paragraphs).filter((p) => /^Erreur n°/.test(p));
       for (const e of errors) expect(e, id).toMatch(/À la place/);
-      const method = out.chapters.find((c) => c.visual?.type === 'steps_diagram' && c.steps.length > 0)!;
+      const method = out.chapters.find((c) => c.visual?.type === 'step_path' && c.steps.length > 0)!;
       expect(method.checklist.length, id).toBe(method.steps.length);
     }
   });

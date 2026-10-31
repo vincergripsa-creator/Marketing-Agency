@@ -28,6 +28,7 @@ import { chargebackOrder, creativeById, nicheOf, orderById, productById, pushEve
 import { genericPhraseHits, guideOverlap, scoreCreative, scorePdf, scoreSalesPage, vocPhraseHits } from './quality.js';
 import { fmtEur, fmtInt, fmtNum, fmtPct, keyTokens, lognormal, norm, overlap, pickWeighted, plural, short, stemSet, uniform } from './text.js';
 import { tempoFit } from './videoCraft.js';
+import { visualCvr, visualRating, visualRefund, visualWtp } from './visual.js';
 
 interface Traffic {
   productId: string;
@@ -103,7 +104,7 @@ class Day {
     let r = this.pdfCache.get(p.id);
     if (!r) {
       const n = this.niche(p);
-      r = p.content ? scorePdf(p.content, { audience: p.audience, problem: p.problem, voc: n.voc, design: p.design }) : NEUTRAL_REPORT;
+      r = p.content ? scorePdf(p.content, { audience: p.audience, problem: p.problem, voc: n.voc, design: p.design, visual: p.visual }) : NEUTRAL_REPORT;
       if (p.quality && p.quality.evaluator !== 'heuristic') {
         r = { ...r, overall: Math.round(0.6 * r.overall + 0.4 * p.quality.overall), specificity: Math.round(0.6 * r.specificity + 0.4 * p.quality.specificity) };
       }
@@ -224,7 +225,7 @@ function baseCvr(d: Day, p: Product): number {
   const compF = 1 - CONVERSION.competitionWeight * n.competition;
   const hypeF = 1 + CONVERSION.hypeBoost * clamp(p.salesPage?.hypeLevel ?? 0.5, 0, 1);
   const boost = d.boost ? CONVERSION.seasonalBoost : 1;
-  return CONVERSION.base * sqF * priceFactor(p.price, n.wtp) * trustFactor(p, d.storeRating) * specF * demandF * dow * compF * hypeF * boost;
+  return CONVERSION.base * sqF * priceFactor(p.price, visualWtp(n.wtp, p.visual)) * trustFactor(p, d.storeRating) * specF * demandF * dow * compF * hypeF * boost * visualCvr(p.visual);
 }
 
 // ───────────────────────────── 1. paid ads ─────────────────────────────
@@ -571,9 +572,9 @@ export function refundProbability(d: Day, p: Product, c: Customer | undefined, o
   const gap = promiseShortfall(d, p) * REFUNDS.gapWeight;
   const lowQ = (Math.max(0, REFUNDS.lowQualityThreshold - pdf.overall) / 100) * REFUNDS.lowQualityWeight;
   const arche = c ? REFUNDS.archetypeBonus[c.archetype] ?? 0 : 0;
-  const regret = overprice(order.price, n.wtp) * REFUNDS.overpriceWeight;
+  const regret = overprice(order.price, visualWtp(n.wtp, p.visual)) * REFUNDS.overpriceWeight;
   const paidTwice = order.source === 'upsell' ? d.echo(p) * REFUNDS.echoWeight : 0;
-  return clamp(base + gap + lowQ + arche + regret + paidTwice, 0, REFUNDS.maxCumulative);
+  return clamp(base + gap + lowQ + arche + regret + paidTwice - visualRefund(p.visual), 0, REFUNDS.maxCumulative);
 }
 
 function hasRequest(world: WorldState, orderId: string): boolean {
@@ -618,6 +619,13 @@ function runRefunds(d: Day): void {
 
 const RATING_SHIFT: Partial<Record<Customer['archetype'], number>> = { karen: -1, troll: -2, sceptique: -0.5, superfan: 0.8, chasseur_de_remboursement: -0.7 };
 
+/** The rating this buyer leans to, before his mood of the day. */
+export function reviewMean(d: Day, p: Product, c: Customer | undefined, o: Pick<Order, 'price' | 'source' | 'refunded'>): number {
+  const paidTwice = o.source === 'upsell' ? d.echo(p) * REVIEWS.echoPenalty : 0;
+  return REVIEWS.ratingIntercept + REVIEWS.ratingSlope * d.pdfQ(p).overall - REVIEWS.promiseGapPenalty * promiseShortfall(d, p) - paidTwice
+    - REVIEWS.overpricePenalty * overprice(o.price, visualWtp(d.niche(p).wtp, p.visual)) + (c ? RATING_SHIFT[c.archetype] ?? 0 : 0) - (o.refunded ? 1.5 : 0) + visualRating(p.visual);
+}
+
 function runReviews(d: Day): void {
   const { world, rng } = d;
   const reviewed = new Set<string>();
@@ -635,10 +643,7 @@ function runReviews(d: Day): void {
     if (!rng.chance(chance)) continue;
     const p = productById(world, o.productId);
     if (!p) continue;
-    const paidTwice = o.source === 'upsell' ? d.echo(p) * REVIEWS.echoPenalty : 0;
-    const mean = REVIEWS.ratingIntercept + REVIEWS.ratingSlope * d.pdfQ(p).overall - REVIEWS.promiseGapPenalty * promiseShortfall(d, p) - paidTwice
-      - REVIEWS.overpricePenalty * overprice(o.price, d.niche(p).wtp) + (c ? RATING_SHIFT[c.archetype] ?? 0 : 0) - (o.refunded ? 1.5 : 0);
-    const rating = Math.round(clamp(rng.normal(mean, REVIEWS.ratingSd), 1, 5));
+    const rating = Math.round(clamp(rng.normal(reviewMean(d, p, c, o), REVIEWS.ratingSd), 1, 5));
     reviewProduct(world, rng, p, c, rating, 'product');
     reviewed.add(key);
   }

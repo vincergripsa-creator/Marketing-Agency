@@ -10,13 +10,13 @@ import { CLICHE_TEMPLATES } from '../lexicon.js';
 import { stripNextPrefix } from '../shapes.js';
 import { conflictsWith, containsBanned, scrubDeep } from '../playbook.js';
 import {
-  bare, bestLabel, cap, clauseLabel, clean, composeTitle, endsDangling, hashString, labelOf, lf, lowerFirst, norm, q, qv, sentence, splitSentences, uniqStrings, wordCount, type LocalRng,
+  allText, bare, bestLabel, cap, clauseLabel, clean, composeTitle, endsDangling, hashString, labelOf, lf, lowerFirst, norm, q, qv, sentence, splitSentences, uniqStrings, wordCount, type LocalRng,
 } from '../util.js';
-import { ARCHETYPES, asStep, chaptersFor, SUITES, type ArchetypeDef, type ChapterDef, type Para, type Role } from './archetypes.js';
+import { ARCHETYPES, asStep, chaptersFor, SUITES, topicExamples, topicFillers, type ArchetypeDef, type ChapterDef, type Para, type Role } from './archetypes.js';
 import { belongsToFollowUp, buildNicheCtx, de, FALLBACK, firstPerson, headOf, isInfinitive, titleCaseKeyword, type NicheCtx } from './niche.js';
 import { buildPlan, type PlanModel } from './plan.js';
 import type { BonusSpec, SheetSpec } from './profiles.js';
-import type { MistakePair, Situation } from './knowledge.js';
+import type { MethodStep, MistakePair, Situation } from './knowledge.js';
 
 /** Research item embedded after a colon of ours: lowercase start, its own « : » turned into « — », no final dot. */
 export function inline(s: string): string {
@@ -55,7 +55,7 @@ function labelsFrom(items: readonly string[], max: number, k: number, fallback: 
 export type Kind = Role;
 
 export function chapterCount(c: NicheCtx): number {
-  if (c.upsellOf) return 5;
+  if (c.upsellOf) return c.topic ? 6 : 5;
   const items = c.pains.length + c.phrases.length + c.tips.length + c.steps.length + c.mistakes.length + c.examples.length + c.facts.length;
   if (c.deep && items >= 24) return 7;
   if (items >= 14) return 6;
@@ -169,7 +169,9 @@ const MAX_ERRORS = 6;
 const MAX_SITUATIONS = 6;
 const MAX_STEPS = 8;
 const MIN_WORDS = 2300;
-const MIN_WORDS_SUITE = 1500;
+const MIN_WORDS_SUITE = 2300;
+/** What the humanizer and the fact-checker take out of a follow-up: the draft leaves them the room, the reader still gets the floor. */
+const PASSES_TAKE = 50;
 
 function situationsOf(c: NicheCtx, def: ArchetypeDef): Situation[] {
   const own = c.situations.slice(0, MAX_SITUATIONS);
@@ -262,7 +264,7 @@ export class Draft {
     this.tips = (c.tips.length >= 3 || c.topic ? c.tips : uniqStrings([...c.tips, ...FALLBACK.tips])).slice();
     this.factsLeft = c.facts.slice();
     this.phrases = rng.shuffle(c.phrases);
-    this.examples = rng.shuffle(c.examples);
+    this.examples = [...rng.shuffle(c.examples), ...topicExamples(c)];
     this.models = c.models.slice();
     // the main pain is quoted by the introduction itself: the pool hands out the others
     this.painsLeft = c.pains.filter((p) => norm(lf(p)) !== norm(c.pbClause));
@@ -289,6 +291,13 @@ export class Draft {
   tipsLeft(k: number): string[] { return this.tips.splice(0, k); }
   /** Full sentence of the research, ready to open a paragraph. */
   fact(): string | null { const f = this.take(this.factsLeft); return f ? sentence(f) : null; }
+  /** A research item the guide does not print: the rail adds substance to a page, it never repeats it. A checklist may have printed one already. */
+  note(printed: string): string | null {
+    const unsaid = (s: string): boolean => !printed.includes(norm(bare(s)).slice(0, 40));
+    const take = (list: string[]): string | null => { const i = list.findIndex(unsaid); return i >= 0 ? list.splice(i, 1)[0]! : null; };
+    const item = take(this.factsLeft) ?? take(this.tips);
+    return item ? sentence(item) : null;
+  }
   facts(k: number): string { return Array.from({ length: k }, () => this.fact()).filter(Boolean).join(' '); }
   outcome(): string | null { const o = this.take(this.outcomes); return o ? inline(o) : null; }
   phrase(): string | null { const p = this.take(this.phrases); return p ? inner(p) : null; }
@@ -312,20 +321,17 @@ export class Draft {
 const ORD_M = ['Premier', 'Deuxième', 'Troisième', 'Quatrième', 'Cinquième', 'Sixième', 'Septième', 'Huitième'];
 const ORD_F = ['Première', ...ORD_M.slice(1)];
 
-/** One paragraph per step (up to 6 paragraphs): the action, then why and how. */
+/** A detail that gives an order says how, one that does not says why: its head must say which. */
+const detailHead = (detail: string): string => (/(?<![\p{L}’'])[\p{L}’']{2,}ez\b/u.test(detail.replace(/\b(?:chez|assez)\b/giu, '')) ? 'Comment faire' : 'Pourquoi ça marche');
+
+/** A paragraph per step: the action, then its detail under a run-in head of its own, so a tired reader finds it. */
 function methodParas(d: Draft, def: ArchetypeDef): string[] {
-  const steps = d.c.method.slice(0, MAX_STEPS);
-  const per = Math.max(1, Math.ceil(steps.length / 6));
-  const out: string[] = [];
   const ord = def.stepNoun.fem ? ORD_F : ORD_M;
-  for (let i = 0; i < steps.length; i += per) {
-    out.push(steps.slice(i, i + per).map((s, k) => {
-      const head = `${ord[i + k] ?? ORD_M[7]} ${def.stepNoun.word} : ${inline(s.text)}.`;
-      const why = s.detail || def.whyFallback.map((w) => d.once(w)).find(Boolean) || '';
-      return clean(`${head} ${why}`);
-    }).join(' '));
-  }
-  return out;
+  return d.c.method.slice(0, MAX_STEPS).flatMap((s, i) => {
+    const head = `${ord[i] ?? ORD_M[7]} ${def.stepNoun.word} : ${inline(s.text)}.`;
+    if (s.detail) return [head, `${detailHead(s.detail)} : ${s.detail}`];
+    return [clean(`${head} ${def.whyFallback.map((w) => d.once(w)).find(Boolean) ?? ''}`)];
+  });
 }
 
 /** The counter-move of an unpaired mistake: the tip or step that talks about the same thing. */
@@ -365,42 +371,84 @@ const DEFAULT_SHEET: SheetSpec = {
   rows: ['', '', '', '', '', ''],
 };
 
-/** The chapter's visual. A number never appears here unless it was measured: see the bar_chart note in shared/types.ts. */
+/** A follow-up prints its bonus sheet once: its starting point is read against its own method, line by line. */
+function sheetFor(c: NicheCtx): SheetSpec {
+  if (!c.topic) return c.profile?.sheet ?? DEFAULT_SHEET;
+  return { title: 'Votre point de départ', columns: ['Ce que vous vérifiez', 'Où vous en êtes', 'À faire en premier'], rows: c.method.slice(0, MAX_STEPS).map((m) => labelOf(m.text, 46)) };
+}
+
+/** The link of a loop the method attacks first: the first step that talks about one of its nodes. */
+function breakOf(loop: readonly string[], method: readonly MethodStep[]): number {
+  const stems = (s: string): string[] => norm(s).split(/[^a-z0-9]+/).filter((w) => w.length >= 5).map((w) => w.slice(0, 5));
+  for (const m of method) {
+    const want = new Set(stems(`${m.text} ${m.detail}`));
+    const node = loop.findIndex((n) => stems(n).some((w) => want.has(w)));
+    if (node >= 0) return node;
+  }
+  return 1;
+}
+
+/** A figure says nothing the guide does not: a list item that is not printed elsewhere comes without a number. */
+const noDigit = (labels: readonly string[]): string[] => labels.filter((l) => !/\d/.test(l));
+
+/**
+ * The chapter's visual, fed by what the writer already has (pdf §9.2). `labels` stay filled with a plain version of the same
+ * data, for a renderer without the type. A number never appears here unless it was measured: see the bar_chart note in shared/types.ts.
+ */
 function visualFor(ch: ChapterDef, d: Draft, def: ArchetypeDef, plan: PlanModel, steps: string[]): VisualSpec {
   const c = d.c;
   switch (ch.role) {
     case 'comprendre': {
       const loop = c.profile?.loop;
-      if (loop && !c.upsellOf && c.archetype === 'habitude') return { type: 'steps_diagram', title: 'La boucle à casser', labels: loop, values: [] };
+      if (loop && !c.upsellOf && c.archetype === 'habitude') return { type: 'cycle', title: 'La boucle à casser', labels: loop, values: [], cycle: { nodes: loop, breakAt: breakOf(loop, c.method), center: 'Un seul maillon à casser' } };
       // the few words of a sub-problem are quoted whole: « Versement libératoire oui » is nobody's sentence
       const labels = c.upsellOf ? uniqStrings([...c.ownPains, ...c.phrases].map((x) => cap(bare(headOf(x)))).filter((x) => x.length <= 60)).slice(0, 6)
         : labelsFrom([...c.pains.map(headOf), ...c.phrases], 40, 6, ['Le même problème, encore et encore']);
       return { type: 'icon_grid', title: 'Ce que vous nous décrivez', labels, values: [] };
     }
     case 'diagnostic':
-      return gridVisual(c.profile?.sheet ?? DEFAULT_SHEET);
-    case 'methode':
-      return { type: 'steps_diagram', title: `Les ${steps.length} ${def.stepNoun.word}s en un coup d’œil`, labels: steps.map((s) => labelOf(s, 64)), values: [] };
+      return gridVisual(sheetFor(c));
+    case 'methode': {
+      const stations = c.method.slice(0, MAX_STEPS).map((m) => ({ label: cap(bare(m.text)), when: m.when, duration: m.duration }));
+      return { type: 'step_path', title: `Les ${steps.length} ${def.stepNoun.word}s en un coup d’œil`, labels: steps.map((s) => labelOf(s, 64)), values: [], path: { stations } };
+    }
     case 'erreurs': {
       // whole phrases only: a cut label can say the opposite of the sentence, and each « à faire » stays with its « à éviter »
       const whole = (s: string | null): string | null => { const t = bare(s ?? ''); return t && t.length <= 72 && !endsDangling(t) ? cap(t) : null; };
-      const pairs = rendered(c).map((p) => ({ m: whole(p.mistake), f: whole(fixFor(p, c)) })).filter((p): p is { m: string; f: string } => !!p.m && !!p.f).slice(0, 3);
-      const use = pairs.length ? pairs : [{ m: 'Tout changer d’un coup', f: 'Commencer par un seul point' }];
-      return { type: 'do_dont', title: 'À éviter / à faire à la place', labels: [...use.map((p) => `À éviter : ${lowerFirst(p.m)}`), ...use.map((p) => `À faire : ${lowerFirst(p.f)}`)], values: [] };
+      const pairs = rendered(c).flatMap((p) => { const fix = fixFor(p, c); return fix ? [{ before: cap(bare(p.mistake)), after: cap(bare(fix)) }] : []; });
+      const short = rendered(c).map((p) => ({ m: whole(p.mistake), f: whole(fixFor(p, c)) })).filter((p): p is { m: string; f: string } => !!p.m && !!p.f).slice(0, 3);
+      const use = short.length ? short : [{ m: 'Tout changer d’un coup', f: 'Commencer par un seul point' }];
+      return { type: 'before_after', title: 'À éviter, à faire à la place', labels: [...use.map((p) => `À éviter : ${lowerFirst(p.m)}`), ...use.map((p) => `À faire : ${lowerFirst(p.f)}`)], values: [], pairs: pairs.length ? pairs : use.map((p) => ({ before: p.m, after: p.f })) };
     }
     case 'situations': {
-      // a quote is a customer's or nothing: no aphorism signed by nobody
-      const p = d.pullQuote();
-      if (p) return { type: 'quote', title: 'Une phrase qu’on lit souvent', labels: [cap(bare(p)), 'Phrase relevée dans nos recherches'], values: [] };
-      return { type: 'icon_grid', title: 'Les cas de ce chapitre', labels: labelsFrom(situationsOf(c, def).map((s) => s.when), 56, 6), values: [] };
+      const own = situationsOf(c, def);
+      const known = new Set(own.map((s) => norm(s.when)));
+      const cases = [...own, ...def.situationsFallback.filter((s) => !known.has(norm(s.when)))].map((s) => ({ when: `Si ${lf(s.when)}`, then: sentence(s.what) }));
+      return { type: 'decision_tree', title: 'Si ça coince, que faire ?', labels: labelsFrom(own.map((s) => s.when), 56, 6), values: [], tree: { question: 'Que faire dans ce cas ?', cases } };
     }
     case 'programme':
       return gridVisual(plan.sheet);
     case 'durer': {
       const labels = labelsFrom(steps, 56, 6, c.keep);
-      return { type: 'icon_grid', title: 'Vos réflexes pour la suite', labels, values: [] };
+      const list = (items: readonly string[]): string[] => noDigit(labelsFrom(items, 60, 5)).slice(0, 3);
+      const cells: [string[], string[], string[], string[]] = [list(c.keep), list(rendered(c).map((p) => p.mistake)), list(c.tips), list(c.observe)];
+      return { type: 'matrix', title: 'Vos réflexes pour la suite', labels, values: [], matrix: { heads: ['À garder', 'À arrêter', 'À tester', 'À surveiller'], cells } };
     }
   }
+}
+
+/** The second visual of a chapter: its `visual` stays the tool the reader fills in. */
+function figureFor(ch: ChapterDef, c: NicheCtx, plan: PlanModel): VisualSpec | null {
+  if (ch.role === 'diagnostic') {
+    // the ruler stays blank: the reader circles, nothing on it is a value. A follow-up has no `observe`: its own mistakes are what to measure
+    const rows = noDigit(labelsFrom([...c.observe, ...rendered(c).map((p) => p.mistake)], 60, 5)).slice(0, 4);
+    if (!rows.length) return null;
+    return { type: 'gauge', title: 'Où vous en êtes aujourd’hui', labels: rows, values: [], gauge: { rows, low: 'Pas du tout', high: 'Tout à fait' } };
+  }
+  if (ch.role !== 'programme') return null;
+  const tracks = plan.rows.flatMap((r) => r.tracks);
+  if (!tracks.length) return null;
+  return { type: 'plan_path', title: `Votre plan de ${c.dur.n} ${c.dur.unit}, en un coup d’œil`, labels: tracks.map((t) => t.label), values: [], plan: { ...plan.span, tracks } };
 }
 
 const DURER_STEPS = ['Noter ce qui a le mieux marché', 'Choisir ce que vous gardez pour la suite', 'Prévoir une date pour refaire le point'];
@@ -421,7 +469,7 @@ function stepsFor(ch: ChapterDef, d: Draft, plan: PlanModel): string[] {
     case 'erreurs':
     case 'situations': return framing;
     case 'diagnostic': {
-      const sheet = c.profile?.sheet;
+      const sheet = c.topic || c.profile ? sheetFor(c) : null;
       return sheet ? [framing[0]!, `Remplir chaque ligne : ${sheet.columns.map((x) => lf(x)).join(', ')}`, ...framing.slice(2)] : framing;
     }
   }
@@ -440,7 +488,7 @@ function checklistFor(ch: ChapterDef, steps: string[], c: NicheCtx): string[] {
     }
     case 'diagnostic': {
       const framing = ch.checks?.(c) ?? DURER_CHECKS;
-      return c.profile ? [`${c.profile.sheet.title} : fait`, framing[0]!, framing[2]!] : framing;
+      return c.profile ? [`${sheetFor(c).title} : fait`, framing[0]!, framing[2]!] : framing;
     }
     // « Je ne fais plus : ne pas déclarer » says the opposite of what it means
     case 'erreurs': return rendered(c).map((p) => `${/^(ne|n['’])/i.test(bare(p.mistake)) ? 'Je corrige' : 'Je ne fais plus'} : ${short(p.mistake)}`);
@@ -466,14 +514,16 @@ function buildChapter(ch: ChapterDef, title: string, d: Draft, def: ArchetypeDef
   ];
   const steps = uniqStrings(stepsFor(ch, d, plan)).map(asStep);
   const visual = visualFor(ch, d, def, plan, steps);
+  const figure = figureFor(ch, c, plan);
   const chapter: ChapterContent = {
     title: clean(title),
     intro: ch.intro(c),
     paragraphs,
     steps,
-    example: d.example() ?? (c.examples.length ? null : situationExample(d)),
+    example: d.example() ?? situationExample(d),
     checklist: checklistFor(ch, steps, c).map((x) => cap(clean(x))),
     visual,
+    ...(figure ? { figure } : {}),
   };
   return { chapter, role: ch.role };
 }
@@ -548,7 +598,28 @@ export function dropRepeats(content: PdfContent): void {
   }
 }
 
-export interface DraftOptions { banned: string[] }
+/** `flaw` and `flawRng` come with a writer's talent (talent §4.4): absent, the draft reads as it always did. */
+export interface DraftOptions { banned: string[]; t?: number; flaw?: number; flawRng?: LocalRng; draw?: number }
+
+/** A time or a quantity in a step: what makes it something to do rather than something to think about. */
+const DURATIONS = /\s*\([^()]*\d[^()]*\)|,?\s+(?:au bout de|pendant|durant|en|sur|pour|sous|dans|à|a|de|d’|chaque|tous les|toutes les)?\s*\d+(?:\s*(?:à|ou|et)\s*\d+)?\s*(?:min(?:utes?)?|h|heures?|jours?|nuits?|soirs?|semaines?|mois|fois)\b(?:\s+près)?/giu;
+
+/**
+ * What a weak writer leaves in a guide, chapter by chapter, each one read by the usual scorers: a real cliché in a paragraph
+ * (`humanTone`), the worked example forgotten (`structure`, half as often), a chapter's steps that lost their durations (`actionability`).
+ */
+function applyGuideFlaws(content: PdfContent, banned: readonly string[], c: NicheCtx, f: number, flawRng: LocalRng): void {
+  const pool = flawRng.shuffle(CLICHE_TEMPLATES.filter((t) => !containsBanned(t, banned)));
+  content.chapters.forEach((ch, i) => {
+    const cliche = pool[i % Math.max(1, pool.length)];
+    if (flawRng.chance(f) && cliche && ch.paragraphs.length) {
+      const last = ch.paragraphs.length - 1;
+      ch.paragraphs[last] = `${ch.paragraphs[last]} ${cliche.replace('{sujet}', c.subj.noun).replace('{diff}', c.subj.fem ? 'différente' : 'différent')}`;
+    }
+    if (flawRng.chance(f / 2)) ch.example = null;
+    if (flawRng.chance(f)) ch.steps = ch.steps.map((s) => s.replace(DURATIONS, ''));
+  });
+}
 
 /** Chapter definition of each outline chapter: by kind, else by role, else by position. */
 function matchChapters(outline: Outline, c: NicheCtx, def: ArchetypeDef): ChapterDef[] {
@@ -616,8 +687,8 @@ export function heuristicPdfContent(
 
   // padding is for thin research only: a well-researched guide stays dense, and it is trimmed if it runs over 4500 words
   let wc = pdfWordCount(content);
-  const fillers = def.fillers.slice();
-  const floor = c.topic ? MIN_WORDS_SUITE : MIN_WORDS;
+  const fillers = [...topicFillers(c), ...def.fillers];
+  const floor = c.topic ? MIN_WORDS_SUITE + PASSES_TAKE : MIN_WORDS;
   while (wc < floor && fillers.length) {
     const target = built.map((b) => b.chapter).filter((ch) => ch.paragraphs.length < 8).sort((a, b) => a.paragraphs.length - b.paragraphs.length)[0];
     if (!target) break;
@@ -642,7 +713,16 @@ export function heuristicPdfContent(
     wc = pdfWordCount(content);
   }
 
+  // the rail comes last: it gets what the text left, so a page never says the same thing twice
+  const printed = norm(allText(content));
+  for (const b of built) {
+    const quote = d.pullQuote();
+    const note = d.note(printed);
+    if (note || quote) b.chapter.margin = { note, quote: quote ? cap(bare(quote)) : null };
+  }
+
   insertFlatSentences(content, c, rng, opts.banned, built.findIndex((b) => b.role === 'programme'));
+  if (opts.flaw && opts.flawRng) applyGuideFlaws(content, opts.banned, c, opts.flaw, opts.flawRng);
   dropRepeats(content);
   const out = scrubDeep(content, opts.banned);
   out.wordCount = pdfWordCount(out);

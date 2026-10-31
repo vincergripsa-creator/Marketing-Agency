@@ -5,7 +5,7 @@
 import { clamp } from '../core/index.js';
 import type {
   AdCreative, ChapterContent, DesignSpec, InboxMessage, MessageIntent, PdfContent, Product, QualityReport, SalesPage,
-  SupportReplyInput, VoiceOfCustomer,
+  SupportReplyInput, VisualReport, VoiceOfCustomer,
 } from '../shared.js';
 import { countHype, findBannedClaims, findPageClaims } from './compliance.js';
 import { countPhrase, countWords, hasPhrase, keyTokens, norm, overlap, stemSet } from './text.js';
@@ -133,6 +133,21 @@ export function pdfText(content: PdfContent): string {
     ...(content.chapters ?? []).map(chapterText), content.bonus ? chapterText(content.bonus) : '',
     content.nextStep?.title ?? '', content.nextStep?.text ?? '',
   ].join('\n');
+}
+
+function stringsIn(v: unknown): string[] {
+  if (typeof v === 'string') return [v];
+  if (Array.isArray(v)) return v.flatMap(stringsIn);
+  return v && typeof v === 'object' ? Object.values(v).flatMap(stringsIn) : [];
+}
+
+/**
+ * What a guide prints outside its prose: the rail, the figures, the sheets, the « how to » box. The scorers of the text stay
+ * on `pdfText`, a table cell is no sentence. A claim is a claim wherever the reader meets it: compliance reads this too.
+ */
+function printedAside(content: PdfContent): string[] {
+  const chapters = [...(content?.chapters ?? []), ...(content?.bonus ? [content.bonus] : [])];
+  return stringsIn([content?.howTo, chapters.map((c) => [c.margin, c.visual, c.figure])]);
 }
 
 const CONCRETE_RE = /\d|\bmin\b|minutes?|heures?|\bh\b|jours?|semaines?|fois|€|%/i;
@@ -366,8 +381,10 @@ const ITEMS_PER_CHAPTER = 7;
 const BROKEN_PROMISE_COST = 30;
 /** promiseMatch lost per claim that overstates what the guide really holds. */
 const STRETCHED_CLAIM_COST = 15;
+/** Under this `interior`, the pages cannot ship whatever the text is worth. */
+const HOLLOW_INTERIOR = 50;
 
-export function scorePdf(content: PdfContent, ctx: { audience: string; problem: string; voc?: VoiceOfCustomer; design?: DesignSpec | null }): QualityReport {
+export function scorePdf(content: PdfContent, ctx: { audience: string; problem: string; voc?: VoiceOfCustomer; design?: DesignSpec | null; visual?: VisualReport | null }): QualityReport {
   const issues = new IssueList();
   const chapters = content?.chapters ?? [];
   const nCh = chapters.length;
@@ -478,10 +495,15 @@ export function scorePdf(content: PdfContent, ctx: { audience: string; problem: 
   }
   if (ctx.design) design += 25;
   else issues.push('Aucune charte graphique (DesignSpec) : la mise en page sera générique.');
+  // the real pages, once they exist. The weight stays .04: visual has its own way to the market (sim/visual.ts)
+  if (ctx.visual) {
+    design = ctx.visual.interior;
+    if (design < HOLLOW_INTERIOR) issues.block(ctx.visual.issues[0] ?? 'Mise en page creuse : des pages à moitié vides.');
+  }
 
   // compliance — risky claims (health, money, guarantees)
   issues.section('compliance');
-  const banned = findBannedClaims([full], ctx.voc?.bannedClaims ?? []);
+  const banned = findBannedClaims([full, ...printedAside(content)], ctx.voc?.bannedClaims ?? []);
   const compliance = 100 - banned.length * 18;
   if (banned.length) issues.block(`Allégations risquées à retirer : ${quote(banned, 4)}.`);
 
@@ -592,7 +614,7 @@ export function scoreSalesPage(sp: SalesPage, product: Product, voc?: VoiceOfCus
   }
   if (objections.length) human += 15 * (answered / objections.length);
 
-  let design = 40 + (product.design ? 30 : 0);
+  let design = product.visual ? 0.7 * product.visual.cover : 40 + (product.design ? 30 : 0);
   if (blurbs.length) design += 30 * (blurbs.filter((b) => (b.title ?? '').length > 3).length / blurbs.length);
   if (objections.length) design = Math.min(100, design) * (0.85 + 0.15 * (objections.filter((o) => (o.a ?? '').length >= 20).length / objections.length));
 

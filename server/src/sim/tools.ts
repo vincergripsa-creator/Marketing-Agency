@@ -406,7 +406,7 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
     }
 
     const niche = nicheOf(world, p);
-    const pdfQ = p.content ? scorePdf(p.content, { audience: p.audience, problem: p.problem, voc: niche.voc, design: p.design }).overall : 40;
+    const pdfQ = p.content ? scorePdf(p.content, { audience: p.audience, problem: p.problem, voc: niche.voc, design: p.design, visual: p.visual }).overall : 40;
     const upRatio = creator.askUpfront > 0 ? Math.min(1, upfront / creator.askUpfront) : 1;
     let score = 0.35 + 1.5 * (commission - creator.askCommission) + 0.45 * (upRatio - 1);
     if (p.stats.rating >= 4) score += 0.1;

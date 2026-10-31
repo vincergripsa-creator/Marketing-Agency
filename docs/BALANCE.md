@@ -93,6 +93,24 @@ L'apprentissage est **visible** quand le CTR et le ROAS des jours 31-60 battent 
 | `runtime/acquisition.ts` — remboursements qui bloquent un produit | > 15 % (significatif) → pause, puis arrêt à la v3 | idem seulement si le produit ne rembourse plus sa pub nette des remboursements (ROAS < 1,1) ou si les remboursements dépassent 25 % | En `cauchemar`, les chasseurs de remboursement font 10-17 % des commandes : le meilleur produit d'une partie (ROAS 1,4) était mis en pause puis tué. |
 | `sim/tools.ts` — troll « nourri » | 1 étoile sur la boutique, acheteur ou non | 1 étoile seulement s'il a acheté ; sinon il revient en message | Des guides notés 99/100 étaient tués par 3 avis 1 étoile de trolls qui n'avaient rien acheté (26 des 33 avis ≤ 2 étoiles sur 4 parties). |
 
+### Empreinte de référence (`golden`)
+
+Le run de référence (entreprise d'avant la V1, 25 jours, graine 7) ne se réenregistre que pour une décision écrite (D43 de `docs/v1/PLAN.md`), avec l'ancienne et la nouvelle empreinte ici. Toute autre différence est un bug.
+
+| Étape | Raison | Ancienne empreinte | Nouvelle empreinte | Ce qui a bougé |
+|---|---|---|---|---|
+| P8.1 | Texte des guides : détail des étapes sous son propre intertitre, plan sans lignes répétées, exemple pour chaque chapitre, citations et notes en marge | `dc93c9d2173be97aade7336c20a776dd70652baf` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `ledger` et `kpis` (le texte change la note de qualité, donc les ventes) ; `tasks` et `events` inchangés. Enregistrée sur `HEAD` plus les seuls fichiers de P8.1 |
+
+### Score visuel : à lire à S14, avant le contrôle apparié
+
+Mesuré à la fin de S8, rien n'a été réglé dessus (`sim/visual.ts` reste celui de pdf §12.4).
+
+- **`VISUAL.ref = 70` n'est pas le niveau d'une agence qui démarre,** contrairement à ce que disent pdf §12.4 et le commentaire de `sim/visual.ts`. Sur cinq runs de 60 jours (graines 1, 2, 3, 7, 42), `visual.overall` moyen va de 83,6 à 86,7, le plus bas à 72,3. À 85, chaque produit gagne dès sa première vente environ +7,5 % de conversion, +5 % de prix acceptable, +0,2 étoile et −1,3 point de remboursement.
+- **Les cibles de finition 55, 72, 88 de pdf §12.2 ne sont pas atteintes :** `interior` mesuré 79, 95, 96 sur les trois guides de `visual.test.ts` (`cover` 75, 77, 78). Tout l'écart est entre la finition 0 et la finition 1.
+- **Conséquence pour la compétition `design` :** le par est à 75 (écart-type 10), tous les graphistes le battent, et les finitions 1 et 2 ne diffèrent que de 2 points d'`overall` moyen quand les guides d'un même run vont de 72 à 90. Le contrôle apparié de pdf §12.5 (designers à 0,25 contre 1) compare justement ces deux finitions : s'attendre à un résultat mince, voire « non prouvé ».
+
+À S14 : soit `ref` passe au niveau de départ mesuré, soit le commentaire de `sim/visual.ts` et pdf §12.4 sont corrigés.
+
 ## 4. Résultats
 
 Banc d'essai final : graines 1, 2, 3, 7, 42 × 60 jours × 3 difficultés, 500 € de départ, cerveau heuristique (`npm run balance`, 28 s sur 8 processus).
