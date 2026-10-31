@@ -141,13 +141,14 @@ export const boutiqueHandlers: HandlerMap = {
       let why: string;
       if (reason === 'experiment' && exp && exp.variants.length) {
         price = Number(exp.variants[ctx.world.day % exp.variants.length]); why = `test A/B en cours (${exp.variants.join(' € vs ')} €)`;
-      } else if ((reason === 'winner' || reason === 'controle' || reason === 'baisse' || reason === 'fondateur') && (numOf(task.input.price) ?? 0) > 0) {
-        // Measured decisions of the CEO (strategy.priceMove) and the founder's: they beat the playbook's older target price.
+      } else if ((reason === 'winner' || reason === 'controle' || reason === 'baisse' || reason === 'fondateur' || reason === 'memoire') && (numOf(task.input.price) ?? 0) > 0) {
+        // Measured decisions of the CEO (strategy.priceMove), the founder's and what a reopened niche measured before: they beat the playbook's older target price.
         price = numOf(task.input.price)!;
         why = reason === 'fondateur' ? 'décision du fondateur'
           : reason === 'winner' ? 'gagnant du test A/B de prix (revenu par visiteur)'
             : reason === 'controle' ? 'test de prix sans gagnant : retour au prix de contrôle'
-              : 'la hausse faisait baisser le revenu par visiteur : retour au prix précédent';
+              : reason === 'memoire' ? 'meilleur prix mesuré sur cette niche au dernier essai'
+                : 'la hausse faisait baisser le revenu par visiteur : retour au prix précédent';
       } else if (target !== null) {
         price = nearestArm(PRICES, target); why = `prix cible du playbook (${target} €)`;
       } else if (reason === 'initial' || !product.launchedDay) {

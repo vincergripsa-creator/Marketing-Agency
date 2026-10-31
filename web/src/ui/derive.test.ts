@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Activity, CompanySnapshot, LedgerEntry, SessionInfo, Task, TaskStats, WorldEvent } from '../../../shared/types';
 import { asSession, brainNotePath, fileUrl } from '../api';
-import { godDataAfter, withSession, withTick } from '../store';
+import { godDataAfter, withPlaybooks, withSession, withTick } from '../store';
 import { mockSnapshot } from '../world/mockSnapshot';
 import {
   activityProductId, approvalAsk, budgetView, currentRunPill, customerLabel, deptCalendar, doneTasksByDay, doneTasksTotal, failedTasksTotal, goalLate, goalTitle, hasWaiver, ledgerView,
@@ -290,6 +290,16 @@ describe('store — what comes between two snapshots', () => {
   it('a tick without agents (older server) keeps them', () => {
     const s = snap();
     expect(withTick(s, { day: 11, tick: 2, phase: 'work', finance: s.finance }).company).toBe(s.company);
+  });
+  it('the stream carries no playbooks: the panel keeps what this run already gave it, and never another run\'s', () => {
+    const full = snap();
+    const rules = { agent: ['Une règle apprise'] };
+    const prev = { ...full, company: { ...full.company, playbooks: rules } };
+    const stream = { ...full, company: { ...full.company, playbooks: {} } };
+    expect(withPlaybooks(stream, prev, true).company.playbooks).toBe(rules);
+    expect(withPlaybooks(stream, prev, false)).toBe(stream);
+    expect(withPlaybooks(stream, null, true)).toBe(stream);
+    expect(withPlaybooks(prev, stream, true)).toBe(prev); // a full snapshot speaks for itself
   });
   it('hidden truth never survives a run switch', () => {
     const god = { niches: [], intents: { msg_1: 'troll' as const } };

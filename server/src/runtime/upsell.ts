@@ -28,7 +28,8 @@ function repeats(text: string, other: string): boolean {
   return small.length >= MIN_REPEAT_CHARS && big.includes(small);
 }
 
-const nicheProducts = (world: WorldState, nicheId: string): Product[] => world.company.products.filter((p) => p.nicheId === nicheId);
+/** Guides, so never a kit: it repeats its guide on purpose, and it says nothing a follow-up should avoid. */
+const nicheProducts = (world: WorldState, nicheId: string): Product[] => world.company.products.filter((p) => p.nicheId === nicheId && p.kind !== 'kit');
 
 /** Products on sale or on their way in the niche of `product`. */
 const rivals = (world: WorldState, product: Product): Product[] => nicheProducts(world, product.nicheId).filter((p) => p.id !== product.id && p.status !== 'killed');
@@ -44,6 +45,7 @@ export function promiseTaken(world: WorldState, product: Product, promise: strin
 
 /** Why `product` cannot go on sale next to the other products of its niche (French), or null. */
 export function nicheCollision(world: WorldState, product: Product): string | null {
+  if (product.kind === 'kit') return null;
   const title = titleTaken(world, product, product.title);
   if (title) return `le titre existe déjà dans cette niche (« ${short(title.title, 60)} »)`;
   const promise = product.content ? promiseTaken(world, product, product.content.promise) : undefined;
@@ -92,8 +94,18 @@ export function linkUpsell(ctx: RuntimeCtx, parent: Product, upsell: Product, mi
   reprintParent(ctx, parent, `Ajouter « La suite est ici » au guide « ${short(parent.title, 40)} »`, missionId);
 }
 
-/** The upsell is gone: the parent's last page stops selling it. */
+/** A kit sells at its guide's checkout and nowhere else: it leaves the shop with it. */
+function retireKit(ctx: RuntimeCtx, guide: Product): void {
+  const kit = ctx.world.company.products.find((p) => p.id === guide.bumpProductId);
+  if (!kit || kit.status === 'killed') return;
+  if (kit.launchedDay !== null) ctx.tools.setProductStatus(kit.id, 'killed');
+  kit.status = 'killed';
+  kit.decision = { day: ctx.world.day, status: 'killed', reason: `son guide « ${short(guide.title, 60)} » est arrêté` };
+}
+
+/** The upsell is gone: the parent's last page stops selling it, and its kit goes with it. */
 export function unlinkUpsell(ctx: RuntimeCtx, upsell: Product): void {
+  retireKit(ctx, upsell);
   const parent = parentOf(ctx.world, upsell.id);
   if (!parent?.content || parent.status === 'killed' || parent.content.nextStep?.upsellProductId !== upsell.id) return;
   parent.content.nextStep = nextStepFor({ audience: withArticle(parent.audience), upsell: null });

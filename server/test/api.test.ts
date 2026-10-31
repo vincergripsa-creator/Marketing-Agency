@@ -18,7 +18,7 @@ import {
 import { createAgencyServer, devLandingPage, type SessionLike } from '../src/api/server.js';
 import { SseHub, sseFrame, type SnapshotSource } from '../src/api/sse.js';
 import {
-  buildSnapshot, DEFAULT_LIMITS, estimateFinance, serializeLiveSnapshot, serializeSnapshot, shrinkValue, SNAPSHOT_BUDGET_BYTES, taskStatsOf, TIGHT_LIMITS, trimContent, trimInbox, trimTasks,
+  buildSnapshot, DEFAULT_LIMITS, estimateFinance, LIVE_LIMITS, serializeLiveSnapshot, serializeSnapshot, shrinkValue, SNAPSHOT_BUDGET_BYTES, taskStatsOf, TIGHT_LIMITS, trimContent, trimInbox, trimTasks,
 } from '../src/api/trim.js';
 import { LEAN_ORG, LEGACY_ORG } from '../src/runtime/org/constants.js';
 import { minRunCash } from '../src/runtime/org/payroll.js';
@@ -657,6 +657,68 @@ describe('what the UI may see', () => {
     const snap = buildSnapshot(w, FINANCE, false, TIGHT_LIMITS);
     expect(snap.company.tasks.filter((t) => t.status === 'done').length).toBeLessThanOrEqual(TIGHT_LIMITS.doneTasks);
     expect(snap.taskStats!.days.find((d) => d.day === 2)!.done).toBe(500);
+  });
+});
+
+describe('what light views keep (scale §7.1, ui §3.1)', () => {
+  const report = { overall: 82, specificity: 80, structure: 80, actionability: 80, humanTone: 80, design: 80, promiseMatch: 80, compliance: 90, issues: ['Une remarque.'], evaluator: 'heuristic' as const };
+  const design = { palette: { bg: '#fff', primary: '#333', secondary: '#666', accent: '#f90', ink: '#111', soft: '#eee' }, motif: 'moon' as const, coverLayout: 'centered' as const, titleFont: 'Helvetica-Bold' as const, bodyFont: 'Helvetica' as const, seed: 1 };
+
+  it('a guide on sale keeps what its card reads: the next step, the palette, the overall score and its remarks', () => {
+    const w = makeWorld();
+    const p = w.company.products[0]!;
+    Object.assign(p, { status: 'live', design, quality: report, salesQuality: report, brief: { angle: 'Le brief' }, pagePrint: 'empreinte' });
+    for (const limits of [TIGHT_LIMITS, LIVE_LIMITS]) {
+      const card = buildSnapshot(w, FINANCE, false, limits).company.products[0]!;
+      expect(card.content!.nextStep).toEqual(p.content!.nextStep);
+      expect(card.design).toEqual({ palette: design.palette });
+      expect(card.quality).toEqual({ overall: 82, issues: ['Une remarque.'] });
+      expect(card.salesQuality).toBeNull();
+      expect(card).not.toHaveProperty('brief');
+      expect(card).not.toHaveProperty('pagePrint');
+      expect(card.content!.title).toBe('');
+    }
+    expect(buildSnapshot(w, FINANCE, false, DEFAULT_LIMITS).company.products[0]).toMatchObject({ design, quality: report, salesQuality: report });
+  });
+
+  it('what a reviewer cannot let through stays on the card', () => {
+    const w = makeWorld();
+    const blocking = [{ dimension: 'compliance' as const, text: 'Promesse de santé.' }];
+    Object.assign(w.company.products[0]!, { status: 'live', quality: { ...report, blocking } });
+    expect(buildSnapshot(w, FINANCE, false, TIGHT_LIMITS).company.products[0]!.quality).toEqual({ overall: 82, issues: ['Une remarque.'], blocking });
+  });
+
+  it('the stream leaves the playbooks to the panel, GET /api/state keeps them', () => {
+    const w = makeWorld();
+    expect(w.company.playbooks).not.toEqual({});
+    expect(buildSnapshot(w, FINANCE, false, LIVE_LIMITS).company.playbooks).toEqual({});
+    expect(buildSnapshot(w, FINANCE, false, TIGHT_LIMITS).company.playbooks).toEqual(w.company.playbooks);
+    expect(buildSnapshot(w, FINANCE, false, DEFAULT_LIMITS).company.playbooks).toEqual(w.company.playbooks);
+  });
+
+  it('no light view carries the VoC or the competitors: no panel reads them, the full view keeps them', () => {
+    const w = makeWorld();
+    w.company.research.voc = { niche_sommeil: { nicheId: 'niche_sommeil' } } as unknown as WorldState['company']['research']['voc'];
+    w.company.research.competitors = { niche_sommeil: [] } as unknown as WorldState['company']['research']['competitors'];
+    for (const limits of [TIGHT_LIMITS, LIVE_LIMITS]) {
+      const { research } = buildSnapshot(w, FINANCE, false, limits).company;
+      expect([research.voc, research.competitors]).toEqual([{}, {}]);
+    }
+    const { research } = buildSnapshot(w, FINANCE, false, DEFAULT_LIMITS).company;
+    expect(research.voc).toEqual(w.company.research.voc);
+    expect(research.competitors).toEqual(w.company.research.competitors);
+  });
+
+  it('guides, covers and reports stop at 120 in a light view, the latest ones, and leave the ad frames their own bound', () => {
+    const w = makeWorld();
+    const row = (id: string, kind: 'pdf' | 'ad_preview') => ({ id, kind, title: id, productId: 'prd_1', creativeId: null, path: 'files/x.pdf', createdBy: 'ag_margaux', day: 1, quality: 80 });
+    w.company.deliverables = [...Array.from({ length: 300 }, (_, i) => row(`dlv_${i}`, 'pdf')), ...Array.from({ length: 200 }, (_, i) => row(`adf_${i}`, 'ad_preview'))];
+    const shown = buildSnapshot(w, FINANCE, false, TIGHT_LIMITS).company.deliverables;
+    expect(shown.filter((d) => d.kind === 'pdf')).toHaveLength(120);
+    expect(shown.filter((d) => d.kind === 'pdf').at(-1)!.id).toBe('dlv_299');
+    expect(shown.filter((d) => d.kind === 'ad_preview')).toHaveLength(TIGHT_LIMITS.deliverables);
+    expect(buildSnapshot(w, FINANCE, false, LIVE_LIMITS).company.deliverables).toHaveLength(120);
+    expect(buildSnapshot(w, FINANCE, false, DEFAULT_LIMITS).company.deliverables.filter((d) => d.kind === 'pdf')).toHaveLength(300);
   });
 });
 

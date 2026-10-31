@@ -1,6 +1,7 @@
-/** The growth pillar: Monday's CFO, stage and portfolio behind growthOn, and what a week closes, in both arms. */
+/** The growth pillar: Monday's CFO, stage and portfolio and the list's morning behind growthOn, and what a week closes, in both arms. */
 import type { ArchiveBatch } from '../contracts.js';
 import type { CompanyState, GrowthState, WorldState } from '../shared.js';
+import { audienceMorning, queueLaunch, refuseEmail, rewardAngles } from './audience.js';
 import { cfoMonday } from './cfo.js';
 import { compactWorld } from './compaction.js';
 import type { RuntimeCtx } from './ctx.js';
@@ -54,14 +55,21 @@ export const growthPillar: Pillar = {
     const w = ctx.world;
     if (!growthOn(w)) return;
     // A tick that failed plays its morning again: the same Monday must not count as a second check of a gate.
-    if (w.day % 7 !== 1 || w.company.growth?.allocation?.day === w.day) {
-      dropStage(ctx);
-      return;
+    if (w.day % 7 !== 1 || w.company.growth?.allocation?.day === w.day) dropStage(ctx);
+    else {
+      cfoMonday(ctx);
+      advanceStage(ctx);
+      await ctx.ritual('portfolio_review', officerId(w, 'ceo'), `Revue du portefeuille, semaine ${Math.ceil(w.day / 7)}`);
     }
-    cfoMonday(ctx);
-    advanceStage(ctx);
-    await ctx.ritual('portfolio_review', officerId(w, 'ceo'), `Revue du portefeuille, semaine ${Math.ceil(w.day / 7)}`);
+    await audienceMorning(ctx);
   },
+  marketClosed(ctx) {
+    if (growthOn(ctx.world)) rewardAngles(ctx);
+  },
+  taskDone(ctx, task) {
+    if (task.kind === 'publish_product') queueLaunch(ctx, task);
+  },
+  refused: refuseEmail,
   async eveningEnd(ctx) {
     const w = ctx.world;
     const weeks = sundaysDue(w).map((day) => weekRollup(w, day - 6, day));

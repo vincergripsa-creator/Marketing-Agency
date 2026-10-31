@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DayPlanItem, MindContext, RunPaths } from '../src/contracts.js';
-import type { AdCreative, AgentState, Campaign, ChannelId, DailyAdStats, Order, Product, RoleId, ScenarioConfig, Task, WorldState } from '../src/shared.js';
+import type { AdCreative, AgentState, Campaign, ChannelId, DailyAdStats, Lesson, Order, PortfolioLine, PortfolioVerdict, Product, RoleId, ScenarioConfig, Task, WorldState } from '../src/shared.js';
 import { CHANNELS, DROPPED_REASON } from '../src/shared.js';
 import { createBrainVault } from '../src/learning/index.js';
 import { createContentEngine } from '../src/minds/index.js';
@@ -623,6 +623,35 @@ describe('discovery (channels §7.2)', () => {
     const items = plan(l);
     expect(of(items, 'adapt_creative')).toEqual([]);
     expect(of(items, 'launch_campaign')).toEqual([]);
+  });
+
+  it('a guide TikTok has closed has no arm to stay on: its paid test can only run elsewhere', async () => {
+    const closedOnTikTok = async (over: Partial<ScenarioConfig>) => {
+      const l = await testing(['meta'], over);
+      const { world: w, p } = l;
+      favour(w, p.nicheId, 'tiktok');
+      w.company.lessons.push({ key: learning.LESSON_KEYS.niche(p.nicheId), insight: 'Couper les pubs de la niche : elles perdent.', day: w.day } as Lesson);
+      expect(productPaidBlock(w, p)?.hard).toBe(true);
+      expect(productPaidBlock(w, p, 'meta')?.hard).toBeFalsy();
+      return of(plan(l), 'adapt_creative').map((i) => i.input.channel);
+    };
+    expect(await closedOnTikTok({})).toEqual(['meta', 'meta']);
+    expect(await closedOnTikTok({ scaling: false })).toEqual([]); // the control keeps its old draw
+  });
+
+  it('the Monday queue goes first: one test left goes to the guide waiting for its paid test, not to one that only keeps', async () => {
+    const l = await testing(['meta'], { startingCash: 500 });
+    const { world: w, p: keep } = l;
+    const wait = addProduct(w, 'potager-balcon', 'prd_2');
+    for (const x of [keep, wait]) {
+      addCreative(w, x, { ratio: '4:5', review: { status: 'pending', reason: null, day: null }, channelReviews: { meta: { status: 'approved', reason: null, day: 2 } } });
+      favour(w, x.nicheId, 'meta');
+    }
+    const launched = () => of(plan(l), 'launch_campaign').map((i) => i.input.productId);
+    expect(launched()).toEqual([keep.id]); // no review yet: the score, then the id
+    const line = (productId: string, verdict: PortfolioVerdict) => ({ productId, verdict }) as PortfolioLine;
+    w.company.growth!.portfolio = { day: w.day, week: 2, lines: [line(keep.id, 'keep'), line(wait.id, 'test')], slots: { used: 2, max: 3 }, notes: [] };
+    expect(launched()).toEqual([wait.id]);
   });
 
   it('a Privilégier lesson weighs one alpha while it stands, and writes nothing to the arm', async () => {

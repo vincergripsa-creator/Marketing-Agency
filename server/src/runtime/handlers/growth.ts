@@ -17,6 +17,7 @@ import { COMPACT } from '../compaction.js';
 import { adsHold, REFUSAL_COOLDOWN_DAYS } from '../holds.js';
 import { officerId, ownersOfAny, roleHolders } from '../org/officers.js';
 import { dropTask } from '../pipeline.js';
+import { budgetQueue } from '../portfolio.js';
 import { growthOn, policyOf } from '../stages.js';
 import { STREAM } from '../streams.js';
 import { armSharp, bestDraft, effectiveT, pruneRead, shrunkRoas } from '../talent/craft.js';
@@ -510,7 +511,7 @@ export const growthHandlers: HandlerMap = {
       const budget = currentBudget(ctx.world);
       // A task that names a channel is that channel's buyer's. Without one it reads them all: no campaign goes without its stop-loss.
       const only = task.input.channel === undefined ? null : taskChannel(task);
-      const campaigns = activeCampaigns(ctx.world).filter((c) => !only || channelOf(c) === only);
+      const campaigns = budgetQueue(ctx.world, activeCampaigns(ctx.world).filter((c) => !only || channelOf(c) === only), (c) => c.productId);
       if (!campaigns.length) return { summary: 'Aucune campagne active.', skipReview: true, output: { actions: [] } };
       const channels = uniq(campaigns.map(channelOf));
       const stats = channels.flatMap((ch) => ctx.tools.getAdStats(Math.max(1, ctx.world.day - 7), ch));

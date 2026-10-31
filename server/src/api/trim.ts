@@ -4,8 +4,8 @@
  */
 import { summarizeLedger } from '../core/index.js';
 import type {
-  AdCreative, AdTotals, AgentId, ArchiveCounters, Campaign, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DailyKpi, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, FinanceSnapshot,
-  InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, TalentTruthView, Task, TaskKind, TaskStats, TaskTotals, VisualReport, WorldState,
+  AdCreative, AdTotals, AgentId, ArchiveCounters, Campaign, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DailyKpi, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, DesignSpec, FinanceSnapshot,
+  InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, QualityReport, TalentTruthView, Task, TaskKind, TaskStats, TaskTotals, VisualReport, WorldState,
 } from '../shared.js';
 import { addAdTotals } from '../sim/adTotals.js';
 import { announcedOutageDays } from '../sim/outage.js';
@@ -35,25 +35,24 @@ export interface SnapshotLimits {
   orders: number;
   ledger: number;
   activity: number;
-  vocKnowledge: boolean;      // keep the raw VoC knowledge arrays
   stringMax: number;          // max length of free strings inside task input/output
-  light: boolean;             // products and ads without what only their files show, daily figures without their channels
-  live: boolean;              // live view: finished tasks without their payload
+  light: boolean;             // products and ads without what only their files show, daily figures without their channels, no VoC or competitors
+  live: boolean;              // live view: finished tasks without their payload, no playbooks
 }
 
 export const DEFAULT_LIMITS: SnapshotLimits = {
   doneTasks: 200, openTasks: 400, taskLog: 10, deliverables: 250, lessons: 150, chatsPerAgent: 30, missions: 80,
   creatives: 120, campaigns: 400, pnl: 8, experiments: 60, kpis: 400, reviewsPerProduct: 25, inbox: 80, threadPerMessage: 12, adStatsDays: 14,
   commentsPerStat: 6, organicPosts: 30, creators: 80, partnerships: 120, events: 40, orders: 100, ledger: 150, activity: 200,
-  vocKnowledge: true, stringMax: 400, light: false, live: false,
+  stringMax: 400, light: false, live: false,
 };
 
 /** Fallback when the default snapshot would exceed the size budget. */
 export const TIGHT_LIMITS: SnapshotLimits = {
   doneTasks: 60, openTasks: 150, taskLog: 4, deliverables: 120, lessons: 60, chatsPerAgent: 12, missions: 30,
-  creatives: 60, campaigns: 40, pnl: 4, experiments: 25, kpis: 120, reviewsPerProduct: 8, inbox: 40, threadPerMessage: 6, adStatsDays: 7,
+  creatives: 40, campaigns: 40, pnl: 2, experiments: 25, kpis: 120, reviewsPerProduct: 8, inbox: 40, threadPerMessage: 6, adStatsDays: 5,
   commentsPerStat: 2, organicPosts: 20, creators: 40, partnerships: 50, events: 25, orders: 60, ledger: 100, activity: 120,
-  vocKnowledge: false, stringMax: 200, light: true, live: false,
+  stringMax: 200, light: true, live: false,
 };
 
 /**
@@ -143,14 +142,14 @@ function trimChapter(ch: ChapterContent | null | undefined, full: boolean): Chap
   };
 }
 
-/** Content light enough for the UI: titles + intros, full text only for the first chapter (light limits: none of the text). */
+/** Content light enough for the UI: titles + intros, full text only for the first chapter (light limits: only what the card reads, its next step). */
 export function trimContent(content: PdfContent | null | undefined, light = false): PdfContent | null {
   if (!content) return null;
   return {
-    title: content.title ?? '',
-    subtitle: content.subtitle ?? '',
-    audience: content.audience ?? '',
-    promise: content.promise ?? '',
+    title: light ? '' : content.title ?? '',
+    subtitle: light ? '' : content.subtitle ?? '',
+    audience: light ? '' : content.audience ?? '',
+    promise: light ? '' : content.promise ?? '',
     introduction: light ? [] : arr(content.introduction).slice(0, 3),
     chapters: light ? [] : arr(content.chapters).map((ch, i) => trimChapter(ch, i === 0)),
     bonus: trimChapter(light ? null : content.bonus, false),
@@ -173,10 +172,19 @@ function stubProduct({ brief: _brief, pagePrint: _pagePrint, visual: _visual, ..
   };
 }
 
+/** A guide on sale under light limits: what its card reads. A guide now stays on sale for months, and with 33 of them these fields weighed 140 KB. */
+function cardProduct({ brief: _brief, pagePrint: _pagePrint, ...p }: Product): Product {
+  return {
+    ...p, salesQuality: null,
+    design: p.design && ({ palette: p.design.palette } as DesignSpec),
+    quality: p.quality && ({ overall: p.quality.overall, issues: p.quality.issues, ...(p.quality.blocking ? { blocking: p.quality.blocking } : {}) } as QualityReport),
+  };
+}
+
 export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS): Product {
   const stats = p.stats ?? { views: 0, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, rating: 0, reviews: [], upsellSales: 0 };
   // What compaction leaves the company to read (scale §7.2): no panel reads it, and at its caps it weighs 9 KB a product.
-  const { hooks: _hooks, feedback: _feedback, artExplored: _artExplored, ...kept } = p;
+  const { hooks: _hooks, feedback: _feedback, artExplored: _artExplored, paidRead: _paidRead, ...kept } = p;
   const trimmed: Product = {
     ...kept,
     ...(p.visual ? { visual: publicVisual(p.visual) } : {}),
@@ -185,7 +193,8 @@ export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS)
     stats: { ...stats, reviews: lastN(stats.reviews, limits.reviewsPerProduct) },
     priceHistory: lastN(p.priceHistory, limits.live ? 14 : 60),
   };
-  return limits.light && (p.status === 'paused' || p.status === 'killed') ? stubProduct(trimmed) : trimmed;
+  if (!limits.light) return trimmed;
+  return p.status === 'paused' || p.status === 'killed' ? stubProduct(trimmed) : cardProduct(trimmed);
 }
 
 /** Killed guides that light limits still show. */
@@ -235,15 +244,20 @@ function trimMissions(missions: Mission[], tasks: Task[], limit: number): Missio
 
 const isAdFrame = (d: Deliverable) => d.kind === 'ad_storyboard' || d.kind === 'ad_preview';
 
-/** The live view stops here too: the gallery reads the whole run elsewhere, and guides, covers and reports only grow. */
+/** Light views stop here too: the gallery reads the whole run elsewhere, and guides, covers and reports only grow. */
+const LIGHT_WORKS = 120;
+/** The live view counts everything together: ui §3.1. */
 const LIVE_DELIVERABLES = 120;
 
-/** Guides, covers, pages and reports stay: only ad frames, by far the most numerous, are cut to the latest ones. */
+/** Ad frames, by far the most numerous, are cut to the latest ones. They never push out guides, covers, pages or reports, which have their own bound in a light view. */
 function trimDeliverables(deliverables: Deliverable[], limits: SnapshotLimits): Deliverable[] {
   const all = arr(deliverables);
-  const firstAd = Math.max(0, all.filter(isAdFrame).length - limits.deliverables);
-  let seen = 0;
-  const kept = all.filter((d) => !isAdFrame(d) || seen++ >= firstAd);
+  const frames = all.filter(isAdFrame).length;
+  const firstAd = Math.max(0, frames - limits.deliverables);
+  const firstWork = limits.light ? Math.max(0, all.length - frames - LIGHT_WORKS) : 0;
+  let ads = 0;
+  let works = 0;
+  const kept = all.filter((d) => (isAdFrame(d) ? ads++ >= firstAd : works++ >= firstWork));
   return limits.live ? kept.slice(-LIVE_DELIVERABLES) : kept;
 }
 
@@ -261,10 +275,6 @@ export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LI
   const experiments = arr(c.experiments);
   const expStart = Math.max(0, experiments.length - limits.experiments);
   const research = c.research ?? { trends: [], voc: {}, competitors: {}, shortlist: [] };
-  const voc: CompanyState['research']['voc'] = {};
-  for (const [nicheId, v] of Object.entries(limits.live ? {} : research.voc ?? {})) {
-    voc[nicheId] = limits.vocKnowledge || !v ? v : { ...v, knowledge: { tips: [], steps: [], mistakes: [], examples: [], facts: [] } };
-  }
   return {
     name: c.name,
     agents: arr(c.agents),
@@ -275,11 +285,11 @@ export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LI
     creatives: trimCreatives(c.creatives, liveCreativeIds, limits),
     campaigns: trimCampaigns(campaigns, limits.campaigns),
     deliverables: trimDeliverables(c.deliverables, limits),
-    research: { trends: arr(research.trends), voc, competitors: limits.live ? {} : research.competitors ?? {}, shortlist: arr(research.shortlist) },
+    research: { trends: arr(research.trends), voc: limits.light ? {} : research.voc ?? {}, competitors: limits.light ? {} : research.competitors ?? {}, shortlist: arr(research.shortlist) },
     lessons: lastN(c.lessons, limits.lessons),
     experiments: experiments.filter((e, i) => i >= expStart || e.status === 'running'),
     bandits: c.bandits ?? {},
-    playbooks: c.playbooks ?? {},
+    playbooks: limits.live ? {} : c.playbooks ?? {}, // ui §3.1: the 15 agents' 24 rules, 49 KB a second to one closed panel
     kpis: trimKpis(c.kpis, limits),
     chats,
     pendingApprovals: arr(c.pendingApprovals),

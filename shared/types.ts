@@ -354,6 +354,8 @@ export interface Product {
   feedback?: { day: number; text: string; quality: boolean }[]; // cap 30
   hooks?: { hook: string; hookStyle: HookStyle }[];             // cap 60
   campaignCount?: number;
+  harvest?: { day: number; price: number; version: number; retest: { day: number; open: boolean } | null }; // off the ads, still on sale. What it left at, and its one paid test
+  paidRead?: { since: number; eur: number }; // the most a Monday review read of what this version took in ads: the rows behind it last 90 days
 }
 
 // ───────────────────────────── TikTok ads (virtual platform) ─────────────────────────────

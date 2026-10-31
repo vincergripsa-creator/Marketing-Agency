@@ -6,15 +6,11 @@ import type { DeliverablesModule } from '../contracts.js';
 import { pickArt } from './art/evaluate.js';
 import { designFor } from './design.js';
 import { coverAudit, renderCoverSvg } from './cover.js';
+import { renderKit, renderLeadMagnet } from './kit.js';
 import { renderPdf } from './pdf.js';
 import { renderSalesPageHtml } from './salesPage.js';
 import { renderAdCut, renderAdStoryboard } from './storyboard.js';
 import { visualReport } from './visualReport.js';
-
-/** Land with P11.2. Nothing calls them before. */
-const notLanded = (): never => { throw new Error('not landed'); };
-const renderLeadMagnet: DeliverablesModule['renderLeadMagnet'] = notLanded;
-const renderKit: DeliverablesModule['renderKit'] = notLanded;
 
 export {
   designFor, renderCoverSvg, renderPdf, renderSalesPageHtml, renderAdStoryboard, renderAdCut,

@@ -1,4 +1,4 @@
-/** Analyse, Finance, RH and Direction rituals: daily report, A/B experiments, CFO budget and its split between channels, the books, retro, HR review, follow-up. */
+/** Analyse, Finance, RH and Direction rituals: daily report, A/B experiments, CFO budget and its split between channels, the books, retro, HR review, follow-up, portfolio. */
 import { CHANNELS, CHANNEL_IDS, channelOf } from '../../shared.js';
 import type { DailyKpi, Experiment, Product } from '../../shared.js';
 import { allocateChannels } from '../allocator.js';
@@ -13,6 +13,7 @@ import { createTask, isOpen } from '../tasks.js';
 import { followFounderMissions, unblockStaleTasks } from '../missions.js';
 import { officerId } from '../org/officers.js';
 import { PRICE_ARMS } from '../playbook.js';
+import { portfolioCounts, reviewPortfolio } from '../portfolio.js';
 import { dec, eur, numOf, pad3, pct, round2, short, sum } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { HOOK_LABELS, FORMAT_LABELS } from './phrases.js';
@@ -327,6 +328,17 @@ export const opsHandlers: HandlerMap = {
       const lines = await learning.performanceReview(ctx.world, ctx.brain);
       for (const l of lines.slice(0, 4)) say(ctx, agent.id, l, 'thought');
       return { summary: lines[0] ?? 'Revue RH effectuée.', output: { lines } };
+    },
+  },
+
+  portfolio_review: {
+    async run(ctx, task, agent) {
+      const review = await reviewPortfolio(ctx, agent.id);
+      if (!review) return { summary: 'Pas de portefeuille à revoir.', skipReview: true, output: { lines: 0 } };
+      return {
+        summary: `Revue du portefeuille : ${portfolioCounts(review)}.${review.notes.length ? ` ${review.notes.slice(0, 3).join(' ')}` : ''}`,
+        output: { lines: review.lines.length, verdicts: review.lines.map((l) => ({ productId: l.productId, verdict: l.verdict })), slots: review.slots },
+      };
     },
   },
 

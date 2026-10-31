@@ -158,6 +158,9 @@ async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): P
       const p = order.product!;
       closeProductMissions(ctx, p, `le fondateur l'a arrêté le jour ${w.day}`);
       await killProduct(ctx, p, `décision du fondateur du jour ${w.day}`);
+      // His word is no wait: the niche this kill closed stays closed, no timer gives it back to the team. A follow-up or a kit closes nothing.
+      const niche = w.company.growth?.niches[p.nicheId];
+      if (niche?.lastEndDay === w.day) niche.reopenDay = null;
       done(`C'est fait : « ${short(p.title, 60)} » est arrêté définitivement.`);
       return;
     }

@@ -15,6 +15,7 @@ import { heuristicAd, heuristicHooks, heuristicOutreach, heuristicSearchAd } fro
 import { heuristicRedTeam, heuristicSalesPage } from './commerce.js';
 import { heuristicChat, heuristicMemo, heuristicMission } from './direction.js';
 import { heuristicFactCheck, heuristicHumanize } from './editing.js';
+import { heuristicBroadcast, heuristicLeadMagnet, heuristicSequence, type LifecycleRules } from './lifecycle.js';
 import { heuristicRanking, valueWeightOf } from './research.js';
 import { heuristicOutline, heuristicPdfContent, heuristicTitles } from './studio.js';
 import { heuristicSupportReply } from './support.js';
@@ -178,18 +179,23 @@ export class HeuristicEngine implements ContentEngine {
     return { ...scrubDeep(text, [...rules.banned, ...(input.bannedClaims ?? [])]), keywords }; // keywords bid, they never show
   }
 
-  // Land with P11.2. Nothing calls them before.
-
-  async writeLeadMagnet(_input: { product: Product; content: PdfContent; voc: VoiceOfCustomer }, _ctx: MindContext): Promise<PdfContent> {
-    throw new Error('not landed');
+  private signing(ctx: MindContext | undefined): LifecycleRules {
+    return { name: ctx?.agent?.name || 'L’équipe', brand: this.brand(ctx) };
   }
 
-  async writeEmailSequence(_input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] }, _ctx: MindContext): Promise<Omit<EmailStep, 'score'>[]> {
-    throw new Error('not landed');
+  async writeLeadMagnet(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer }, ctx: MindContext): Promise<PdfContent> {
+    const { rng, rules } = this.begin('writeLeadMagnet', ctx, productSubjects(input.product), input.product?.title);
+    return scrubDeep(heuristicLeadMagnet(input, rng, this.signing(ctx)), [...rules.banned, ...(input.voc?.bannedClaims ?? [])]);
   }
 
-  async writeBroadcast(_input: { product: Product; voc: VoiceOfCustomer; angle: string; audience: Broadcast['audience']; bannedClaims: string[] }, _ctx: MindContext): Promise<{ subject: string; body: string; hasUnsubscribe: boolean }> {
-    throw new Error('not landed');
+  async writeEmailSequence(input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] }, ctx: MindContext): Promise<Omit<EmailStep, 'score'>[]> {
+    const { rng, rules } = this.begin('writeEmailSequence', ctx, productSubjects(input.product), input.product?.title);
+    return scrubDeep(heuristicSequence(input, rng, this.signing(ctx)), [...rules.banned, ...(input.bannedClaims ?? [])]);
+  }
+
+  async writeBroadcast(input: { product: Product; voc: VoiceOfCustomer; angle: string; audience: Broadcast['audience']; bannedClaims: string[] }, ctx: MindContext): Promise<{ subject: string; body: string; hasUnsubscribe: boolean }> {
+    const { rng, rules } = this.begin('writeBroadcast', ctx, productSubjects(input.product), input.product?.title, input.angle, input.audience);
+    return scrubDeep(heuristicBroadcast(input, rng, this.signing(ctx)), [...rules.banned, ...(input.bannedClaims ?? [])]);
   }
 
   usage(): Usage {

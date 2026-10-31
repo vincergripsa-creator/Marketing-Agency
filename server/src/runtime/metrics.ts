@@ -67,9 +67,9 @@ export function activeCampaigns(world: WorldState, productId?: string): Campaign
   return world.company.campaigns.filter((c) => c.status === 'active' && (!productId || c.productId === productId));
 }
 
-/** An upsell lives off its parent's buyers, so only while the parent is on sale: an orphan is a guide like any other. */
+/** An upsell lives off its parent's buyers, so only while the parent is on sale: an orphan is a guide like any other. A kit only ever sells at checkout: no cold ads, never judged alone. */
 export function isUpsellProduct(world: WorldState, productId: string): boolean {
-  return world.company.products.some((p) => p.upsellProductId === productId && p.id !== productId && p.status === 'live');
+  return world.company.products.some((p) => (p.id === productId ? p.kind === 'kit' : p.upsellProductId === productId && p.status === 'live'));
 }
 
 export function parentOf(world: WorldState, productId: string): Product | undefined {
@@ -224,6 +224,7 @@ export function priceTiers(world: WorldState, p: Product): PriceTier[] {
  * customers' anchors and competitors), not the highest anchor anyone ever quoted.
  */
 export function priceCeiling(world: WorldState, p: Product): { ceiling: number; why: string } {
+  if (p.kind === 'kit') return { ceiling: p.price, why: 'un kit suit le prix de son guide' };
   const measured = measuredCeiling(world, p);
   const limit = followUpLimit(world, p);
   return limit !== null && limit < measured.ceiling ? { ceiling: limit, why: 'une suite ne se vend pas plus cher que le guide qu’elle prolonge' } : measured;

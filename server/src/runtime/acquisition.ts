@@ -120,6 +120,9 @@ export function productHealth(world: WorldState, p: Product): ProductHealth {
   return { since, reviews, rating, sales: m.sales, refundRate: m.refundRate, severe };
 }
 
+/** Off the ads and still on sale: the portfolio harvests it. Its one paid test lifts this while it runs (scale §5.2). */
+export const harvesting = (p: Product): boolean => !!p.harvest && !p.harvest.retest?.open;
+
 /** Mild quality signal: a rewrite is only worth its cost when refunds are significantly high, not a few refund hunters. */
 export const MILD_REFUND_RATE = 0.1;
 export const MIN_SALES_FOR_REWORK = 12;
@@ -147,7 +150,7 @@ export interface RecentLoss { fromDay: number; toDay: number; profit: number; ro
  * books (refunds, fees and creators included) with outage days left out. Upsells live off their parent: not judged here.
  */
 export function recentLoss(world: WorldState, p: Product): RecentLoss | null {
-  if (p.status !== 'live' || isUpsellProduct(world, p.id)) return null;
+  if (p.status !== 'live' || p.harvest || isUpsellProduct(world, p.id)) return null; // the loss of a harvested guide is behind it, the Monday review reads its test
   const toDay = sim.lastClosedDay(world);
   if (toDay - versionSince(world, p) + 1 < LOSS_WINDOW_DAYS) return null;
   const fromDay = toDay - LOSS_WINDOW_DAYS + 1;
@@ -205,6 +208,7 @@ export function isReworking(world: WorldState, productId: string): boolean {
 
 /** Why a product must not be promoted at all (organic, ads, creators), or null when it may be. */
 export function promotionBlock(world: WorldState, p: Product): string | null {
+  if (p.kind === 'kit') return 'vendu à la commande, jamais seul';
   if (p.status !== 'live') return p.status === 'paused' ? 'produit en pause' : 'produit pas en ligne';
   const h = productHealth(world, p);
   if (h.severe) return h.severe;
@@ -266,6 +270,7 @@ export interface PaidBlock { reason: string; hard: boolean; final?: boolean }
 export function productPaidBlock(world: WorldState, p: Product, ch: ChannelId = 'tiktok'): PaidBlock | null {
   const held = adsHold(world, p.id, ch);
   if (held) return { reason: held.reason, hard: true, final: true };
+  if (harvesting(p)) return { reason: `en récolte depuis le jour ${p.harvest!.day} : plus de pub ni de créa`, hard: true, final: true };
   const promo = promotionBlock(world, p);
   if (promo) return { reason: promo, hard: true, final: true };
   if (isUpsellProduct(world, p.id)) return { reason: 'upsell vendu via « La suite est ici », pas en pub froide', hard: true };

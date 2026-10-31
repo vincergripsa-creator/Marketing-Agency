@@ -58,10 +58,8 @@ vi.mock('../src/runtime/compaction.js', async (importOriginal) => {
   return { ...real, compactWorld: vi.fn(real.compactWorld) };
 });
 
-/** Shrinks as packages land: P5.1 and P5.2 the channels, P11.1 and P11.2 the rest. Empty at the end. */
-const NOT_LANDED: TaskKind[] = [
-  'write_lead_magnet', 'write_email_sequence', 'send_broadcast', 'design_bump', 'portfolio_review',
-];
+/** Shrank as packages landed, P11.1 and P11.2 last. A kind added without a handler lands here and fails. */
+const NOT_LANDED: TaskKind[] = [];
 
 const roots: string[] = [];
 const installed: Pillar[] = [];
@@ -244,7 +242,7 @@ describe('the pillar seam', () => {
       async morning(ctx) {
         const w = ctx.world;
         const before = w.company.tasks.length;
-        await ctx.ritual('portfolio_review', 'camille', 'Pas encore de savoir-faire');
+        await ctx.ritual('pas_de_savoir_faire' as TaskKind, 'camille', 'Pas encore de savoir-faire'); // the list above ends empty: a kind nobody will ever land
         const quiet = w.company.tasks.length;
         await ctx.ritual('budget_review', 'gabriel', 'Rituel de test');
         tasks = { before, quiet, done: w.company.tasks.find((t) => t.title === 'Rituel de test') };

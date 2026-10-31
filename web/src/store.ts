@@ -84,6 +84,12 @@ export function godDataAfter(prev: CompanySnapshot['godMode'] | null, s: Company
   return s.godMode ?? (sameRun ? prev : null);
 }
 
+/** The live stream leaves the playbooks out (ui §3.1): the agent panel keeps what GET /api/state gave it for this run. */
+export function withPlaybooks(s: CompanySnapshot, prev: CompanySnapshot | null, sameRun: boolean): CompanySnapshot {
+  const kept = sameRun ? prev?.company.playbooks : null;
+  return kept && !Object.keys(s.company.playbooks ?? {}).length ? { ...s, company: { ...s.company, playbooks: kept } } : s;
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : 'Serveur injoignable';
 }
@@ -106,7 +112,7 @@ export function useAgency(): Agency {
   const applySnapshot = useCallback((s: CompanySnapshot) => {
     const sameRun = runIdRef.current === s.runId;
     runIdRef.current = s.runId;
-    setSnapshot(s);
+    setSnapshot((prev) => withPlaybooks(s, prev, sameRun));
     setActivity((prev) => mergeActivity(sameRun ? prev : [], s.activity ?? []));
     setGodData((prev) => godDataAfter(prev, s, sameRun));
   }, []);

@@ -9,18 +9,23 @@
  *   Red Team on the guide (see redteam.ts): a « fix » adds humanize → render → red_team before the publish, a « kill »
  *   adds outline → pdf → humanize → fact_check → render → sales page + red_team.
  */
-import type { AgentId, ChannelId, Product, Task, TaskKind } from '../shared.js';
+import type { AgentId, ChannelId, NicheCloseReason, NicheRecord, Product, Task, TaskKind, WorldState } from '../shared.js';
 import { channelOf } from '../shared.js';
+import { productHealth } from './acquisition.js';
+import { creditOf } from './channels.js';
 import type { RuntimeCtx } from './ctx.js';
-import { incident, latestOutput, nameOf, runFileExists, say } from './ctx.js';
+import { incident, latestOutput, nameOf, nicheName, runFileExists, say } from './ctx.js';
 import type { GuideGaps } from '../contracts.js';
+import { logDecision } from './digest.js';
 import { addHold } from './holds.js';
 import { officerId } from './org/officers.js';
 import { createTask, isOpen, KIND_META, logTask, openTasks, taskChannel, type TaskSpec } from './tasks.js';
-import { activeCampaigns } from './metrics.js';
+import { activeCampaigns, closedWindow, parentOf, PRICE_EVIDENCE_VIEWS, priceTiers, productMetrics } from './metrics.js';
+import { sim } from './modules.js';
 import { productNote, writePostMortem } from './notes.js';
+import { growthOn, policyOf } from './stages.js';
 import { unlinkUpsell } from './upsell.js';
-import { short } from './util.js';
+import { eur, round2, short, sum } from './util.js';
 
 export interface PipelineOpts { createdBy: Task['createdBy']; missionId: string | null; priority?: 1 | 2 | 3 }
 
@@ -48,6 +53,7 @@ export function openTasksForProduct(ctx: RuntimeCtx, productId: string, kinds?: 
 
 export function createProductPipeline(ctx: RuntimeCtx, product: Product, opts: PipelineOpts): Task[] {
   const T = maker(ctx, product, opts);
+  const best = reopenNiche(ctx, product);
   const pre: Task[] = [];
   const voc = ctx.world.company.research.voc[product.nicheId];
   if (!voc || voc.depth !== 'deep') pre.push(T('mine_pains', [], { depth: 'deep' }, { title: `Écouter la voix du client (approfondi) — ${short(product.audience, 40)}` }));
@@ -58,7 +64,7 @@ export function createProductPipeline(ctx: RuntimeCtx, product: Product, opts: P
   const human = T('humanize_pdf', [pdf]);
   const fact = T('fact_check', [human]);
   const cover = T('design_cover', [titles]);
-  const price = T('set_price', [titles], { reason: 'initial' });
+  const price = T('set_price', [titles], best ? { reason: 'memoire', price: best } : { reason: 'initial' });
   const render = T('render_pdf', [fact, cover]);
   const redPdf = T('red_team', [render], { subject: 'pdf', version: product.version, cycle: 0 }, { title: `Red Team : attaquer le guide « ${short(product.title, 40)} »` });
   const sales = T('write_sales_page', [render, price]);
@@ -273,10 +279,33 @@ export async function pauseProduct(ctx: RuntimeCtx, product: Product, reason: st
   } catch { /* the brain is best-effort */ }
 }
 
+/** Ads off, for as long as it takes. A campaign the founder forced stays: his word beats the plan. */
+export function stopAds(ctx: RuntimeCtx, product: Product): number {
+  const running = activeCampaigns(ctx.world, product.id).filter((c) => !c.founderForced);
+  for (const c of running) {
+    try { ctx.tools.updateCampaign(c.id, { status: 'paused' }); } catch { /* ignore */ }
+    c.status = 'paused';
+  }
+  return running.length;
+}
+
+/**
+ * CEO decision: a paid loser its buyers like stops costing and goes on selling. No ads, no creatives, one organic slot a week: it
+ * frees a main's slot and keeps its niche. Its price and version are noted: its one paid test waits for either to move (scale §5.2).
+ */
+export function harvestProduct(ctx: RuntimeCtx, product: Product, why: string, by: AgentId = officerId(ctx.world, 'ceo')): void {
+  stopAds(ctx, product);
+  const cancelled = cancelProductTasks(ctx, product.id, 'produit en récolte', PAID_AD_TASKS);
+  const retest = product.harvest?.retest ?? null;
+  product.harvest = { day: ctx.world.day, price: product.price, version: product.version, retest: retest && { ...retest, open: false } };
+  say(ctx, by, `${nameOf(ctx, by)} passe « ${short(product.title, 50)} » en récolte : ${why}${cancelled ? ` (${cancelled} tâche(s) pub annulée(s))` : ''}`, 'thought', { productId: product.id });
+}
+
 /** CEO decision: stop a product, pause its ads, write the post-mortem. */
-export async function killProduct(ctx: RuntimeCtx, product: Product, reason: string, by: AgentId = officerId(ctx.world, 'ceo')): Promise<void> {
+export async function killProduct(ctx: RuntimeCtx, product: Product, reason: string, by: AgentId = officerId(ctx.world, 'ceo'), impactEur?: number): Promise<void> {
   if (product.status === 'killed') return;
   const wasPublished = product.launchedDay !== null;
+  closeNiche(ctx.world, product);
   product.status = 'killed';
   product.decision = { day: ctx.world.day, status: 'killed', reason };
   if (wasPublished) {
@@ -290,15 +319,125 @@ export async function killProduct(ctx: RuntimeCtx, product: Product, reason: str
   if (wasPublished) unlinkUpsell(ctx, product);
   say(ctx, by, `${nameOf(ctx, by)} arrête « ${short(product.title, 50)} » : ${reason}${cancelled ? ` (${cancelled} tâches annulées)` : ''}`, 'thought', { productId: product.id });
   incident(ctx, `Produit « ${product.title} » arrêté : ${reason}`);
+  if (growthOn(ctx.world)) logDecision(ctx.world, { kind: 'kill', who: by, text: `« ${short(product.title, 60)} » arrêté`, why: reason, productId: product.id, ...(impactEur === undefined ? {} : { impactEur }) });
   await writePostMortem(ctx, product, reason, by);
 }
 
-/** Niches we must not pick again (killed products) or already work on. */
-export function excludedNiches(ctx: RuntimeCtx, opts: { includeActive: boolean }): string[] {
-  const out = new Set<string>();
-  for (const p of ctx.world.company.products) {
-    if (p.status === 'killed') out.add(p.nicheId);
-    else if (opts.includeActive) out.add(p.nicheId);
+// ───────────────────────────── what the portfolio reads of a guide ─────────────────────────────
+
+/** Buyers like a guide at this rating and under this refund rate: over the line a paid loser is harvested, under it it stops. */
+const HAPPY_RATING = 3.2;
+const HAPPY_REFUNDS = 0.2;
+/** Reviews it takes before a low rating is the buyers' verdict. */
+const DISLIKED_REVIEWS = 3;
+
+/** Ad euros a product took from `from` on. The rows reach back 90 days: a guide off the ads for longer reads 0 here, what a test paid stays in `Product.paidRead`. */
+export function paidOn(w: WorldState, productId: string, from: number): number {
+  return round2(sum(w.market.adStats.filter((s) => s.productId === productId && s.day >= from).map((s) => s.spend)));
+}
+
+/** Reconciled ROAS of a product over the last `days` closed days, each row at its channel's credit, announced outages out. Null without spend. */
+export function roasOver(w: WorldState, p: Product, days: number): number | null {
+  const { fromDay, toDay } = closedWindow(w, days);
+  const outage = sim.announcedOutageDays(w);
+  let spend = 0, revenue = 0;
+  for (const s of w.market.adStats) {
+    if (s.productId !== p.id || s.day < fromDay || s.day > toDay || outage.includes(s.day)) continue;
+    spend += s.spend;
+    revenue += s.revenue * creditOf(w, channelOf(s), p.nicheId);
   }
+  return spend > 0 ? revenue / spend : null;
+}
+
+/** What buyers say of the current version: the store's rating until it has reviews of its own, refunds over 28 days. */
+export function buyersRead(w: WorldState, p: Product): { rating: number; reviews: number; refundRate: number } {
+  const h = productHealth(w, p);
+  return { rating: h.rating || p.stats.rating, reviews: h.reviews.length, refundRate: productMetrics(w, p.id, closedWindow(w, 28).fromDay).refundRate };
+}
+
+/** Rule 12 of the guardrails: a guide its buyers like loses its ads, not its place on sale. */
+export const buyersLike = (read: { rating: number; refundRate: number }): boolean => read.rating >= HAPPY_RATING && read.refundRate <= HAPPY_REFUNDS;
+
+// ───────────────────────────── niches: closed for a while, not for ever ─────────────────────────────
+
+/** Days a niche stays closed, by what ended the attempt (scale §5.3). A market or Red Team end also counts a strike. */
+export const NICHE_REOPEN_DAYS: Record<NicheCloseReason, number> = { no_test: 14, quality: 30, market: 60, redteam: 90 };
+const STRIKES: readonly NicheCloseReason[] = ['market', 'redteam'];
+/** At this many strikes a niche waits this long for its last attempt. After that one it stays closed. */
+export const NICHE_LAST_STRIKES = 2;
+export const NICHE_LAST_DAYS = 180;
+
+const CLOSE_LABELS: Record<NicheCloseReason, string> = { no_test: 'arrêt sans test payant', quality: 'acheteurs déçus', market: 'test payant perdu', redteam: 'refus de la Red Team' };
+
+/** What a niche keeps of a guide: its best fortnight, and the price that earned most per paid visitor. */
+export function learnNiche(w: WorldState, p: Product): NicheRecord | null {
+  const niches = w.company.growth?.niches;
+  if (!niches) return null;
+  const rec = (niches[p.nicheId] ??= { nicheId: p.nicheId, attempts: 0, paidEur: 0, strikes: 0, lastEndDay: null, lastReason: null, reopenDay: null, bestRoas14: null, bestPrice: null });
+  const roas = roasOver(w, p, 14);
+  if (roas !== null) rec.bestRoas14 = round2(Math.max(rec.bestRoas14 ?? 0, roas));
+  const measured = priceTiers(w, p).filter((t) => t.views >= PRICE_EVIDENCE_VIEWS);
+  if (measured.length) rec.bestPrice = measured.reduce((a, b) => (b.rpv > a.rpv ? b : a)).price;
+  return rec;
+}
+
+/** All a guide took in ads: the rows that are left, or what a Monday read before they went. */
+const paidEver = (w: WorldState, p: Product): number => Math.max(paidOn(w, p.id, 1), p.paidRead?.eur ?? 0);
+
+/** What ended the attempt: the Red Team's word first, then the buyers', then the money. */
+function closeReason(w: WorldState, p: Product): NicheCloseReason {
+  if (latestOutput(w, 'red_team', p.id)?.finalVerdict === 'kill') return 'redteam';
+  const { rating, reviews, refundRate } = buyersRead(w, p);
+  if (productHealth(w, p).severe || (reviews >= DISLIKED_REVIEWS && rating > 0 && rating < HAPPY_RATING) || refundRate > HAPPY_REFUNDS) return 'quality';
+  return paidEver(w, p) >= policyOf(w).paidTestEur ? 'market' : 'no_test';
+}
+
+/** A guide stops, its niche waits. A follow-up or a kit ends nothing: the niche is its parent's to close. */
+function closeNiche(w: WorldState, p: Product): void {
+  if (!growthOn(w) || p.kind === 'kit' || parentOf(w, p.id)) return;
+  const rec = learnNiche(w, p);
+  if (!rec) return;
+  const reason = closeReason(w, p);
+  const lastAttempt = rec.strikes >= NICHE_LAST_STRIKES;
+  if (STRIKES.includes(reason)) rec.strikes += 1;
+  rec.attempts += 1;
+  rec.paidEur = round2(rec.paidEur + paidEver(w, p));
+  rec.lastEndDay = w.day;
+  rec.lastReason = reason;
+  rec.reopenDay = lastAttempt ? null : w.day + (rec.strikes >= NICHE_LAST_STRIKES ? NICHE_LAST_DAYS : NICHE_REOPEN_DAYS[reason]);
+}
+
+/** A new guide in a niche that closed once: the log says so, and the best price it measured comes along. Its research and bandits never left. */
+function reopenNiche(ctx: RuntimeCtx, product: Product): number | null {
+  const w = ctx.world;
+  const growth = growthOn(w) ? w.company.growth : undefined;
+  const rec = growth?.niches[product.nicheId];
+  if (!growth || !rec || rec.lastEndDay === null) return null;
+  if (!growth.decisions.some((d) => d.kind === 'reopen' && d.productId === product.id)) {
+    logDecision(w, {
+      kind: 'reopen', who: officerId(w, 'ceo'), text: `La niche « ${short(nicheName(ctx, product.nicheId), 60)} » rouvre`, productId: product.id,
+      why: `fermée le jour ${rec.lastEndDay} (${CLOSE_LABELS[rec.lastReason!]}), ${rec.attempts} essai(s), ${eur(rec.paidEur)} de pub, ${rec.strikes} avertissement(s)${rec.bestPrice ? `, meilleur prix mesuré ${eur(rec.bestPrice)}` : ''}`,
+    });
+  }
+  return rec.bestPrice;
+}
+
+const nicheClosed = (rec: NicheRecord, day: number): boolean => rec.lastEndDay !== null && (rec.reopenDay === null || day < rec.reopenDay);
+
+/**
+ * Niches the team may not pick today: what it already works on, and what closed and has not reopened. Under growth a stop is a wait,
+ * by what ended the attempt. In the control a kill is for ever, and so is a kill that left no record.
+ */
+export function closedNiches(ctx: RuntimeCtx, opts: { includeActive: boolean }): string[] {
+  const w = ctx.world;
+  const records = growthOn(w) ? w.company.growth?.niches : undefined;
+  const out = new Set<string>();
+  for (const p of w.company.products) {
+    if (p.status === 'killed' ? !records?.[p.nicheId] : opts.includeActive) out.add(p.nicheId);
+  }
+  for (const rec of Object.values(records ?? {})) if (nicheClosed(rec, w.day)) out.add(rec.nicheId);
   return [...out];
 }
+
+/** The name its readers know it by. */
+export { closedNiches as excludedNiches };

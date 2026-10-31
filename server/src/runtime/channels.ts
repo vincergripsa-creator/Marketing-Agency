@@ -22,6 +22,8 @@ import { requestRole } from './org/hiring.js';
 import { officerId, ownersOfAny, roleHolders } from './org/officers.js';
 import type { Pillar } from './pillars.js';
 import { addPlaybookRule, directivesOf } from './playbook.js';
+import { budgetQueue } from './portfolio.js';
+import { growthOn } from './stages.js';
 import { onStrike } from './talent/evidence.js';
 import { KIND_META, openTasks, taskChannel } from './tasks.js';
 import { clamp, dec, eur, round2, short, sum } from './util.js';
@@ -263,7 +265,9 @@ function askCreatives(ctx: RuntimeCtx, items: DayPlanItem[], p: Product, ch: Cha
 
 /**
  * The small tests of the day (channels §7.2): best guides first, the bandit picks a channel or stays on TikTok, and what is
- * picked gets its creatives then a launch at the smallest useful budget, inside the test envelope.
+ * picked gets its creatives then a launch at the smallest useful budget, inside the test envelope. Under growth the Monday
+ * queue goes first, so a guide waiting for its paid test comes before one that only keeps, and a guide TikTok has closed has
+ * no arm to stay on: this is the only way its test can run.
  */
 function planTests(ctx: RuntimeCtx, items: DayPlanItem[], notes: string[]): void {
   const w = ctx.world;
@@ -274,11 +278,11 @@ function planTests(ctx: RuntimeCtx, items: DayPlanItem[], notes: string[]): void
   let count = tests.length;
   let spent = sum(tests.map((c) => c.dailyBudget));
   let room = budget.adCap - committedAdBudget(w);
-  for (const { product: p } of acquisitionCandidates(w)) {
+  for (const { product: p, block } of budgetQueue(w, acquisitionCandidates(w), (c) => c.product.id)) {
     if (count >= maxTests) break;
     const eligible = eligibleChannels(ctx, p);
     if (!eligible.length) continue;
-    const pick = pickChannel(ctx, p.nicheId, [...eligible, 'tiktok']);
+    const pick = pickChannel(ctx, p.nicheId, growthOn(w) && block?.hard ? eligible : [...eligible, 'tiktok']);
     if (pick === 'tiktok' || running(w, p, pick)) continue;
     const cost = dailyTest(pick);
     if (spent + cost > envelope || cost > room) break;
