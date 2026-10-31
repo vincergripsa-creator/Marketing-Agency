@@ -835,7 +835,7 @@ Then `flat` median against the current 1 408 € tells the final calibration wha
 20. **Routing**: same load, higher observed rating gets the task in `league`, and in `flat` the order is the old one.
 21. **Claude mapping**: fake client: t=.2 on a `sonnet` seat calls haiku with `effort: 'low'`.
 
-`server/test/runtime.test.ts`: the reload test runs in both `flat` and `league`. `web/src/world/world.test.ts` keeps 31 agents: `league` never changes the count.
+`server/test/runtime.test.ts`: the reload test runs in both `flat` and `league`. `web/src/world/world.test.ts` asserts invariants: `league` never changes them.
 
 ## 12. Rejected
 

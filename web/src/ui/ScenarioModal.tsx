@@ -1,6 +1,6 @@
 // "Nouveau scénario": configure a fresh run (budget, difficulty, goal, mind) or load a saved one.
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import type { CompanySnapshot, Difficulty } from '../../../shared/types';
+import type { CompanySnapshot, Difficulty, TalentMode } from '../../../shared/types';
 import { api, type RunSummary } from '../api';
 import { cx, Empty, Pill } from './common';
 import { useApp } from './context';
@@ -13,10 +13,17 @@ import { budgetError, budgetTooLow, deadlineNote, defaultForm, minCashOf, scenar
 
 const randomSeed = () => Math.floor(Math.random() * 100_000);
 
+const TALENT_MODES: { id: TalentMode; label: string; help: string }[] = [
+  { id: 'league', label: 'Ligue', help: 'Saisons, classements, duels. Un agent qui plafonne passe un test contre trois candidats et peut être remplacé.' },
+  { id: 'flat', label: 'Sans conséquence', help: 'Chacun a son talent et sa note, personne n’est classé ni remplacé.' },
+  { id: 'off', label: 'Désactivée', help: 'Tous les agents se valent : ni talent, ni note.' },
+];
+
 export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded(s: CompanySnapshot): void }) {
   const { snapshot, demo, toast } = useApp();
   const minCash = minCashOf(snapshot);
-  const [form, setForm] = useState<ScenarioForm>(() => defaultForm(snapshot?.scenario, minCash, randomSeed()));
+  // « Sans fin » starts on whatever the last run did (scale §8), a bench run included
+  const [form, setForm] = useState<ScenarioForm>(() => ({ ...defaultForm(snapshot?.scenario, minCash, randomSeed()), openEnded: true, talent: snapshot?.scenario?.talent ?? 'league' }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
@@ -103,12 +110,16 @@ export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded
                 <input {...numberInput('startingCash')} />
                 <span className={cx('field-note', budgetTooLow(form, minCash) && 'is-bad')}>Minimum {fmtEur(minCash, 0)} : frais de démarrage et premier mois de frais fixes.</span>
               </label>
-              <label className="field"><span>Horizon (jours)</span><input {...numberInput('horizonDays')} /></label>
+              <label className="field">
+                <span>Horizon (jours)</span>
+                <input {...numberInput('horizonDays')} />
+                {form.openEnded ? <span className="field-note">Sans fin : l’horizon ne sert qu’à situer l’objectif.</span> : null}
+              </label>
               <label className="field"><span>Objectif de profit (€)</span><input {...numberInput('targetProfit')} /></label>
               <label className="field">
                 <span>Avant le jour</span>
                 <input {...numberInput('byDay')} />
-                {deadline ? <span className="field-note is-warn">{deadline}</span> : null}
+                {deadline ? <span className="field-note is-warn">{form.openEnded ? deadline.replace('Après la fin de la simulation', 'Après l’horizon') : deadline}</span> : null}
               </label>
               <label className="field">
                 <span>Graine (seed)</span>
@@ -143,7 +154,20 @@ export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded
               {form.mindMode === 'auto' ? 'Claude si une clé ANTHROPIC_API_KEY est configurée côté serveur, sinon heuristique.' : form.mindMode === 'claude' ? 'Chaque agent pense avec Claude (Opus, Sonnet, Haiku selon le rôle), dans la limite du plafond.' : 'Générateurs procéduraux hors-ligne : gratuit et déterministe.'}
             </div>
 
+            <label className="field">
+              <span>Compétition</span>
+              <select value={form.talent} onChange={(e) => set('talent', e.target.value as TalentMode)}>
+                {TALENT_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              </select>
+              <span className="field-note">{TALENT_MODES.find((m) => m.id === form.talent)?.help}</span>
+            </label>
+
             <div className="toggles">
+              <label className="toggle">
+                <input type="checkbox" checked={form.openEnded ?? true} onChange={(e) => set('openEnded', e.target.checked)} />
+                <span className="toggle-ui" />
+                <span><strong>Sans fin</strong><span className="muted small">L’agence tourne tant que tu ne l’arrêtes pas. Sinon la simulation s’arrête à l’horizon.</span></span>
+              </label>
               <label className="toggle">
                 <input type="checkbox" checked={form.founderApproval} onChange={(e) => set('founderApproval', e.target.checked)} />
                 <span className="toggle-ui" />

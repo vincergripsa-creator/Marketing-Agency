@@ -1,6 +1,6 @@
 // Agent movement simulation (UI only): each agent gets a target spot from its snapshot status/place
 // and recent activities, then walks there along island ↔ bridge waypoints at ~40 px/s.
-import type { Activity, AgentState, CompanySnapshot, Place } from '../../../shared/types';
+import type { Activity, AgentState, CompanySnapshot, PersonCard, Place } from '../../../shared/types';
 import { facingFrom, screenDist, type Facing, type Pt } from './iso';
 import { faceTowards } from './islands';
 import { applyDeskVisibility, deskIndexes, homeDept } from './layout';
@@ -10,7 +10,7 @@ import { hashStr } from './pixel';
 import { getSheet } from './sprites';
 
 export type Pose = 'sit' | 'stand' | 'coffee';
-type SpotKind = 'seat' | 'cafe' | 'fountain' | 'meeting' | 'visitor' | 'wander' | 'visit' | 'dock';
+type SpotKind = 'seat' | 'cafe' | 'fountain' | 'meeting' | 'visitor' | 'wander' | 'visit' | 'dock' | 'duel' | 'cheer';
 
 export interface Waypoint extends Pt { island: string; cross?: boolean }
 
@@ -26,12 +26,16 @@ export interface Spot {
 }
 
 interface Override {
-  kind: 'fountain' | 'visit' | 'place';
+  kind: 'fountain' | 'visit' | 'place' | 'duel' | 'cheer';
   until: number;
   holdUntil?: number;
   place?: Place;
   target?: string;
+  slot?: 0 | 1;               // which side of the duel table
 }
+
+/** What the sim cannot draw itself: `Drama` hands it to the effects. */
+export type Cue = { kind: 'dust'; at: Pt } | { kind: 'spark'; at: Pt; seconds: number };
 
 export interface AgentVis {
   id: string;
@@ -42,6 +46,10 @@ export interface AgentVis {
   /** A short gesture, held until `poseUntil`. */
   pose?: 'cheer' | 'slump' | 'shake' | null;
   poseUntil?: number;
+  /** When the walker started to fade: in as it steps off the dock, out as it reaches it. */
+  fadeAt?: number;
+  /** A newcomer's chief got up to meet it. */
+  greeted?: boolean;
   sheet: HTMLCanvasElement;
   pos: Pt;
   island: string;
@@ -62,6 +70,23 @@ export interface AgentVis {
 const BASE_SPEED = 40; // world px per second
 const FOUNTAIN_HOLD = 2.6;
 const VISIT_HOLD = 2.4;
+const WALKER_PACE = 1.6;      // who is leaving or arriving hurries
+export const MAX_WALKERS = 6; // of each: past that the sprite is skipped, the toast and the feed still tell it
+export const FADE_SECONDS = 0.8;
+const SHAKE_SECONDS = 1.5;
+export const DUEL_SECONDS = 8;
+const DUEL_CALL = 45;         // the far side of the map, both walks and the duel itself
+const PODIUM_SECONDS = 4;
+const PODIUM_CALL = 45;
+/** Spots nobody shares: no index to hand out. */
+const SOLO = new Set<SpotKind>(['seat', 'wander', 'visit', 'duel', 'cheer']);
+
+/** How visible a walker is. Only the dock fades: there is no other way on or off the map. */
+export function opacityOf(v: AgentVis, now: number): number {
+  if (v.fadeAt === undefined || v.role === 'staff') return 1;
+  const t = Math.max(0, Math.min(1, (now - v.fadeAt) / FADE_SECONDS));
+  return v.role === 'arriving' ? t : 1 - t;
+}
 
 function d2(a: Pt, b: Pt): number {
   return Math.hypot(a.tx - b.tx, a.ty - b.ty);
@@ -149,16 +174,27 @@ export class AgentSim {
   private groups = new Map<string, Map<string, number>>();
   /** Desk of each agent inside its department, recomputed on each sync: the layout knows no one. */
   private desks = new Map<string, number>();
+  private chiefs = new Map<string, string>();
+  /** Hires the next sync starts at the dock. */
+  private expected = new Set<string>();
   private started = false;
+  /** Drained by `Drama` on each frame. */
+  readonly cues: Cue[] = [];
 
   setLayout(layout: WorldLayout): void {
-    const changed = this.layout && this.layout.key !== layout.key;
+    const before = this.layout;
+    const changed = before && before.key !== layout.key;
     this.layout = layout;
     if (changed) {
-      // the world was rebuilt: put everybody straight back on their spot
+      // the world was rebuilt: put everybody straight back on their spot, walkers carry on from where they are on their island
       for (const v of this.agents.values()) {
         v.spot = null;
         v.path = [];
+        if (v.role === 'staff') continue;
+        const was = before.byId.get(v.island);
+        const is = layout.byId.get(v.island);
+        if (was && is) v.pos = { tx: v.pos.tx - was.center.tx + is.center.tx, ty: v.pos.ty - was.center.ty + is.center.ty };
+        if (v.role === 'leaving') this.walkTo(v, this.dockSpot());
       }
       this.started = false;
     }
@@ -169,35 +205,142 @@ export class AgentSim {
     if (!L) return;
     const states = snapshot?.company.agents ?? [];
     const departments = snapshot?.company.departments ?? [];
-    const chiefs = new Map<string, string>(departments.map((d) => [d.id, d.chiefId]));
-    this.desks = deskIndexes(states, (dept) => chiefs.get(dept));
+    this.chiefs = new Map<string, string>(departments.map((d) => [d.id, d.chiefId]));
+    this.desks = deskIndexes(states, (dept) => this.chiefs.get(dept));
     applyDeskVisibility(L, this.desks, states, departments);
     const seen = new Set<string>();
     for (const st of states) {
       seen.add(st.id);
       let v = this.agents.get(st.id);
       if (!v) {
-        const h = hashStr(st.id);
-        v = {
-          id: st.id, state: st, role: 'staff', carry: null, sheet: getSheet(st.avatar), pos: { ...L.pier.center }, island: L.pier.id, path: [], spot: null,
-          facing: 'se', moving: false, walkT: 0, speed: BASE_SPEED * (0.9 + ((h % 100) / 100) * 0.25), phase: (h % 1000) / 160,
-          override: null, wanderAt: now + 3 + (h % 7), wanderIdx: h % 97, lastVisit: -999, arrived: true,
-        };
+        v = this.sprite(st.id, st, L.pier.center, L.pier.id, now);
         this.agents.set(st.id, v);
       } else {
         if (v.state.avatar !== st.avatar) v.sheet = getSheet(st.avatar);
         v.state = st;
       }
+      if (this.expected.has(st.id)) this.startArrival(v, now);
     }
+    this.expected.clear();
     for (const [id, v] of this.agents) if (!seen.has(id) && v.role === 'staff') this.agents.delete(id);
     this.retargetAll(now, !this.started);
     this.started = true;
   }
 
+  private sprite(id: string, state: AgentState, pos: Pt, island: string, now: number): AgentVis {
+    const h = hashStr(id);
+    return {
+      id, state, role: 'staff', carry: null, sheet: getSheet(state.avatar), pos: { ...pos }, island, path: [], spot: null,
+      facing: 'se', moving: false, walkT: 0, speed: BASE_SPEED * (0.9 + ((h % 100) / 100) * 0.25), phase: (h % 1000) / 160,
+      override: null, wanderAt: now + 3 + (h % 7), wanderIdx: h % 97, lastVisit: -999, arrived: true,
+    };
+  }
+
+  private dockSpot(): Spot {
+    const pier = this.layout!.pier;
+    return { key: 'dock', kind: 'dock', island: pier, pos: pier.pier?.dock ?? pier.center, pose: 'stand', facing: 'se' };
+  }
+
   /** The walk from a point to the dock, the only way off the map. */
   routeToDock(from: Pt, island: string): Waypoint[] {
-    const pier = this.layout!.pier;
-    return this.route(from, island, { key: 'dock', kind: 'dock', island: pier, pos: pier.pier?.dock ?? pier.center, pose: 'stand', facing: 'se' });
+    return this.route(from, island, this.dockSpot());
+  }
+
+  private walkers(role: AgentVis['role']): number {
+    let n = 0;
+    for (const v of this.agents.values()) if (v.role === role) n++;
+    return n;
+  }
+
+  /**
+   * A leaver is always a new sprite, cloned from the one that still shows the person: beats run before `sync`. Without such a
+   * sprite it starts from the card, at the middle of its island. Returns its id, `null` past the cap.
+   */
+  spawnLeaver(key: string, seat: string | null, person: PersonCard | undefined, now: number): string | null {
+    const L = this.layout;
+    const from = seat ? this.agents.get(seat) : undefined;
+    if (!L || (!from && !person) || this.walkers('leaving') >= MAX_WALKERS) return null;
+    const id = `leaver:${key}`;
+    const home = person ? L.deptIsland.get(person.dept) ?? L.plaza : L.plaza;
+    const state = from?.state ?? ({ ...person, status: 'idle', place: person!.dept, bubble: null } as AgentState);
+    const v = this.sprite(id, { ...state, status: 'idle', bubble: null }, from?.pos ?? home.center, from?.island ?? home.id, now);
+    v.role = 'leaving';
+    v.carry = 'box';
+    if (from) {
+      v.sheet = from.sheet;
+      v.facing = from.facing;
+      v.path = from.path;
+      v.spot = from.spot;
+      this.agents.delete(from.id);
+    }
+    this.agents.set(id, v);
+    this.walkTo(v, this.dockSpot());
+    return id;
+  }
+
+  /** The next sync starts this agent at the dock with its bag. Past the cap it simply sits at its desk. */
+  expectArrival(id: string): void {
+    if (this.walkers('arriving') + this.expected.size < MAX_WALKERS) this.expected.add(id);
+  }
+
+  private startArrival(v: AgentVis, now: number): void {
+    const L = this.layout!;
+    v.role = 'arriving';
+    v.carry = 'bag';
+    v.pos = { ...(L.pier.pier?.dock ?? L.pier.center) };
+    v.island = L.pier.id;
+    v.path = [];
+    v.spot = null;
+    v.override = null;
+    v.fadeAt = now;
+    v.greeted = false;
+  }
+
+  /** A new run: nobody is on their way in or out of the old one. */
+  clearWalkers(): void {
+    this.expected.clear();
+    for (const [id, v] of this.agents) if (v.role !== 'staff') this.agents.delete(id);
+  }
+
+  /** Both duellists walk to the table. False when one of them cannot answer: gone, or still arriving. */
+  callToDuel(a: string, b: string, now: number): boolean {
+    const pair = [this.agents.get(a), this.agents.get(b)];
+    if (!this.layout?.plaza.stage || a === b || pair.some((v) => v?.role !== 'staff')) return false;
+    pair.forEach((v, i) => {
+      v!.override = { kind: 'duel', until: now + DUEL_CALL, slot: i ? 1 : 0, target: i ? a : b };
+      this.retarget(v!, now, false);
+    });
+    return true;
+  }
+
+  get inDuel(): boolean {
+    for (const v of this.agents.values()) if (v.override?.kind === 'duel') return true;
+    return false;
+  }
+
+  callToPodium(id: string, now: number): void {
+    const v = this.agents.get(id);
+    if (!this.layout?.plaza.stage || v?.role !== 'staff') return;
+    v.override = { kind: 'cheer', until: now + PODIUM_CALL };
+    this.retarget(v, now, false);
+  }
+
+  gesture(id: string, pose: NonNullable<AgentVis['pose']>, until: number): void {
+    const v = this.agents.get(id);
+    if (!v) return;
+    v.pose = pose;
+    v.poseUntil = until;
+  }
+
+  /** The lowest desk of a department nobody uses, for the vacancy tag. */
+  nextFreeSeat(dept: string): Seat | null {
+    const seats = this.layout?.deptIsland.get(dept)?.seats ?? [];
+    const taken = new Set<number>();
+    for (const v of this.agents.values()) {
+      const desk = this.desks.get(v.id);
+      if (desk !== undefined && v.state.dept === dept) taken.add(desk);
+    }
+    return seats.find((_, i) => !taken.has(i)) ?? null;
   }
 
   /** React to a fresh activity (brain visits, delegation calls, walks). */
@@ -205,7 +348,8 @@ export class AgentSim {
     const L = this.layout;
     if (!L || !a.agentId) return;
     const v = this.agents.get(a.agentId);
-    if (!v) return;
+    // the stage comes first: a coffee does not pull anyone out of a duel, and a newcomer has not sat down yet
+    if (!v || v.role !== 'staff' || v.override?.kind === 'duel' || v.override?.kind === 'cheer') return;
     if (a.kind === 'brain_read' || a.kind === 'brain_write') {
       const busyAtFountain = [...this.agents.values()].filter((x) => x.override?.kind === 'fountain').length;
       if (v.state.status !== 'coffee' && now - v.lastVisit > 45 && busyAtFountain < 4 && !v.override) {
@@ -215,7 +359,7 @@ export class AgentSim {
       }
     } else if (a.kind === 'delegate' && a.toAgentId) {
       const t = this.agents.get(a.toAgentId);
-      if (t && !t.override && t.state.status !== 'coffee' && t.island === v.island && d2(t.pos, v.pos) < 9 && t.id !== v.id) {
+      if (t && t.role === 'staff' && !t.override && t.state.status !== 'coffee' && t.island === v.island && d2(t.pos, v.pos) < 9 && t.id !== v.id) {
         t.override = { kind: 'visit', until: now + 25, target: v.id };
         this.retarget(t, now, false);
       }
@@ -231,7 +375,7 @@ export class AgentSim {
   update(dt: number, now: number): void {
     for (const v of this.agents.values()) {
       if (v.path.length) {
-        let step = v.speed * dt * (v.spot?.kind === 'wander' ? 0.7 : 1) * (v.path.length > 6 ? 1.2 : 1);
+        let step = v.speed * dt * (v.spot?.kind === 'wander' ? 0.7 : 1) * (v.path.length > 6 ? 1.2 : 1) * (v.role === 'staff' ? 1 : WALKER_PACE);
         while (step > 0 && v.path.length) {
           const wp = v.path[0];
           const dist = screenDist(v.pos, wp);
@@ -250,14 +394,18 @@ export class AgentSim {
         v.moving = true;
         v.walkT += dt;
         v.arrived = false;
+        if (v.role === 'arriving' && !v.greeted && v.island === v.spot?.island.id) this.greet(v, now);
       } else {
         v.moving = false;
         if (v.spot) v.facing = v.spot.facing;
         if (!v.arrived) {
           v.arrived = true;
-          if (v.override?.kind === 'fountain') v.override.holdUntil = now + FOUNTAIN_HOLD;
-          if (v.override?.kind === 'visit') v.override.holdUntil = now + VISIT_HOLD;
+          this.landed(v, now);
         }
+      }
+      if (v.role === 'leaving') {
+        if (v.fadeAt !== undefined && now >= v.fadeAt + FADE_SECONDS) this.agents.delete(v.id);
+        continue;
       }
       const o = v.override;
       if (o && (now > o.until || (o.holdUntil !== undefined && now > o.holdUntil) || (o.kind === 'place' && o.place === v.state.place))) {
@@ -269,6 +417,44 @@ export class AgentSim {
         this.retarget(v, now, false);
       }
     }
+  }
+
+  /** The end of a walk. */
+  private landed(v: AgentVis, now: number): void {
+    const o = v.override;
+    if (v.role === 'leaving') v.fadeAt = now;
+    else if (v.role === 'arriving') {
+      v.role = 'staff';
+      v.carry = null;
+      v.pose = 'shake';
+      v.poseUntil = now + SHAKE_SECONDS;
+      this.cues.push({ kind: 'dust', at: { ...v.pos } });
+    } else if (o?.kind === 'fountain') o.holdUntil = now + FOUNTAIN_HOLD;
+    else if (o?.kind === 'visit') o.holdUntil = now + VISIT_HOLD;
+    else if (o?.kind === 'cheer') {
+      o.holdUntil = now + PODIUM_SECONDS;
+      v.pose = 'cheer';
+      v.poseUntil = o.holdUntil;
+    } else if (o?.kind === 'duel') this.duelReady(v, now);
+  }
+
+  /** The 8 seconds start once both stand at the table, whoever walked further. */
+  private duelReady(v: AgentVis, now: number): void {
+    const other = v.override?.target ? this.agents.get(v.override.target) : undefined;
+    const stage = this.layout?.plaza.stage;
+    if (!stage || !v.override || other?.override?.kind !== 'duel' || !other.arrived || other.path.length) return;
+    if (v.override.holdUntil !== undefined) return; // a rebuild of the map lands them again: they are already at it
+    v.override.holdUntil = other.override.holdUntil = now + DUEL_SECONDS;
+    this.cues.push({ kind: 'spark', at: stage.duel.centre, seconds: DUEL_SECONDS });
+  }
+
+  /** On a newcomer's way into its island, its chief gets up to meet it. */
+  private greet(v: AgentVis, now: number): void {
+    v.greeted = true;
+    const chief = this.agents.get(this.chiefs.get(v.state.dept) ?? '');
+    if (!chief || chief === v || chief.role !== 'staff' || chief.override || chief.state.status === 'coffee') return;
+    chief.override = { kind: 'visit', until: now + 25, target: v.id };
+    this.retarget(chief, now, false);
   }
 
   // ───────────── targets ─────────────
@@ -291,8 +477,10 @@ export class AgentSim {
     const L = this.layout!;
     const st = v.state;
     const o = v.override;
+    if (v.role === 'arriving') return { kind: this.seatOf(st) ? 'seat' : 'visitor', island: this.homeIsland(st) };
     if (o && now <= o.until) {
       if (o.kind === 'fountain') return { kind: 'fountain', island: L.plaza };
+      if (o.kind === 'duel' || o.kind === 'cheer') return { kind: o.kind, island: L.plaza };
       if (o.kind === 'visit' && o.target) {
         const t = this.agents.get(o.target);
         if (t) return { kind: 'visit', island: L.byId.get(t.island) ?? L.plaza };
@@ -322,13 +510,14 @@ export class AgentSim {
 
   private retargetAll(now: number, snap: boolean): void {
     const want = new Map<string, { kind: SpotKind; island: IslandModel }>();
-    for (const v of this.agents.values()) want.set(v.id, this.desired(v, now));
+    const crowd = [...this.agents.values()].filter((v) => v.role !== 'leaving'); // the dock is all a leaver wants
+    for (const v of crowd) want.set(v.id, this.desired(v, now));
     // stable spot indices inside each shared group
     const live = new Set<string>();
-    const ordered = [...this.agents.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
+    const ordered = crowd.sort((a, b) => (a.id < b.id ? -1 : 1));
     for (const v of ordered) {
       const w = want.get(v.id)!;
-      if (w.kind === 'seat' || w.kind === 'wander' || w.kind === 'visit') continue;
+      if (SOLO.has(w.kind)) continue;
       const gk = `${w.kind}:${w.island.id}`;
       live.add(gk);
       let g = this.groups.get(gk);
@@ -352,11 +541,11 @@ export class AgentSim {
         g.set(v.id, i);
       }
     }
-    for (const v of this.agents.values()) {
+    for (const v of ordered) {
       const w = want.get(v.id)!;
       const spot = this.resolve(v, w.kind, w.island);
-      if (snap || !v.spot) this.placeAt(v, spot, now);
-      else if (spot.key !== v.spot.key) this.walkTo(v, spot);
+      if (v.role === 'staff' && (snap || !v.spot)) this.placeAt(v, spot, now);
+      else if (spot.key !== v.spot?.key) this.walkTo(v, spot);
     }
   }
 
@@ -365,7 +554,7 @@ export class AgentSim {
     const gk = `${w.kind}:${w.island.id}`;
     // leave previous groups
     for (const [k, g] of this.groups) if (k !== gk) g.delete(v.id);
-    if (w.kind !== 'seat' && w.kind !== 'wander' && w.kind !== 'visit') {
+    if (!SOLO.has(w.kind)) {
       let g = this.groups.get(gk);
       if (!g) this.groups.set(gk, (g = new Map()));
       if (!g.has(v.id)) {
@@ -412,12 +601,26 @@ export class AgentSim {
     if (kind === 'visit') {
       const t = v.override?.target ? this.agents.get(v.override.target) : undefined;
       if (t) {
-        const dir = { tx: v.pos.tx - t.pos.tx, ty: v.pos.ty - t.pos.ty };
+        const at = t.role === 'arriving' && t.spot ? t.spot.pos : t.pos; // a newcomer is met where it is going
+        const dir = { tx: v.pos.tx - at.tx, ty: v.pos.ty - at.ty };
         const len = Math.hypot(dir.tx, dir.ty) || 1;
-        const pos = { tx: t.pos.tx + (dir.tx / len) * 0.7, ty: t.pos.ty + (dir.ty / len) * 0.7 };
-        return { key: `visit:${t.id}`, kind, island: L.byId.get(t.island) ?? isl, pos, pose: 'stand', facing: faceTowards(pos, t.pos) };
+        const pos = { tx: at.tx + (dir.tx / len) * 0.7, ty: at.ty + (dir.ty / len) * 0.7 };
+        return { key: `visit:${t.id}`, kind, island: L.byId.get(t.island) ?? isl, pos, pose: 'stand', facing: faceTowards(pos, at) };
       }
       kind = 'visitor';
+    }
+    const stage = plaza.stage;
+    if (kind === 'duel' && stage) {
+      const slot = v.override?.slot ?? 0;
+      const pos = stage.duel.spots[slot];
+      // each side of the table is reached from behind it, never across it
+      return { key: `duel:${slot}`, kind, island: plaza, pos, approach: { tx: pos.tx, ty: pos.ty - 0.7 }, pose: 'stand', facing: stage.duel.facing[slot] };
+    }
+    if (kind === 'cheer' && stage) {
+      const pos = stage.podium.champion;
+      const mouth = plaza.edges['y+'];
+      // along the front of the podium, from the path: every other line to this spot crosses the steps
+      return { key: 'cheer', kind, island: plaza, pos, approach: mouth ? { tx: mouth.tx, ty: pos.ty } : undefined, pose: 'stand', facing: 'se' };
     }
     if (kind === 'meeting') {
       const spots = isl.meetingSpots.length ? isl.meetingSpots : isl.wanderSpots;
@@ -445,9 +648,12 @@ export class AgentSim {
     v.facing = spot.facing;
     v.arrived = true;
     if (v.override?.kind === 'fountain' || v.override?.kind === 'visit') v.override.holdUntil = now + FOUNTAIN_HOLD;
+    if (v.override?.kind === 'duel') this.duelReady(v, now);
+    if (v.override?.kind === 'cheer' && v.override.holdUntil === undefined) this.landed(v, now);
   }
 
   private walkTo(v: AgentVis, spot: Spot): void {
+    const left = v.spot;
     v.spot = spot;
     let start: Pt = v.pos;
     let island = v.island;
@@ -456,6 +662,10 @@ export class AgentSim {
       keep.push(v.path[0]);
       start = v.path[0];
       island = v.path[0].island;
+    } else if (left?.approach && !v.path.length && (left.kind === 'duel' || left.kind === 'cheer')) {
+      // the stage is left the way it was entered
+      keep.push({ ...left.approach, island: left.island.id });
+      start = left.approach;
     }
     v.path = keep.concat(this.route(start, island, spot));
     v.arrived = false;

@@ -1,0 +1,51 @@
+/* Founder digest, stage badge, HUD chips. Existing tokens only (styles.css). */
+
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+/* ───────────── Stage badge ───────────── */
+.stage-badge { position: relative; align-self: flex-start; }
+.stage-badge-btn {
+  display: inline-flex; align-items: center; gap: 7px; padding: 3px 7px; border: 1px solid var(--line-2); border-radius: 7px;
+  background: #fff; cursor: pointer; font: 600 11px var(--font); color: var(--ink-2); white-space: nowrap;
+}
+.stage-badge-btn:hover { border-color: #93c5fd; }
+.stage-badge-btn .stage-pip { width: 10px; height: 5px; }
+.stage-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 2; width: min(420px, calc(100vw - 32px)); padding: 11px 12px; border-radius: 12px; background: var(--glass-solid); }
+/* the popover hangs under the HUD row: it has to clear a tab left open */
+.hud-row:has(.stage-pop) { z-index: 45; }
+
+/* ───────────── HUD ───────────── */
+.hud-away { font-size: 11px; color: var(--muted); font-style: italic; white-space: nowrap; }
+.hud-digest { white-space: nowrap; }
+/* one line, or the speed controls wrap under the side panel: the chips leave before anything he clicks */
+@media (max-width: 1320px) { .hud .mind-chip:not(.hud-team) { display: none; } }
+@media (max-width: 1180px) { .hud .hud-team { display: none; } }
+
+/* ───────────── Agent card ───────────── */
+.career { display: flex; flex-direction: column; gap: 6px; }
+
+/* ───────────── Scenario form ───────────── */
+.field select { font: 500 13.5px var(--font); color: var(--ink); padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line-2); background: #fff; outline: none; width: 100%; min-width: 0; }
+.field select:focus { border-color: #93c5fd; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
+
+/* ───────────── Digest ───────────── */
+.digest { width: min(760px, 100%); }
+.digest-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 18px; overflow: auto; min-height: 0; }
+.digest .stat-value { white-space: normal; overflow-wrap: anywhere; }
+.digest-headline { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.4; }
+.digest-money { line-height: 1.45; }
+.digest-section { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; align-items: flex-start; }
+.digest-section > ul { width: 100%; }
+.digest-section h3 { margin: 0; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.digest-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.digest-entry { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 6px; width: 100%; padding: 4px 6px; border: 0; border-radius: 8px; background: none; cursor: pointer; font: inherit; color: inherit; text-align: left; }
+.digest-entry:hover { background: var(--surface-3); }
+.digest-decision { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 6px; padding: 0 6px; align-items: baseline; }
+.digest-decision strong { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.digest-foot { display: flex; justify-content: flex-end; padding: 10px 18px 12px; border-top: 1px solid var(--line); }
+
+/* ───────────── End of a run ───────────── */
+/* three choices: the text keeps the first line */
+.end-extend { flex-wrap: wrap; }
+.end-extend .end-body { flex-basis: calc(100% - 58px); }
+.end-extend .end-actions { width: 100%; justify-content: flex-end; }

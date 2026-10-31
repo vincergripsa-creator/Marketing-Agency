@@ -109,6 +109,18 @@ function okFlag(data: unknown): boolean {
   return !(isObj(data) && data.ok === false);
 }
 
+function controlResult(data: unknown): ControlResult {
+  const o = isObj(data) ? data : {};
+  return {
+    ok: okFlag(data),
+    status: typeof o.status === 'string' ? o.status : undefined,
+    speed: typeof o.speed === 'number' && [1, 2, 4, 8].includes(o.speed) ? (o.speed as Speed) : undefined,
+    playing: typeof o.playing === 'boolean' ? o.playing : undefined,
+    message: typeof o.message === 'string' ? o.message : undefined,
+    session: asSession(o.session),
+  };
+}
+
 // ───────────────────────────── Endpoints ─────────────────────────────
 
 export const api = {
@@ -120,16 +132,17 @@ export const api = {
   /** POST /api/control */
   async control(body: ControlRequest): Promise<ControlResult> {
     // step/day run whole ticks server-side (slow with Claude): allow a long wait
-    const data = await post<unknown>('/api/control', body, body.action === 'day' || body.action === 'step' ? 180_000 : 15_000);
-    const o = isObj(data) ? data : {};
-    return {
-      ok: okFlag(data),
-      status: typeof o.status === 'string' ? o.status : undefined,
-      speed: typeof o.speed === 'number' && [1, 2, 4, 8].includes(o.speed) ? (o.speed as Speed) : undefined,
-      playing: typeof o.playing === 'boolean' ? o.playing : undefined,
-      message: typeof o.message === 'string' ? o.message : undefined,
-      session: asSession(o.session),
-    };
+    return controlResult(await post<unknown>('/api/control', body, body.action === 'day' || body.action === 'step' ? 180_000 : 15_000));
+  },
+
+  /** POST /api/run/extend — a finished run goes on, with no end. */
+  async extendRun(): Promise<ControlResult> {
+    return controlResult(await post<unknown>('/api/run/extend', {}, 30_000));
+  },
+
+  /** POST /api/digest/seen — the founder has the agency in front of him: his « last seen » follows the clock. */
+  async digestSeen(): Promise<void> {
+    await post<unknown>('/api/digest/seen', {});
   },
 
   /** POST /api/scenario — starts a new run. */

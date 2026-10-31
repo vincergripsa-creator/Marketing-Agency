@@ -17,9 +17,9 @@ import type { RunPaths, StepResult } from '../src/contracts.js';
 import type { ScenarioConfig, WorldState } from '../src/shared.js';
 import { isServerOnlyFile } from '../src/api/http.js';
 import {
-  keptCheckpoints, listRuns, loadWorld, loadWorldSafe, migrateWorld, readCurrentRun, readSessionLog, runExists, runsDir, saveCheckpoint, saveWorld, writeCurrentRun,
+  flushSaves, keptCheckpoints, listRuns, loadWorld, loadWorldSafe, migrateWorld, readCurrentRun, readSessionLog, runExists, runsDir, saveCheckpoint, saveWorld, writeCurrentRun,
 } from '../src/api/persist.js';
-import { createAgencyServer, installCrashGuards, PORT_BUSY_EXIT, startServer, type SessionLike } from '../src/api/server.js';
+import { createAgencyServer, installCrashGuards, PORT_BUSY_EXIT, sessionViews, startServer, type SessionLike } from '../src/api/server.js';
 import { AgencySession, mountWorld, type MountedRun, type SessionOptions, type VideoDirectorLike } from '../src/api/session.js';
 import { SseHub } from '../src/api/sse.js';
 import { Company, createWorld, defaultScenario } from '../src/runtime/index.js';
@@ -468,6 +468,93 @@ describe('nothing stops the agency but the founder', () => {
     await flight;
     await save;
     expect((await loadWorld(saved.runId))!.tick).toBe(run.world.tick);
+    await s.shutdown();
+  });
+
+  it.each<[string, (s: AgencySession) => void]>([
+    ['« vu »', (s) => { sessionViews(s).digestSeen(); }],
+    ['a founder action', (s) => { (s as unknown as { touch(): void }).touch(); }],
+  ])('%s saved on a timer waits for the tick in flight too', async (name, look) => {
+    const saved = await savedRun(`run-soon-${name.length}`);
+    await writeCurrentRun(saved.runId);
+    const s = new AgencySession(options);
+    await s.start();
+    s.pause();
+    await s.step();
+    const run = mounted(s);
+    const before = (await loadWorld(saved.runId))!.tick;
+    let finish: () => void = () => undefined;
+    run.company.step = () => new Promise((r) => { finish = () => { run.world.tick += 1; r(stepped(run.world)); }; });
+    const flight = s.step();
+    await idle();
+    run.world.tick += 1; // halfway through the tick
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    look(s);
+    await vi.advanceTimersByTimeAsync(2000); // the debounce is over, the tick is not
+    vi.useRealTimers();
+    await wait(30);
+    expect((await loadWorld(saved.runId))!.tick).toBe(before); // nothing was written mid-tick
+    finish();
+    await flight;
+    await wait(30);
+    await flushSaves();
+    expect((await loadWorld(saved.runId))!.tick).toBe(run.world.tick);
+    await s.shutdown();
+  });
+
+  it('« vu » reaches the save of a paused run, and flushing it waits for the tick too', async () => {
+    const saved = await savedRun('run-seen-paused');
+    await writeCurrentRun(saved.runId);
+    const s = new AgencySession(options);
+    await s.start();
+    s.pause();
+    await s.step();
+    const run = mounted(s);
+    const before = (await loadWorld(saved.runId))!.tick;
+    let finish: () => void = () => undefined;
+    run.company.step = () => new Promise((r) => { finish = () => { run.world.tick += 1; r(stepped(run.world)); }; });
+    const flight = s.step();
+    await idle();
+    run.world.tick += 1;
+    const founder = sessionViews(s).digestSeen();
+    const flushed = flushSaves();
+    await wait(30);
+    expect((await loadWorld(saved.runId))!.tick).toBe(before);
+    finish();
+    await flight;
+    await flushed;
+    const disk = (await loadWorld(saved.runId))!;
+    expect(disk.tick).toBe(run.world.tick);
+    expect(disk.company.growth!.founder).toEqual(founder);
+    await s.shutdown();
+  });
+
+  it('a playing run leaves « vu » to its evening save, or world.prev.json would be seconds old', async () => {
+    const saved = await savedRun('run-seen-playing');
+    await writeCurrentRun(saved.runId);
+    const s = new AgencySession(options);
+    await s.start();
+    s.pause();
+    await s.step();
+    const run = mounted(s);
+    let phase: StepResult['phase'] = 'work';
+    run.company.step = async () => ({ ...stepped(run.world), phase });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] });
+    s.play();
+    await vi.advanceTimersByTimeAsync(600);
+    const seen = sessionViews(s).digestSeen()!;
+    await vi.advanceTimersByTimeAsync(5000); // the debounce would be long over
+    await flushSaves();                      // and its write on the disk
+    expect((await loadWorld(saved.runId))!.company.growth!.founder.lastSeenAt).toBeNull();
+    expect(run.world.company.growth!.founder).toEqual(seen); // the snapshot has it at once
+    phase = 'evening';
+    await vi.advanceTimersByTimeAsync(600);
+    await idle();
+    await vi.advanceTimersByTimeAsync(0);
+    vi.useRealTimers();
+    await wait(30);
+    await flushSaves();
+    expect((await loadWorld(saved.runId))!.company.growth!.founder).toEqual(seen);
     await s.shutdown();
   });
 });

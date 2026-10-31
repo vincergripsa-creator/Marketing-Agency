@@ -1,9 +1,11 @@
 // Pure-logic tests of the world module (no DOM needed): grid layout, mock data, time of day.
 // Run: cd server && npx vitest run --root ../web/src/world
 import { describe, expect, it } from 'vitest';
-import type { DeptDef } from '../../../shared/types';
+import type { DeptDef, Office, TaskKind } from '../../../shared/types';
+import { CANDIDATES, KIND_HATS, OFFICES, ROLES } from '../../../server/src/runtime/org/catalog';
+import { DEPARTMENTS } from '../../../server/src/runtime/roster';
 import { effectiveGrid } from './layout';
-import { mockSnapshot } from './mockSnapshot';
+import { SCENE_ACTIONS, mockOrgState, mockSnapshot } from './mockSnapshot';
 import { hourForTick, skyAt } from './scenery';
 import { facingFrom, isoX, isoY, pointInPoly, toTile } from './iso';
 
@@ -59,17 +61,110 @@ describe('effectiveGrid', () => {
 
 describe('mockSnapshot', () => {
   const s = mockSnapshot();
-  it('has 31 agents in 11 departments with unique ids', () => {
-    expect(s.company.agents).toHaveLength(31);
-    expect(s.company.departments).toHaveLength(11);
-    expect(new Set(s.company.agents.map((a) => a.id)).size).toBe(31);
-    const depts = new Set(s.company.departments.map((d) => d.id));
-    for (const a of s.company.agents) expect(depts.has(a.dept)).toBe(true);
-    for (const d of s.company.departments) {
-      expect(Math.abs(d.grid.col)).toBeLessThanOrEqual(3);
-      expect(Math.abs(d.grid.row)).toBeLessThanOrEqual(3);
-      expect(s.company.agents.find((a) => a.id === d.chiefId)?.isChief).toBe(true);
+  const { agents, departments } = s.company;
+  const org = mockOrgState();
+
+  it('has unique people, in cells of the catalog', () => {
+    expect(new Set(agents.map((a) => a.id)).size).toBe(agents.length);
+    expect(new Set(agents.map((a) => a.name)).size).toBe(agents.length);
+    for (const d of [...departments, ...s.scene!.closedDepts]) {
+      expect(d.grid, d.id).toEqual(DEPARTMENTS.find((c) => c.id === d.id)!.grid);
     }
+  });
+
+  it('I1: every kind has a living owner', () => {
+    for (const kind of Object.keys(KIND_HATS) as TaskKind[]) expect(agents.some((a) => a.taskKinds.includes(kind)), kind).toBe(true);
+  });
+
+  it('I2: every office resolves to a living agent', () => {
+    for (const office of Object.keys(OFFICES) as Office[]) expect(agents.some((a) => a.id === org.offices[office]), office).toBe(true);
+  });
+
+  it('I3: every open department has a member and exactly one chief, who is that member', () => {
+    for (const d of departments) {
+      const members = agents.filter((a) => a.dept === d.id);
+      expect(members.length, d.id).toBeGreaterThan(0);
+      expect(members.filter((a) => a.isChief).map((a) => a.id), d.id).toEqual([d.chiefId]);
+    }
+  });
+
+  it('I4: every agent sits in an open department, and the catalog is open or a vacant plot', () => {
+    const open = new Set(departments.map((d) => d.id));
+    for (const a of agents) expect(open.has(a.dept), a.id).toBe(true);
+    const closed = s.scene!.closedDepts.map((d) => d.id);
+    expect(closed.filter((id) => open.has(id))).toEqual([]);
+    expect([...open, ...closed].sort()).toEqual(DEPARTMENTS.map((d) => d.id).sort());
+    expect(org.closedDepts.map((d) => d.id)).toEqual(closed);
+  });
+
+  it('every kind an agent holds comes from their role or from a hat of the catalog', () => {
+    for (const a of agents) {
+      expect(a.dept, a.id).toBe(ROLES[a.roleId].dept);
+      expect(a.taskKinds, a.id).toEqual([...ROLES[a.roleId].core, ...ROLES[a.roleId].assist, ...a.hatKinds]);
+      for (const hat of a.hatKinds) expect(KIND_HATS[hat], `${a.id} ${hat}`).toContain(a.roleId);
+    }
+  });
+
+  it('a closed department is carried by an open one, by whoever wears its hats', () => {
+    for (const d of org.closedDepts) {
+      const host = org.deptHost[d.id];
+      expect(departments.some((x) => x.id === host), d.id).toBe(true);
+      expect(agents.some((a) => a.dept === host && a.hatDepts.includes(d.id)), d.id).toBe(true);
+    }
+  });
+
+  it('the org block keeps out of the snapshot, as in the stream', () => {
+    expect(s.company.org).toBeUndefined();
+    expect(org.load.map((l) => l.day)).toEqual(s.company.kpis.map((k) => k.day));
+    expect(org.load.at(-1)!.headcount).toBe(agents.length);
+    expect(org.positions.map((p) => p.status).sort()).toEqual(['filled', 'open']);
+    expect(org.decisions.length).toBeGreaterThanOrEqual(3);
+    expect(Object.keys(s.scene!.names)).toEqual(org.alumni.map((a) => a.id));
+  });
+
+  it('whatever the mock says someone did, that someone exists', () => {
+    const c = s.company;
+    const named = [
+      ...c.tasks.flatMap((t) => [t.assignee, t.reviewer]), ...c.missions.flatMap((m) => [m.from, m.ownerId]),
+      ...c.creatives.map((x) => x.createdBy), ...c.campaigns.map((x) => x.createdBy), ...c.deliverables.map((x) => x.createdBy),
+      ...c.lessons.flatMap((l) => [l.source, ...l.appliesTo]), ...c.experiments.map((e) => e.owner), ...Object.keys(c.chats),
+      ...s.market.inbox.flatMap((m) => m.thread.map((t) => t.from)), ...Object.keys(s.scene!.people), ...s.scene!.board.map((r) => r.agentId),
+    ].filter((id): id is string => !!id && id !== 'customer' && id !== 'founder');
+    const ids = new Set(agents.map((a) => a.id));
+    expect(named.filter((id) => !ids.has(id))).toEqual([]);
+    for (const a of agents) expect(c.playbooks[a.id], a.id).toBeDefined();
+  });
+
+  it('nobody reviews their own work, and a current task is one they hold', () => {
+    for (const t of s.company.tasks) expect(t.reviewer, t.id).not.toBe(t.assignee);
+    for (const a of agents.filter((x) => x.currentTaskId)) {
+      const t = s.company.tasks.find((x) => x.id === a.currentTaskId);
+      expect([t?.assignee, t?.reviewer], a.id).toContain(a.id);
+    }
+    for (const t of s.company.tasks) {
+      if (t.assignee) expect(agents.find((a) => a.id === t.assignee)!.taskKinds, t.id).toContain(t.kind);
+    }
+  });
+
+  it('hires are dated after the founders, founders stay on day 0', () => {
+    for (const a of agents) {
+      if (a.founder) expect(a.hiredDay, a.id).toBe(0);
+      else expect(a.hiredDay, a.id).toBeGreaterThan(0);
+    }
+    expect(agents.filter((a) => a.founder).map((a) => a.id).sort()).toEqual(Object.values(CANDIDATES).filter((c) => c.founder).map((c) => c.id).sort());
+  });
+
+  it('a recruit is one more person of their role, wherever the department stands', () => {
+    let next = s;
+    for (let i = 0; i < 6; i++) next = SCENE_ACTIONS.find((a) => a.id === 'hire')!.apply(next);
+    const added = next.company.agents.slice(agents.length);
+    expect(new Set(next.company.agents.map((a) => a.id)).size).toBe(next.company.agents.length);
+    for (const a of added) {
+      expect(a.isChief, a.id).toBe(false);
+      expect(a.dept, a.id).toBe(ROLES[a.roleId].dept);
+    }
+    const again = SCENE_ACTIONS.find((a) => a.id === 'hire')!.apply(SCENE_ACTIONS.find((a) => a.id === 'fire')!.apply(next));
+    expect(new Set(again.company.agents.map((a) => a.id)).size).toBe(again.company.agents.length);
   });
 
   it('keeps finance and KPIs consistent', () => {

@@ -127,7 +127,7 @@ function mockOrg(): OrgDetail {
     },
     headcount, cost30d, costPerHead30d: cost30d / headcount, revenuePerHead30d: 22.4, profitPerHead30d: -2.6,
     depts,
-    closed: [{ id: 'video', name: 'Studio Vidéo', hostedBy: 'creation' }, { id: 'crm', name: 'Communauté & Email', hostedBy: 'growth' }],
+    closed: [{ id: 'partenariats', name: 'Partenariats', hostedBy: 'recherche' }, { id: 'video', name: 'Studio Vidéo', hostedBy: 'creation' }],
     reqs: [
       {
         id: 'pos_2', dept: 'creation', role: ROLE_LABEL.motion_designer, status: 'open', openedDay: 8, budget30d: 24, blockedBy: null,

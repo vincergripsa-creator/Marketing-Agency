@@ -1,7 +1,8 @@
-// "Plan du bureau": mini map of the islands (same effective grid as the world), plaza in the middle,
+// "Plan du bureau": mini map of the islands (same effective grid as the world), plaza in the middle, l'Accueil on its pier,
 // working agents as dots, active department outlined, "Vue d'ensemble" button.
 import { useMemo, type JSX } from 'react';
 import type { CompanySnapshot, DeptDef, DeptId } from '../../../shared/types';
+import { PIER_CELL } from '../../../shared/worldgrid';
 import { mapGrid } from './layout';
 import { deptColor, shade } from './palette';
 
@@ -10,6 +11,8 @@ export interface MinimapProps {
   selectedDept: DeptId | null;
   onPick(dept: DeptId): void;
   onOverview(): void;
+  /** L'Accueil is where people arrive and leave: it opens Effectif (ui §6.9). */
+  onAccueil?(): void;
 }
 
 const STYLE_ID = 'pa-minimap-style';
@@ -32,6 +35,8 @@ const CSS = `
   box-shadow:0 2px 0 rgba(0,0,0,0.12),inset 0 1px 0 rgba(255,255,255,0.45);transition:transform .15s,box-shadow .15s}
 .pa-minimap__cell:hover{transform:translateY(-1px) scale(1.07);z-index:2}
 .pa-minimap__cell[data-active="true"]{box-shadow:0 0 0 2px #fff,0 0 0 4px var(--c),0 4px 12px rgba(0,0,0,0.18);z-index:3}
+.pa-minimap__accueil{background:linear-gradient(180deg,#cbd5e1 0%,#94a3b8 60%,#64748b 100%);color:#fff;font:700 9px Inter,system-ui,sans-serif;
+  display:grid;place-items:center}
 .pa-minimap__dots{position:absolute;left:0;right:0;bottom:4px;display:flex;justify-content:center;gap:2px}
 .pa-minimap__dot{width:3px;height:3px;border-radius:1px;background:#fff;box-shadow:0 0 0 0.5px rgba(0,0,0,0.15)}
 .pa-minimap__more{position:absolute;top:2px;right:3px;font:700 7px Inter,system-ui,sans-serif;color:rgba(255,255,255,0.95)}
@@ -56,10 +61,11 @@ const U = 26; // horizontal unit (px) of the iso-like layout
 const V = 13; // vertical unit
 const CELL = 22;
 const PLAZA = 26;
+const PIER = { x: (PIER_CELL.col - PIER_CELL.row) * U, y: (PIER_CELL.col + PIER_CELL.row) * V };
 
 export function Minimap(props: MinimapProps): JSX.Element {
   ensureStyle();
-  const { snapshot, selectedDept, onPick, onOverview } = props;
+  const { snapshot, selectedDept, onPick, onOverview, onAccueil } = props;
   const departments: DeptDef[] = snapshot?.company.departments ?? [];
   const agents = snapshot?.company.agents ?? [];
 
@@ -75,7 +81,7 @@ export function Minimap(props: MinimapProps): JSX.Element {
     let maxX = PLAZA / 2;
     let minY = -PLAZA / 2;
     let maxY = PLAZA / 2;
-    for (const it of items) {
+    for (const it of [...items, PIER]) {
       minX = Math.min(minX, it.x - CELL / 2);
       maxX = Math.max(maxX, it.x + CELL / 2);
       minY = Math.min(minY, it.y - CELL / 2);
@@ -153,6 +159,16 @@ export function Minimap(props: MinimapProps): JSX.Element {
             </button>
           );
         })}
+        <button
+          type="button"
+          className="pa-minimap__cell pa-minimap__accueil"
+          onClick={onAccueil}
+          title="L’Accueil — arrivées et départs, ouvre l’Effectif"
+          aria-label="L’Accueil : ouvrir l’Effectif"
+          style={{ left: ox + PIER.x - CELL / 2, top: oy + PIER.y - CELL / 2, width: CELL, height: CELL }}
+        >
+          A
+        </button>
         <button
           type="button"
           className="pa-minimap__plaza"

@@ -6,9 +6,10 @@ import type { Connection } from '../store';
 import { cx } from './common';
 import type { SessionView } from './derive';
 import { useApp } from './context';
-import { fmtEur, fmtEurSigned } from './format';
+import { fmtEur, fmtEurSigned, plural } from './format';
 import { Icon } from './icons';
 import { DIFFICULTY_INFO, PHASE_HINT, PHASE_ICON, PHASE_LABEL } from './labels';
+import { StageBadge } from './StageBadge';
 
 export function CompanyBadge({ connection, lastError, onRetry }: { connection: Connection; lastError: string | null; onRetry(): void }) {
   const { snapshot } = useApp();
@@ -16,11 +17,11 @@ export function CompanyBadge({ connection, lastError, onRetry }: { connection: C
   return (
     <div className="company-col">
       <div className="glass company-badge">
-        <span className="badge-red">AGENCE PDF</span>
+        <StageBadge />
         <strong className="company-name">{snapshot?.company?.name || sc?.companyName || 'Pixel Agency'}</strong>
         {sc ? (
           <span className="company-sub">
-            {sc.name} · {DIFFICULTY_INFO[sc.difficulty]?.label ?? sc.difficulty} · {sc.horizonDays} j
+            {sc.name} · {DIFFICULTY_INFO[sc.difficulty]?.label ?? sc.difficulty} · {sc.openEnded ? '∞' : `${sc.horizonDays} j`}
           </span>
         ) : null}
       </div>
@@ -53,7 +54,7 @@ function ConnectionChip({ connection, lastError, onRetry }: { connection: Connec
  * busy = a control request of ours is in flight. sim = loop state from snapshot.session (server truth),
  * with the run status / remembered speed as fallback.
  */
-export function SimHud({ sim, onControl, busy }: { sim: SessionView; onControl(action: ControlAction, speed?: Speed): void; busy: boolean }) {
+export function SimHud({ sim, onControl, busy, onDigest }: { sim: SessionView; onControl(action: ControlAction, speed?: Speed): void; busy: boolean; onDigest?(): void }) {
   const { snapshot, toast } = useApp();
   if (!snapshot) return null;
   const f = snapshot.finance;
@@ -86,13 +87,16 @@ export function SimHud({ sim, onControl, busy }: { sim: SessionView; onControl(a
         <span className="hud-label">Profit cumulé</span>
         <strong className={cx((f?.profit ?? 0) >= 0 ? 'txt-good' : 'txt-bad')}>{fmtEurSigned(f?.profit)}</strong>
       </div>
+      <TeamChip team={snapshot.scene?.team} />
       <MindChip mind={mind} />
+      {snapshot.session?.pace === 'away' ? <span className="hud-away" title="Personne ne suit le flux : la journée avance à l’allure de l’absence.">au ralenti : personne ne regarde</span> : null}
       {sim.lastError ? (
         <button type="button" className="hud-error" title={`Incident technique pendant le dernier tick : ${sim.lastError}`}
           onClick={() => toast({ tone: 'warn', title: 'Incident technique', text: `${sim.lastError} — l’agence réessaie au prochain créneau.`, ttl: 9000 })}>
           <Icon name="alert" size={12} /><span className="hud-error-text">Incident</span>
         </button>
       ) : null}
+      {onDigest ? <button type="button" className="btn btn-xs hud-digest" onClick={onDigest} title="Résumé des 7 derniers jours (d)"><Icon name="clock" size={12} /> Résumé</button> : null}
       <span className="bar-sep" />
       <div className="speed" role="group" aria-label="Vitesse de simulation">
         <button type="button" className={cx('icon-btn', running && 'icon-btn-on')} disabled={ended || busy}
@@ -113,6 +117,17 @@ export function SimHud({ sim, onControl, busy }: { sim: SessionView; onControl(a
         </button>
       </div>
     </div>
+  );
+}
+
+/** Effectif · masse salariale · revenu par tête: what the team costs against what it brings, in one line (org §13). */
+function TeamChip({ team }: { team: NonNullable<CompanySnapshot['scene']>['team'] | undefined }) {
+  if (!team) return null;
+  return (
+    <span className="mind-chip mind-heur hud-team" title="Effectif · masse salariale sur 30 jours · revenu par tête sur 30 jours">
+      <Icon name="users" size={13} />
+      {plural(team.headcount, 'agent', 'agents')} · {fmtEur(team.payroll30d, 0)}/mois · {fmtEur(team.revenuePerHead30d, 0)}/tête
+    </span>
   );
 }
 

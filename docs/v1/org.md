@@ -1,4 +1,4 @@
-# Pillar: org. Headcount on demand, the right agents, not 31
+# Pillar: org. Headcount on demand, not a fixed team
 
 Status: design, nothing implemented. Other pillars: talent, channels, video, pdf, scale, ui.
 Read section 13 for what this pillar needs from them.
@@ -7,7 +7,7 @@ Read section 13 for what this pillar needs from them.
 
 1. The company starts with **8 founders in 8 departments**, 228 €/month of payroll, and wears 17 of its 36 task kinds as hats.
 2. **Why 8 is a measured knee, not a taste.** On the same hat table, 8 costs 0.4 day of lead time against 31, 7 costs 0.6 day more, 6 and 5 degrade further (section 1).
-3. **Why not 31.** At the pay scale of section 5, 31 agents cost 1 422 € over 60 days: the whole of today's median profit (1 408 €).
+3. **Why not the fixed team.** At the pay scale of section 5, the `legacy31` team costs 1 422 € over 60 days: the whole of today's median profit (1 408 €).
 4. **Payroll is real.** One `salary` line per day in the ledger, plus one-off `recruiting` lines. Runway, CFO cap and KPI all see it.
 5. **Hats are real.** A kind worn as a hat runs at 0.67 speed. A hire removes the hat. Talent adds the quality penalty.
 6. **A hire needs a measured bottleneck AND money.** Wait above 12 task-ticks/day on a role, its owners above 70 % busy, 3 evenings in a row, then margin, cash and revenue-per-head gates.
@@ -25,7 +25,7 @@ The replay re-runs the real task stream tick by tick with `dependsOn`, one task 
 
 **Limits of this evidence.** One seed, 25 days, and the plan does not react to delays in the replay. The replay also routes by lowest load only, so its per-agent shares differ from the real run. Good enough to size a team, not to promise a profit.
 
-**[measured] The 31 agents are about 7 % utilised.** 19.5 ticks of real work per day against 279 available. The run counts 22.6, but `plan_day`, `budget_review`, `retro` and `performance_review` run in zero ticks. In 25 days Tom finished 66 tasks while 12 agents finished fewer than 6.
+**[measured] The `legacy31` team is about 7 % utilised.** 19.5 ticks of real work per day against 279 available. The run counts 22.6, but `plan_day`, `budget_review`, `retro` and `performance_review` run in zero ticks. In 25 days Tom finished 66 tasks while 12 agents finished fewer than 6.
 
 Load by function, ticks/day: growth 6.9, studio 2.5, research 1.8, analyse 1.8, boutique 1.4, creation 1.2, finance 1.1, direction 1.0, support 0.8, partnerships 0.5, RH 0.5.
 

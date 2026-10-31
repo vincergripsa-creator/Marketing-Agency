@@ -1,6 +1,6 @@
 // Calendar of simulated days: tasks done, sales and profit per day; click a day → detail + journal.
 import { useEffect, useMemo, useState } from 'react';
-import type { DailyKpi } from '../../../../shared/types';
+import type { DailyKpi, ScenarioConfig } from '../../../../shared/types';
 import { api, type BrainNote } from '../../api';
 import { cx, Empty, Overlay, Pill, SectionTitle } from '../common';
 import { useApp } from '../context';
@@ -8,9 +8,25 @@ import { doneTasksByDay } from '../derive';
 import { fmtEur, fmtEurSigned, fmtInt, fmtPct, fmtRoas, pad3 } from '../format';
 import { Icon } from '../icons';
 import { Markdown } from '../markdown';
-import { ACTIVITY_META, deptColor, EVENT_TONE } from '../labels';
+import { ACTIVITY_META, agentName, deptColor, EVENT_TONE } from '../labels';
 
 const WEEKDAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+const WEEK = 7;
+const OPEN_WEEKS = 26;
+
+/**
+ * The days on the grid, whole weeks: day 1 sits on a Monday. A run with an end shows all of it. A run without one has no last cell
+ * to reach for: the coming week, the deadline if it is ahead, and six months back at most, or a long run redraws a year of buttons each tick.
+ */
+export function calendarSpan(today: number, scenario: Pick<ScenarioConfig, 'horizonDays' | 'openEnded' | 'goal'> | undefined): { from: number; to: number; end: number | null } {
+  const roundUp = (d: number) => Math.ceil(d / WEEK) * WEEK;
+  if (!scenario?.openEnded) {
+    const end = Math.max(scenario?.horizonDays ?? 30, today);
+    return { from: 1, to: roundUp(end), end };
+  }
+  const thisWeek = Math.floor((today - 1) / WEEK);
+  return { from: 1 + WEEK * Math.max(0, thisWeek - OPEN_WEEKS + 1), to: roundUp(Math.max(today + WEEK, scenario.goal?.byDay ?? 0)), end: null };
+}
 
 function tint(profit: number, maxAbs: number): string {
   if (!maxAbs || !profit) return 'transparent';
@@ -22,7 +38,7 @@ export function CalendarTab({ onClose }: { onClose(): void }) {
   const { snapshot } = useApp();
   const today = snapshot?.day ?? 1;
   const [selected, setSelected] = useState<number>(Math.max(1, today - (snapshot?.phase === 'morning' ? 1 : 0)));
-  const horizon = Math.max(snapshot?.scenario?.horizonDays ?? 30, today);
+  const { from, to, end } = calendarSpan(today, snapshot?.scenario);
   const goalDay = snapshot?.scenario?.goal?.byDay ?? null;
   const kpiByDay = useMemo(() => new Map((snapshot?.company?.kpis ?? []).map((k) => [k.day, k] as const)), [snapshot]);
   const doneByDay = useMemo(() => doneTasksByDay(snapshot), [snapshot]);
@@ -32,18 +48,17 @@ export function CalendarTab({ onClose }: { onClose(): void }) {
     return m;
   }, [snapshot]);
   const maxAbs = Math.max(1, ...[...kpiByDay.values()].map((k) => Math.abs(k.profit)));
-  const cells = Math.ceil(horizon / 7) * 7;
 
   return (
-    <Overlay title="Calendrier" subtitle={`Jour ${today} sur ${horizon} · une case = une journée simulée`} icon="calendar" onClose={onClose}>
+    <Overlay title="Calendrier" subtitle={`Jour ${today}${end === null ? '' : ` sur ${end}`} · une case = une journée simulée`} icon="calendar" onClose={onClose}>
       <div className="cal-layout">
         <div className="cal-grid-wrap">
           <div className="cal-weekdays">{WEEKDAYS.map((w) => <span key={w}>{w}</span>)}</div>
           <div className="cal-grid">
-            {Array.from({ length: cells }, (_, i) => i + 1).map((d) => {
+            {Array.from({ length: to - from + 1 }, (_, i) => from + i).map((d) => {
               const k = kpiByDay.get(d);
               const future = d > today;
-              const beyond = d > horizon;
+              const beyond = end !== null && d > end;
               const done = doneByDay.get(d) ?? 0;
               const ev = eventsByDay.get(d) ?? 0;
               return (
@@ -153,7 +168,7 @@ function DayDetail({ day, kpi, doneCount }: { day: number; kpi: DailyKpi | undef
             <li key={t.id}>
               <span className="eyebrow-dot" style={{ background: deptColor(lookups, t.dept) }} />
               <span>{t.title}</span>
-              {t.assignee ? <button type="button" className="link-btn small" onClick={() => openAgent(t.assignee!)}>{lookups.agents.get(t.assignee)?.name ?? ''}</button> : null}
+              {t.assignee ? <button type="button" className="link-btn small" onClick={() => openAgent(t.assignee!)}>{agentName(lookups, t.assignee)}</button> : null}
             </li>
           ))}
         </ul>

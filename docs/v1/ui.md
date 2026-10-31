@@ -6,7 +6,7 @@ Measured for this spec, not guessed:
 
 | Fact | Value | How |
 |---|---|---|
-| Live snapshot today, day 61, 31 agents | **530 655 bytes, already over the 0,5 MB target** | `serializeLiveSnapshot` logic on `runs/cfx-full-112/world.json` |
+| Live snapshot today, day 61, `legacy31` team | **530 655 bytes, already over the 0,5 MB target** | `serializeLiveSnapshot` logic on `runs/cfx-full-112/world.json` |
 | Biggest live fields | creatives 76 KB, tasks 60, products 57, inbox 44, playbooks 38, deliverables 31, lessons 30, adStats 26, agents 24 | same |
 | One agent in JSON | 793 bytes | same |
 | Effective grid today (declared grid is NOT what is drawn) | recherche (-1,0), studio (-1,-1), creation (0,-1), partenariats (1,-1), growth (2,-1), boutique (1,0), support (1,1), finance (-1,1), rh (-2,1), analyse (-2,2) | `effectiveGrid(DEPARTMENTS)` |
@@ -911,8 +911,8 @@ export function digestDue(lastSeenDay: number | null, day: number): boolean {
 }
 ```
 
-- While the tab is visible, the client posts `POST /api/digest/seen`, at most every 30 s. So `lastSeenDay` follows him as he watches, and a run at ×8 does not trigger a digest in his face. Hidden tab, closed tab: nothing is posted, and the gap builds up.
-- Checked on the first snapshot of a run and on return to visible.
+- While the tab is visible, the client posts `POST /api/digest/seen`, at most every 30 s. So `lastSeenDay` follows him as he watches, and a run at ×8 does not trigger a digest in his face. Hidden tab, closed tab: nothing is posted, and the gap builds up. A tab or a stream just back posts nothing until a new day has shown: the page may hold an old snapshot, and the server writes down today.
+- Checked on the first snapshot of a run, on return to visible, and on every snapshot he has in front of him, from the last day the page showed him: a return on an old snapshot decides nothing, the first fresh one does.
 - Not in demo mode.
 - Modal, not a toast: he must read it. Close with Esc or « Reprendre », which posts `seen`.
 
@@ -952,7 +952,7 @@ HUD button « Résumé » reopens it, for the last 7 days.
 | `DeptPanel.tsx` | `Postes : 5 occupés / 6`, open reqs, and the hosted message for a closed department |
 | `App.tsx` | `<div role="status" aria-live="polite" className="sr-only">` announces the last `hire`, `fire`, `season_end`. The canvas drama therefore has a text equivalent |
 | `Minimap.tsx` | Accueil cell, click opens Effectif |
-| `mockSnapshot.ts` | Stays at its 31 agents, gains a full `scene` and `mockDetail` |
+| `mockSnapshot.ts` | Follows org §11 (P13.3), gains a full `scene` and `mockDetail` |
 | `styles.css` | `.league-table`, `.org-grid`, `.channel-card`, `.lightbox`, `.flip`, `.digest`, `.sr-only`, using existing tokens only |
 
 ---
@@ -1106,7 +1106,7 @@ Each step ships working on its own, because every view tolerates a missing pilla
 | « Last seen » in `localStorage` | Scale already keeps it on the server, which also works from a second device |
 | `company.org`, `company.league`, `company.channels` in the live stream, as their specs propose | Together they would push the stream past 500 KB. `scene` carries what the world needs, tabs fetch the rest |
 | Tab named « Ligue » | The founder said competition |
-| Annex islands when a department is full | Second geometry for one department, for a case that needs over 31 agents in one team |
+| Annex islands when a department is full | Second geometry for one department, for a case no team reaches under the cap |
 | Building desks one by one with a layout rebuild | A rebuild per hire is the bug being fixed |
 | Keeping fired agents in `company.agents` with a `gone` status | Every loop over agents in the runtime would need a filter |
 | Client-derived seats only | Two browsers could disagree, and a shrink would move people |

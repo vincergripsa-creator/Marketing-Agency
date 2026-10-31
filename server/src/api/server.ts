@@ -399,9 +399,10 @@ function safeDecode(s: string): string | null {
 
 /**
  * The tabs' reads of a mounted run, and the founder's « vu ». The session has neither: `world` and the disk are all they need, and
- * « vu » moves a field the tick never reads. It is the wall clock's only way into a save, and no draw ever sees it.
+ * « vu » moves a field the tick never reads. It is the wall clock's only way into a save, and no draw ever sees it. Saving it stays the
+ * session's business: `saveSeen` keeps it behind the tick in flight.
  */
-export function sessionViews(live: Pick<AgencySession, 'world' | 'videoIndex' | 'paths'>): Required<Pick<SessionLike, 'view' | 'digestSeen'>> {
+export function sessionViews(live: Pick<AgencySession, 'world' | 'videoIndex' | 'paths'> & Partial<Pick<AgencySession, 'saveSeen'>>): Required<Pick<SessionLike, 'view' | 'digestSeen'>> {
   return {
     view: async (name, query) => {
       const { world } = live;
@@ -415,7 +416,8 @@ export function sessionViews(live: Pick<AgencySession, 'world' | 'videoIndex' | 
       const growth = world.company.growth;
       if (!growth) return null;
       growth.founder = { lastSeenDay: world.day, lastSeenAt: new Date().toISOString() };
-      scheduleSave(world, 2000, { finance: () => safeFinance(world) });
+      if (live.saveSeen) live.saveSeen();
+      else scheduleSave(world, 2000, { finance: () => safeFinance(world) }); // a world no session ticks: nothing to wait for
       return growth.founder;
     },
   };

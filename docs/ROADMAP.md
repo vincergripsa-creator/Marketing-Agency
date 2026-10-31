@@ -5,8 +5,12 @@ L'agence a **le même fonctionnement qu'en réel** dès aujourd'hui : mêmes dé
 ## Phase 1 — Simulation (actuelle)
 - [x] Marché virtuel avec vérité cachée, clients pénibles, arnaques, refus de pub, concurrents, événements
 - [x] Livrables réels : PDF illustrés, couvertures SVG, pages de vente HTML, storyboards TikTok
-- [x] Organisation de 31 agents, délégation, revues, Red Team, cerveau partagé
+- [x] Organisation : une équipe fondatrice de 8 agents qui recrute quand les chiffres le demandent, délégation, revues, Red Team, cerveau partagé
 - [x] Apprentissage : bandits, expériences A/B, leçons chiffrées, playbooks, revues RH
+- [x] Compétition : notes sur résultats observés, saisons, plans de progrès, duels, remplacement sur test réel
+- [x] Cinq canaux publicitaires, réconciliation des ventes, répartition par le CFO
+- [x] Vraies vidéos de pub en MP4, PDF refaits, aperçus de pages sur la page de vente
+- [x] Partie sans fin : paliers, portefeuille, liste e-mail, concurrents, résumé du fondateur, compaction
 - [ ] **Critère de sortie** : sur 5 seeds différents en difficulté `normal`, l'agence est rentable avant J40 ; sur `cauchemar`, elle survit (pas de faillite) sur au moins 3 seeds sur 5.
 
 ## Phase 2 — Réel en lecture seule (aucun risque)
@@ -30,8 +34,5 @@ Brancher la **recherche** sur le vrai monde, sans rien publier ni dépenser :
 - Kill-switch global dans l'UI.
 
 ## Idées d'amélioration de la simulation
-- Concurrents simulés qui copient nos meilleurs PDF et baissent leurs prix
 - Saisonnalité annuelle (rentrée, fêtes, été)
-- Plusieurs plateformes pub (Meta, Pinterest) avec des audiences différentes
-- Clients qui reviennent acheter (LTV), liste email et séquences
 - Personae clients joués par Claude (mode `claude`) qui lisent réellement le PDF et la page de vente avant d'acheter

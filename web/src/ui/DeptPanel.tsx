@@ -1,22 +1,63 @@
 // Department panel: Aperçu (KPIs, tools, competences, team) | Tâches | Calendrier.
 import { useMemo, useState } from 'react';
-import type { DeptId, Task, TaskKind } from '../../../shared/types';
+import type { DeptId, OrgDetail, Task, TaskKind } from '../../../shared/types';
 import { Avatar, Bar, ChiefBadge, cx, Empty, Pill, SectionTitle, Segmented } from './common';
 import { useApp } from './context';
 import { deptCalendar } from './derive';
-import { fmtDec, fmtInt } from './format';
+import { fmtDec, fmtInt, plural } from './format';
 import { Icon } from './icons';
 import {
-  AGENT_STATUS_LABEL, BUSY_STATUSES, deptColor, deptName, TASK_KIND_LABEL, TASK_STATUS_LABEL, TASK_STATUS_TONE,
+  AGENT_STATUS_LABEL, agentName, BUSY_STATUSES, deptColor, deptName, TASK_KIND_LABEL, TASK_STATUS_LABEL, TASK_STATUS_TONE,
   toolGroupsOf, TOOL_LABEL,
 } from './labels';
 import { SidePanel } from './SidePanel';
+import { useDetail } from './useDetail';
 
 type DeptTab = 'apercu' | 'taches' | 'calendrier';
 
 const STATUS_ORDER: Record<Task['status'], number> = { awaiting_founder: 0, in_progress: 1, review: 2, pending: 3, failed: 4, done: 5, cancelled: 6 };
 
+/** `Postes : 5 occupés / 6`, then what is open. */
+export function seatsLine(held: number, open: number): string {
+  const line = `Postes : ${fmtInt(held)} occupé${held > 1 ? 's' : ''} / ${fmtInt(held + open)}`;
+  return open > 0 ? `${line} · ${plural(open, 'poste ouvert', 'postes ouverts')}` : line;
+}
+
+/** A vacant plot. `company.org` stays out of the stream (D34), so who carries its work comes from GET /api/org. */
+function ClosedDept({ deptId, onClose }: { deptId: DeptId; onClose(): void }) {
+  const { snapshot, lookups, centerDept, openDept } = useApp();
+  const detail = useDetail<OrgDetail>('/api/org', snapshot?.day ?? 0);
+  const name = deptName(lookups, deptId);
+  const def = snapshot?.scene?.closedDepts.find((d) => d.id === deptId);
+  const host = detail.data?.closed.find((c) => c.id === deptId)?.hostedBy ?? null;
+  return (
+    <SidePanel label={`Équipe ${name}`} eyebrow="ÉQUIPE FERMÉE" eyebrowColor={deptColor(lookups, deptId)} onCenter={() => centerDept(deptId)} onClose={onClose}>
+      <div className="agent-head">
+        <span className="dept-icon" style={{ background: '#94a3b8' }}><Icon name="building" size={20} /></span>
+        <div className="agent-titles">
+          <div className="agent-name">{name}</div>
+          <div className="agent-role">Personne pour l’instant</div>
+        </div>
+      </div>
+      {def?.description ? <div className="dept-desc">{def.description}</div> : null}
+      <div className="side-body">
+        <Empty icon="building">
+          {host
+            ? <>Pas encore d’équipe ici : <button type="button" className="link-btn" onClick={() => openDept(host)}>{deptName(lookups, host)}</button> porte son travail.</>
+            : 'Pas encore d’équipe ici : elle ouvrira avec sa première embauche.'}
+        </Empty>
+      </div>
+    </SidePanel>
+  );
+}
+
 export function DeptPanel({ deptId, onClose }: { deptId: DeptId; onClose(): void }) {
+  const { snapshot, lookups } = useApp();
+  const closed = !lookups.depts.has(deptId) && !!snapshot?.scene?.closedDepts.some((d) => d.id === deptId);
+  return closed ? <ClosedDept deptId={deptId} onClose={onClose} /> : <OpenDept deptId={deptId} onClose={onClose} />;
+}
+
+function OpenDept({ deptId, onClose }: { deptId: DeptId; onClose(): void }) {
   const { snapshot, lookups, centerDept } = useApp();
   const [tab, setTab] = useState<DeptTab>('apercu');
   const dept = lookups.depts.get(deptId);
@@ -33,6 +74,7 @@ export function DeptPanel({ deptId, onClose }: { deptId: DeptId; onClose(): void
         <div className="agent-titles">
           <div className="agent-name">{name}</div>
           <div className="agent-role">{fmtInt(members.length)} agent{members.length > 1 ? 's' : ''} · chef : {chief?.name ?? '—'}</div>
+          <div className="agent-role">{seatsLine(members.length, snapshot?.scene?.openSeats[deptId] ?? 0)}</div>
         </div>
       </div>
       {dept?.description ? <div className="dept-desc">{dept.description}</div> : null}
@@ -128,14 +170,14 @@ function Overview({ deptId, tasks }: { deptId: DeptId; tasks: Task[] }) {
   );
 }
 
-function DeptTasks({ tasks }: { tasks: Task[] }) {
+export function DeptTasks({ tasks }: { tasks: Task[] }) {
   const { lookups, openAgent } = useApp();
   const sorted = [...tasks].sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.dayCreated - a.dayCreated).slice(0, 60);
   if (sorted.length === 0) return <Empty icon="list">Aucune tâche pour ce département pour l’instant.</Empty>;
   return (
     <div className="mini-tasks">
       {sorted.map((t) => {
-        const who = t.assignee ? lookups.agents.get(t.assignee) : undefined;
+        const who = t.assignee;
         return (
           <div key={t.id} className="mini-task">
             <div className="task-line-top">
@@ -143,7 +185,7 @@ function DeptTasks({ tasks }: { tasks: Task[] }) {
               <Pill tone={TASK_STATUS_TONE[t.status]}>{TASK_STATUS_LABEL[t.status]}</Pill>
             </div>
             <div className="mini-task-meta">
-              {who ? <button type="button" className="link-btn" onClick={() => openAgent(who.id, t.dept)}>{who.name}</button> : <span className="muted">non assignée</span>}
+              {who ? <button type="button" className="link-btn" onClick={() => openAgent(who, t.dept)}>{agentName(lookups, who)}</button> : <span className="muted">non assignée</span>}
               <span className="muted"> · J{t.dayCreated}{t.attempts > 1 ? ` · tentative ${t.attempts}` : ''}</span>
             </div>
             {t.status === 'in_progress' || t.status === 'review' ? <Bar value={t.progress} height={4} color={deptColor(lookups, t.dept)} /> : null}

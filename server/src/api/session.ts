@@ -608,9 +608,19 @@ export class AgencySession {
     }
   }
 
-  private touch(): void {
+  /** Like every other save, behind the tick in flight: on its own timer it lands at any await inside a tick. */
+  private saveSoon(): void {
     const run = this.run;
-    if (run) scheduleSave(run.world, 2000, { finance: () => safeFinance(run.world) });
+    if (run) scheduleSave(run.world, 2000, { finance: () => safeFinance(run.world), through: (save) => this.lock(save) });
+  }
+
+  /** The founder's « vu », up to twice a minute. A playing run's evening save carries it: its own save would leave world.prev.json seconds old. */
+  saveSeen(): void {
+    if (!this._playing) this.saveSoon();
+  }
+
+  private touch(): void {
+    this.saveSoon();
     this.events.emit('state');
   }
 

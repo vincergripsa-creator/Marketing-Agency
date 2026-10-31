@@ -144,6 +144,8 @@ Mesuré à la fin de S8, rien n'a été réglé dessus (`sim/visual.ts` reste ce
 
 ## 4. Résultats
 
+Ces tableaux datent d'avant la V1 : ils mesurent l'ancienne équipe fixe, sans salaires ni embauches. Ils ne servent plus de référence, y compris le critère du §6, jusqu'à la calibration finale (`docs/v1/PLAN.md` §4), qui écrira ici ses candidats, son gagnant et chaque contrôle.
+
 Banc d'essai final : graines 1, 2, 3, 7, 42 × 60 jours × 3 difficultés, 500 € de départ, cerveau heuristique (`npm run balance`, 28 s sur 8 processus).
 
 ```
@@ -201,7 +203,7 @@ npx tsx scripts/balance.ts --seeds 7 --difficulties normal --keep --details  # g
 npx tsx scripts/balance.ts --json resultats.json  # résultats détaillés, jour par jour
 ```
 
-- Chaque run est une vraie entreprise sans interface (31 agents, cerveau heuristique, PDF et pages de vente réellement générés) dans un dossier temporaire supprimé à la fin, sauf avec `--keep`. Les runs tournent dans `--jobs` processus (3 par défaut ; `--jobs 1` = tout dans le même processus, mêmes résultats). Un run de 60 jours prend ~10 s. Le mode `claude` n'est jamais utilisé par le banc (aucune clé n'est transmise).
+- Chaque run est une vraie entreprise sans interface (une équipe fondatrice de 8 agents qui recrute quand les chiffres le demandent, cerveau heuristique, PDF et pages de vente réellement générés) dans un dossier temporaire supprimé à la fin, sauf avec `--keep`. Les runs tournent dans `--jobs` processus (3 par défaut ; `--jobs 1` = tout dans le même processus, mêmes résultats). Un run de 60 jours prend ~30 s. Le mode `claude` n'est jamais utilisé par le banc (aucune clé n'est transmise).
 - Colonnes : **J>0** = premier jour où le profit cumulé (frais de démarrage compris) passe au-dessus de 0 ; **Objectif** = premier jour à 1 000 € de profit cumulé ; **Faillite** = trésorerie négative un soir ; **Prod. L/A** = produits en ligne / arrêtés ; **ROAS 1→2** et **CTR 1→2** = pubs payantes des jours 1-30 puis 31-60 (↑ = mieux en 2e moitié) ; **Remb.** = part des commandes remboursées ou contestées ; **Leçons** = leçons chiffrées écrites dans le cerveau.
 - **Artefacts** surveillés : **F** = falaise (le profit cumulé perd plus de 40 % d'un pic ≥ 100 € en moins de 7 jours ; `--details` liste la chaîne qui l'explique : événements du marché, jours de pub sans vente, vagues de remboursements) ; **S** = plus de 2 jours sans pub alors qu'il reste plus de 30 % de la trésorerie de départ, un produit vendable et un compte pub actif ; **K** = KPI du jour ≠ somme du grand livre ; **N** = valeur non numérique.
 - `--set CHEMIN=N` remplace une constante de `server/src/sim/balance.ts` le temps du banc (chemin inconnu = erreur, pour ne jamais mesurer le marché par défaut sans le savoir).

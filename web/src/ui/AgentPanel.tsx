@@ -1,17 +1,18 @@
-// Agent panel: Discussion (chat + live work trace) | Fiche (card) | Playbook (learned rules).
+// Agent panel: Discussion (chat + live work trace) | Fiche (card, career) | Playbook (learned rules). Someone who left keeps a card.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Activity, AgentState, ChatMessage, DeptId, Task } from '../../../shared/types';
+import type { Activity, AgentState, AlumnusView, ChatMessage, DeptId, HeadRow, LeagueDetail, OrgDetail, PersonChip, Task } from '../../../shared/types';
 import { api } from '../api';
 import { Avatar, Bar, ChiefBadge, cx, DeliverableLink, Empty, Pill, SectionTitle, Segmented } from './common';
 import { useApp } from './context';
-import { clamp01, fmtClock, fmtInt, fmtPct, hash, safeDiv } from './format';
+import { fmtClock, fmtEur, fmtInt, fmtPct, safeDiv } from './format';
 import { Icon } from './icons';
 import {
-  ACTIVITY_META, AGENT_STATUS_LABEL, AGENT_STATUS_TONE, DELIVERABLE_ICON, DELIVERABLE_LABEL, deptColor, deptName, firstName,
-  lessonForRule, LESSON_TOPIC_LABEL, LESSON_TOPIC_TONE, parseRule, RESEARCH_KINDS, TASK_KIND_LABEL, TASK_STATUS_LABEL,
+  ACTIVITY_META, AGENT_STATUS_LABEL, AGENT_STATUS_TONE, agentName, ALUMNUS_KIND_LABEL, CONTRACT_LABEL, CONTRACT_TONE, DELIVERABLE_ICON, DELIVERABLE_LABEL,
+  deptColor, deptName, firstName, lessonForRule, LESSON_TOPIC_LABEL, LESSON_TOPIC_TONE, parseRule, RESEARCH_KINDS, TASK_KIND_LABEL, TASK_STATUS_LABEL,
   TASK_STATUS_TONE, TIER_LABEL, toolGroupsOf, TOOL_LABEL, type Lookups, type RuleKind, type Tone,
 } from './labels';
 import { SidePanel } from './SidePanel';
+import { useDetail } from './useDetail';
 
 type AgentTab = 'chat' | 'fiche' | 'playbook';
 
@@ -20,20 +21,20 @@ interface LocalMsg { id: string; from: string; text: string; at: number; error?:
 const SUGGESTIONS = ['Qu’est-ce que tu fais en ce moment ?', 'Un point rapide sur tes résultats ?', 'Qu’as-tu appris récemment ?'];
 
 export function AgentPanel({ agentId, backDept, onBack, onClose }: { agentId: string; backDept: DeptId | null; onBack(): void; onClose(): void }) {
-  const { snapshot, lookups, centerAgent } = useApp();
+  const { lookups } = useApp();
+  // the tab stays when he goes from one agent to the next; each one fetches its own playbook
   const [tab, setTab] = useState<AgentTab>('chat');
   const agent = lookups.agents.get(agentId);
+  if (!agent) return <GoneAgent key={agentId} agentId={agentId} backDept={backDept} onBack={onBack} onClose={onClose} />;
+  return <AgentCard key={agentId} agent={agent} tab={tab} onTab={setTab} backDept={backDept} onBack={onBack} onClose={onClose} />;
+}
 
-  if (!agent || !snapshot) {
-    return (
-      <SidePanel eyebrow="AGENT" eyebrowColor="#94a3b8" onCenter={() => centerAgent(agentId)} onClose={onClose} label="Agent">
-        <div className="side-body"><Empty>Cet agent n’existe pas (ou plus) dans cette run.</Empty></div>
-      </SidePanel>
-    );
-  }
-
+function AgentCard({ agent, tab, onTab, backDept, onBack, onClose }: { agent: AgentState; tab: AgentTab; onTab(t: AgentTab): void; backDept: DeptId | null; onBack(): void; onClose(): void }) {
+  const { snapshot, lookups, centerAgent } = useApp();
   const color = deptColor(lookups, agent.dept);
-  const rules = snapshot.company?.playbooks?.[agent.id] ?? [];
+  // the live stream leaves the playbooks out (ui §3.1): what the snapshot still holds is only what was there before this answer
+  const playbook = useDetail<string[]>(`/api/playbook?agentId=${encodeURIComponent(agent.id)}`, snapshot?.day ?? 0);
+  const rules = playbook.data ?? snapshot?.company?.playbooks?.[agent.id] ?? [];
 
   return (
     <SidePanel
@@ -54,7 +55,7 @@ export function AgentPanel({ agentId, backDept, onBack, onClose }: { agentId: st
       </div>
       {agent.bubble ? <div className="agent-bubble">« {agent.bubble} »</div> : null}
       <div className="side-tabs">
-        <Segmented<AgentTab> value={tab} onChange={setTab} options={[
+        <Segmented<AgentTab> value={tab} onChange={onTab} options={[
           { id: 'chat', label: 'Discussion' },
           { id: 'fiche', label: 'Fiche' },
           { id: 'playbook', label: 'Playbook', count: rules.length },
@@ -63,6 +64,64 @@ export function AgentPanel({ agentId, backDept, onBack, onClose }: { agentId: st
       {tab === 'chat' ? <ChatTab key={agent.id} agent={agent} /> : null}
       {tab === 'fiche' ? <div className="side-body"><FicheTab agent={agent} /></div> : null}
       {tab === 'playbook' ? <div className="side-body"><PlaybookTab agent={agent} rules={rules} /></div> : null}
+    </SidePanel>
+  );
+}
+
+// ───────────────────────────── Someone who left ─────────────────────────────
+
+export function AlumnusCard({ who }: { who: AlumnusView }) {
+  const { openAgent } = useApp();
+  return (
+    <div className="fiche">
+      <div className="chip-row">
+        <Pill tone="red">{ALUMNUS_KIND_LABEL[who.kind] ?? who.kind}</Pill>
+        <span className="chip">Arrivée jour {who.hiredDay} · départ jour {who.leftDay}</span>
+      </div>
+      <p className="persona">{who.why}</p>
+      <div className="perf-grid">
+        <div><strong>{who.bestRating === null ? '—' : fmtInt(who.bestRating)}</strong><span>meilleure note</span></div>
+        <div><strong>{fmtInt(who.titles)}</strong><span>titres</span></div>
+        <div><strong>{fmtInt(who.tasksDone)}</strong><span>tâches faites</span></div>
+        <div><strong>{fmtEur(who.cost, 0)}</strong><span>coût total</span></div>
+      </div>
+      {who.replacedBy ? (
+        <div className="small">Poste repris par <button type="button" className="link-btn" onClick={() => openAgent(who.replacedBy!.id)}>{who.replacedBy.name}</button></div>
+      ) : null}
+    </div>
+  );
+}
+
+function GoneAgent({ agentId, backDept, onBack, onClose }: { agentId: string; backDept: DeptId | null; onBack(): void; onClose(): void }) {
+  const { snapshot, lookups, centerAgent } = useApp();
+  const league = useDetail<LeagueDetail>(snapshot ? '/api/league' : null, snapshot?.day ?? 0);
+  const who = league.data?.alumni.find((a) => a.person.id === agentId) ?? null;
+  const name = who?.person.name ?? lookups.names.get(agentId) ?? null;
+  const color = who ? deptColor(lookups, who.person.dept) : '#94a3b8';
+
+  return (
+    <SidePanel
+      label={name ? `Ancien agent ${name}` : 'Agent'}
+      eyebrow={who ? <>ANCIEN · {deptName(lookups, who.person.dept).toUpperCase()}</> : 'AGENT'}
+      eyebrowColor={color}
+      onBack={backDept ? onBack : undefined}
+      onCenter={() => centerAgent(agentId)}
+      onClose={onClose}
+    >
+      {name ? (
+        <div className="agent-head">
+          <Avatar name={name} color={color} size={44} />
+          <div className="agent-titles">
+            <div className="agent-name">{name}</div>
+            {who ? <div className="agent-role">{who.person.role}</div> : null}
+          </div>
+        </div>
+      ) : null}
+      <div className="side-body">
+        {who ? <AlumnusCard who={who} /> : null}
+        {!who && league.loading ? <div className="muted"><span className="spinner" /> Chargement…</div> : null}
+        {!who && !league.loading ? <Empty>{name ? `${name} a quitté l’agence.` : 'Cet agent n’existe pas (ou plus) dans cette run.'}</Empty> : null}
+      </div>
     </SidePanel>
   );
 }
@@ -190,7 +249,67 @@ function recentTasks(tasks: Task[], agentId: string): Task[] {
     .slice(0, 5);
 }
 
-function FicheTab({ agent }: { agent: AgentState }) {
+/** A hat's name, a tool's: what the role says. The person's numbers are the Carrière block's, read from what the league observed. */
+function SkillChips({ skills }: { skills: readonly string[] }) {
+  if (skills.length === 0) return <span className="muted small">Pas de compétence déclarée.</span>;
+  return <div className="chip-row">{skills.map((s) => <span key={s} className="chip">{s}</span>)}</div>;
+}
+
+const signed = (n: number): string => `${n > 0 ? '+' : ''}${fmtInt(n)}`;
+
+/** Observed numbers only: the league's, never the talent behind them. Every line says nothing rather than guess. */
+export function CareerBody({ agent, chip, league, head }: { agent: AgentState; chip: PersonChip | null; league: LeagueDetail | null; head: HeadRow | null }) {
+  const { lookups, openAgent } = useApp();
+  const notes = (league?.roles ?? []).flatMap((f) => f.rows.filter((r) => r.agentId === agent.id).map((r) => ({ label: f.label, row: r })));
+  const contract = chip?.contract ?? head?.contract ?? notes[0]?.row.contract ?? null;
+  const plan = league?.plans.find((p) => p.agentId === agent.id && p.outcome === 'open') ?? null;
+  const titles = (league?.hallOfFame ?? []).filter((h) => h.champion.id === agent.id).map((h) => h.season);
+  const lineage = league?.lastHire?.candidates.find((c) => c.id === agent.id)?.lineage ?? null;
+  const before = league?.alumni.find((a) => a.replacedBy?.id === agent.id) ?? null;
+
+  return (
+    <div className="career">
+      <div className="perf-grid">
+        <div><strong>{chip ? fmtInt(chip.rating) : '—'}</strong><span>note{chip?.delta7d ? ` · ${signed(chip.delta7d)} en 7 j` : ''}</span></div>
+        <div><strong>{chip ? `${chip.rank}/${chip.of}` : '—'}</strong><span>rang</span></div>
+        <div><strong>{titles.length ? fmtInt(titles.length) : '—'}</strong><span>trophées</span></div>
+        <div><strong>{head ? fmtEur(head.pay30d, 0) : '—'}</strong><span>coût 30 j</span></div>
+      </div>
+      {contract ? <div className="chip-row"><Pill tone={CONTRACT_TONE[contract]}>{CONTRACT_LABEL[contract]}</Pill></div> : null}
+      {!chip && !notes.length ? <div className="muted small">Hors ligue : poste sans effet mesurable sur un résultat.</div> : null}
+      {notes.map(({ label, row }) => (
+        <div key={label} className="small">
+          {label} : note {fmtInt(row.rating)}, rang {row.rank}{row.metric ? `, ${row.metric}` : ''}{row.confidence === 'faible' ? ', peu de données' : ''}
+        </div>
+      ))}
+      {plan ? (
+        <div className="small">
+          <div>{plan.text}</div>
+          {plan.coachId ? <div className="muted">Coach : {agentName(lookups, plan.coachId)}</div> : null}
+        </div>
+      ) : null}
+      {titles.length ? <div className="small">Titres : saison{titles.length > 1 ? 's' : ''} {titles.join(', ')}</div> : null}
+      {lineage ? <div className="small">Élève de {agentName(lookups, lineage)}</div> : null}
+      {before ? (
+        <div className="small">
+          Avant, à ce poste : <button type="button" className="link-btn" onClick={() => openAgent(before.person.id)}>{before.person.name}</button>
+          <span className="muted"> · départ jour {before.leftDay}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CareerBlock({ agent }: { agent: AgentState }) {
+  const { snapshot } = useApp();
+  const day = snapshot?.day ?? 0;
+  const league = useDetail<LeagueDetail>('/api/league', day);
+  const org = useDetail<OrgDetail>('/api/org', day);
+  const head = org.data?.depts.flatMap((d) => d.heads).find((h) => h.agentId === agent.id) ?? null;
+  return <CareerBody agent={agent} chip={snapshot?.scene?.people[agent.id] ?? null} league={league.data} head={head} />;
+}
+
+export function FicheTab({ agent }: { agent: AgentState }) {
   const { snapshot, lookups } = useApp();
   const color = deptColor(lookups, agent.dept);
   const tasks = recentTasks(snapshot?.company?.tasks ?? [], agent.id);
@@ -219,21 +338,11 @@ function FicheTab({ agent }: { agent: AgentState }) {
         ))}
       </div>
 
+      <SectionTitle>Carrière</SectionTitle>
+      <CareerBlock agent={agent} />
+
       <SectionTitle>Compétences</SectionTitle>
-      <div className="skills">
-        {(agent.skills ?? []).length === 0 ? <span className="muted small">Pas de compétence déclarée.</span> : null}
-        {(agent.skills ?? []).map((s) => {
-          // Mastery estimate: level and performance, with a stable per-skill offset (display only).
-          const v = clamp01((35 + agent.level * 7 + (perf.score || 50) * 0.25 + (hash(agent.id + s) % 18)) / 100);
-          return (
-            <div key={s} className="skill-row">
-              <span className="skill-name">{s}</span>
-              <Bar value={v} color={color} />
-              <span className="skill-val">{Math.round(v * 100)}</span>
-            </div>
-          );
-        })}
-      </div>
+      <SkillChips skills={agent.skills ?? []} />
 
       <SectionTitle>Performance</SectionTitle>
       <div className="perf-grid">

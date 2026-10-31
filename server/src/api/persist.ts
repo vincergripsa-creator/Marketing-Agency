@@ -24,6 +24,8 @@ export interface SaveOptions {
    * the save serialises the world, so a debounced save never pairs a newer world with older figures.
    */
   finance?: SavedFinance | (() => SavedFinance);
+  /** What a debounced save goes through: a session's lock, so it lands behind the tick in flight and never holds half of it. */
+  through?: <T>(save: () => Promise<T>) => Promise<T>;
 }
 
 export interface SavedFinance { cash: number; profit: number }
@@ -178,13 +180,16 @@ export function saveWorld(world: WorldState, opts: SaveOptions = {}): Promise<st
 interface PendingSave { timer: NodeJS.Timeout; world: WorldState; opts: SaveOptions }
 const pending = new Map<string, PendingSave>();
 
+const pendingWrite = (world: WorldState, opts: SaveOptions): Promise<unknown> =>
+  (opts.through ? opts.through(() => saveWorld(world, opts)) : saveWorld(world, opts));
+
 /** Debounced save: many calls within `delayMs` produce one write. */
 export function scheduleSave(world: WorldState, delayMs = 1500, opts: SaveOptions = {}): void {
   const existing = pending.get(world.runId);
   if (existing) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
     pending.delete(world.runId);
-    saveWorld(world, opts).catch((err) => console.error(`[sauvegarde] échec pour ${world.runId} :`, (err as Error).message));
+    pendingWrite(world, opts).catch((err) => console.error(`[sauvegarde] échec pour ${world.runId} :`, (err as Error).message));
   }, Math.max(0, delayMs));
   timer.unref?.();
   pending.set(world.runId, { timer, world, opts });
@@ -196,7 +201,7 @@ export async function flushSaves(): Promise<void> {
   for (const [runId, p] of pending) {
     clearTimeout(p.timer);
     pending.delete(runId);
-    jobs.push(saveWorld(p.world, p.opts));
+    jobs.push(pendingWrite(p.world, p.opts));
   }
   jobs.push(...chains.values());
   await Promise.allSettled(jobs);

@@ -1,9 +1,10 @@
 // The world renderer: owns the canvas, camera, layout, agent simulation, effects and input.
 // Runs its own requestAnimationFrame loop (60 fps) independently from server ticks.
 import type { Activity, AgentState, CompanySnapshot, DeptId } from '../../../shared/types';
-import { AgentSim, type AgentVis } from './agents';
+import { AgentSim, opacityOf, type AgentVis } from './agents';
 import { Bubbles } from './bubbles';
 import { Camera } from './camera';
+import { Drama, badgeIcon, nameTagRole } from './drama';
 import { Effects } from './effects';
 import { Flows } from './flow';
 import { freshState, needsOverviewFit, pruneSeen, takeFresh, type FreshItem, type FreshState } from './fresh';
@@ -29,6 +30,7 @@ export interface EngineCallbacks {
 const BUSY = new Set(['working', 'reviewing', 'meeting', 'thinking']);
 const AT_DESK = new Set(['working', 'reviewing', 'thinking', 'blocked']);
 const SCREEN_COLOR: Record<string, string> = { working: '#9be9ff', reviewing: '#ffe08a', thinking: '#d3c6ff', blocked: '#ffb4b4' };
+const BADGE_LEFT = 7; // the second marker slot, left of the head
 
 interface DynItem { depth: number; kind: 'agent' | 'screen' | 'prop'; v?: AgentVis; poly?: [number, number][]; color?: string; flicker?: number; prop?: DynProp }
 
@@ -55,6 +57,7 @@ export class WorldEngine {
   private flows = new Flows();
   private stage = new StageLayer();
   private effects = new Effects();
+  private drama = new Drama(this.sim, this.effects, this.bubbles);
   private layout: WorldLayout | null = null;
   private snapshot: CompanySnapshot | null = null;
   private byId = new Map<string, AgentState>();
@@ -110,6 +113,7 @@ export class WorldEngine {
         this.liveActivity = null;
         this.bubbles.reset();
         this.flows.reset();
+        this.drama.reset();
         this.firstSnapshot = true;
       }
       this.runId = s.runId;
@@ -127,9 +131,11 @@ export class WorldEngine {
         const still = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
         this.dissolve = { img: copy.c, t0: now, dur: still ? 0 : 0.35 };
       }
+      const before = this.layout;
       this.layout = buildLayout(s);
       this.sim.setLayout(this.layout);
       this.camera.setBounds(this.layout.bounds);
+      if (reflow && before && !this.firstSnapshot) this.drama.grown(before, this.layout, now);
       // first real layout: re-frame it unless the user already took the camera (the frames drawn before the
       // first snapshot fitted a plaza-only placeholder, ×2.2 zoom on the fountain)
       if (this.camera.w > 1 && needsOverviewFit(this.fitted, this.fittedPlaceholder, this.userMoved)) this.fitOverview();
@@ -149,7 +155,9 @@ export class WorldEngine {
     const acts = s?.activity ?? [];
     const fresh = takeFresh(this.fresh, acts, now, Date.now(), this.firstSnapshot);
     pruneSeen(this.fresh, [acts, this.liveActivity ?? undefined]);
+    this.drama.play(s, this.layout, now);
     this.sim.sync(s, now);
+    this.drama.placeTags(s?.scene);
     this.animate(fresh, now);
     this.bubbles.syncAgentBubbles(s?.company.agents ?? [], now, this.firstSnapshot);
     if (s) this.firstSnapshot = false;
@@ -267,6 +275,7 @@ export class WorldEngine {
     this.camera.update(dt);
     this.scenery.update(dt);
     this.sim.update(dt, now);
+    this.drama.update(now);
     this.effects.update(dt);
     this.flows.prune(now);
     const readers = this.flows.brainActivity(now) + [...this.sim.agents.values()].filter((v) => v.spot?.kind === 'fountain' && !v.moving).length;
@@ -343,6 +352,7 @@ export class WorldEngine {
       }
     }
     for (const prop of this.stage.items()) dyn.push({ depth: prop.depth, kind: 'prop', prop });
+    for (const prop of this.drama.items()) dyn.push({ depth: prop.depth, kind: 'prop', prop });
     dyn.sort((a, b) => a.depth - b.depth);
     // selection ring under the agent
     const selV = this.selectedAgent ? this.sim.agents.get(this.selectedAgent) : undefined;
@@ -561,7 +571,7 @@ export class WorldEngine {
     const f = v.facing;
     const front = f === 'se' || f === 'sw';
     const mirror = f === 'sw' || f === 'nw';
-    const pose = v.pose && now < (v.poseUntil ?? 0) ? v.pose : null;
+    const pose = v.pose && !v.moving && now < (v.poseUntil ?? 0) ? v.pose : null;
     if (pose) return { frame: pose === 'cheer' ? FRAME.cheer + (Math.floor(now * 5 + v.phase) % 2) : pose === 'slump' ? FRAME.slump : FRAME.shake, mirror, lift: 0 };
     if (v.moving) {
       const walk = v.carry ? (front ? FRAME.carryFront : FRAME.carryBack) : front ? FRAME.walkFront : FRAME.walkBack;
@@ -588,6 +598,7 @@ export class WorldEngine {
     const { frame, mirror, lift } = this.frameFor(v, now);
     const x = Math.round(p.x);
     const y = Math.round(p.y);
+    g.globalAlpha = opacityOf(v, now);
     if (!lift) {
       g.fillStyle = 'rgba(30,20,50,0.24)';
       g.fillRect(x - 4, y - 1, 9, 2);
@@ -598,6 +609,7 @@ export class WorldEngine {
     const bob = v.moving || lift ? 0 : v.state.status === 'meeting' ? (Math.sin(now * 5 + v.phase) > 0.3 ? 1 : 0) : Math.sin(now * 2.1 + v.phase) > 0.75 ? 1 : 0;
     if (v.carry && v.moving) drawCarrying(g, v.sheet, frame, mirror, x, y, v.carry, v.facing === 'se' || v.facing === 'sw', this.layout?.deptIsland.get(v.state.dept)?.color);
     else drawFrame(g, v.sheet, frame, mirror, x, y - lift - bob);
+    g.globalAlpha = 1;
   }
 
   private drawIcon(g: CanvasRenderingContext2D, v: AgentVis, now: number, vx0: number, vy0: number, vx1: number, vy1: number): void {
@@ -607,13 +619,19 @@ export class WorldEngine {
     else if (st === 'thinking') kind = 'thinking';
     else if (st === 'reviewing' && !v.moving) kind = 'review';
     else if (st === 'coffee' && !v.moving && v.spot?.kind === 'cafe') kind = 'coffee';
-    if (!kind) return;
+    else if (v.spot?.kind === 'duel' && !v.moving) kind = 'vs';
+    const focused = v.id === this.selectedAgent || v.id === this.hoverAgent;
+    const badge = badgeIcon(this.snapshot?.scene?.people[v.id]?.badge, this.camera.zoom, focused);
+    if (!kind && !badge) return;
     const p = this.agentFoot(v);
     if (p.x < vx0 - 20 || p.x > vx1 + 20 || p.y < vy0 - 10 || p.y > vy1 + 40) return;
-    const img = statusIcon(kind, Math.floor(now * 2.5 + v.phase));
     const lift = this.seated(v) ? 2 : 0;
     const bob = Math.round(Math.sin(now * 3 + v.phase) * 1);
-    g.drawImage(img, Math.round(p.x - 6), Math.round(p.y - CELL_H - lift - 9 + bob));
+    const y = Math.round(p.y - CELL_H - lift - 9 + bob);
+    g.globalAlpha = opacityOf(v, now); // a marker fades with its sprite: no star over an empty dock
+    if (badge) g.drawImage(statusIcon(badge, 0), Math.round(p.x - 6 - BADGE_LEFT), y);
+    if (kind) g.drawImage(statusIcon(kind, Math.floor(now * 2.5 + v.phase)), Math.round(p.x - 6), y);
+    g.globalAlpha = 1;
   }
 
   /** Flow mode: dotted remaining path of walking agents. */
@@ -690,7 +708,7 @@ export class WorldEngine {
       const p = this.agentFoot(v);
       const [sx, sy] = cam.worldToScreen(p.x, p.y);
       const color = L.deptIsland.get(v.state.dept)?.color ?? '#8b5cf6';
-      drawNameTag(g, sx, sy + 4 + 4 * Math.min(1, cam.zoom / 3), v.state.name, v.state.role, color, strong);
+      drawNameTag(g, sx, sy + 4 + 4 * Math.min(1, cam.zoom / 3), v.state.name, nameTagRole(v.state.role, this.snapshot?.scene?.people[id]), color, strong);
     };
     if (this.hoverAgent !== this.selectedAgent) tagFor(this.hoverAgent, false);
     tagFor(this.selectedAgent, true);
@@ -707,7 +725,7 @@ export class WorldEngine {
           return [sx, sy - 4];
         },
         colorOf: (id) => {
-          const a = this.byId.get(id);
+          const a = this.byId.get(id) ?? this.sim.agents.get(id)?.state; // a leaver is no longer on the roster
           return (a && L.deptIsland.get(a.dept)?.color) || '#7c3aed';
         },
         selectedId: this.selectedAgent,
@@ -747,7 +765,7 @@ export class WorldEngine {
     }
     const [wx, wy] = this.camera.screenToWorld(sx, sy);
     const pad = Math.max(0, 5 / this.camera.zoom - 2);
-    const agents = [...this.sim.agents.values()].sort((a, b) => b.pos.tx + b.pos.ty - (a.pos.tx + a.pos.ty));
+    const agents = [...this.sim.agents.values()].filter((v) => v.role !== 'leaving').sort((a, b) => b.pos.tx + b.pos.ty - (a.pos.tx + a.pos.ty));
     for (const v of agents) {
       const p = this.agentFoot(v);
       const lift = this.seated(v) ? 2 : 0;

@@ -1,6 +1,6 @@
 // App shell: the pixel world fills the screen; floating glass panels on top (like the reference video).
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CompanySnapshot, DeptId } from '../../shared/types';
+import type { ChronicleEntry, CompanySnapshot, DeptId } from '../../shared/types';
 import { api, type ControlAction, type Speed } from './api';
 import { useAgency } from './store';
 import { ActivityFeed } from './ui/ActivityFeed';
@@ -12,6 +12,7 @@ import { DeptPanel } from './ui/DeptPanel';
 import { DeptStrip } from './ui/DeptStrip';
 import { EndBanner } from './ui/EndBanner';
 import { ErrorBoundary } from './ui/ErrorBoundary';
+import { FounderDigestModal, useFounderDigest } from './ui/FounderDigest';
 import { CompanyBadge, SimHud } from './ui/Hud';
 import { PixelLogo } from './ui/icons';
 import { buildLookups, placeTab, TABS, type TabId } from './ui/labels';
@@ -28,9 +29,10 @@ import { ProductsTab } from './ui/tabs/ProductsTab';
 import { TasksTab } from './ui/tabs/TasksTab';
 import { Toasts, useToasts } from './ui/Toasts';
 import { TopBar } from './ui/TopBar';
-import { useEventToasts } from './ui/useEventToasts';
+import { entryTarget, lastAnnounced, useChronicleToasts, useEventToasts } from './ui/useEventToasts';
 import { Minimap } from './world/Minimap';
 import { WorldCanvas } from './world/WorldCanvas';
+import './ui/shell.css';
 
 // Tabs read from a GET and fetch their chunk on first open: the main bundle stays what the world needs.
 const CanauxTab = lazy(() => import('./ui/tabs/CanauxTab').then((m) => ({ default: m.CanauxTab })));
@@ -83,6 +85,7 @@ export default function App() {
   useEffect(() => { setBrainPath(null); }, [currentRun]);
 
   useEventToasts(snapshot, push, connection === 'live' || connection === 'reconnecting', openProduct);
+  const digest = useFounderDigest(snapshot, demo, connection === 'live');
 
   // Connection transitions → one toast each.
   const prevConn = useRef(connection);
@@ -120,6 +123,13 @@ export default function App() {
   }, []);
   const openBrainNote = useCallback((path: string) => { setBrainPath(path); setTab('cerveau'); }, []);
   const refresh = useCallback(() => { void agencyRefresh().catch(() => undefined); }, [agencyRefresh]);
+  const openEntry = useCallback((e: ChronicleEntry) => {
+    const target = entryTarget(e);
+    if ('tab' in target) setTab(target.tab);
+    else if ('agent' in target) openAgent(target.agent);
+    else openDept(target.dept);
+  }, [openAgent, openDept]);
+  useChronicleToasts(snapshot?.scene, push, { runId: snapshot?.runId, enabled: connection === 'live', onOpen: openEntry });
 
   // ── Simulation controls ────────────────────────────────────
   const control = useCallback(async (action: ControlAction, newSpeed?: Speed) => {
@@ -143,6 +153,24 @@ export default function App() {
     }
   }, [demo, push, setSpeed, speed, agencyRefresh, applySession]);
 
+  const extendRun = useCallback(async () => {
+    try {
+      const r = await api.extendRun();
+      if (!r.ok) throw new Error(r.message ?? 'Commande refusée');
+      if (r.session) applySession(r.session);
+      await agencyRefresh().catch(() => undefined);
+      push({ tone: 'good', icon: 'play', title: 'L’agence continue, sans fin', text: 'La simulation ne s’arrête plus à l’horizon.' });
+    } catch (e) {
+      push({ tone: 'bad', title: 'Prolongation impossible', text: e instanceof Error ? e.message : undefined });
+    }
+  }, [applySession, agencyRefresh, push]);
+
+  const showDigest = digest.show;
+  const openDigest = useCallback(() => {
+    if (demo) push({ tone: 'warn', title: 'Mode démo', text: 'Le résumé demande le serveur (npm run dev).' });
+    else showDigest();
+  }, [demo, push, showDigest]);
+
   const toggleGod = useCallback((on: boolean) => {
     setGodMode(on);
     if (on) push({ tone: 'info', icon: 'eye', title: 'Mode dieu activé', text: demo ? 'Mode démo : vérité cachée simulée.' : 'Vraies intentions des clients, vérité des niches et vrai talent visibles (Boîte mail, Apprentissage, Compétition).' });
@@ -156,7 +184,7 @@ export default function App() {
     setFocus({ kind: 'overview' });
   }, [replaceSnapshot, closePanel]);
 
-  // ── Keyboard: Esc closes, 1-9/0 and the letters of « Plus » switch tabs, / focuses search ──
+  // ── Keyboard: Esc closes, 1-9/0 and the letters of « Plus » switch tabs, d opens the digest, / focuses search ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -172,12 +200,13 @@ export default function App() {
       }
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return; }
       if (scenarioOpen) return;
+      if (e.key === 'd') { e.preventDefault(); openDigest(); return; }
       const t = TABS.find((x) => x.key === e.key);
       if (t) { e.preventDefault(); setTab(t.id); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [scenarioOpen, agentId, panelDept, tab, closePanel]);
+  }, [scenarioOpen, agentId, panelDept, tab, closePanel, openDigest]);
 
   const ctx: AppCtx = useMemo(() => ({
     snapshot,
@@ -237,7 +266,7 @@ export default function App() {
           />
           <div className="hud-row">
             <CompanyBadge connection={connection} lastError={agency.lastError} onRetry={agency.retry} />
-            <SimHud sim={sim} onControl={(a, s) => void control(a, s)} busy={ctrlBusy} />
+            <SimHud sim={sim} onControl={(a, s) => void control(a, s)} busy={ctrlBusy} onDigest={openDigest} />
           </div>
 
           <DeptStrip selected={selectedDept} onPick={openDept} onOverview={overview} />
@@ -271,13 +300,15 @@ export default function App() {
           <MissionBar />
           <div className="minimap-wrap">
             <ErrorBoundary label="La carte" quiet resetKey={snapshot?.runId}>
-              <Minimap snapshot={snapshot} selectedDept={selectedDept} onPick={openDept} onOverview={overview} />
+              <Minimap snapshot={snapshot} selectedDept={selectedDept} onPick={openDept} onOverview={overview} onAccueil={() => setTab('effectif')} />
             </ErrorBoundary>
           </div>
 
-          {showEnd ? <EndBanner onNewScenario={() => setScenarioOpen(true)} onDismiss={() => setEndDismissed(endKey)} onFinance={() => setTab('finance')} /> : null}
+          {showEnd ? <EndBanner onNewScenario={() => setScenarioOpen(true)} onDismiss={() => setEndDismissed(endKey)} onFinance={() => setTab('finance')} onExtend={demo ? undefined : () => void extendRun()} /> : null}
           <Toasts toasts={toasts} onDismiss={dismiss} />
           {scenarioOpen ? <ScenarioModal onClose={() => setScenarioOpen(false)} onLoaded={onLoaded} /> : null}
+          {digest.open ? <FounderDigestModal since={digest.open.since} onClose={digest.close} /> : null}
+          <div role="status" aria-live="polite" className="sr-only">{lastAnnounced(snapshot?.scene?.recent)}</div>
           {!snapshot ? <Splash connection={connection} onRetry={agency.retry} /> : null}
         </div>
       </div>

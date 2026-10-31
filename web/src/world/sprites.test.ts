@@ -596,7 +596,7 @@ describe('the « Scènes » of the preview', () => {
 
   it('the mock carries a whole scene: plots, board, channels, and no talent truth', () => {
     const s = mockSnapshot();
-    expect(s.scene!.closedDepts.map((d) => d.id)).toEqual(['video', 'crm']);
+    expect(s.scene!.closedDepts.map((d) => d.id)).toEqual(['partenariats', 'video']);
     expect(s.scene!.board).toHaveLength(5);
     expect(JSON.stringify(s.scene)).not.toMatch(/truth/i);
   });

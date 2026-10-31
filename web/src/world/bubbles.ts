@@ -7,12 +7,14 @@ export const BUBBLE_LIFE = 6.5;
 const MAX_BUBBLES = 6;
 const MAX_W = 184;
 
-interface Item { agentId: string; header: string; text: string; kind: ActivityKind | 'bubble'; born: number; accent: string; life: number }
+type BubbleKind = ActivityKind | 'bubble' | 'say';
 
-const KIND_PRIO: Partial<Record<ActivityKind | 'bubble', number>> = {
+interface Item { agentId: string; header: string; text: string; kind: BubbleKind; born: number; accent: string; life: number }
+
+const KIND_PRIO: Partial<Record<BubbleKind, number>> = {
   delegate: 50, deliverable: 50, review: 34, task_done: 30, task_failed: 32, lesson: 30, brain_write: 26,
   brain_read: 22, task_start: 20, message: 20, ad: 20, sale: 24, refund: 22, chat: 18, thought: 14, meeting: 12,
-  founder: 30, bubble: 10, walk: 4, coffee: 6, event: 16, finance: 16,
+  founder: 30, bubble: 10, walk: 4, coffee: 6, event: 16, finance: 16, say: 60,
 };
 
 const KIND_COLOR: Partial<Record<ActivityKind | 'bubble', string>> = {
@@ -65,6 +67,11 @@ export class Bubbles {
     // keep an important line visible a bit longer than a following trivial one
     if (prev && prev.born > born - 1.2 && (KIND_PRIO[prev.kind] ?? 0) > prio + 15) return;
     this.items.set(a.agentId, { agentId: a.agentId, header: headerFor(a, ag.name, to), text: a.text, kind: a.kind, born, accent: KIND_COLOR[a.kind] ?? '', life: BUBBLE_LIFE });
+  }
+
+  /** A line the world stages itself, with no activity behind it: it outranks the day's chatter. */
+  say(agentId: string, header: string, text: string, now: number): void {
+    this.items.set(agentId, { agentId, header, text, kind: 'say', born: now, accent: '', life: BUBBLE_LIFE + 1.5 });
   }
 
   /** agent.bubble from the server: shown for a while each time it changes. */
