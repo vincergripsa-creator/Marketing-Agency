@@ -8,6 +8,7 @@ import { SR, add, mixDown, readWavMono, stereo, writeWav, writeWavMono, type Ste
 import { makeMusic, musicFor } from '../src/video/music.js';
 import { ding, impact, pop, sfxCues, whoosh, type CueBeat } from '../src/video/sfx.js';
 import { alignWords, audibleSpan, estimatedWords, findVoice, synthesize, type TtsEvent } from '../src/video/speech.js';
+import { captionGroups } from '../src/video/timeline.js';
 
 const rmsDb = (s: Float32Array, from: number, to: number): number => {
   let sum = 0;
@@ -185,7 +186,7 @@ describe('sfx', () => {
     expect(at(0.26)).toEqual([3.87, 8.87, 13.87, 18.87]);
     expect(at(0.7)).toEqual([16.3]);
     expect(at(0.42)).toEqual([0, 19.05]);
-    expect(at(0.09).sort((a, b) => a - b)).toEqual([4.55, 10, 19.25]);
+    expect(at(0.09).sort((a, b) => a - b)).toEqual([4.55, 10, 19.25, 20.6]); // 40 % into the end card: the price lands
     for (const c of cues) {
       expect(c.gain).toBeGreaterThanOrEqual(0.22);
       expect(c.gain).toBeLessThanOrEqual(0.5);
@@ -248,7 +249,12 @@ describe('alignWords', () => {
   it('is monotonic on every recorded line, words from the source text', () => {
     for (const row of RECORDED) {
       const words = alignWords(row.text, eventsOf(row));
-      expect(words.map((w) => w.text)).toEqual(row.text.split(' ').filter((w) => /[\p{L}\p{N}]/u.test(w)));
+      const read: string[] = [];
+      for (const w of row.text.split(' ')) {
+        if (/[\p{L}\p{N}]/u.test(w)) read.push(w);
+        else if (/^[»:;!?.,…]+$/.test(w)) read[read.length - 1] += `\u00a0${w}`;
+      }
+      expect(words.map((w) => w.text)).toEqual(read);
       for (let i = 0; i < words.length; i++) {
         expect(words[i].end).toBeGreaterThanOrEqual(words[i].at);
         if (i) expect(words[i].at).toBeGreaterThanOrEqual(words[i - 1].at);
@@ -300,8 +306,19 @@ describe('alignWords', () => {
 
   it('splits words on the non-breaking spaces of French typography', () => {
     const words = alignWords('Vraiment\u00a0? Oui\u202f!', [{ t: 'Vraiment', c: 0, ms: 80 }, { t: 'Oui', c: 11, ms: 700 }]);
-    expect(words.map((w) => w.text)).toEqual(['Vraiment', 'Oui']);
+    expect(words.map((w) => w.text)).toEqual(['Vraiment\u00a0?', 'Oui\u00a0!']);
     expect(words[1].at).toBe(0.7);
+  });
+
+  it('keeps a closing mark on its word: a caption ends where the clause ends', () => {
+    for (const words of [alignWords('Tu dis « j’ai paniqué » reste deux secondes.', []), estimatedWords('Tu dis « j’ai paniqué » reste deux secondes.')]) {
+      expect(words.map((w) => w.text)).toEqual(['Tu', 'dis', 'j’ai', 'paniqué\u00a0»', 'reste', 'deux', 'secondes.']);
+      expect(captionGroups(words, 6).map((g) => g.map((w) => w.text).join(' '))).toEqual(['Tu dis j’ai paniqué\u00a0»', 'reste deux secondes.']);
+    }
+  });
+
+  it('keeps a dash out: it opens the next clause, a caption does not print it', () => {
+    expect(alignWords('Le plan — enfin clair.', []).map((w) => w.text)).toEqual(['Le', 'plan', 'enfin', 'clair.']);
   });
 });
 

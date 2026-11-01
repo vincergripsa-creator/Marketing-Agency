@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import type { AdCreative, AdFormat, AgentState, BeatKind, Product, ScenarioConfig, VideoCut, VoiceOfCustomer, WorldState } from '../src/shared.js';
 import type { MindContext, Rng, RunPaths } from '../src/contracts.js';
 import { createRng, streamRng } from '../src/core/index.js';
-import { EDIT_BASELINE, planCut, roleOf, TEMPOS, tightenSpoken } from '../src/deliverables/videoCut.js';
+import { EDIT_BASELINE, leadOut, planCut, reviewQuote, roleOf, saidSpan, TEMPOS, tightenSpoken } from '../src/deliverables/videoCut.js';
 import { createBrainVault } from '../src/learning/index.js';
 import { createContentEngine } from '../src/minds/index.js';
 import { inline } from '../src/minds/heuristic/studio.js';
@@ -134,20 +134,40 @@ describe('planCut', () => {
     for (const g of guides) expect(scoreCut(cutFor(g, format, 0.9)).craft - scoreCut(cutFor(g, format, 0.2)).craft).toBeGreaterThanOrEqual(40);
   });
 
+  it.each(['faceless_voiceover', 'ugc_avatar'] as const)('the top of the league stays readable: what a strong editor adds is not paid to a middling one, %s', (format) => {
+    const mean = (skill: number) => guides.reduce((n, g) => n + scoreCut(cutFor(g, format, skill)).craft, 0) / guides.length;
+    expect(mean(0.9) - mean(0.45)).toBeGreaterThanOrEqual(12);
+    expect(mean(0.9) - mean(0.7)).toBeGreaterThanOrEqual(6);
+  });
+
+  it('holds no reading of the editor: the end hold is one of four decisions, on every cut and in its end card', () => {
+    const skills = Array.from({ length: 21 }, (_, i) => i / 20);
+    const cuts = eachCut(['faceless_voiceover', 'ugc_avatar'], skills);
+    expect([...new Set(cuts.map(({ cut }) => cut.metrics.endHoldSec))].sort()).toEqual([0.8, 1.2, 1.5, 1.8]);
+    const g = guides[2]!;
+    const end = (skill: number) => cutFor(g, 'faceless_voiceover', skill).beats.at(-1)!.estSec;
+    expect(end(0.61)).toBe(end(0.74)); // one decision, and every other row reads the same: nothing in the end card tells them apart
+  });
+
   it('every row of the table changes the plan, not a label', () => {
     const g = guides[2]!;
     const at = (skill: number) => cutFor(g, 'faceless_voiceover', skill);
     expect(at(0.2).beats[0]).toMatchObject({ kind: 'title_card', spoken: '', estSec: 0.8 });
     expect(at(0.4).beats[0]).toMatchObject({ kind: 'title_card', estSec: 0.25 });
     expect(at(0.5).beats[0]!.kind).toBe('hook');
-    expect(at(0.2).metrics).toMatchObject({ hookWordSec: 0.8, captionWords: 6, endHoldSec: 0.88 });
+    expect(at(0.2).metrics).toMatchObject({ hookWordSec: 0.8, captionWords: 6, endHoldSec: 0.8 });
     expect(at(0.4).metrics.captionWords).toBe(3);
-    expect(at(0.9).metrics).toMatchObject({ hookWordSec: 0, productSec: 0.45, captionWords: 2, endHoldSec: 1.86 });
-    expect(at(0.7).metrics.productSec).toBeGreaterThan(2);
+    expect(at(0.9).metrics).toMatchObject({ hookWordSec: 0, productSec: 0.45, captionWords: 2, endHoldSec: 1.8 });
+    expect(at(0.74).metrics.productSec).toBeGreaterThan(2);    // the guide waits for the first page: only a strong editor's opens the ad
+    expect([0.29, 0.3, 0.49, 0.5, 0.74, 0.75].map((x) => at(x).metrics.endHoldSec)).toEqual([0.8, 1.2, 1.2, 1.5, 1.5, 1.8]);
     expect(at(0.3).beats.filter((b) => b.kind === 'pain_bubble')).toHaveLength(0);
     expect(at(0.4).beats.filter((b) => b.kind === 'pain_bubble')).toHaveLength(1);
-    expect(at(0.49).beats.filter((b) => b.kind === 'page_proof')).toHaveLength(0);
-    expect(at(0.5).beats.filter((b) => b.kind === 'page_proof').length).toBeGreaterThan(0);
+    expect(at(0.09).beats.filter((b) => b.kind === 'page_proof')).toHaveLength(0);
+    expect(at(0.1).beats.filter((b) => b.kind === 'page_proof')).toHaveLength(1);
+    expect(at(0.29).beats.find((b) => b.kind === 'page_proof')!.shots).toBe(1);   // he holds it
+    expect(at(0.3).beats.find((b) => b.kind === 'page_proof')!.shots).toBeGreaterThan(1);
+    expect(at(0.49).beats.filter((b) => b.kind === 'page_proof')).toHaveLength(1);
+    expect(at(0.9).beats.filter((b) => b.kind === 'page_proof').length).toBeGreaterThanOrEqual(1);
     expect([at(0.49).sfx, at(0.5).sfx]).toEqual([false, true]);
     expect(at(0.34).metrics.estSec).toBeGreaterThan(at(0.35).metrics.estSec);
     expect(at(0.59).metrics.estSec).toBeGreaterThan(at(0.6).metrics.estSec);
@@ -264,6 +284,32 @@ describe('formats (video §3.4)', () => {
   });
 });
 
+describe('the needle', () => {
+  const VOICE = 'Un repère à garder en tête : le terreau du pot épuise ses réserves très vite en été.';
+  const scenes = (voiceover: string) => [
+    { visual: '', onScreenText: 'Le terreau', voiceover: 'Le terreau du pot s’épuise.', durationSec: 3 },
+    { visual: '', onScreenText: 'Le terreau du pot', voiceover, durationSec: 4 },
+    { visual: '', onScreenText: 'Guide PDF', voiceover: 'Le guide complet est en lien dans ma bio.', durationSec: 3 },
+  ];
+  const cut = (chapter: Record<string, unknown>) => {
+    const product = { id: 'prd_1', title: 'Le balcon', content: { chapters: [{ title: 'Le sol', intro: '', paragraphs: [], steps: [], example: null, checklist: [], ...chapter }] }, pdfFacts: { pages: 30 } } as unknown as Product;
+    const creative = { hook: 'Le terreau', format: 'faceless_voiceover', scenes: scenes(VOICE) } as unknown as AdCreative;
+    return planCut({ creative, product, voc: { phrases: [], bannedClaims: [] } as unknown as VoiceOfCustomer, skill: 0.9, tempo: 'standard', rng: steady() });
+  };
+  const proofOf = (chapter: Record<string, unknown>) => cut(chapter).beats.find((b) => b.proof)?.proof?.needle;
+  const INTRO = 'Le terreau du pot épuise ses réserves'; // the voice says it first: in one pass it would win
+  const PARAGRAPH = 'Le pot épuise ses réserves très vite';
+
+  it('leaves the chapter\'s opener for last: its intro prints under a giant numeral, a poor close-up', () => {
+    expect(proofOf({ intro: `${INTRO}.`, paragraphs: [`${PARAGRAPH}.`] })).toBe(PARAGRAPH);
+    expect(proofOf({ intro: `${INTRO}.`, checklist: [`${PARAGRAPH}.`] })).toBe(PARAGRAPH);
+  });
+
+  it('still lands on the intro rather than lose the page: `proof` stays', () => {
+    expect(proofOf({ intro: `${INTRO}.` })).toBe(INTRO);
+  });
+});
+
 describe('tightenSpoken', () => {
   it.each([
     ['Si toi aussi tu te dis « Je n’en peux plus. Vraiment. », reste deux secondes. Une étape à la fois.', 'Si toi aussi tu te dis « Je n’en peux plus. Vraiment. », reste deux secondes.'],
@@ -295,13 +341,23 @@ describe('tightenSpoken', () => {
     expect(tightenSpoken(text, 2)).toBe(text);
   });
 
-  it('level 2 drops the title in apposition, in the last scene only, and never one the sentence needs', () => {
+  it('from level 1 drops the title in apposition, in the last scene only, and never one the sentence needs', () => {
     const line = 'Le guide complet, « Le chiot : 6 étapes concrètes (2-6 mois) », est en lien dans ma bio.';
-    expect(tightenSpoken(line, 2, true)).toBe('Le guide complet est en lien dans ma bio.');
-    expect(tightenSpoken(line, 2, false)).toBe(line);
-    expect(tightenSpoken(line, 1, true)).toBe(line);
+    for (const level of [1, 2]) {
+      expect(tightenSpoken(line, level, true)).toBe('Le guide complet est en lien dans ma bio.');
+      expect(tightenSpoken(line, level, false)).toBe(line);
+    }
+    expect(tightenSpoken(line, 0, true)).toBe(line); // the plain editor reads it all
     const needed = 'Télécharge « Le chiot propre » dans ma bio.';
     expect(tightenSpoken(needed, 2, true)).toBe(needed);
+  });
+
+  it('holds the end card a level-1 cut spends on its title: the voice stops at the link', () => {
+    for (const g of guides) {
+      const last = (skill: number) => cutFor(g, 'faceless_voiceover', skill).beats.at(-1)!;
+      expect(last(0.45).estSec, g.product.title).toBeLessThan(last(0.2).estSec - 1);
+      expect(last(0.45).spoken).not.toContain('«');
+    }
   });
 
   function strings(x: unknown, out: string[] = []): string[] {
@@ -387,12 +443,12 @@ describe('proof', () => {
     expect(cuts.filter((c) => c.beats.some((b) => b.kind === 'page_proof')).length).toBeGreaterThanOrEqual(guides.length - 1);
   });
 
-  it('without a guide, or under .5, a plate stands in for the page: proof is never invented', () => {
+  it('without a guide, or under .1, a plate stands in for the page: proof is never invented', () => {
     const g = guides[0]!;
     const noGuide = planCut({ creative: g.ads.faceless_voiceover!, product: { ...g.product, content: null }, voc: g.voc, skill: 0.9, tempo: 'standard', rng: steady() });
     expect(noGuide.beats.some((b) => b.kind === 'page_proof' || b.proof)).toBe(false);
     expect(noGuide.beats.some((b) => b.kind === 'fact_card')).toBe(true);
-    expect(cutFor(g, 'faceless_voiceover', 0.45).beats.some((b) => b.proof)).toBe(false);
+    expect(cutFor(g, 'faceless_voiceover', 0.09).beats.some((b) => b.proof)).toBe(false);
   });
 
   it('pain bubbles carry real customer phrases, none the platform refuses', () => {
@@ -665,7 +721,7 @@ describe('the video test (D16)', () => {
 
     await produce(l, product);
     const position = openPosition(ctx, 'motion_designer', 'founder', 'Pour le test')!;
-    const candidates = drawCandidates(ctx, 'motion_designer', 1, 3);
+    const candidates = drawCandidates(ctx, 'motion_designer', 1, 6); // scores stand on bands: three of them can land on one
     const before = JSON.stringify(w);
     await scoreCandidates(ctx, 'motion_designer', candidates);
     expect(JSON.stringify(w)).toBe(before);
@@ -674,6 +730,145 @@ describe('the video test (D16)', () => {
     const hire = await hireAgent(ctx, position, candidates[0]!);
     expect(w.company.league!.entries[hire.id]!.ratings.video?.rating).not.toBe(1500);
   }, 30_000);
+});
+
+describe('the page a cut shows', () => {
+  const chapter = (over: Partial<NonNullable<Product['content']>['chapters'][number]>) => ({ title: 'Le soleil', intro: '', paragraphs: [], steps: [], example: null, checklist: [], visual: null, ...over });
+  const guideOf = (chapters: unknown[], pages = 30): Product => ({ ...guides[0]!.product, pdfFacts: { pages, sheets: 1 }, content: { ...guides[0]!.product.content!, chapters } as Product['content'] });
+  const scenes = (step: string, proof: string): AdCreative['scenes'] => [
+    { visual: '', onScreenText: 'Le hook', voiceover: 'Le hook du jour.', durationSec: 3 },
+    { visual: '', onScreenText: '1. Mesurer', voiceover: step, durationSec: 4 },
+    { visual: '', onScreenText: 'Plan de 8 mois', voiceover: proof, durationSec: 4 },
+    { visual: '', onScreenText: 'Guide PDF — lien en bio', voiceover: 'Le guide complet est en lien dans ma bio.', durationSec: 3 },
+  ];
+  const plan = (product: Product, script: AdCreative['scenes'], skill: number, format: AdFormat = 'faceless_voiceover'): VideoCut => planCut({ creative: { ...guides[0]!.ads[format]!, scenes: script }, product, voc: guides[0]!.voc, skill, tempo: 'standard', rng: steady() });
+  const STEP = 'La méthode commence par un geste : mesurer le soleil du balcon chaque matin.';
+
+  it('takes a needle as the page prints it: no box label, no step number', () => {
+    const tick = plan(guideOf([chapter({ checklist: ['Fait : mesurer le soleil du balcon chaque matin'] })]), scenes(STEP, 'Un repère à garder.'), 0.9);
+    expect(tick.beats[1]!.proof?.needle).toBe('mesurer le soleil du balcon chaque matin');
+    const step = plan(guideOf([chapter({ steps: ['1. Mesurer le soleil du balcon chaque matin'] })]), scenes(STEP, 'Un repère à garder.'), 0.9);
+    expect(step.beats[1]!.proof?.needle).toBe('Mesurer le soleil du balcon chaque matin');
+    const example = plan(guideOf([chapter({ example: 'Exemple type : Karim mesure le soleil du balcon chaque matin.' })]), scenes(STEP, 'Un repère à garder.'), 0.9);
+    expect(example.beats[1]!.proof?.needle).toBe('Karim mesure le soleil du balcon chaque matin');
+  });
+
+  it('a digest prints its steps, not its running text: the needle stays on a line it has', () => {
+    const chapters = [chapter({ paragraphs: ['Mesurer le soleil du balcon chaque matin, sans exception.'], steps: ['Noter les heures de plein soleil sur le carnet'] })];
+    expect(plan(guideOf(chapters), scenes(STEP, 'Un repère à garder.'), 0.9).beats[1]!.proof?.needle).toBe('Mesurer le soleil du balcon chaque matin, sans exception');
+    expect(plan(guideOf(chapters, 9), scenes(STEP, 'Un repère à garder.'), 0.9).beats[1]!.proof?.needle).toBe('Noter les heures de plein soleil sur le carnet');
+  });
+
+  it('a scene about the method shows the method, even when no line repeats the voice', () => {
+    const product = guideOf([chapter({ steps: ['Tailler les tomates une fois par semaine'] })]);
+    const cut = plan(product, scenes('La méthode tient en peu de gestes, et ça change tout pour toi.', 'Un repère à garder.'), 0.9);
+    expect(cut.beats[1]).toMatchObject({ kind: 'page_proof', proof: { chapter: 0, needle: 'Tailler les tomates une fois par semaine' } });
+    expect(cut.beats[2]!.kind).toBe('fact_card'); // a loose scene with nothing on its subject stays a plate: proof is not decoration
+  });
+
+  it('a plain editor shows one page, a strong one every page it can', () => {
+    const product = guideOf([chapter({ steps: ['Mesurer le soleil du balcon chaque matin', 'Le terreau du pot s’épuise vite en été'] })]);
+    const script = scenes(STEP, 'Un repère à garder : le terreau du pot s’épuise vite en été.');
+    const pages = (skill: number) => plan(product, script, skill).beats.filter((b) => b.kind === 'page_proof').length;
+    expect([pages(0.09), pages(0.2), pages(0.49), pages(0.5), pages(0.9)]).toEqual([0, 1, 1, 2, 2]);
+  });
+
+  it('a narrator keeps the page beside it and still gets its full-bleed page', () => {
+    const product = guideOf([chapter({ steps: ['Mesurer le soleil du balcon chaque matin', 'Le terreau du pot s’épuise vite en été'] })]);
+    const cut = plan(product, scenes(STEP, 'Un repère à garder : le terreau du pot s’épuise vite en été.'), 0.45, 'ugc_avatar');
+    expect(cut.beats.map((b) => [b.kind, !!b.proof]).slice(-3, -1)).toEqual([['narrator', true], ['page_proof', true]]);
+  });
+
+  it('a narrated cut with nothing else to fill the frame shows its step full bleed, the voice on the line: an inset does not read on a phone', () => {
+    const product = guideOf([chapter({ steps: ['Mesurer le soleil du balcon chaque matin'] })]);
+    const cut = plan(product, scenes(STEP, 'Un repère à garder.'), 0.9, 'ugc_avatar');
+    expect(cut.beats[1]).toMatchObject({ kind: 'page_proof', proof: { needle: 'Mesurer le soleil du balcon chaque matin' } });
+    expect(cut.beats.some((b) => b.kind === 'narrator' && b.proof)).toBe(false);
+  });
+
+  it('a narrator stands in every narrated cut, at every skill, with a page beside him only past a plain editor', () => {
+    const pain = 'Si toi aussi tu te dis « rien ne pousse », reste deux secondes.';
+    const product = guideOf([chapter({ steps: ['Mesurer le soleil du balcon chaque matin', 'Le terreau du pot s’épuise vite en été'] })]);
+    const script = (first: string): AdCreative['scenes'] => { const s = scenes(STEP, 'Un repère à garder : le terreau du pot s’épuise vite en été.'); return [s[0]!, { visual: '', onScreenText: '« rien ne pousse »', voiceover: first, durationSec: 3 }, ...s.slice(1)]; };
+    for (const skill of [0, 0.09, 0.2, 0.35, 0.45, 0.9]) {
+      const cut = plan(product, script(pain), skill, 'ugc_avatar');
+      expect(cut.beats.filter((b) => b.kind === 'narrator').length, `skill ${skill}`).toBeGreaterThanOrEqual(2);
+      expect(cut.beats.some((b) => b.kind === 'narrator' && b.proof), `skill ${skill}`).toBe(skill >= 0.4);
+    }
+    expect(plan(product, script('Rien ne pousse, et l’impression d’avoir tout essayé.'), 0.2, 'ugc_avatar').beats.some((b) => b.kind === 'narrator')).toBe(true); // no quote: still his to say
+    for (const skill of [0.2, 0.9]) { // the scene after the hook is his, on what a faceless cut shows as a proof
+      const unquoted = script('Rien ne pousse, et l’impression d’avoir tout essayé.').map((s, i) => (i === 1 ? { ...s, onScreenText: 'Rien ne pousse' } : s));
+      expect(plan(product, unquoted, skill, 'ugc_avatar').beats.find((b) => b.scene === 1)!.kind, `skill ${skill}`).toBe('narrator');
+      expect(plan(product, unquoted, skill).beats.find((b) => b.scene === 1)!.kind, `skill ${skill}`).not.toBe('narrator');
+    }
+  });
+
+  it('marks what the viewer hears: the spoken line, not the script an editor cut', () => {
+    const product = guideOf([chapter({ steps: ['Mesurer le soleil du balcon chaque matin', 'Verser le terreau du pot avant les plantations'] })]);
+    const long = `${STEP} Ensuite : verser le terreau du pot avant les plantations. Une étape à la fois.`;
+    expect(plan(product, scenes(long, 'Un repère à garder.'), 0.9).beats[1]!.spoken).toBe(STEP);
+    expect(plan(product, scenes(long, 'Un repère à garder.'), 0.9).beats[1]!.proof?.needle).toBe('Mesurer le soleil du balcon chaque matin');
+  });
+
+  it('of two lines the voice says, marks the one it says first, not the longest', () => {
+    const first = 'Mesurer le soleil du balcon';
+    const second = 'Noter les heures de plein soleil sur un carnet de bord';
+    const product = guideOf([chapter({ steps: [second, first] })]);
+    const voice = 'La méthode commence par un geste tout simple : mesurer le soleil du balcon, et noter les heures de plein soleil sur un carnet de bord.';
+    expect(plan(product, scenes(voice, 'Un repère à garder.'), 0.9).beats[1]!.proof?.needle).toBe(first);
+  });
+
+  it('a lead-in opens every ad: it matches no line', () => {
+    const product = guideOf([chapter({ paragraphs: ['La garder en tête au moment de l’étape concernée'], steps: ['Tailler les tomates une fois par semaine'] })]);
+    const cut = plan(product, scenes(STEP, 'Un repère à garder en tête : le soleil tourne vite en été.'), 0.9);
+    expect(cut.beats.map((b) => b.proof?.needle).filter(Boolean)).not.toContain('La garder en tête au moment de l’étape concernée');
+    expect(cut.beats[2]!.kind).toBe('fact_card');
+    expect(leadOut('Un repère à garder en tête : le soleil tourne.')).toBe('le soleil tourne.');
+    expect(leadOut('La méthode commence par un geste tout simple : mesurer.')).toBe('mesurer.');
+    expect(leadOut('Le plan tient en 8 mois.')).toBe('Le plan tient en 8 mois.');
+  });
+
+  it('a line too long for the marker is marked up to its first clause, as the page prints it', () => {
+    const step = 'Identifier sa catégorie d’activité : vente, prestation commerciale ou prestation de service libérale';
+    const product = guideOf([chapter({ steps: [step] })]);
+    const cut = plan(product, scenes('La méthode commence par un geste tout simple : identifier sa catégorie d’activité.', 'Un repère à garder.'), 0.9);
+    expect(cut.beats[1]!.proof?.needle).toBe('Identifier sa catégorie d’activité');
+    expect(step.startsWith(cut.beats[1]!.proof!.needle)).toBe(true);
+  });
+
+  it('finds where the voice says a line, word by word, anchors on no small word', () => {
+    const spoken = 'La méthode commence par un geste tout simple : mesurer le soleil de ton balcon chaque matin.'.split(' ');
+    expect(saidSpan('Mesurer le soleil du balcon', spoken)).toEqual({ from: 9, to: 14 });
+    expect(saidSpan('Tailler les tomates', spoken)).toBeNull();
+    expect(saidSpan('L’ensoleillement du balcon', 'Il faut mesurer l’ensoleillement du balcon.'.split(' '))).toEqual({ from: 3, to: 5 });
+  });
+
+  it('a card that reads a buyer stays up long enough to read him, on a silent format', () => {
+    const product = guideOf([chapter({ steps: ['Mesurer le soleil du balcon chaque matin'] })]);
+    const quote = 'J’avais tout lu sur internet sans résultat, ici il y a une vraie méthode et des checklists que je peux suivre';
+    const short = plan(product, scenes(STEP, 'Un repère à garder.'), 0.9, 'text_slideshow').beats[2]!;
+    const read = plan(product, scenes(STEP, `Un acheteur a écrit sur le guide : « ${quote} ».`), 0.9, 'text_slideshow').beats[2]!;
+    expect(read.estSec).toBeGreaterThan(short.estSec + 2);
+    expect(read.spoken).toBe('');
+  });
+
+  it('a scene where the voice reads a buyer stays a plate, without a page: its card is the proof', () => {
+    const product = guideOf([chapter({ steps: ['Mesurer le soleil du balcon chaque matin'] })]);
+    const cut = plan(product, scenes(STEP, 'Un acheteur a écrit sur le guide : « mesurer le soleil du balcon chaque matin a tout changé ».'), 0.9);
+    expect(cut.beats[2]).toMatchObject({ kind: 'fact_card' });
+    expect(cut.beats[2]!.proof).toBeUndefined();
+    expect(reviewQuote('Un acheteur a écrit sur le guide : « très clair ».')).toBe('très clair');
+    expect(reviewQuote('Si toi aussi tu te dis « rien ne pousse », reste deux secondes.')).toBeNull();
+  });
+
+  it('the league still reads the editor: below the page, on the page, past it', () => {
+    for (const g of guides) {
+      const craft = [0.1, 0.2, 0.3, 0.4, 0.6, 0.9].map((s) => scoreCut(cutFor(g, 'faceless_voiceover', s)).craft);
+      expect([...craft].sort((a, b) => a - b)).toEqual(craft);
+      expect(craft[5]! - craft[1]!).toBeGreaterThanOrEqual(40);
+      expect(craft[3]! - craft[0]!).toBeGreaterThanOrEqual(35);
+    }
+  });
 });
 
 describe('reload', () => {

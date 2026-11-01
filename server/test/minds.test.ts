@@ -17,7 +17,7 @@ import { catalogNiche, NICHE_CATALOG } from '../src/sim/niches.js';
 import { parseKnowledge, parseMistake, parseStep } from '../src/minds/heuristic/knowledge.js';
 import { archetypeOf, classifyArchetype, PROFILED_NICHES } from '../src/minds/heuristic/profiles.js';
 import { buildNicheCtx } from '../src/minds/heuristic/niche.js';
-import { heuristicPdfContent, nextStepFor, promiseOutcome } from '../src/minds/heuristic/studio.js';
+import { heuristicPdfContent, nextStepFor, promiseOutcome, standAlone } from '../src/minds/heuristic/studio.js';
 import { speakable } from '../src/minds/heuristic/voice.js';
 import { ensureVisual } from '../src/minds/shapes.js';
 import { nAd, nPdf } from '../src/minds/claude/normalize.js';
@@ -1344,6 +1344,15 @@ describe('a label never flips or dangles', () => {
   it('contrast words are dangling ends, a closing negation is not', () => {
     for (const s of ['Récompenser dehors, pas', 'Le chiot, jamais', 'Arroser le matin, sauf', 'Sans sel ni', 'Tout sauf']) expect(endsDangling(s), s).toBe(true);
     for (const s of ['Bébé ne dort pas', 'Il ne mange jamais', 'Ça n’avance pas', 'Pas de sel']) expect(endsDangling(s), s).toBe(false);
+  });
+
+  it('a line with no sentence around it stands on its own: a whole sentence or the head of an order, nothing that leans on what came before', () => {
+    expect(standAlone(['À chaque changement de rythme, reprenez un seul geste pendant une semaine complète et notez ce qui bouge dans le carnet.'])).toEqual([]);
+    expect(standAlone(['Il dit à quel moment placer la sortie.', 'Elles demandent de la stratégie, pas du vocabulaire.', 'C’est votre première économie.', 'Passez tout de suite à la suivante.'])).toEqual([]);
+    expect(standAlone(['Viser un vendredi soir plutôt qu’un lundi matin quand la semaine a été chargée pour tout le monde à la maison.'])).toEqual([]);
+    expect(standAlone(['Notez la hauteur griffée, le moment de la journée et ce qui s’est passé juste avant, sur la même page du carnet.'])).toEqual(['Notez la hauteur griffée']);
+    expect(standAlone(['Gardez les repas à heures fixes. Il comprend vite.'])).toEqual(['Gardez les repas à heures fixes']);
+    expect(standAlone(['Tester la peinture sur l’arrière du meuble.', 'Tester la peinture sur l’arrière du meuble.'])).toEqual(['Tester la peinture sur l’arrière du meuble']);
   });
 
   it('never ends on one of them, whatever the cut', () => {

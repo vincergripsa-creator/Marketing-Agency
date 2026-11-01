@@ -19,6 +19,10 @@ const LINE = 1.22;
 const LINE2 = 1.24;
 const PAD = 90;
 const PAD2 = 58;
+const BLEED = 30;              // a bubble reaches past its words, the words stay in the zone
+const MAX_SIZE = 96;
+const MIN_SIZE = 40;
+const INDENT2 = 70;            // the answer sits off to the right
 
 interface Layout { size: number; lines: string[]; size2: number; lines2: string[]; h: number; h2: number }
 
@@ -27,10 +31,10 @@ function layout(s: SceneApi, phrase: string, second: string | null): Layout {
   const box = s.column;
   const room = s.captionTop - box.y - LABEL_H;
   let last: Layout | null = null;
-  for (let size = 78; size >= 40; size -= 4) {
-    const size2 = Math.round(size * 0.7);
-    const lines = s.wrap(phrase, size, FACE.bold, box.w - 120);
-    const lines2 = second ? s.wrap(second, size2, FACE.bold, box.w - 200) : [];
+  for (let size = MAX_SIZE; size >= MIN_SIZE; size -= 4) {
+    const size2 = Math.round(size * 0.72);
+    const lines = s.wrap(phrase, size, FACE.bold, box.w - 24);
+    const lines2 = second ? s.wrap(second, size2, FACE.bold, box.w - INDENT2 - 24) : [];
     const h = lines.length * size * LINE + PAD;
     const h2 = second ? lines2.length * size2 * LINE2 + PAD2 : 0;
     last = { size, lines, size2, lines2, h, h2 };
@@ -45,7 +49,7 @@ function bubblePhrase(s: SceneApi, l: Layout, x: number, y: number, t: number): 
   ctx.fillStyle = C.ink;
   let index = 0;
   l.lines.forEach((line, row) => {
-    let wx = x + 60;
+    let wx = x + BLEED + 12;
     const wy = y + 46 + l.size * 0.92 + row * l.size * LINE;
     for (const word of line.split(' ')) {
       const age = t - TYPING_SEC - index * WORD_SEC;
@@ -63,14 +67,16 @@ function bubblePhrase(s: SceneApi, l: Layout, x: number, y: number, t: number): 
 export function drawPain(s: SceneApi, b: TimelineBeat, t: number): void {
   const { ctx, C, column: box } = s;
   s.background(C.light, mix(C.light, C.secondary, 0.7), 0.2);
+  s.art(b.t0 + t, 0.12);
   s.floaters(t, rgba(C.primary, 0.09), 7, 5);
+  s.band(b.t0 + t);
   const phrase = b.screen.replace(/^[«"\s]+|[»"\s]+$/g, '');
   const second = b.items?.[0]?.replace(/^[«"\s]+|[»"\s]+$/g, '') ?? null;
   const l = s.memo(b, () => layout(s, phrase, second));
   const typing = t < TYPING_SEC;
-  const bx = box.x;
+  const bx = box.x - BLEED;
   const by = box.y + LABEL_H;
-  const bw = typing ? 240 : box.w;
+  const bw = typing ? 240 : box.w + BLEED * 2;
   const bh = typing ? 150 : l.h;
   const appear = eBack(t / 0.22);
 
@@ -118,8 +124,8 @@ export function drawPain(s: SceneApi, b: TimelineBeat, t: number): void {
   const secondAt = Math.min(SECOND_SEC, b.dur * 0.6);
   if (second && t > secondAt) {
     const grow = eBack((t - secondAt) / 0.2);
-    const w2 = box.w - 110;
-    const x2 = box.x + 110;
+    const x2 = box.x + INDENT2 - BLEED;
+    const w2 = box.w - INDENT2 + BLEED * 2;
     const y2 = by + l.h + GAP;
     ctx.save();
     ctx.translate(x2 + w2 - 60, y2 + l.h2);
@@ -131,7 +137,7 @@ export function drawPain(s: SceneApi, b: TimelineBeat, t: number): void {
     ctx.shadowColor = 'transparent';
     ctx.fillStyle = '#fff';
     s.font(l.size2, FACE.bold, -1);
-    l.lines2.forEach((line, i) => s.drawText(line, x2 + 44, y2 + 22 + l.size2 + i * l.size2 * LINE2, { moving: t < secondAt + 0.2 }));
+    l.lines2.forEach((line, i) => s.drawText(line, x2 + BLEED + 12, y2 + 22 + l.size2 + i * l.size2 * LINE2, { moving: t < secondAt + 0.2 }));
     ctx.restore();
   }
 }

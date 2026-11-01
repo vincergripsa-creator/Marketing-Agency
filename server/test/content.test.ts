@@ -21,7 +21,7 @@ import { archetypeDef, heuristicPdfContent } from '../src/minds/heuristic/studio
 import { CLICHE_TEMPLATES } from '../src/minds/lexicon.js';
 import { ensurePdf } from '../src/minds/shapes.js';
 import { speakable } from '../src/minds/heuristic/voice.js';
-import { allText, bare, norm, seededRng } from '../src/minds/util.js';
+import { allText, bare, endsDangling, norm, seededRng } from '../src/minds/util.js';
 import { createWorld, defaultScenario } from '../src/runtime/index.js';
 import type { RuntimeCtx } from '../src/runtime/ctx.js';
 import { studioHandlers } from '../src/runtime/handlers/studio.js';
@@ -316,6 +316,36 @@ describe('each role has its diagram (pdf §9.2)', () => {
         for (const r of rows) expect(r, g.nicheId).not.toMatch(/\d/);
       }
     }
+  });
+
+  it('a ladder starts from the reader’s own problem: it never says again what the title of its figure said', () => {
+    const generic = norm('Que faire dans ce cas ?');
+    for (const g of all) {
+      for (const guide of [g.parent, g.follow]) {
+        const v = of(guide, 'decision_tree')[0]!;
+        const c = buildNicheCtx(g.brief, g.voc);
+        expect(norm(v.tree!.question), g.nicheId).not.toBe(generic);
+        expect(v.tree!.question, g.nicheId).toMatch(/quel cas ressemble au vôtre \?$/iu);
+        expect(norm(v.tree!.question), g.nicheId).not.toBe(norm(v.title));
+        if (guide === g.parent && c.pbShort) expect(norm(v.tree!.question), g.nicheId).toContain(norm(c.pbShort));
+      }
+    }
+  });
+
+  it('every cell of the matrix reads on its own, and no line comes twice', () => {
+    let lines = 0;
+    for (const g of all) {
+      const { cells } = of(g.parent, 'matrix')[0]!.matrix!;
+      const all4 = cells.flat();
+      lines += all4.length;
+      expect(new Set(all4.map(norm)).size, g.nicheId).toBe(all4.length);
+      expect(cells.every((c) => c.length > 0), `${g.nicheId} : ${cells.map((c) => c.length).join()}`).toBe(true);
+      for (const l of all4) {
+        expect(endsDangling(l), `${g.nicheId} « ${l} »`).toBe(false);
+        expect(l, g.nicheId).not.toMatch(/^(?:Il|Elle|Ils|Elles|On|Ce|C[’']|Ça|Cela|Son|Sa|Ses|Seuls?|Seules?)\b/u);
+      }
+    }
+    expect(lines).toBeGreaterThan(all.length * 6);
   });
 
   it('a method is a line of stations, each with its real moment and duration, and nothing when it has none', () => {

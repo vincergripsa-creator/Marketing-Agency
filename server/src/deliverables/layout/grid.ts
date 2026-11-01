@@ -11,8 +11,20 @@ export const LEAD_LINE = 17.4;
 
 /** A page holding less than this share of content because of one leftover block is a layout bug. */
 export const MIN_PAGE_FILL = 0.25;
-/** A chapter's last page under this looks unfinished: other params are tried, then ruled notes. */
+/** The last page of a section holds this much when the page before can spare it: under it the art closes more of the page than the text does. */
+export const LAST_PAGE = 0.4;
+/** Under this a page is short in the audit. */
 export const SHORT_PAGE = 0.45;
+/** Every body page ends at least here, unless its section closes on a designed end: above it a page reads as full, under it as half empty. */
+export const PAGE_FLOOR = 0.6;
+/** `fill` stops at the foot of a block's last line box, a little under its ink: the paginator aims this high so that the ink itself clears the floor. */
+export const PAGE_AIM = PAGE_FLOOR + 0.025;
+/** What a page that feeds the last one keeps to go on reading as full. */
+export const PAGE_FULL = 0.8;
+/** A last page shorter than this, once it has breathed, closes on its art: past the floor is still a page with a foot to fill. */
+export const PAGE_BREATH = 0.72;
+/** A page shorter than this opens up its rows and its section breaks. */
+export const PAGE_AIR = PAGE_FULL + 0.01;
 
 /** Height of the section tabs on the outer edge, so that a long guide still fits them all. */
 export const tabHeight = (tabs: number): number => Math.min(54, (GRID.H - 220) / Math.max(1, tabs));

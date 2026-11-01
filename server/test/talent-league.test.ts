@@ -1133,7 +1133,7 @@ describe('the founder signs (D17, D48, D49)', () => {
   });
 });
 
-describe('the whole cycle, on a real run of seed 7 (talent 4)', () => {
+describe('the whole cycle, on a real run of seed 8 (talent 4)', () => {
   const TICKS_A_DAY = 12;
   const MAX_DAYS = 180; // a limit, not a target: the run stops at the firing
   /** Everything the run decided: only the wall clock, and what it stamps in a PDF, may differ. */
@@ -1144,8 +1144,8 @@ describe('the whole cycle, on a real run of seed 7 (talent 4)', () => {
    * the rest is the company's own evidence. Runs `ticks` ticks, or until that person has left, and says how many it took.
    */
   async function play(reloadEvery: number, ticks: number): Promise<{ world: WorldState; ticks: number; dump: string; audit: string[] }> {
-    // TikTok alone: this pins seed 7's road through a firing, and buyers change who gets hired, and when (D23). The growth pillar changes it too.
-    const m = await lab({ openEnded: true, channelControl: 'tiktok_only', scaling: false });
+    // TikTok alone: this pins seed 8's road through a firing, and buyers change who gets hired, and when (D23). The growth pillar changes it too, and so does what a cut holds (D79).
+    const m = await lab({ seed: 8, openEnded: true, channelControl: 'tiktok_only', scaling: false });
     let { world, company } = m;
     let target: string | undefined;
     const audit: string[] = [];

@@ -197,11 +197,11 @@ Worst error +8 %. The model is slightly long, the safe side for a budget.
 | Title card | x < 0,30: 0,8 s logo card first. x < 0,50: 0,25 s. Else none | `hookWordSec` |
 | Tightening | x < 0,35: none. x < 0,60: level 1. Else level 2 | The voice, the duration |
 | Shot target | `lerp(3.4, 1.4, x) × tempoFactor` (calm 1,2, standard 1, fast 0,8) | `shots = max(1, ceil(estSec / target))` |
-| Proof | x ≥ 0,50 and a needle is found in `product.content`: `page_proof`. Else `fact_card` | Real page or a text plate |
-| Product early | x ≥ 0,75: the guide enters during the hook at 0,45 s. Else only from the bonus or the end | `productSec` |
+| Proof | With a needle found in `product.content`: x < 0,10: `fact_card`. x < 0,30: one page, held on one shot. x < 0,50: one page. Else every page it can | Real page or a text plate |
+| Product early | x ≥ 0,75: the guide enters during the hook at 0,45 s. Else from its first page, the bonus or the end. The late rise of a kinetic hook is the film's, it does not enter here (D77) | `productSec` |
 | Pain | x ≥ 0,40: `pain_bubble`. Else `fact_card` | `kinds` |
 | Captions | x < 0,30: 6 words a line. x < 0,60: 3 words. Else 2-3 with the spoken word on a pill | `captionWords` |
-| End hold | `lerp(0.6, 2.0, x)` after the last word | `endHoldSec` |
+| End hold | After the last word. x < 0,30: 0,8 s. x < 0,50: 1,2 s. x < 0,75: 1,5 s. Else 1,8 s (D76) | `endHoldSec` |
 | SFX | x ≥ 0,50 | `sfx` |
 
 **Tightening** only deletes at sentence or clause boundaries, never mid-clause, so a negation cannot be lost:
@@ -211,7 +211,7 @@ Worst error +8 %. The model is slightly long, the safe side for a budget.
 
 On the prototype creative: level 0 gives 38 s, level 1 about 33 s, level 2 about 27 s. I tightened the prototype's script by hand with these rules, plus one cut the rule would not make (« sur une journée »): 26,1 s.
 
-**Needle**: the longest sentence of the chapters that shares at least 60 % of its key tokens with the scene's voice-over, 18 to 70 characters. In this creative: « Le terreau d’un pot s’épuise vite » is found in chapter 1, and page 5 of the real PDF shows it.
+**Needle** (D66 changed the sentence below): of the lines the pages print that share at least 60 % of their key tokens with what the voice says once the editor has cut it, the line it says first; 18 to 70 characters, a longer line marked up to its first clause. It was: the longest sentence of the chapters that shares at least 60 % of its key tokens with the scene's voice-over, 18 to 70 characters. In this creative: « Le terreau d’un pot s’épuise vite » is found in chapter 1, and page 5 of the real PDF shows it.
 
 **Scene roles** in `roleOf(scene, index, count)`: first = hook, last = end, middle by text: `«` = pain, `^\d\.` or « étape » = step, « bonus » = bonus, else proof. It reads text only, so a Claude-written ad works too.
 
@@ -343,13 +343,13 @@ Grain: one static full-frame noise image at alpha 13/255. Never one per frame.
 
 All proven in the prototype unless marked.
 
-- **Hook**: Anton, largest size that fits the box in 3 lines at most. Each word slams from ×1,55 with `easeOutBack` over 0,14 s, shake 10 px over 0,1 s, digits in gold. One screen per clause. The cover rises at 0,45 s (x ≥ 0,65).
+- **Hook** (D66 changed this line): the first screen is the line written to stand alone, whole on frame 1, flush left, one accent word; each word hits on the voice. Later screens are clauses of at most 9 words. `Timeline.plain` (`captionWords` ≥ 6 on a voiced cut, no `sfx` on a slide) stands the type centred over a dark plate, nothing hits, no book. A kinetic hook lands on its guide at 1,2 s, at most 60 % of the hook (D77). It was: Anton, largest size that fits the box in 3 lines at most. Each word slams from ×1,55 with `easeOutBack` over 0,14 s, shake 10 px over 0,1 s, digits in gold. One screen per clause. The cover rises at 0,45 s (x ≥ 0,65).
 - **Pain bubble**: light plate for contrast with the dark hook, typing dots 0,55 s, words appear at 45 ms each, second real phrase pops at 2,3 s. Label « LU DANS LES COMMENTAIRES ». The phrases are VoC research, never invented, and no fake user name.
 - **Page proof**: real page at scale 3,4 (2 024 px wide), tilted −0,05 rad, then two punch-ins centred on the real text box, marker sweep in `multiply` at 20 % of the beat. Chip « ÉTAPE 1 » or « REPÈRE ».
 - **Bonus stack**: three real pages fan out behind the book, sticker « BONUS OFFERT » pops on the word « cadeau ».
 - **End card**: rays, book with a moving sheen, CTA pill pulsing ±3,5 %, « Lien en bio », bouncing arrow. No caption: the voice says the same thing and they collided.
 - **Captions**: Montserrat ExtraBold 76, uppercase, one group at a time, pops ×0,86 to 1 over 0,13 s, the spoken word on a rounded pill. Black stroke 15 px, `lineJoin` round. Below the bubbles on `pain_bubble`.
-- **Cuts**: every beat change has a white flash 0,07 s at 32 %, a punch ×1,07 falling over 0,16 s and a whoosh. Inside a beat a shot change is a real camera jump (+8 % scale).
+- **Cuts**: every beat change has a white flash 0,07 s at 32 %, a punch ×1,07 falling over 0,16 s and a whoosh. Inside a beat a shot change is a real camera jump (+6 % scale, D66).
 - **Progress bar**: 10 px, gold, at the top of the safe area, hidden on the end card.
 - **Depth**: drifting leaves (shapes by motif), radial glow, vignette 0,34.
 - **Not prototyped**: `before_after`, `step_list`, `slide`, `title_card`, carousel export. Drawn with the same helpers. `narrator` exists as one still (`sheet4.png`, middle).
@@ -370,6 +370,7 @@ export interface Stage {
 beat.dur = speech + 0.16, then rounded up to the next 8th note of the music (at most 0.27 s at 112 BPM)
 end card: speech + endHoldSec
 caption groups: cut after punctuation, at 3 words, or at 16 chars
+hook screens: the standing line, then clauses (§4.2). QA's cadence counts each screen, and each word that hits past a plain editor (`plannedCuts`)
 ```
 
 Not prototyped: the grid snap. It is one line, and it puts the cuts on the music.

@@ -10,7 +10,8 @@ import { advance, fitDisplay, sanitizeFor, wrapFace, type FaceName } from './fon
 import { n, Scene } from './scene.js';
 import type { Voice } from './voices.js';
 
-export interface FigureStyle { voice: Voice; inks: InkSet }
+/** `ticks`: the rows of a figure carry the boxes of the checklist they replace. */
+export interface FigureStyle { voice: Voice; inks: InkSet; ticks?: boolean }
 export interface Diagram { scene: Scene; height: number }
 
 type Draw = (v: VisualSpec, width: number, style: FigureStyle) => Diagram | null;
@@ -181,6 +182,7 @@ export const decisionTree: Draw = (v, width, style) => {
   p.s.rect(0, top, width, rootH, inks.ink);
   setLines(p, root, { x: 14, top: top + 7, font: voice.deck, size: 12.5, leading: 17, fill: inks.paper });
   const stem = 14;
+  const rung = 10;
   const whenX = 34;
   const whenW = Math.round(width * 0.36);
   const thenX = whenX + whenW + 22;
@@ -198,11 +200,11 @@ export const decisionTree: Draw = (v, width, style) => {
     p.s.line(whenX + whenW - 4, mid, thenX - 8, mid, inks.b, 1.2);
     p.s.path(`M${n(thenX - 4)} ${n(mid)}l-6 -3.4v6.8Z`, inks.b);
     setLines(p, then, { x: thenX, top: y, font: voice.text, ...BODY, fill: inks.ink });
-    y += Math.max(when.length, then.length) * BODY.leading + 10;
+    y += Math.max(when.length, then.length) * BODY.leading + rung;
     if (i < cases.length - 1) p.s.line(whenX, y - 4, width, y - 4, inks.ink, 0.25);
   });
   p.s.line(stem, top + rootH, stem, last, inks.ink, 1);
-  return finish(p, y);
+  return finish(p, y - rung); // the air under a rung is the page's, once the last one is drawn
 };
 
 /** Each mistake beside its fix: before on the left, after on a tinted column, an arrow on every row. */
@@ -303,15 +305,17 @@ export const gaugeDiagram: Draw = (v, width, style) => {
 
 /** The method as a line with its stations: each one says its real moment and duration, and nothing when it has none. */
 export const stepPath: Draw = (v, width, style) => {
-  const { voice, inks } = style;
+  const { voice, inks, ticks } = style;
   const disc = 11;
+  const gap = 10;
+  const box = 13;
   const textX = 2 * disc + 12;
-  const textW = width - textX;
+  const textW = width - textX - (ticks ? box + 14 : 0);
   const stations = (v.path?.stations ?? []).map((st) => {
     const meta = [clean(st.when, voice.label), clean(st.duration, voice.label)].filter(Boolean).join(' · ');
     const label = linesOf(st.label, voice.textB, LABEL.size, textW);
     const info = wrapFace(meta, voice.label, 8.2, textW);
-    return { label, info, h: Math.max(2 * disc, label.length * LABEL.leading + info.length * 11) + 10 };
+    return { label, info, h: Math.max(2 * disc, label.length * LABEL.leading + info.length * 11) + gap };
   }).filter((st) => st.label.length);
   if (!stations.length) return null;
   const { p, top } = start(v.title, width, style);
@@ -322,9 +326,10 @@ export const stepPath: Draw = (v, width, style) => {
     p.s.text(String(i + 1), disc, y + disc + 4, voice.deck, 11, readableOn(inks.a, inks.ink, inks.paper), { anchor: 'middle' });
     const under = setLines(p, st.label, { x: textX, top: y + 1, font: voice.textB, ...LABEL, fill: inks.ink });
     setLines(p, st.info, { x: textX, top: y + 1 + under, font: voice.label, size: 8.2, leading: 11, fill: p.aText });
+    if (ticks) p.s.rect(width - box, y + disc - box / 2, box, box, undefined, { stroke: inks.ink, sw: 0.8 });
     y += st.h;
   });
-  return finish(p, y);
+  return finish(p, y - gap);
 };
 
 const DRAW: Partial<Record<VisualSpec['type'], Draw>> = {

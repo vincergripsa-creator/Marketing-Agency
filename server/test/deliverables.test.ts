@@ -304,7 +304,7 @@ describe('cover title is shown in full', () => {
         const shown = svgText(svg).replace(/\s+/g, ' ');
         // the head goes big, what follows « : » goes to the deck (pdf §7.1)
         expect(shown, `${coverLayout}/${titleFont}`).toContain(LONG.split(' : ')[0]);
-        expect(shown, `${coverLayout}/${titleFont}`).toContain('La méthode simple pour les propriétaires d\'un chiot de 2 à 6 mois');
+        expect(shown, `${coverLayout}/${titleFont}`).toContain('La méthode simple pour les propriétaires d’un chiot de 2 à 6 mois');
         expect(shown, `${coverLayout}/${titleFont}`).not.toMatch(/…/);
       }
     }

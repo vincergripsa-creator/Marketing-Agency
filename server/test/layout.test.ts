@@ -5,14 +5,15 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ChapterContent, DesignEffort, DesignSpec, NicheBrief, PdfContent, Product, VisualSpec } from '../src/shared.js';
 import { createRng } from '../src/core/index.js';
-import { advance, setFontDir } from '../src/deliverables/fonts.js';
+import { advance, sanitizeFor, setFontDir } from '../src/deliverables/fonts.js';
 import { demoContent, demoProduct } from '../src/deliverables/fixture.js';
+import { posesOf } from '../src/deliverables/art/poses.js';
 import { designFor, normalizeDesign } from '../src/deliverables/design.js';
 import { effortFor } from '../src/deliverables/effort.js';
 import { renderPdf } from '../src/deliverables/index.js';
 import type { Block, ChecklistBlock, ExampleBlock, FigureBlock, HeadingBlock, NoteBlock, ParaBlock, SheetBlock, StepsBlock } from '../src/deliverables/layout/blocks.js';
-import { chapterBlocks, lineOf, noteBlock, sheetBlock } from '../src/deliverables/layout/blocks.js';
-import { BODY_BOTTOM, BODY_H, GRID, MIN_PAGE_FILL, SHORT_PAGE, tabHeight, wrapWords } from '../src/deliverables/layout/grid.js';
+import { chapterBlocks, FIGURE_FOOT, lineOf, noteBlock, paraBlock, quoteBlock, sheetBlock } from '../src/deliverables/layout/blocks.js';
+import { BODY_BOTTOM, BODY_H, GRID, LAST_PAGE, MIN_PAGE_FILL, PAGE_FLOOR, PAGE_FULL, SHORT_PAGE, tabHeight, wrapWords } from '../src/deliverables/layout/grid.js';
 import { LAYOUTS, layoutOf, paginate, type LayoutParams, type PagePlan, type Placed } from '../src/deliverables/layout/paginate.js';
 import { finalWording, layoutPdf } from '../src/deliverables/pdf.js';
 import { gridModel, layoutVisual, themeFor } from '../src/deliverables/pdfVisuals.js';
@@ -36,7 +37,7 @@ const example = (h: number): ExampleBlock => ({ t: 'example', label: 'Exemple ty
 const note = (h: number): NoteBlock => ({ t: 'note', text: 'À noter', lines: ['À noter'], h, rail: true });
 const checklist = (rows: number, h = 20.7): ChecklistBlock => ({ t: 'checklist', items: Array.from({ length: rows }, (_, k) => `point ${k}`), h: rows * h, cols: 1, rows: Array.from({ length: rows }, () => ({ cells: [['point']], h })) });
 
-const flowOf = (p: PagePlan): Placed[] => p.items.filter((i) => i.t !== 'rail' && i.t !== 'notes');
+const flowOf = (p: PagePlan): Placed[] => p.items.filter((i) => i.t !== 'rail' && i.t !== 'notes' && i.t !== 'end');
 const textOf = (pages: PagePlan[]): PagePlan[] => pages.filter((p) => p.kind === 'text' || p.kind === 'figure');
 
 /** Rules 1, 2 and 5, read from the plan alone: what the audit says must also be what a reader finds. */
@@ -166,6 +167,14 @@ describe('paginate: text', () => {
     expect(paginate([para(10), checklist(40, 20)], { ...PLAIN, space: 0 }).length).toBe(2);
   });
 
+  it('a trim moves paragraphs and leaves a list that has the room whole', () => {
+    const blocks = [para(30), heading(), steps(60, 60, 60, 60), para(40)];
+    const pages = paginate(blocks, { ...PLAIN, space: 0, trim: 5 * GRID.baseline });
+    expect(flowOf(pages[0]!).filter((i) => i.t === 'rows').map((r) => (r.t === 'rows' ? [r.from, r.to] : []))).toEqual([[0, 4]]);
+    const text = paginate([para(40), para(40)], { ...PLAIN, space: 0, trim: 5 * GRID.baseline });
+    expect(bottomOf(flowOf(text[0]!).at(-1)!)).toBeLessThanOrEqual(BODY_BOTTOM - 5 * GRID.baseline);
+  });
+
   it('every layout keeps the rules on seven lengths of real text', () => {
     const filler = 'Il est six heures quarante, la flaque est sur le tapis du salon, encore une fois, et le voisin du dessous commence à se plaindre de l’odeur. ';
     for (let n = 1; n <= 7; n++) {
@@ -173,6 +182,29 @@ describe('paginate: text', () => {
       const blocks = chapterBlocks(ch, theme, { finish: 2, lead: null, example: { label: 'Exemple type', text: 'Manon programme une sortie après chaque sieste.' } });
       for (const p of LAYOUTS) expect(brokenRules(paginate(blocks, p)), `variante ${n}`).toEqual([]);
     }
+  });
+
+  it('a figure waits for the last row of a list: on seven lengths none sits between two rows of one block', () => {
+    const queued = paginate([para(30), figure(340), heading(), steps(60, 60, 60, 60, 60, 60, 60)], { ...PLAIN, space: 0 });
+    expect(queued[1]!.items.map((i) => i.t)).toEqual(['rows', 'block']);
+    let cut = 0;
+    for (let n = 1; n <= 7; n++) {
+      const ch = chapter({
+        paragraphs: Array.from({ length: 3 + n }, (_, k) => chapter().paragraphs[k % 4]!),
+        steps: Array.from({ length: 6 + n }, (_, k) => `Étape ${k + 1} : une action précise, qui dit ce qu’il faut faire et à quel moment de la journée.`),
+        visual: { type: 'timeline', title: 'Une journée', labels: Array.from({ length: 8 }, (_, k) => `Étape ${k + 1} du parcours de la journée`), values: [] },
+      });
+      const blocks = chapterBlocks(ch, theme, { finish: 2, lead: null, example: { label: 'Exemple type', text: 'Manon programme une sortie après chaque sieste.' } });
+      for (const p of LAYOUTS) {
+        const flow = paginate(blocks, p).flatMap(flowOf);
+        flow.forEach((item, k) => {
+          if (item.t !== 'rows' || item.from === 0) return;
+          cut += 1;
+          expect(flow[k - 1], `variante ${n}`).toMatchObject({ t: 'rows', to: item.from });
+        });
+      }
+    }
+    expect(cut).toBeGreaterThan(0);
   });
 
   it('is a pure function: two calls give deep-equal plans, and nothing in it reads the world', () => {
@@ -259,6 +291,44 @@ describe('paginate: sheets and short pages', () => {
     expect(long.parts.flatMap((p) => Array.from({ length: p.to - p.from }, (_, k) => p.from + k))).toEqual(Array.from({ length: 60 }, (_, k) => k));
   });
 
+  it('a table that ends high leaves room to write down to the foot, and a sheet counts its real end, notes at half weight', () => {
+    const plan: VisualSpec = { type: 'grid', title: 'Votre plan de 14 jours, à cocher', labels: [], values: [], grid: { columns: ['Jours', 'À faire', 'Fait'], rows: ['1', '2', '3', '4'], cells: Array.from({ length: 4 }, () => ['Une action du plan', null]) } };
+    const b = sheetBlock(plan, theme)!;
+    const part = b.parts[0]!;
+    expect(part.notes).toMatchObject({ label: 'Ce que j’ai observé' });
+    expect(part.notes!.y + part.notes!.h).toBeCloseTo(BODY_BOTTOM, 3);
+    const sheet = paginate([b], PLAIN)[0]!;
+    expect(sheet.items.map((i) => i.t)).toEqual(['sheet', 'notes']);
+    expect(sheet.fill).toBeCloseTo((part.end - GRID.top + part.notes!.h / 2) / BODY_H, 3);
+    expect(sheet.fill).toBeLessThan(0.75);
+    expect(sheetBlock(grid(5), theme)!.parts[0]!.notes?.label ?? 'Vos notes').toBe('Vos notes');
+    const full = sheetBlock(grid(60), theme)!.parts[0]!;
+    expect(full.notes).toBeNull();
+    expect(paginate([sheetBlock(grid(60), theme)!], PLAIN)[0]!.fill).toBeCloseTo((full.end - GRID.top) / BODY_H, 3);
+  });
+
+  it('every sheet of every guide ends past the floor, in ink', () => {
+    let sheets = 0;
+    let written = 0;
+    for (const { title, content } of allOf()) {
+      for (const effort of LEVELS) {
+        const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort });
+        guide.plans.forEach((plan, k) => {
+          if (plan.kind !== 'sheet') return;
+          sheets += 1;
+          const { ops } = guide.pages[k + 1]!.scene;
+          expect(inkOf(ops), `${title.slice(0, 30)}, p${k + 2}`).toBeGreaterThanOrEqual(PAGE_FLOOR);
+          if (plan.items.some((i) => i.t === 'notes')) {
+            written += 1;
+            expect(ops.some((o) => o.k === 'text' && /^(VOS NOTES|CE QUE J’AI OBSERVÉ)$/.test(o.s))).toBe(true);
+          }
+        });
+      }
+    }
+    expect(written).toBeGreaterThan(0);
+    expect(sheets).toBeGreaterThanOrEqual(written);
+  });
+
   it('a sheet stays whole on one page when it can, and blank lines grow for handwriting', () => {
     const b = sheetBlock(grid(14), theme) as SheetBlock;
     expect(b.parts).toHaveLength(1);
@@ -280,7 +350,8 @@ describe('paginate: sheets and short pages', () => {
   });
 
   it('rule 7: other params are tried, then ruled notes close the section at half weight', () => {
-    const blocks = [para(50), para(9)];
+    // a page of plain text with no page before it: nothing to take from, no rows to open (D66 rebalances the rest)
+    const blocks = [para(12)];
     const plain = paginate(blocks, { ...PLAIN, space: 0 });
     expect(plain.at(-1)!.fill).toBeLessThan(SHORT_PAGE);
     const pages = layoutOf(blocks);
@@ -297,6 +368,319 @@ describe('paginate: sheets and short pages', () => {
     const fine = layoutOf(twelve);
     expect(fine.at(-1)!.fill).toBeGreaterThanOrEqual(SHORT_PAGE);
     expect(fine.flatMap((p) => p.items).some((i) => i.t === 'notes')).toBe(false);
+  });
+});
+
+const bottomOf = (i: Placed): number => (i.t === 'para' ? i.y + (i.to - i.from) * lineOf(i.block) : i.t === 'rows' ? i.y + (i.block.t === 'steps' ? i.block.items : i.block.rows).slice(i.from, i.to).reduce((a, r) => a + r.h + (i.air ?? 0), 0) : i.t === 'block' ? i.y + i.block.h : 0);
+
+/** Where a page really stops printing, rail included and whatever closes it left out, in shares of the body. */
+function solidOf(page: PagePlan): number {
+  const ends = page.items.flatMap((i) => (i.t === 'rail' ? [i.y + i.block.h] : i.t === 'para' || i.t === 'rows' ? [bottomOf(i)] : i.t === 'block' ? [bottomOf(i) - (i.block.t === 'figure' ? FIGURE_FOOT : 0)] : []));
+  return (Math.max(GRID.top, ...ends) - GRID.top) / BODY_H;
+}
+
+/** The lowest y a path reaches, curves by their end points: enough for rules, boxes and discs. */
+function pathBottom(d: string): number {
+  let y = 0;
+  let low = 0;
+  for (const [, cmd, args] of d.matchAll(/([MLHVCAZhvl])([^MLHVCAZhvl]*)/g)) {
+    const v = [...args!.matchAll(/-?[\d.]+/g)].map((m) => Number(m[0]));
+    if (cmd === 'M' || cmd === 'L') y = v[1]!;
+    else if (cmd === 'V') y = v[0]!;
+    else if (cmd === 'v') y += v[0]!;
+    else if (cmd === 'l') y += v[1]!;
+    else if (cmd === 'C') y = v[5]!;
+    else if (cmd === 'A') y = v[6]!;
+    low = Math.max(low, y);
+  }
+  return low;
+}
+
+const firstY = (d: string): number => Number(/^M-?[\d.]+ (-?[\d.]+)/.exec(d)?.[1] ?? 0);
+
+/** Read from what is drawn, not from the plan: the last ink of the body, the section tab and the foot of the page left out. */
+function inkOf(ops: Op[], dy = 0): number {
+  const low = (o: Op): number => {
+    if (o.k === 'text') return o.x > GRID.left + GRID.full || o.y > BODY_BOTTOM + 8 ? 0 : o.y + 0.22 * o.size;
+    if (o.k === 'group') return dy + o.y + (inkOf(o.ops, 0) * BODY_H + GRID.top);
+    if (o.k === 'clip') return Math.max(0, ...o.ops.map(low));
+    return /^M0 0h/.test(o.d) || /^M5\d\d/.test(o.d) ? 0 : pathBottom(o.d);
+  };
+  return (Math.max(GRID.top, ...ops.map(low)) - GRID.top) / BODY_H;
+}
+
+describe('no half-empty page (D66)', () => {
+  it('a figure left alone on the last page closes on the art of the guide: the text stays on its page, the section ends past the floor', () => {
+    const blocks = [para(40), figure(320)];
+    const plain = paginate(blocks, { ...PLAIN, space: 0 });
+    expect(plain.map((p) => p.kind)).toEqual(['text', 'figure']);
+    expect(plain.at(-1)!.fill).toBeLessThan(PAGE_FLOOR);
+    const pages = layoutOf(blocks);
+    expect(pages).toHaveLength(2);
+    expect(brokenRules(pages)).toEqual([]);
+    for (const p of pages) expect(p.fill).toBeGreaterThanOrEqual(PAGE_FLOOR);
+    expect(pages.flatMap(flowOf).reduce((a, i) => a + (i.t === 'para' ? i.to - i.from : 0), 0)).toBe(40);
+    expect(pages[1]!.items.map((i) => (i.t === 'block' ? i.block.t : i.t))).toEqual(['figure', 'end']);
+    expect(bottomOf(flowOf(pages[0]!)[0]!)).toBe(GRID.top + 40 * GRID.baseline);
+  });
+
+  it('the art closes a short last page down to its foot, at half weight, and a page near full keeps its foot', () => {
+    const pages = layoutOf([para(40), figure(320)]);
+    const end = pages[1]!.items.find((i) => i.t === 'end')!;
+    expect(end.t === 'end' && end.y + end.h).toBeCloseTo(BODY_BOTTOM, 3);
+    const ink = solidOf(pages[1]!);
+    expect(pages[1]!.fill).toBeCloseTo(ink + (end.t === 'end' ? end.h / 2 : 0) / BODY_H, 3);
+    expect(pages[1]!.fill).toBeLessThan(0.8); // art cannot buy a full page
+    const near = layoutOf([para(36)]);
+    expect(near[0]!.items.some((i) => i.t === 'end')).toBe(false);
+  });
+
+  it('a band is tiles to the foot of the page, and no two sections of a guide draw the same one', () => {
+    let bands = 0;
+    for (const { title, content } of allOf()) {
+      const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort: LEVELS[2]! });
+      const drawn: string[] = [];
+      guide.plans.forEach((plan, k) => {
+        const end = plan.items.find((i) => i.t === 'end');
+        if (end?.t !== 'end') return;
+        const { ops } = guide.pages[k + 1]!.scene;
+        const art = ops.filter((o) => o.k === 'path' && !!o.fill && Math.abs(firstY(o.d) - end.y) < end.h + 1);
+        expect(art.length, title).toBeGreaterThan(end.rows * 3);
+        expect(inkOf(ops), title).toBeGreaterThanOrEqual(0.995);
+        drawn.push(JSON.stringify(art.slice(0, 18)));
+        bands += 1;
+      });
+      expect(new Set(drawn).size, title).toBe(drawn.length);
+    }
+    expect(bands).toBeGreaterThan(10);
+  });
+
+  it('`trim` takes from every page but the last, and leaves the last one its whole height', () => {
+    const blocks = Array.from({ length: 12 }, () => para(9));
+    const plain = paginate(blocks, { ...PLAIN, space: 0 });
+    const trimmed = paginate(blocks, { ...PLAIN, space: 0, trim: 5 * GRID.baseline });
+    expect(plain).toHaveLength(3);
+    expect(trimmed).toHaveLength(3);
+    for (const page of trimmed.slice(0, -1)) expect(Math.max(...page.items.map(bottomOf))).toBeLessThanOrEqual(BODY_BOTTOM - 5 * GRID.baseline);
+    expect(trimmed.at(-1)!.fill).toBeGreaterThan(plain.at(-1)!.fill);
+  });
+
+  it('a page with nothing to take from breathes: rows open, blocks part, a heading stays on what it heads', () => {
+    const blocks: Block[] = [para(3), heading(), steps(42, 42), example(70), heading(), checklist(3)];
+    const plain = paginate(blocks, PLAIN);
+    expect(plain).toHaveLength(1);
+    expect(plain[0]!.fill).toBeLessThan(PAGE_FLOOR);
+    const pages = layoutOf(blocks);
+    expect(pages).toHaveLength(1);
+    expect(pages[0]!.fill).toBeGreaterThanOrEqual(PAGE_FLOOR);
+    expect(pages[0]!.items.some((i) => i.t === 'notes')).toBe(false);
+    const flow = flowOf(pages[0]!);
+    flow.forEach((item, k) => {
+      if (item.t === 'rows') expect(item.air).toBeGreaterThan(0);
+      const before = flow[k - 1];
+      if (!before || item.t === 'sheet') return;
+      if (before.t === 'block' && before.block.t === 'h2') expect(item.y).toBeCloseTo(bottomOf(before), 6);
+      else expect(item.y).toBeGreaterThan(bottomOf(before));
+    });
+  });
+
+  it('a rail element goes where its block went, and two of them never close up', () => {
+    const blocks: Block[] = [para(6), note(120), para(6), note(120), heading(), steps(42, 42), heading(), checklist(4)];
+    const pages = layoutOf(blocks);
+    expect(pages).toHaveLength(1);
+    const [first, second] = pages[0]!.items.filter((i) => i.t === 'rail');
+    const [a, b] = pages[0]!.items.filter((i) => i.t === 'para');
+    expect(first!.t === 'rail' && first!.y).toBeCloseTo(a!.t === 'para' ? a!.y : -1, 6);
+    expect(second!.t === 'rail' && first!.t === 'rail' && second!.y - first!.y).toBeGreaterThanOrEqual(120);
+    expect(b!.t === 'para' && b!.y).toBeGreaterThan(GRID.top + 6 * GRID.baseline);
+  });
+
+  it('every body page of every guide ends past the floor, or closes on purpose down to its foot', () => {
+    let closed = 0;
+    let body = 0;
+    for (const { title, content } of allOf()) {
+      for (const effort of LEVELS) {
+        const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort });
+        const text = textOf(guide.plans);
+        text.forEach((page, k) => {
+          body += 1;
+          const close = page.items.find((i) => i.t === 'notes' || i.t === 'end');
+          if (close?.t === 'notes' || close?.t === 'end') {
+            if (close.t === 'notes') closed += 1;
+            expect(close.y + close.h).toBeCloseTo(BODY_BOTTOM, 3);
+            // only a section ends on purpose: what comes after is another section
+            expect(text[k + 1]?.chapter === page.chapter && !!page.chapter, `${title.slice(0, 30)} / finition ${effort.finish}`).toBe(false);
+          } else expect(page.fill, `${title.slice(0, 30)} / finition ${effort.finish}`).toBeGreaterThanOrEqual(PAGE_FLOOR);
+        });
+      }
+    }
+    expect(closed).toBeLessThan(body / 8); // the notes stay a way out, not the way the pages fill
+  });
+
+  it('`fill` means ink: it says where a page really stops printing', () => {
+    for (const { title, content } of allOf()) {
+      for (const effort of LEVELS) {
+        const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort });
+        guide.plans.forEach((plan, k) => {
+          if ((plan.kind !== 'text' && plan.kind !== 'figure') || plan.items.some((i) => i.t === 'notes' || i.t === 'end')) return;
+          const where = `${title.slice(0, 30)} / finition ${effort.finish}, p${k + 2}`;
+          expect(plan.fill - inkOf(guide.pages[k + 1]!.scene.ops), where).toBeLessThanOrEqual(0.025);
+          expect(inkOf(guide.pages[k + 1]!.scene.ops) - plan.fill, where).toBeLessThanOrEqual(0.005);
+        });
+      }
+    }
+  });
+
+  it('a page stays a full page: no list is cut while its next row has the room, and the median page that does not close on art ends at 0.80 or more', () => {
+    const inks: number[] = [];
+    for (const { title, content } of allOf()) {
+      for (const effort of LEVELS) {
+        const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort });
+        for (const page of textOf(guide.plans)) {
+          if (!page.items.some((i) => i.t === 'end')) inks.push(solidOf(page));
+          const last = flowOf(page).at(-1);
+          if (last?.t !== 'rows') continue;
+          const rows = last.block.t === 'steps' ? last.block.items : last.block.rows;
+          if (last.to < rows.length) expect(bottomOf(last) + rows[last.to]!.h, `${title.slice(0, 30)} / finition ${effort.finish}`).toBeGreaterThan(BODY_BOTTOM);
+        }
+      }
+    }
+    expect(inks.sort((a, b) => a - b)[inks.length >> 1]).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it('a last page the art cannot close takes an example whole from the page before, and the page that gives stays full', () => {
+    const blocks: Block[] = [para(30), heading(), steps(42, 42, 42), example(90), heading(), checklist(3)];
+    const pages = layoutOf(blocks);
+    expect(pages).toHaveLength(2);
+    expect(flowOf(pages[1]!)[0]).toMatchObject({ t: 'block', block: { t: 'example' } });
+    expect(pages[1]!.items.some((i) => i.t === 'notes')).toBe(false);
+    expect(pages[1]!.items.at(-1)?.t).toBe('end');
+    expect(solidOf(pages[0]!)).toBeGreaterThanOrEqual(PAGE_FULL);
+    expect(brokenRules(pages)).toEqual([]);
+  });
+
+  it('a heading and its list go over together, whole', () => {
+    const blocks: Block[] = [para(34), heading(), steps(42, 42, 42, 42), heading(), checklist(2)];
+    const pages = layoutOf(blocks);
+    expect(pages).toHaveLength(2);
+    expect(flowOf(pages[0]!).every((i) => i.t === 'para')).toBe(true);
+    const rows = flowOf(pages[1]!).filter((i) => i.t === 'rows');
+    expect(flowOf(pages[1]!)[0]).toMatchObject({ t: 'block', block: { t: 'h2' } });
+    expect(rows.map((r) => (r.t === 'rows' ? [r.block.t, r.from, r.to] : []))).toEqual([['steps', 0, 4], ['checklist', 0, 2]]);
+    expect(brokenRules(pages)).toEqual([]);
+  });
+
+  it('a page that gives stays a page: it keeps what it would lose past the floor', () => {
+    // moving the list would leave three lines: the art closes what is left
+    const pages = layoutOf([para(3), heading(), steps(150, 150, 150, 150), heading(), checklist(2)]);
+    expect(solidOf(pages[0]!)).toBeGreaterThanOrEqual(PAGE_FLOOR);
+  });
+
+  it('ruled notes never stand in for a page: no body page holds less than LAST_PAGE above them, on any guide at any finish', () => {
+    for (const { title, content } of allOf()) {
+      for (const effort of LEVELS) {
+        const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort });
+        guide.plans.forEach((page, k) => {
+          if ((page.kind === 'text' || page.kind === 'figure') && page.items.some((i) => i.t === 'notes')) expect(solidOf(page), `${title.slice(0, 30)} / finition ${effort.finish}, p${k + 2}`).toBeGreaterThanOrEqual(LAST_PAGE);
+        });
+      }
+    }
+  });
+
+  it('a chapter keeps the spacing of the guide: two values a reader cannot tell apart, the rest goes to the rebalance and the art', () => {
+    expect(new Set(LAYOUTS.map((p) => p.space))).toEqual(new Set([10.8, 9]));
+    for (const { title, content } of allOf()) {
+      const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort: LEVELS[2]! });
+      for (const page of textOf(guide.plans)) {
+        flowOf(page).forEach((item, k, flow) => {
+          const before = flow[k - 1];
+          if (before?.t === 'para' && item.t === 'para') expect([10.8, 9], title.slice(0, 30)).toContainEqual(Math.round((item.y - bottomOf(before)) * 100) / 100);
+        });
+      }
+    }
+  });
+
+  it('the art stays under the text: tiles are whole, the page takes what they leave, and the gap stays under a tile', () => {
+    const gaps: number[] = [];
+    for (const { title, content } of allOf()) {
+      for (const effort of LEVELS) {
+        const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort });
+        for (const page of textOf(guide.plans)) {
+          const end = page.items.find((i) => i.t === 'end');
+          if (end?.t !== 'end') continue;
+          expect(end.h).toBeCloseTo((end.rows * GRID.full) / end.cols, 6);
+          gaps.push(end.y - GRID.top - solidOf({ ...page, items: page.items.filter((i) => i !== end) }) * BODY_H);
+        }
+      }
+    }
+    expect(gaps.length).toBeGreaterThan(30);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...gaps)).toBeLessThan(GRID.full / 6);
+    expect(gaps.sort((a, b) => a - b)[gaps.length >> 1]).toBeLessThanOrEqual(2 * 21.6);
+  });
+
+  it('two paragraphs keep the spacing of their section on every page, and a heading takes one line of air at most', () => {
+    const short = flowOf(layoutOf([para(6), para(6), para(6), heading(), para(3)])[0]!);
+    expect(short[1]!.t === 'para' && short[1]!.y - bottomOf(short[0]!)).toBeCloseTo(PLAIN.space, 6);
+    expect(short[2]!.t === 'para' && short[2]!.y - bottomOf(short[1]!)).toBeCloseTo(PLAIN.space, 6);
+    expect(short[3]!.t === 'block' && short[3]!.y - bottomOf(short[2]!)).toBeGreaterThan(PLAIN.space);
+    for (const { title, content } of allOf()) {
+      for (const effort of LEVELS) {
+        const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort });
+        for (const chapter of new Set(guide.plans.map((p) => p.chapter))) {
+          const gaps = new Set<number>();
+          for (const page of textOf(guide.plans).filter((p) => p.chapter === chapter && chapter !== null)) {
+            flowOf(page).forEach((item, k, flow) => {
+              const before = flow[k - 1];
+              if (before?.t === 'para' && item.t === 'para') gaps.add(Math.round((item.y - bottomOf(before)) * 100) / 100);
+              // a heading under a long rail starts below it: that gap is the rail's, not air
+              if (before?.t === 'para' && item.t === 'block' && item.block.t === 'h2' && !page.items.some((i) => i.t === 'rail')) expect(item.y - bottomOf(before)).toBeLessThanOrEqual(14.4 + GRID.baseline + 1e-6);
+            });
+          }
+          expect(gaps.size, `${title.slice(0, 30)} / chapitre ${chapter}`).toBeLessThanOrEqual(1);
+        }
+      }
+    }
+  });
+
+  it('a rail keeps its distance from the full-width block under it', () => {
+    const pages = paginate([para(3), note(51), heading(), steps(50)], { ...PLAIN, space: 0 });
+    const rail = pages[0]!.items.find((i) => i.t === 'rail')!;
+    const head = pages[0]!.items.find((i) => i.t === 'block')!;
+    expect(head.t === 'block' && rail.t === 'rail' && head.y - (rail.y + rail.block.h)).toBeGreaterThanOrEqual(9);
+    for (const { title, content } of allOf()) {
+      const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort: LEVELS[2]! });
+      for (const page of textOf(guide.plans)) {
+        for (const r of page.items) {
+          if (r.t !== 'rail') continue;
+          for (const below of flowOf(page)) {
+            if (below.t === 'para' || below.t === 'sheet' || (below.t === 'block' && below.block.t === 'example') || below.y <= r.y) continue;
+            if (below.y < r.y + r.block.h + 9) expect.fail(`${title.slice(0, 30)} : ${below.y - r.y - r.block.h} pt sous le rail`);
+          }
+        }
+      }
+    }
+  });
+
+  it('the air is drawn: the numbers of a page that breathes stand as far apart as the plan says', () => {
+    const content: PdfContent = { ...written[0]!.content, chapters: [chapter({ paragraphs: chapter().paragraphs.slice(0, 2), example: null, steps: ['Notez.', 'Sortez.', 'Récompensez.', 'Recommencez.'] })] };
+    const guide = layoutPdf({ product: productOf('x', content), content, design, brand: 'Pixel Agency', effort: LEVELS[1]! });
+    const at = guide.plans.findIndex((p) => p.chapter === 1 && p.kind === 'text');
+    const rows = guide.plans[at]!.items.find((i) => i.t === 'rows' && i.block.t === 'steps');
+    expect(rows?.t === 'rows' && rows.air).toBeGreaterThan(0);
+    const numbers = guide.pages[at + 1]!.scene.ops.flatMap((o) => (o.k === 'text' && o.size === 30 ? [o.y] : []));
+    expect(numbers).toHaveLength(4);
+    const step = rows!.t === 'rows' && rows!.block.t === 'steps' ? rows!.block.items[0]!.h + rows!.air! : 0;
+    expect(numbers[1]! - numbers[0]!).toBeCloseTo(step, 6);
+  });
+
+  it('the plan on one page spreads down its page', () => {
+    const { content } = written[0]!;
+    const guide = layoutPdf({ product: productOf('x', content), content, design, brand: 'Pixel Agency', effort: LEVELS[2]! });
+    const at = guide.plans.findIndex((p) => p.kind === 'memo');
+    const ys = guide.pages[at + 1]!.scene.ops.flatMap((o) => (o.k === 'text' && o.y < GRID.folio - 1 ? [o.y] : []));
+    expect(Math.max(...ys)).toBeGreaterThanOrEqual(GRID.top + PAGE_FLOOR * BODY_H);
+    expect(guide.audit.overflow).toBe(0);
   });
 });
 
@@ -317,6 +701,162 @@ describe('blocks', () => {
     expect(box.items).toEqual(['Établir un planning', 'Choisir un coin', 'Gronder après coup']);
     expect(box.heads).toEqual(['À faire', 'À arrêter']);
     expect(box.cols).toBe(2);
+  });
+
+  it('prints no « : fait » beside a box either, on any page of any guide', () => {
+    const blocks = chapterBlocks(chapter({ checklist: ['Votre feuille de cadrage : fait', 'Le carnet est ouvert', 'L’endroit est choisi : fait.'] }), theme, { finish: 1, lead: null, example: null });
+    expect((blocks.find((b) => b.t === 'checklist') as ChecklistBlock).items).toEqual(['Votre feuille de cadrage', 'Le carnet est ouvert', 'L’endroit est choisi']);
+    for (const { title, content } of allOf()) {
+      const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort: LEVELS[2]! });
+      for (const page of guide.pages) for (const o of page.scene.ops) if (o.k === 'text') expect(o.s, title.slice(0, 30)).not.toMatch(/:\s*fait\.?$/iu);
+    }
+  });
+
+  it('a thousands group is never split at the end of a line', () => {
+    const face = theme.v.text;
+    const text = 'Les devis que j’ai reçus pour la même salle demandent 4 000 € et le traiteur 12 500 € pour le même nombre d’invités.';
+    for (let width = 60; width <= 400; width += 4) {
+      const lines = wrapWords(text, face, 10.3, width);
+      lines.forEach((l, k) => { if (/\d$/.test(l) && /^\d{3}\b/.test(lines[k + 1] ?? '')) expect.fail(`${l} / ${lines[k + 1]}`); });
+    }
+  });
+
+  it('a checklist that only restates the steps puts its boxes on them, and prints no list', () => {
+    const repeated = chapter().steps.map((s) => `Fait : ${s.charAt(0).toLowerCase()}${s.slice(1).replace(/\.$/, '')}`);
+    const blocks = chapterBlocks(chapter({ checklist: repeated }), theme, { finish: 1, lead: null, example: null });
+    expect(blocks.some((b) => b.t === 'checklist')).toBe(false);
+    expect(blocks.some((b) => b.t === 'h2' && b.text === 'Votre checklist')).toBe(false);
+    expect((blocks.find((b) => b.t === 'steps') as StepsBlock).ticks).toBe(true);
+    // one line that says something else keeps the list, and the steps stay as they are
+    const other = chapterBlocks(chapter({ checklist: [...repeated, 'L’endroit est choisi'] }), theme, { finish: 1, lead: null, example: null });
+    expect(other.some((b) => b.t === 'checklist')).toBe(true);
+    expect((other.find((b) => b.t === 'steps') as StepsBlock).ticks).toBeUndefined();
+    // a step cut short by the writer is still that step
+    const cut = chapterBlocks(chapter({ steps: ['Notez chaque sortie pendant 2 jours, à la même heure, sur le carnet ouvert.'], checklist: ['Fait : notez chaque sortie pendant 2 jours'] }), theme, { finish: 1, lead: null, example: null });
+    expect(cut.some((b) => b.t === 'checklist')).toBe(false);
+  });
+
+  it('the boxes are drawn: on the rows of the steps, and on the stations of a path that replaces them', () => {
+    const boxes = (ops: Op[]): number => ops.reduce((a, o) => a + (o.k === 'group' ? boxes(o.ops) : o.k === 'path' && !o.fill && o.sw === 0.8 && /Z$/.test(o.d) ? 1 : 0), 0);
+    const steps = chapter().steps;
+    const repeated = steps.map((s) => `Fait : ${s}`);
+    const stations = steps.map((label) => ({ label, when: 'Jour 1', duration: null }));
+    const path: VisualSpec = { type: 'step_path', title: 'Les 3 étapes en un coup d’œil', labels: [], values: [], path: { stations } };
+    const printed = (visual: VisualSpec | null): PdfContent => ({ ...written[0]!.content, chapters: [chapter({ visual, checklist: repeated, example: null })] });
+    for (const visual of [null, path]) {
+      const content = printed(visual);
+      const guide = layoutPdf({ product: productOf('x', content), content, design, brand: 'Pixel Agency', effort: LEVELS[1]! });
+      const at = guide.plans.findIndex((p) => p.chapter === 1 && p.kind !== 'opener');
+      expect(boxes(guide.pages[at + 1]!.scene.ops), visual?.type ?? 'liste').toBe(3);
+    }
+  });
+
+  it('no chapter of a real guide says the same lines twice on two pages', () => {
+    let steps = 0;
+    for (const { content } of allOf()) {
+      for (const ch of content.chapters) {
+        const blocks = chapterBlocks(ch, theme, { finish: 2, lead: null, example: null });
+        const list = blocks.find((b) => b.t === 'checklist') as ChecklistBlock | undefined;
+        const key = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+        if (!list) { steps += 1; continue; }
+        const said = ch.steps.map(key);
+        expect(list.items.every((l) => said.some((s) => s.startsWith(key(l)))), ch.title).toBe(false);
+      }
+    }
+    expect(steps).toBeGreaterThan(3);
+  });
+
+  it('the annex opens each case on the case itself, in bold, whatever its length, and goes on in lower case', () => {
+    const { content } = written[0]!;
+    const guide = layoutPdf({ product: productOf('x', content), content, design, brand: 'Pixel Agency', effort: LEVELS[2]! });
+    const from = guide.plans.findLastIndex((p) => p.kind === 'opener');
+    const cases = guide.plans.slice(from + 1).filter((p) => p.kind === 'text' && p.chapter === null).flatMap((p) => p.items).filter((i) => i.t === 'para' && i.from === 0);
+    const tree = content.chapters.flatMap((ch) => [ch.visual, ch.figure]).find((v) => v?.type === 'decision_tree')!.tree!;
+    expect(cases).toHaveLength(tree.cases.length);
+    for (const item of cases) {
+      if (item.t !== 'para') continue;
+      const { block } = item;
+      expect(!!block.head || !!block.bold, block.lines[0]).toBe(true);
+      const body = block.lines[block.bold ?? 0]!;
+      expect(body, block.lines[0]).toMatch(/^[\p{Ll}\d]|^\p{Lu}{2}/u);
+    }
+    // a long head wraps in bold, and the text takes the end of its last line
+    const long = paraBlock('préparez la réponse.', theme, { head: 'Si le chiot refuse de sortir quand il pleut, qu’il fait froid et que le voisin promène son chien juste devant la porte' })!;
+    expect(long.bold).toBeGreaterThan(0);
+    expect(long.lines.length).toBeGreaterThan(long.bold!);
+  });
+
+  it('a mistake goes under « À arrêter », never under « À faire », and a list of mistakes has one label', () => {
+    const only = chapterBlocks(chapter({ checklist: ['Je ne fais plus : gronder après coup', 'Je corrige : ne prévoir aucune espèce'] }), theme, { finish: 1, lead: null, example: null });
+    const box = only.find((b) => b.t === 'checklist') as ChecklistBlock;
+    expect(box.items).toEqual(['Gronder après coup', 'Ne prévoir aucune espèce']);
+    expect(box.heads).toBeUndefined();
+    const labels = only.filter((b): b is HeadingBlock => b.t === 'h2').map((b) => b.text);
+    expect(labels).toContain('À arrêter');
+    expect(labels).not.toContain('Votre checklist');
+    const both = chapterBlocks(chapter({ checklist: ['Fait : établir un planning', 'Je corrige : ne prévoir aucune espèce'] }), theme, { finish: 1, lead: null, example: null }).find((b) => b.t === 'checklist') as ChecklistBlock;
+    expect(both.heads).toEqual(['À faire', 'À arrêter']);
+    expect(both.rows.at(-1)!.cells[1]!.join(' ')).toBe('Ne prévoir aucune espèce');
+    for (const { content } of allOf()) {
+      for (const ch of content.chapters) {
+        const list = chapterBlocks(ch, theme, { finish: 1, lead: null, example: null }).find((b) => b.t === 'checklist') as ChecklistBlock | undefined;
+        if (list?.heads) expect(list.rows.slice(1).some((r) => r.cells[0]!.length) && list.rows.slice(1).some((r) => r.cells[1]!.length)).toBe(true);
+      }
+    }
+  });
+
+  it('a chapter whose path walks its steps does not list them again', () => {
+    const path: VisualSpec = { type: 'step_path', title: 'Les 3 étapes en un coup d’œil', labels: [], values: [], path: { stations: chapter().steps.map((label) => ({ label, when: 'Jour 1', duration: null })) } };
+    const shown = chapterBlocks(chapter({ visual: path }), theme, { finish: 1, lead: null, example: null });
+    expect(shown.filter((b) => b.t === 'figure')).toHaveLength(1);
+    expect(shown.some((b) => b.t === 'steps')).toBe(false);
+    expect(shown.some((b) => b.t === 'h2' && b.text === 'Étape par étape')).toBe(false);
+    // the path of a finish that does not draw it says nothing: the list stays
+    const unseen = chapterBlocks(chapter({ figure: path }), theme, { finish: 1, lead: null, example: null });
+    expect(unseen.some((b) => b.t === 'steps')).toBe(true);
+    expect(chapterBlocks(chapter({ figure: path }), theme, { finish: 2, lead: null, example: null }).some((b) => b.t === 'steps')).toBe(false);
+    const content: PdfContent = { ...written[0]!.content, chapters: [chapter({ visual: path })] };
+    const guide = layoutPdf({ product: productOf('x', content), content, design, brand: 'Pixel Agency', effort: LEVELS[1]! });
+    const texts = (at: number) => guide.pages[at]!.scene.ops.flatMap((o) => (o.k === 'text' ? [o.s] : []));
+    expect(texts(1)).toContain('3'); // the promise still counts its actions
+    expect(texts(1)).toContain('actions guidées');
+  });
+
+  it('a path that does not hold every step whole leaves the list where it is: a drawing never takes a step out of a guide', () => {
+    const steps = chapter().steps;
+    const ticked = steps.map((s) => `Fait : ${s}`);
+    const stationsOf = (labels: string[]): VisualSpec => ({ type: 'step_path', title: 'La méthode', labels: [], values: [], path: { stations: labels.map((label) => ({ label, when: null, duration: null })) } });
+    const shown = (visual: VisualSpec, checklist: string[] = []) => chapterBlocks(chapter({ visual, checklist }), theme, { finish: 1, lead: null, example: null });
+    const short = stationsOf(steps.slice(0, 1));
+    const headed = stationsOf(steps.map((s) => s.split(' ').slice(0, 2).join(' ')));
+    for (const visual of [short, headed]) {
+      expect(shown(visual).filter((b) => b.t === 'figure')).toHaveLength(1);
+      expect(shown(visual).some((b) => b.t === 'steps')).toBe(true);
+      expect(shown(visual, ticked).some((b) => b.t === 'steps')).toBe(true); // the boxes stay with the steps they tick
+    }
+    expect(shown(stationsOf(steps)).some((b) => b.t === 'steps')).toBe(false);
+  });
+
+  it('every apostrophe printed is the real one, on the cover as on the pages', () => {
+    expect(sanitizeFor(VOICES.conte.text, 'd\'un chiot, l\'été, aujourd\'hui')).toBe('d’un chiot, l’été, aujourd’hui');
+    const content: PdfContent = { ...written[0]!.content, audience: 'Propriétaires d\'un chiot d\'appartement', subtitle: 'Pour l\'été', promise: 'Un chiot propre aujourd\'hui', chapters: written[0]!.content.chapters.map((c) => ({ ...c, title: `L\'erreur d\'un ${c.title}`, margin: { note: 'Un chiot n\'apprend rien ainsi.', quote: 'j\'ai tout essayé' } })) };
+    const guide = layoutPdf({ product: { ...productOf('L\'erreur d\'un maître', content), audience: content.audience }, content, design, brand: 'Pixel Agency', effort: LEVELS[2]! });
+    const walk = (ops: Op[]): string[] => ops.flatMap((o) => (o.k === 'text' ? [o.s] : o.k === 'group' || o.k === 'clip' ? walk(o.ops) : []));
+    const printed = guide.pages.flatMap((p) => walk(p.scene.ops)).join('\n');
+    expect(printed).toContain('d’un');
+    expect(printed).not.toMatch(/\p{L}'\p{L}/u);
+  });
+
+  it('a name typed in lower case prints as a name in a large quote, and the words kept stay as they were said', () => {
+    const b = quoteBlock('le jr pass a doublé, de tokyo à kyoto', theme)!;
+    expect(b.lines.join(' ')).toContain('JR Pass');
+    expect(b.lines.join(' ')).toContain('Tokyo');
+    expect(b.lines.join(' ')).toContain('Kyoto');
+    expect(b.text).toBe('le jr pass a doublé, de tokyo à kyoto');
+    expect(quoteBlock('une fresque de plus en acrylique', theme)!.lines.join(' ')).toContain('acrylique');
+    const words = new Scene(GRID.full, 200);
+    layoutVisual({ type: 'icon_grid', title: 'Ce que vous nous décrivez', labels: ['Les hôtels à tokyo', 'Le jr pass a doublé'], values: [] }, GRID.full, theme)!.draw(words, 0, 0);
+    expect(words.ops.flatMap((o) => (o.k === 'text' ? [o.s] : [])).join(' ')).toMatch(/Tokyo.*JR Pass/);
   });
 
   it('a step or an example longer than half a page flows as text, a figure taller than a page is dropped', () => {
@@ -463,6 +1003,84 @@ describe('guides as the writers write them', () => {
     const openers = guide.pages.filter((_, k) => k > 0 && guide.plans[k - 1]!.kind === 'opener').map((p) => JSON.stringify(p.scene.ops.slice(0, 40)));
     expect(openers.length).toBeGreaterThanOrEqual(5);
     expect(new Set(openers).size).toBe(openers.length);
+  });
+});
+
+describe('chapter openers (D66)', () => {
+  const heroAt = (ops: Op[]): number => ops.findIndex((o) => o.k === 'clip' && Number(/h([\d.]+)v/.exec(o.d)?.[1] ?? 0) > (2 * GRID.W) / 6);
+
+  /** The hero of an opener, wherever and however large it sits: its inks, its shapes, and where it starts in its box. */
+  function heroOf(ops: Op[]): string {
+    const at = heroAt(ops);
+    const clip = ops[at] as Extract<Op, { k: 'clip' }>;
+    const [x, y, size] = [...clip.d.matchAll(/[\d.]+/g)].map((m) => Number(m[0]));
+    const shape = (d: string) => d.replace(/-?[\d.]+/g, '').replace(/\s/g, '');
+    const first = clip.ops.find((o) => o.k === 'path');
+    const start = first?.k === 'path' ? [...first.d.matchAll(/-?[\d.]+/g)].slice(0, 2).map((m, k) => (Number(m[0]) - (k ? y! : x!)) / size!) : [];
+    const ground = ops[at - 1]!;
+    return JSON.stringify([ground.k === 'path' ? ground.fill : null, start.map((v) => v.toFixed(2)), clip.ops.map((o) => (o.k === 'path' ? [o.fill, o.stroke, shape(o.d)] : [o.k, o.k === 'text' ? 0 : o.ops.length]))]);
+  }
+
+  it('no two openers of a guide draw the same hero, at any finish', () => {
+    for (const { title, content } of allOf()) {
+      for (const effort of LEVELS) {
+        const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort });
+        const heroes = guide.pages.filter((_, k) => k > 0 && guide.plans[k - 1]!.kind === 'opener').map((p) => heroOf(p.scene.ops));
+        expect(heroes.length, title).toBeGreaterThanOrEqual(content.chapters.length);
+        expect(new Set(heroes).size, `${title.slice(0, 30)} / finition ${effort.finish}`).toBe(heroes.length);
+      }
+    }
+  });
+
+  it('the drawing itself opens a chapter smaller than on the cover, and on the other side', () => {
+    const titles = written[0]!.content.chapters.map((_, k) => `Sans indice ${k}`);
+    const content: PdfContent = { ...written[0]!.content, chapters: written[0]!.content.chapters.map((ch, k) => ({ ...ch, title: titles[k]! })) };
+    const seen = new Set<number>();
+    for (let artSeed = 1; artSeed <= 60; artSeed++) {
+      const at = posesOf([...titles, content.bonus.title], artSeed).indexOf('portrait');
+      if (at < 0 || at >= titles.length) continue;
+      seen.add(at);
+      const guide = layoutPdf({ product: productOf('x', content), content, design: { ...design, artSeed }, brand: 'Pixel Agency', effort: LEVELS[2]! });
+      const page = guide.plans.findIndex((p) => p.kind === 'opener' && p.chapter === at + 1);
+      const { ops } = guide.pages[page + 1]!.scene;
+      const clip = ops[heroAt(ops)] as Extract<Op, { k: 'clip' }>;
+      const [x, , size] = [...clip.d.matchAll(/[\d.]+/g)].map((m) => Number(m[0]));
+      expect(x, `graine ${artSeed}`).toBe(0);
+      expect(size, `graine ${artSeed}`).toBeCloseTo((3 * GRID.W) / 6, 1);
+    }
+    expect(seen.size).toBeGreaterThanOrEqual(4); // chapters that would have taken the big hero or the right side among them
+  });
+
+  it('a band closes on a picture of its own: the hero changes from section to section, in every guide', () => {
+    const shape = (ops: Op[]): string => JSON.stringify(ops.map((o) => (o.k === 'path' ? [o.fill, o.stroke, o.d.replace(/-?[\d.]+/g, '')] : o.k)));
+    for (const { title, content } of allOf()) {
+      const guide = layoutPdf({ product: productOf(title, content), content, design, brand: 'Pixel Agency', effort: LEVELS[2]! });
+      const heroes: string[] = [];
+      guide.plans.forEach((plan, k) => {
+        const end = plan.items.find((i) => i.t === 'end');
+        if (end?.t !== 'end' || end.rows < 2) return;
+        const clip = guide.pages[k + 1]!.scene.ops.filter((o): o is Extract<Op, { k: 'clip' }> => o.k === 'clip').at(-1)!;
+        heroes.push(shape(clip.ops));
+      });
+      expect(heroes.length, title.slice(0, 30)).toBeGreaterThanOrEqual(3);
+      heroes.forEach((h, k) => { if (k) expect(h, title.slice(0, 30)).not.toBe(heroes[k - 1]); });
+      expect(new Set(heroes).size, title.slice(0, 30)).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('the art of an opener belongs to its guide: same chapters, same art; a new seed, new art', () => {
+    const { content } = written[0]!;
+    const at = (d: DesignSpec) => layoutPdf({ product: productOf('x', content), content, design: d, brand: 'Pixel Agency' });
+    const openers = (g: ReturnType<typeof at>) => g.pages.filter((_, k) => k > 0 && g.plans[k - 1]!.kind === 'opener').map((p) => JSON.stringify(p.scene.ops));
+    expect(openers(at(design))).toEqual(openers(at(design)));
+    expect(openers(at({ ...design, artSeed: 91 }))).not.toEqual(openers(at(design)));
+  });
+
+  it('the bonus keeps its own ground', () => {
+    const { content } = written[0]!;
+    const guide = layoutPdf({ product: productOf('x', content), content, design, brand: 'Pixel Agency', effort: LEVELS[2]! });
+    const ops = guide.pages[guide.plans.findLastIndex((p) => p.kind === 'opener') + 1]!.scene.ops;
+    expect(ops[heroAt(ops) - 1]).toMatchObject({ k: 'path', fill: theme.inks.b });
   });
 });
 

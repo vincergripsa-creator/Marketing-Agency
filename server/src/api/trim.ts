@@ -177,18 +177,21 @@ function publicVisual(visual: VisualReport): VisualReport {
   return shown as VisualReport;
 }
 
+/** The files a card opens. The previews of a guide serve its shop page, and six paths a guide weighed 12 KB of a big stream. */
+const cardFiles = (p: Product): Product['files'] => ({ pdf: p.files?.pdf ?? null, cover: p.files?.cover ?? null, salesPage: p.files?.salesPage ?? null });
+
 /** A stopped guide under light limits: what the catalogue shows of it. Its text and scores weigh more than a live guide's figures. */
 export function stubProduct({ brief: _brief, pagePrint: _pagePrint, visual: _visual, ...p }: Product): Product {
   return {
     ...p, subtitle: '', audience: '', problem: '', content: null, design: null, salesPage: null, quality: null, salesQuality: null, priceHistory: [],
-    files: { pdf: p.files?.pdf ?? null, cover: p.files?.cover ?? null, salesPage: p.files?.salesPage ?? null }, stats: { ...p.stats, reviews: [] },
+    files: cardFiles(p), stats: { ...p.stats, reviews: [] },
   };
 }
 
 /** A guide on sale under light limits: what its card reads. A guide now stays on sale for months, and with 33 of them these fields weighed 140 KB. */
 function cardProduct({ brief: _brief, pagePrint: _pagePrint, ...p }: Product): Product {
   return {
-    ...p, salesQuality: null,
+    ...p, salesQuality: null, files: cardFiles(p),
     design: p.design && ({ palette: p.design.palette } as DesignSpec),
     quality: p.quality && ({ overall: p.quality.overall, issues: p.quality.issues, ...(p.quality.blocking ? { blocking: p.quality.blocking } : {}) } as QualityReport),
   };

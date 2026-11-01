@@ -168,6 +168,8 @@ export function heuristicTitles(nicheIn: NicheBrief, vocIn: VoiceOfCustomer, cou
 const MAX_ERRORS = 6;
 const MAX_SITUATIONS = 6;
 const MAX_STEPS = 8;
+/** Two lines of a cell of the matrix. */
+const STAND_ALONE = 72;
 const MIN_WORDS = 2300;
 const MIN_WORDS_SUITE = 2300;
 /** What the humanizer and the fact-checker take out of a follow-up: the draft leaves them the room, the reader still gets the floor. */
@@ -388,6 +390,20 @@ function breakOf(loop: readonly string[], method: readonly MethodStep[]): number
   return 1;
 }
 
+const LEANS_ON = /^(?:il|elle|ils|elles|on|ce|c|ca|cela|cette|ces|celui|celle|ceux|son|sa|ses|leur|leurs|seul|seule|seuls|seules|qui|que|qu|dont|puis|ensuite|alors|mais|donc|car|et)\b|\b(?:suivante?s?|precedente?s?)$/;
+
+/**
+ * A cell of a matrix has no sentence around it: whole sentences that stand on their own feet, then the head of an order
+ * (« Notez la hauteur griffée »), or nothing. Any other head of a sentence (« À chaque changement de rythme ») and a sentence
+ * that leans on the one before (« Il dit à quel moment… ») read as broken.
+ */
+export function standAlone(items: readonly string[]): string[] {
+  const sentences = items.flatMap(splitSentences);
+  const whole = sentences.map(bare).filter((t) => t.length <= STAND_ALONE && !endsDangling(t));
+  const orders = labelsFrom(sentences, STAND_ALONE, sentences.length).filter((l) => /^\p{L}+ez\b/u.test(l));
+  return [...whole, ...orders].map(cap).filter((l, k, all) => !LEANS_ON.test(norm(l)) && all.findIndex((x) => norm(x) === norm(l)) === k);
+}
+
 /** A figure says nothing the guide does not: a list item that is not printed elsewhere comes without a number. */
 const noDigit = (labels: readonly string[]): string[] => labels.filter((l) => !/\d/.test(l));
 
@@ -424,13 +440,23 @@ function visualFor(ch: ChapterDef, d: Draft, def: ArchetypeDef, plan: PlanModel,
       const own = situationsOf(c, def);
       const known = new Set(own.map((s) => norm(s.when)));
       const cases = [...own, ...def.situationsFallback.filter((s) => !known.has(norm(s.when)))].map((s) => ({ when: `Si ${lf(s.when)}`, then: sentence(s.what) }));
-      return { type: 'decision_tree', title: 'Si ça coince, que faire ?', labels: labelsFrom(own.map((s) => s.when), 56, 6), values: [], tree: { question: 'Que faire dans ce cas ?', cases } };
+      // the ladder starts from the reader's own problem: the title of the figure has already said « que faire »
+      const question = c.pbShort ? `${cap(c.pbShort)} : quel cas ressemble au vôtre ?` : 'Quel cas ressemble au vôtre ?';
+      return { type: 'decision_tree', title: 'Si ça coince, que faire ?', labels: labelsFrom(own.map((s) => s.when), 56, 6), values: [], tree: { question, cases } };
     }
     case 'programme':
       return gridVisual(plan.sheet);
     case 'durer': {
       const labels = labelsFrom(steps, 56, 6, c.keep);
-      const list = (items: readonly string[]): string[] => noDigit(labelsFrom(items, 60, 5)).slice(0, 3);
+      const seen = new Set<string>();
+      const pick = (items: readonly string[]): string[] => noDigit(standAlone(items)).filter((l) => !seen.has(norm(l)));
+      // the method is what a thin cell falls back on: it has to last for all four
+      const list = (items: readonly string[]): string[] => {
+        const own = pick(items).slice(0, 3);
+        const cell = own.length ? own : pick(c.method.map((m) => m.text)).slice(0, 2);
+        for (const l of cell) seen.add(norm(l));
+        return cell;
+      };
       const cells: [string[], string[], string[], string[]] = [list(c.keep), list(rendered(c).map((p) => p.mistake)), list(c.tips), list(c.observe)];
       return { type: 'matrix', title: 'Vos réflexes pour la suite', labels, values: [], matrix: { heads: ['À garder', 'À arrêter', 'À tester', 'À surveiller'], cells } };
     }

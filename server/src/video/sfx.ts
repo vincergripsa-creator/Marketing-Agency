@@ -2,6 +2,7 @@
 import { createRng } from '../core/rng.js';
 import type { BeatKind } from '../shared.js';
 import { SR, type SfxCue } from './mix.js';
+import { priceAt } from './timeline.js';
 
 export function whoosh(rnd: () => number, dur = 0.26): Float32Array {
   const n = Math.floor(dur * SR);
@@ -75,6 +76,7 @@ export function sfxCues(beats: CueBeat[], seed: number): SfxCue[] {
     if (b.kind === 'end_card') {
       cues.push({ at: b.t0 + 0.05, sig: impact(), gain: 0.34 });
       cues.push({ at: b.t0 + 0.25, sig: pop(), gain: 0.34 });
+      cues.push({ at: b.t0 + priceAt(b.dur), sig: pop(), gain: 0.34 }); // the price lands
     }
   });
   return cues;

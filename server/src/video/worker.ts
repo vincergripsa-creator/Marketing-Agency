@@ -18,7 +18,7 @@ import { sfxCues } from './sfx.js';
 import { stillFormat, type RenderSpec } from './spec.js';
 import { synthesize, type SpokenLine } from './speech.js';
 import { stageFor, type Stage } from './stage.js';
-import { buildTimeline, settledFrames, TEMPO_BPM, type Timeline } from './timeline.js';
+import { buildTimeline, captionGroups, plannedCuts, quickTitle, settledFrames, TEMPO_BPM, type Timeline } from './timeline.js';
 
 // Spelled here, not imported: the director loads with the server, this file only in the child process.
 const SPEC_FILE = 'spec.json';
@@ -52,11 +52,15 @@ const clock = (sec: number): string => {
   return `${pad(Math.floor(ms / 3_600_000))}:${pad(Math.floor(ms / 60_000) % 60)}:${pad(Math.floor(ms / 1000) % 60)}.${pad(ms % 1000, 3)}`;
 };
 
-/** The captions of the file: the groups on screen, or the slide's text where nothing is spoken. */
-export function webVtt(tl: Pick<Timeline, 'beats' | 'total'>): string {
+/** The captions of the file: the groups on screen, or where nothing is spoken what the card shows: the slide's text, a buyer's words. */
+export function webVtt(tl: Pick<Timeline, 'beats' | 'total'>, reviews: RenderSpec['reviews'] = {}): string {
   const cues = tl.beats.flatMap((b) => {
-    if (!b.groups.length) return b.screen.trim() ? [{ from: b.t0, to: b.t0 + b.dur, text: b.screen.trim() }] : [];
-    return b.groups.map((g) => ({ from: b.t0 + g[0]!.at, to: b.t0 + g[g.length - 1]!.end, text: g.map((w) => w.text).join(' ') }));
+    if (!b.groups.length) {
+      const text = (reviews[b.scene]?.quote ?? b.screen).trim();
+      return text ? [{ from: b.t0, to: b.t0 + b.dur, text }] : [];
+    }
+    const said = b.kind === 'hook' ? captionGroups(b.words) : b.groups; // a screen of the hook is what reads, the file says what is said
+    return said.map((g) => ({ from: b.t0 + g[0]!.at, to: b.t0 + g[g.length - 1]!.end, text: g.map((w) => w.text).join(' ') }));
   });
   const escaped = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return ['WEBVTT', '', ...cues.flatMap((c) => [`${clock(c.from)} --> ${clock(Math.min(tl.total, Math.max(c.to, c.from + 0.05)))}`, escaped(c.text), ''])].join('\n');
@@ -69,7 +73,7 @@ function mixTo(wav: string, spec: RenderSpec, tl: Timeline, speech: SpokenLine[]
     return line?.wav ? [{ at: b.t0, dur: b.speech, pcm: readWavMono(line.wav).s }] : [];
   });
   const music = makeMusic(tl.total, musicFor(spec.hook, spec.design.family, spec.cut.tempo));
-  writeWav(wav, mixDown({ totalSec: tl.total, music, voices, sfx: tl.sfx ? sfxCues(tl.beats, hashString(spec.hook)) : [] }));
+  writeWav(wav, mixDown({ totalSec: tl.total, music, voices, sfx: tl.sfx ? sfxCues(tl.beats.filter((b) => !quickTitle(b)), hashString(spec.hook)) : [] }));
 }
 
 async function renderMaster(job: RenderJob, spec: RenderSpec, tl: Timeline, stage: Stage, comp: Compositor, speech: SpokenLine[], base: RenderResult, rel: (name: string) => string): Promise<RenderResult> {
@@ -78,7 +82,7 @@ async function renderMaster(job: RenderJob, spec: RenderSpec, tl: Timeline, stag
   mixTo(wav, spec, tl, speech);
   const encoded = await encodeMp4(comp.rgbaFrames(), wav, out, { ffmpeg: job.ffmpeg, w: stage.w, h: stage.h });
   await rm(wav, { force: true });
-  const shots = tl.beats.reduce((n, b) => n + b.shotAt.length, 0);
+  const shots = plannedCuts(tl);
   const report = checkFile(out, { ffmpeg: job.ffmpeg, w: stage.w, h: stage.h, durationSec: tl.total, audio: true, shots, text: textProof(comp), estSec: spec.cut.metrics.estSec });
   const qa = qaSummary(report);
   if (!report.ok) {
@@ -87,7 +91,7 @@ async function renderMaster(job: RenderJob, spec: RenderSpec, tl: Timeline, stag
   }
   comp.drawFrame(settledFrames(tl)[0] ?? 0);
   await writeFile(join(job.dir, 'poster.jpg'), await comp.canvas.encode('jpeg', POSTER_QUALITY));
-  await writeFile(join(job.dir, 'captions.vtt'), webVtt(tl));
+  await writeFile(join(job.dir, 'captions.vtt'), webVtt(tl, spec.reviews));
   return {
     ...base, ok: true, retry: false,
     video: { ratio: spec.ratio, path: rel('master.mp4'), durationSec: report.durationSec ?? tl.total, bytes: encoded.bytes },

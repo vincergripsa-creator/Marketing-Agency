@@ -246,7 +246,7 @@ Files: `deliverables/art/tiles.ts`, `art/heroes.ts`, `art/field.ts`, `art/evalua
 3. One hero spanning 3 or 4 units, on a single ground. The hero is the only large shape.
 4. **No two neighbouring tiles share a ground.** This checker is what makes a field read as one printed block.
 5. Tiles repeat the hero's vocabulary. A paw guide has small paws, never stars.
-6. The hero is the same drawing at every scale, so a guide reads as one object.
+6. The hero is the same drawing on every page, so a guide reads as one object. On openers it takes one of eight poses of that drawing (portrait, closeup, array, trail, counter, target, stairs, arch), chosen from the chapter title, so no two openers of a guide look alike (D80).
 
 ### 6.2 Four grammars for the 14 motifs
 
@@ -269,7 +269,7 @@ export const HEROES: Record<DesignSpec['motif'], { draw: Hero; ground: keyof Ink
 ### 6.3 Variation
 
 - **Cover:** `field({ cols: 6, rows, hero })`. `rows = head.length > 40 ? 4 : 5`, so a long title gets more room.
-- **Chapter openers:** `rows = 4`, seed `artSeed + n × 7`. Odd chapters take a 4-unit hero, even chapters a 3-unit hero on the other side, so eight openers never repeat.
+- **Chapter openers:** `rows = 4`, seed `artSeed + n × 7`. Each takes its own pose (`art/poses.ts`, D80). Before D66: odd chapters a 4-unit hero, even chapters a 3-unit hero on the other side, which left eight openers alike.
 - **Bonus:** hero on ground `b`, label « CADEAU ».
 - **Introduction and final page:** 2 rows.
 
@@ -340,7 +340,7 @@ export function paginate(blocks: Block[], params: LayoutParams): PagePlan[];
 4. Rail blocks sit on the baseline of their anchor. A rail block that does not fit moves to the next page's top.
 5. A `steps` item is never split.
 6. A `sheet` block ends the chapter on its own full-bleed tinted page.
-7. If a chapter's last page has `fill < 0.45`, try the next params. If none helps, add a ruled « Vos notes » block down to the folio. It is useful on a printed sheet, and the audit counts it at half weight, so it cannot game the score.
+7. No body page stops under `PAGE_FLOOR` (0.6, D80): lines move from the pages before it (`PAGE_AIM`, trims of at most 6 lines), a short page breathes up to `PAGE_BREATH`, then its section closes on a band of the guide's tiles or on ruled « Vos notes ». Sheets get the same notes under a short table. `fill` means ink, a close counts at half weight, so it cannot game the score. It was: under `fill < 0.45`, try the next params, then ruled notes.
 
 Because block heights are known, one `paginate` call is pure arithmetic. That is why a designer can try 24 layouts for free.
 

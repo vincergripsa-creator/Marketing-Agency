@@ -6,14 +6,15 @@
 import type { PdfAudit } from '../../contracts.js';
 import type { ChapterContent, DesignEffort, DesignSpec, VisualSpec } from '../../shared.js';
 import { field, type HeroPlace } from '../art/field.js';
+import { closesOf, poseGround, posesOf, type Pose } from '../art/poses.js';
 import { readableOn } from '../color.js';
 import { advance, fitDisplay, sanitizeFor, type FaceName } from '../fonts.js';
-import { arr, calloutBlocks, chapterBlocks, CHECK_INDENT, CHECK_LINE, DROP_SIZE, labelBlock, lineOf, NOTE_TEXT, paraBlock, QUOTE_TEXT, quoteBlock, SHEET_BAND, sheetTop, STEP_GAP, STEP_INDENT, type Block, type ChecklistBlock, type ExampleBlock, type HeadingBlock, type NoteBlock, type ParaBlock, type QuoteBlock, type SheetBlock, type StepsBlock } from '../layout/blocks.js';
+import { arr, calloutBlocks, chapterBlocks, CHECK_INDENT, CHECK_LINE, DROP_SIZE, labelBlock, lineOf, NOTE_TEXT, paraBlock, QUOTE_TEXT, quoteBlock, SHEET_BAND, sheetTop, STEP_BOX, STEP_GAP, STEP_INDENT, type Block, type ChecklistBlock, type ExampleBlock, type HeadingBlock, type NoteBlock, type ParaBlock, type QuoteBlock, type SheetBlock, type StepsBlock } from '../layout/blocks.js';
 import { BODY_BOTTOM, GRID, RAIL_X, SHORT_PAGE, tabHeight } from '../layout/grid.js';
 import { layoutOf, type PagePlan } from '../layout/paginate.js';
 import { linesOf, setLines, tickBox, type PdfTheme } from '../pdfVisuals.js';
 import { n, Scene, toSvg } from '../scene.js';
-import { wholeClause } from '../text.js';
+import { hashString, wholeClause } from '../text.js';
 
 const { W, H, left: L, full: FULL } = GRID;
 const U = W / 6;               // the tile of the art, on every page but the cover
@@ -116,11 +117,12 @@ function drawPara(c: Ctx, s: Scene, b: ParaBlock, from: number, to: number, y: n
     const ly = base + (k - from) * lh;
     let x = L;
     if (b.drop && k < b.dropLines!) x += b.dropW!;
-    if (b.head && k === 0) {
+    const bold = b.bold ?? 0;
+    if (b.head && k === bold) {
       s.text(b.head, x, ly, v.textB, size, inks.ink);
       x += b.headW!;
     }
-    s.text(b.lines[k]!, x, ly, face, size, inks.ink);
+    s.text(b.lines[k]!, x, ly, k < bold ? v.textB : face, size, inks.ink);
   }
 }
 
@@ -130,14 +132,16 @@ function drawHeading(c: Ctx, s: Scene, b: HeadingBlock, y: number): void {
   s.text(sanitizeFor(v.labelB, b.text).toUpperCase(), L, y + 18, v.labelB, 8, inks.ink, { track: 1.6 });
 }
 
-function drawSteps(c: Ctx, s: Scene, b: StepsBlock, from: number, to: number, y: number): void {
+function drawSteps(c: Ctx, s: Scene, b: StepsBlock, from: number, to: number, y: number, air: number): void {
   const { v, inks } = c.t;
   let cy = y;
   for (let k = from; k < to; k++) {
     const item = b.items[k]!;
-    s.text(String(k + 1), L, cy + STEP_GAP + 22, v.display, 30, c.t.bText);
-    item.lines.forEach((l, i) => s.text(l, L + STEP_INDENT, cy + STEP_GAP + 12 + i * GRID.baseline, v.textB, v.body, inks.ink));
-    cy += item.h;
+    const top = cy + air / 2 + STEP_GAP;
+    s.text(String(k + 1), L, top + 22, v.display, 30, c.t.bText);
+    item.lines.forEach((l, i) => s.text(l, L + STEP_INDENT, top + 12 + i * GRID.baseline, v.textB, v.body, inks.ink));
+    if (b.ticks) tickBox(s, L + FULL - STEP_BOX, top + 1, STEP_BOX, inks.ink);
+    cy += item.h + air;
     if (k < b.items.length - 1) s.line(L + STEP_INDENT, cy, L + FULL, cy, inks.ink, 0.3);
   }
 }
@@ -150,7 +154,7 @@ function drawExample(c: Ctx, s: Scene, b: ExampleBlock, y: number): void {
   b.lines.forEach((l, k) => s.text(l, L + 14, y + 14.4 + 10.8 + k * GRID.baseline, v.textIt, v.body, inks.ink));
 }
 
-function drawChecklist(c: Ctx, s: Scene, b: ChecklistBlock, from: number, to: number, y: number): void {
+function drawChecklist(c: Ctx, s: Scene, b: ChecklistBlock, from: number, to: number, y: number, air: number): void {
   const { v, inks } = c.t;
   const colW = (FULL - GRID.gutter) / 2;
   let cy = y;
@@ -163,7 +167,7 @@ function drawChecklist(c: Ctx, s: Scene, b: ChecklistBlock, from: number, to: nu
       tickBox(s, x, cy + 2.8, 9, inks.ink);
       lines.forEach((l, j) => s.text(l, x + CHECK_INDENT, cy + 10.5 + j * CHECK_LINE, v.text, v.body, inks.ink));
     });
-    cy += row.h;
+    cy += row.h + air;
   }
 }
 
@@ -178,20 +182,34 @@ function drawRail(c: Ctx, s: Scene, b: NoteBlock | QuoteBlock, y: number): void 
   b.lines.forEach((l, k) => s.text(l, RAIL_X, y + 18 + 12 + k * QUOTE_TEXT.leading, v.displayIt, QUOTE_TEXT.size, c.t.aText));
 }
 
-function drawNotes(c: Ctx, s: Scene, y: number, h: number): void {
+/** Ruled lines to write on, the last one on the foot of the page. On a sheet they sit on its tint and take a darker ink. */
+function drawNotes(c: Ctx, s: Scene, y: number, h: number, label = 'Vos notes', rule = c.t.hair): void {
   const { v } = c.t;
-  s.text('VOS NOTES', L, y + 8, v.labelB, 7.8, c.t.muted, { track: 1.4 });
-  for (let ly = y + 8 + NOTE_LINE; ly <= y + h; ly += NOTE_LINE) s.line(L, ly, L + FULL, ly, c.t.hair, 0.4);
+  s.text(sanitizeFor(v.labelB, label).toUpperCase(), L, y + 8, v.labelB, 7.8, c.t.muted, { track: 1.4 });
+  const bottom = y + h;
+  for (let ly = bottom; ly >= y + 8 + NOTE_LINE - 0.01; ly -= NOTE_LINE) s.line(L, ly, L + FULL, ly, rule, 0.4);
 }
 
-function drawItems(c: Ctx, s: Scene, plan: PagePlan): void {
+/** How a section closes: the seed of its tiles, the pose of its hero and a number that tells two of them apart. */
+interface Close { seed: number; pose: Pose; pick: number }
+
+/** The art of the guide at the width of the text: a band of tiles, a seed of its own to each section, and from two rows up a hero in its own pose, on the side the seed says. */
+function drawEnd(c: Ctx, s: Scene, y: number, rows: number, cols: number, { seed, pose, pick }: Close): void {
+  const size = Math.min(rows, Math.round((cols * (rows > 4 ? 2 : 1.5)) / 3));
+  const ground = poseGround(pose, pick, seed);
+  const hero: HeroPlace | null = rows >= 2 ? { c: seed % 2 ? cols - size : 0, r: rows - size, s: size, pose, pick, ...(ground ? { ground } : {}) } : null;
+  field(s, { x: L, y, u: FULL / cols, cols, rows, inks: c.t.inks, motif: c.spec.design.motif, seed, hero });
+}
+
+function drawItems(c: Ctx, s: Scene, plan: PagePlan, close: Close): void {
   for (const item of plan.items) {
     if (item.t === 'para') drawPara(c, s, item.block, item.from, item.to, item.y);
     else if (item.t === 'rows') {
-      if (item.block.t === 'steps') drawSteps(c, s, item.block, item.from, item.to, item.y);
-      else drawChecklist(c, s, item.block, item.from, item.to, item.y);
+      if (item.block.t === 'steps') drawSteps(c, s, item.block, item.from, item.to, item.y, item.air ?? 0);
+      else drawChecklist(c, s, item.block, item.from, item.to, item.y, item.air ?? 0);
     } else if (item.t === 'rail') drawRail(c, s, item.block, item.y);
-    else if (item.t === 'notes') drawNotes(c, s, item.y, item.h);
+    else if (item.t === 'notes') drawNotes(c, s, item.y, item.h, item.label);
+    else if (item.t === 'end') drawEnd(c, s, item.y, item.rows, item.cols, close);
     else if (item.t === 'block') {
       if (item.block.t === 'h2') drawHeading(c, s, item.block, item.y);
       else if (item.block.t === 'example') drawExample(c, s, item.block, item.y);
@@ -200,13 +218,13 @@ function drawItems(c: Ctx, s: Scene, plan: PagePlan): void {
   }
 }
 
-function textPage(section: Section, index: number, plan: PagePlan, top: ((c: Ctx, s: Scene) => void) | null) {
+function textPage(section: Section, index: number, plan: PagePlan, pose: Pose, top: ((c: Ctx, s: Scene) => void) | null) {
   return (c: Ctx, no: number): Scene => {
     const s = pageOf(c.t.page);
     if (top) top(c, s);
     else runningHead(c, s, section);
     sectionTab(c, s, section, index);
-    drawItems(c, s, plan);
+    drawItems(c, s, plan, { seed: c.seed + hashString(section.dest) % 9973, pose, pick: index });
     folio(c, s, no);
     return s;
   };
@@ -230,7 +248,7 @@ function openerText(ch: ChapterSpec, t: PdfTheme, finish: 0 | 1 | 2): OpenerText
   const { v } = t;
   const rows = finish === 0 ? 3 : 4;
   const band = rows * U;
-  const title = fitDisplay(ch.title, v.deck, { width: W - TITLE_X - GRID.right, max: 29, min: 20, maxLines: 4, leading: 1.1 });
+  const title = fitDisplay(sanitizeFor(v.deck, ch.title), v.deck, { width: W - TITLE_X - GRID.right, max: 29, min: 20, maxLines: 4, leading: 1.1 });
   const ruleAt = band + Math.max(166, 56 + title.lines.length * title.size * 1.1 + 22);
   const content = ch.content;
   const steps = arr(content.steps);
@@ -246,14 +264,16 @@ function openerText(ch: ChapterSpec, t: PdfTheme, finish: 0 | 1 | 2): OpenerText
   return { rows, title, ruleAt, lead: fits ? lead : null, tease, stats };
 }
 
-function openerPage(o: OpenerText, number: number, total: number, bonus: boolean) {
+function openerPage(o: OpenerText, number: number, total: number, bonus: boolean, pose: Pose) {
   return (c: Ctx, no: number): Scene => {
     const { v, inks, aText } = c.t;
     const s = pageOf(inks.paper);
     const big = number % 2 === 1;
-    const size = o.rows === 3 ? 3 : big ? 4 : 3;
-    const col = o.rows === 3 ? (big ? 3 : 0) : big ? (number % 4 === 1 ? 2 : 0) : (number % 4 === 2 ? 0 : 3);
-    const hero: HeroPlace = { c: col, r: o.rows - size, s: size, ...(bonus ? { ground: 'b' as const } : {}) };
+    // the drawing itself is the picture of the cover: an opener shows it smaller, on the side the cover does not use
+    const size = o.rows === 3 || pose === 'portrait' ? 3 : big ? 4 : 3;
+    const col = pose === 'portrait' ? 0 : o.rows === 3 ? (big ? 3 : 0) : big ? (number % 4 === 1 ? 2 : 0) : (number % 4 === 2 ? 0 : 3);
+    const ground = bonus ? 'b' : poseGround(pose, number, c.seed);
+    const hero: HeroPlace = { c: col, r: o.rows - size, s: size, pose, pick: number, ...(ground ? { ground } : {}) };
     art(c, s, o.rows, c.seed + number * 7, hero);
     const band = o.rows * U;
     s.text(bonus ? '+' : pad2(number), L - 4, band + 128, v.display, 128, aText);
@@ -302,6 +322,8 @@ function sheetPage(b: SheetBlock, part: number, order: number) {
     if (b.model.note) s.text(b.model.note, L, band + 19, v.textIt, 9.4, inks.ink);
     const { from, to, grow } = b.parts[part]!;
     b.model.draw(s, L, sheetTop(b.title.length), from, to, grow);
+    const notes = b.parts[part]!.notes;
+    if (notes) drawNotes(c, s, notes.y, notes.h, notes.label, c.t.muted);
     folio(c, s, no);
     return s;
   };
@@ -408,6 +430,7 @@ function contentsPage(c: Ctx, no: number): Scene {
 
 const INTRO_TOP = TOP_BAND + 92;
 const ANNEX_TOP = GRID.top + 64.8;
+const MEMO_AIR = 39.6;         // the rows of a plan on one page spread down it, with room to tick and to write
 
 function introTop(title: string) {
   return (c: Ctx, s: Scene): void => {
@@ -428,7 +451,7 @@ function memoPage(c: Ctx, no: number): Scene {
     return { title: linesOf(ch.title, v.deck, 11.5, FULL - 62), lines: linesOf(wholeClause(first, fit), v.text, v.body, FULL - 62) };
   });
   const need = rows.reduce((a, r) => a + r.title.length * 14.4 + r.lines.length * GRID.baseline + 18, 0);
-  const gap = Math.max(0, Math.min(14.4, (BODY_BOTTOM - y - need) / Math.max(1, rows.length)));
+  const gap = Math.max(0, Math.min(MEMO_AIR, (BODY_BOTTOM - y - need) / Math.max(1, rows.length)));
   rows.forEach((r, k) => {
     s.line(L, y, L + FULL, y, inks.ink, 0.5);
     s.text(pad2(k + 1), L, y + 26, v.display, 22, aText);
@@ -450,7 +473,7 @@ function finalPage(c: Ctx, no: number): Scene {
   art(c, s, 2, c.seed + 3, null);
   let y = TOP_BAND + 34;
   s.text('ET MAINTENANT ?', L, y, v.labelB, 8.6, c.t.bText, { track: 1.8 });
-  const head = fitDisplay(final.heading, v.deck, { width: FULL, max: 32, min: 22, maxLines: 2, leading: 1.1 });
+  const head = fitDisplay(sanitizeFor(v.deck, final.heading), v.deck, { width: FULL, max: 32, min: 22, maxLines: 2, leading: 1.1 });
   y += 10;
   for (const line of head.lines) {
     y += head.size * 1.1;
@@ -513,10 +536,17 @@ function finalPage(c: Ctx, no: number): Scene {
 
 // ───────────────────────────── the guide ─────────────────────────────
 
-/** « Si ça coince »: every case the guide's decision trees hold, as a page to come back to. */
+/** A sentence that follows a colon goes on in lower case, a name or an acronym as it is. */
+const onward = (s: string): string => (/^\p{Lu}\p{Ll}/u.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s);
+
+/** « Si ça coince »: every case the guide's decision trees hold, under the chapter it comes from, as a page to come back to. Each one opens on its case, whatever its length. */
 function annexBlocks(chapters: ChapterSpec[], t: PdfTheme): Block[] {
-  const trees = chapters.flatMap((ch) => [ch.content.visual, ch.content.figure]).filter((v): v is VisualSpec => v?.type === 'decision_tree' && !!v.tree?.cases?.length);
-  return trees.flatMap((v) => [labelBlock(v.tree!.question), ...v.tree!.cases.flatMap((k) => paraBlock(`${k.when} : ${k.then}`, t) ?? [])]);
+  const { v } = t;
+  const fits = (s: string) => advance(v.labelB, s.toUpperCase(), 8, 1.6) <= FULL;
+  return chapters.flatMap((ch) => [ch.content.visual, ch.content.figure].filter((x): x is VisualSpec => x?.type === 'decision_tree' && !!x.tree?.cases?.length).flatMap((x) => [
+    labelBlock(wholeClause(sanitizeFor(v.labelB, ch.title), fits)),
+    ...x.tree!.cases.flatMap((k) => paraBlock(onward(k.then), t, { head: k.when }) ?? []),
+  ]));
 }
 
 function auditOf(slots: Slot[], chapters: number, overflow: number, pages: number): Guide['audit'] {
@@ -528,7 +558,7 @@ function auditOf(slots: Slot[], chapters: number, overflow: number, pages: numbe
   let widows = 0;
   let strandedHeadings = 0;
   for (const p of text) {
-    const flow = p.items.filter((i) => i.t !== 'rail' && i.t !== 'notes');
+    const flow = p.items.filter((i) => i.t !== 'rail' && i.t !== 'notes' && i.t !== 'end');
     const last = flow[flow.length - 1];
     if (last?.t === 'block' && last.block.t === 'h2') strandedHeadings += 1;
     for (const i of p.items) {
@@ -573,17 +603,20 @@ export function layoutGuide(spec: GuideSpec, t: PdfTheme, effort: DesignEffort):
   const c: Ctx = { t, spec, seed, tabs: chapters.length + (bonus ? 1 : 0), entries, pagesTotal: 0, sheetsTotal: 0, overflow: 0, links: [] };
   const front = (kind: PagePlan['kind'], section: Section, draw: Slot['draw']) => slots.push({ plan: { kind, chapter: null, items: [], fill: 1 }, section, first: true, draw });
   const plain: Section = { dest: '', label: '', title: '', head: '', tab: null };
+  const poses = posesOf([...chapters, ...(bonus ? [bonus] : [])].map((ch) => ch.title), seed);
+  const closes = closesOf(poses, poses.length + 2, seed); // the chapters, then the introduction and the annex
+  const [introClose, annexClose] = closes.slice(poses.length) as [Pose, Pose];
   let sheets = 0;
 
   /** The pages of a planned section: each knows how to draw itself once page numbers exist. */
-  const addPlans = (section: Section, index: number, chapter: number | null, plans: PagePlan[], top: ((x: Ctx, s: Scene) => void) | null = null, opens = !!top) => {
+  const addPlans = (section: Section, index: number, chapter: number | null, plans: PagePlan[], pose: Pose, top: ((x: Ctx, s: Scene) => void) | null = null, opens = !!top) => {
     plans.forEach((plan, k) => {
       plan.chapter = chapter;
       const item = plan.items[0];
       if (item?.t === 'sheet') {
         if (item.part === 0) sheets += 1;
         slots.push({ plan, section, first: false, draw: sheetPage(item.block, item.part, sheets) });
-      } else slots.push({ plan, section, first: opens && k === 0, draw: textPage(section, index, plan, k === 0 ? top : null) });
+      } else slots.push({ plan, section, first: opens && k === 0, draw: textPage(section, index, plan, pose, k === 0 ? top : null) });
     });
   };
   const entry = (section: Section, number: string | null) => entries.push({ number, label: section.label, title: section.title, page: 0, dest: section.dest });
@@ -609,7 +642,7 @@ export function layoutGuide(spec: GuideSpec, t: PdfTheme, effort: DesignEffort):
   });
   introBlocks.push(...calloutBlocks(spec.intro.box ? { label: 'À la fin de ce guide', text: spec.intro.box, titled: true } : null, t));
   const introPlans = layoutOf(introBlocks, INTRO_TOP);
-  addPlans(intro, 0, null, introPlans.length ? introPlans : [{ kind: 'text', chapter: null, items: [], fill: 0 }], introTop(introTitle));
+  addPlans(intro, 0, null, introPlans.length ? introPlans : [{ kind: 'text', chapter: null, items: [], fill: 0 }], introClose, introTop(introTitle));
 
   const addChapter = (ch: ChapterSpec, k: number, isBonus: boolean) => {
     const number = k + 1;
@@ -618,9 +651,9 @@ export function layoutGuide(spec: GuideSpec, t: PdfTheme, effort: DesignEffort):
       : { dest: `chapitre-${number}`, label: `Chapitre ${number}`, title: ch.title, head: ch.head, tab: String(number) };
     entry(section, isBonus ? '+' : pad2(number));
     const opener = openerText(ch, t, finish);
-    slots.push({ plan: { kind: 'opener', chapter: number, items: [], fill: 1 }, section, first: true, draw: openerPage(opener, number, chapters.length, isBonus) });
+    slots.push({ plan: { kind: 'opener', chapter: number, items: [], fill: 1 }, section, first: true, draw: openerPage(opener, number, chapters.length, isBonus, poses[k]!) });
     const blocks = chapterBlocks(ch.content, t, { finish, lead: opener.lead ? null : ch.content.intro, example: ch.example });
-    addPlans(section, k, number, layoutOf(blocks));
+    addPlans(section, k, number, layoutOf(blocks), closes[k]!);
   };
   chapters.forEach((ch, k) => addChapter(ch, k, false));
 
@@ -634,7 +667,7 @@ export function layoutGuide(spec: GuideSpec, t: PdfTheme, effort: DesignEffort):
   if (annex.length) {
     const section: Section = { dest: 'si-ca-coince', label: 'Annexe', title: 'Si ça coince', head: 'Si ça coince', tab: null };
     entry(section, null);
-    addPlans(section, 0, null, layoutOf(annex, ANNEX_TOP), (x, s) => { pageTitle(x, s, 'ANNEXE', 'Si ça coince', GRID.top); });
+    addPlans(section, 0, null, layoutOf(annex, ANNEX_TOP), annexClose, (x, s) => { pageTitle(x, s, 'ANNEXE', 'Si ça coince', GRID.top); });
   }
 
   const last: Section = { dest: 'la-suite', label: 'Et après ?', title: spec.final.heading, head: spec.final.heading, tab: null };

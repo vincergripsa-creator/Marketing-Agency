@@ -99,6 +99,7 @@ const UNIT_AFTER_NUMBER = /(\d) (?=(?:[€%]|(?:h|min|s|km|m|kg|g|ml|cl|cm|m²|�
 export function frenchNbsp(value: string): string {
   return String(value ?? '')
     .replace(UNIT_AFTER_NUMBER, '$1\u00a0')
+    .replace(/(\d) (?=\d{3}\b)/g, '$1\u00a0') // "4 000 €" stays on one line
     .replace(/(\d\u00a0h) (?=\d)/g, '$1\u00a0') // "19 h 30" stays on one line
     .replace(/ ([:;!?»])/g, '\u00a0$1')
     .replace(/« /g, '«\u00a0');

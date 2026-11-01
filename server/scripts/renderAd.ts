@@ -13,7 +13,7 @@ import { isEntryPoint } from '../src/api/entry.js';
 import { runPaths } from '../src/core/index.js';
 import type { AdCreative, AdRatio, WorldState } from '../src/shared.js';
 import { detectCaps } from '../src/video/caps.js';
-import { createCompositor, loadAssets } from '../src/video/compose.js';
+import { createCompositor, loadAssets, textProof } from '../src/video/compose.js';
 import { buildRenderSpec, renderKey } from '../src/video/spec.js';
 import { synthesize } from '../src/video/speech.js';
 import { insideSafe, stageFor, type VideoRatio } from '../src/video/stage.js';
@@ -74,9 +74,11 @@ async function main(argv: readonly string[]): Promise<void> {
     sheetCtx.drawImage(comp.canvas, (i % SHEET_COLS) * SHEET_W, Math.floor(i / SHEET_COLS) * sheetH, SHEET_W, sheetH);
   }
   writeFileSync(join(out, 'sheet.png'), await sheet.encode('png'));
+  const proof = textProof(comp); // what the worker's QA reads, not the frames asked for here
+  const refused = proof.frames.flatMap((f) => f.boxes.filter((b) => !proof.inside(b)).map((b) => `${f.frame} « ${(b as { text?: string }).text ?? ''} »`));
   console.log(`${creativeId} « ${spec.hook} »`);
   console.log(timeline.beats.map((b) => `${b.kind}@${b.t0.toFixed(2)} (${b.shotAt.length})`).join(' '));
-  console.log(`${timeline.total.toFixed(2)} s, ${times.length} frames, ${assets.proofs.size} real proof pages, ${outside} text boxes outside the zones`);
+  console.log(`${timeline.total.toFixed(2)} s, ${times.length} frames, ${assets.proofs.size} real proof pages, ${outside} text boxes outside the zones, ${refused.length} on the frames QA reads${refused.length ? `: ${refused.slice(0, 4).join(', ')}` : ''}`);
   console.log(out);
 }
 

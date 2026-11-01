@@ -218,6 +218,22 @@ describe('what a tab adds up past a trimmed list', () => {
     ]);
   });
 
+  it('the tightest stream holds the last closed day of the ads all day long: its rows are written at the close, not at dawn', () => {
+    const base = clone(world.market.adStats[0]!);
+    const rows = [198, 199, 200].flatMap((day) => [{ ...base, day }, { ...base, day, creativeId: 'cre_b' }]);
+    for (const day of [201, 200]) expect(trimAdStats(rows, day, LIVE_TIGHT_LIMITS).map((r) => r.day)).toContain(200);
+    expect(trimAdStats(rows, 201, LIVE_TIGHT_LIMITS)).toHaveLength(2);
+  });
+
+  it('a card of the stream carries what it opens: the previews stay for the shop and GET /api/product', () => {
+    const w = clone(world);
+    const guide = w.company.products.find((p) => p.status === 'live')!;
+    guide.files.previews = ['files/a.svg', 'files/b.svg'];
+    const card = buildSnapshot(w, safeFinance(w), false, LIVE_TIGHT_LIMITS).company.products.find((p) => p.id === guide.id)!;
+    expect(card.files).toEqual({ pdf: guide.files.pdf, cover: guide.files.cover, salesPage: guide.files.salesPage });
+    expect(fullProduct(guide).files.previews).toEqual(['files/a.svg', 'files/b.svg']);
+  });
+
   it('the tightest stream keeps the comments the tab prints, the latest first, and no more', () => {
     const base = clone(world.market.adStats[0]!);
     const comment = { author: 'lea', text: 'Merci', tone: 'positive' as const };

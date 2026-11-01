@@ -874,6 +874,15 @@ describe.skipIf(!findFfmpeg() || !(await import('@napi-rs/canvas').then(() => tr
     expect(vtt).toBe('WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nCinq erreurs.\n\n00:00:01.000 --> 00:00:01.500\na&lt;b\n\n00:00:02.000 --> 00:00:05.000\nUne carte\n');
   });
 
+  it('a silent card of a buyer reads as what it shows, not as the plan\'s line', async () => {
+    const { webVtt } = await import('../src/video/worker.js');
+    const beats = [{ t0: 0, dur: 2, scene: 3, screen: 'Avis vérifié : 5/5', groups: [] }, { t0: 2, dur: 2, scene: 4, screen: 'Le plan', groups: [] }];
+    const vtt = webVtt({ total: 4, beats } as never, { 3: { quote: 'Une vraie méthode', rating: 5, name: 'Sophie' } });
+    expect(vtt).toContain('Une vraie méthode');
+    expect(vtt).toContain('Le plan');
+    expect(vtt).not.toContain('Avis vérifié');
+  });
+
   it('a killed worker is a crash, not a hang', async () => {
     const dir = join(paths.root, 'job');
     mkdirSync(dir);

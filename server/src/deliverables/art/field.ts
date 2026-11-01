@@ -7,7 +7,8 @@ import { contrast } from '../color.js';
 import { decoRng, hashString } from '../text.js';
 import type { Scene } from '../scene.js';
 import { HEROES, placeHero } from './heroes.js';
-import { DRAWN_AS, drawTile, tileOf, type Corner } from './tiles.js';
+import { drawPose, type Pose } from './poses.js';
+import { DRAWN_AS, drawTile, tileOf, type Corner, type Tile } from './tiles.js';
 
 /** The inks a tile can be grounded on, in the order `SceneMeta.grounds` indexes them. */
 export const GROUNDS: readonly (keyof InkSet)[] = ['a', 'ink', 'b', 'c', 'paper'];
@@ -19,8 +20,11 @@ export const HERO_CELL = -1;
 const MIN_SHAPE_CONTRAST = 1.5;
 /** Rects overlap by a hair: viewers antialias a shared edge into a seam. */
 const SEAM = 0.4;
+/** The same seam between a shape and the next tile's ground, when they share an ink: a shape runs this far under its neighbours, and stays flush with the edge of the field. */
+const BLEED = 0.3;
 
-export interface HeroPlace { c: number; r: number; s: number; ground?: keyof InkSet }
+/** `pose` makes it a chapter's own picture, `pick` tells apart two chapters that share a pose. */
+export interface HeroPlace { c: number; r: number; s: number; ground?: keyof InkSet; pose?: Pose; pick?: number }
 
 export interface FieldOptions {
   x: number; y: number; u: number;
@@ -30,6 +34,8 @@ export interface FieldOptions {
   seed: number;
   hero: HeroPlace | null;
 }
+
+const bleed = (k: number, count: number): number => (k === 0 ? 0 : k === count - 1 ? 2 * BLEED : BLEED);
 
 const inside = (h: HeroPlace | null, c: number, r: number): boolean => !!h && c >= h.c && c < h.c + h.s && r >= h.r && r < h.r + h.s;
 
@@ -77,6 +83,7 @@ export function field(s: Scene, o: FieldOptions): void {
   const rnd = decoRng(hashString(`tiles|${seed}`));
   const grounds = groundsOf(o, heroGroundOf(motif, hero));
   const kinds: number[] = [];
+  const tiles: Tile[] = [];
   grounds.forEach((row, r) => row.forEach((g, c) => {
     if (g === HERO_CELL) return;
     const ground = GROUNDS[g]!;
@@ -87,8 +94,13 @@ export function field(s: Scene, o: FieldOptions): void {
     const X = x + c * u;
     const Y = y + r * u;
     s.rect(X, Y, u + (c < cols - 1 ? SEAM : 0), u + (r < rows - 1 ? SEAM : 0), bg);
-    drawTile(s, { kind: tile.kind, x: X, y: Y, u, fg, bg, motif: drawn, corner: Math.floor(rnd() * 4) as Corner, pick: rnd() });
+    tiles.push({ kind: tile.kind, x: X - bleed(c, cols), y: Y - bleed(r, rows), u: u + 2 * BLEED, fg, bg, motif: drawn, corner: Math.floor(rnd() * 4) as Corner, pick: rnd() });
   }));
+  // every ground before any shape: a shape over the next tile stays over it
+  for (const tile of tiles) drawTile(s, tile);
   s.meta = { grounds, kinds };
-  if (hero) placeHero(s, motif, { x: x + hero.c * u, y: y + hero.r * u, size: hero.s * u }, inks, seed, hero.ground);
+  if (!hero) return;
+  const box = { x: x + hero.c * u, y: y + hero.r * u, size: hero.s * u };
+  if (hero.pose) drawPose(s, hero.pose, motif, box, hero.s, inks, seed, hero.ground, hero.pick ?? 0);
+  else placeHero(s, motif, box, inks, seed, hero.ground);
 }

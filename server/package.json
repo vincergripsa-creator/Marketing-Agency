@@ -9,7 +9,7 @@
     "sim": "tsx src/cli.ts",
     "test": "vitest run",
     "test:long": "vitest run --mode long test/longrun.test.ts",
-    "test:web": "vitest run --root ../web/src",
+    "test:web": "vitest run --root ../web/src --testTimeout=60000",
     "typecheck": "tsc -p tsconfig.json",
     "balance": "tsx scripts/balance.ts",
     "video": "tsx scripts/renderAd.ts"

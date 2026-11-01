@@ -33,6 +33,7 @@ const CHARS_PER_SEC = 20.5;    // the speech model's pace, for a word no event t
 const VOICE_CHAIN = 'highpass=f=90,equalizer=f=220:t=q:w=1:g=2,equalizer=f=3200:t=q:w=1.2:g=4,'
   + 'aexciter=level_in=1:level_out=1:amount=1:drive=4.5:blend=0:freq=3000:ceil=9999,'
   + 'acompressor=threshold=-20dB:ratio=3.5:attack=6:release=90:makeup=4dB,aresample=44100,alimiter=limit=0.9';
+const TAKE_V = 2;              // what a cached take holds: bumped when its words read differently
 const TTS_SCRIPT = fileURLToPath(new URL('./tts.ps1', import.meta.url));
 
 const POWERSHELL = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', TTS_SCRIPT];
@@ -45,6 +46,18 @@ function tokensOf(text: string): Token[] {
 
 /** « 33 % » and « 39 € » are spoken and shown: a caption without them says something else. A guillemet or a lone colon is not a word. */
 const isWord = (raw: string): boolean => /[\p{L}\p{N}\p{Sc}\p{Sm}%]/u.test(raw);
+/** A closing mark French sets apart: no word, and it ends the clause of the word before it. A dash stays out: it opens the next one. */
+const CLOSING = /^[»:;!?.,…]+$/;
+
+/** The tokens a viewer reads, each closing mark on its word, as a page prints it. */
+function wordsOf(toks: readonly Token[]): Token[] {
+  const words: Token[] = [];
+  for (const k of toks) {
+    if (isWord(k.raw)) words.push({ ...k });
+    else if (CLOSING.test(k.raw) && words.length) words.at(-1)!.raw += `\u00a0${k.raw}`;
+  }
+  return words;
+}
 
 /**
  * The source text decides the words, the events only give times. They are normalised tokens: « 8 étapes » fires
@@ -71,7 +84,7 @@ export function alignWords(text: string, events: TtsEvent[]): SpokenWord[] {
     const tb = after?.at ?? ta + (cb - ca) / CHARS_PER_SEC;
     tok.at = ta + (tb - ta) * ((tok.start - ca) / Math.max(1, cb - ca));
   });
-  const words = toks.filter((k) => isWord(k.raw));
+  const words = wordsOf(toks);
   let last = 0;
   const times = words.map((k) => (last = Math.max(last, k.at ?? 0)));
   return words.map((k, i) => ({ text: k.raw, at: times[i], end: times[i + 1] ?? times[i] + k.raw.length / CHARS_PER_SEC }));
@@ -81,7 +94,7 @@ export function alignWords(text: string, events: TtsEvent[]): SpokenWord[] {
 export function estimatedWords(text: string): SpokenWord[] {
   const total = estimateSpeechSec(text);
   const origin = estimateSpeechSec('x');
-  const words = tokensOf(text).filter((k) => isWord(k.raw));
+  const words = wordsOf(tokensOf(text));
   const times = words.map((k) => Math.min(total, estimateSpeechSec(text.slice(0, k.start) + 'x') - origin));
   return words.map((k, i) => ({ text: k.raw, at: times[i], end: times[i + 1] ?? total }));
 }
@@ -166,13 +179,13 @@ function fromCache(base: string): SpokenLine | null {
 /**
  * Lines in, spoken lines out, same order. `voice: null` gives the estimate, and so does any failure, for every line:
  * half a voice-over is worse than none, and no machine crashes on this. Synchronous on purpose: it runs in the worker.
- * Each line is cached as `<cacheDir>/<sha1(text|voice|rate)>`, `.wav` + `.json`.
+ * Each line is cached as `<cacheDir>/<sha1(text|voice|rate|TAKE_V)>`, `.wav` + `.json`.
  */
 export function synthesize(lines: string[], voice: string | null, opts: SynthesisOptions = {}): SpokenLine[] {
   if (voice === null || process.platform !== 'win32') return lines.map(estimatedLine);
   const rate = opts.rate ?? VOICE_RATE;
   const dir = opts.cacheDir ?? join(tmpdir(), 'agency-voice');
-  const baseOf = (text: string): string => join(dir, createHash('sha1').update(`${text}|${voice}|${rate}`).digest('hex'));
+  const baseOf = (text: string): string => join(dir, createHash('sha1').update(`${text}|${voice}|${rate}|${TAKE_V}`).digest('hex'));
   let work: string | null = null;
   try {
     mkdirSync(dir, { recursive: true });

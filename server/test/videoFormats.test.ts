@@ -8,6 +8,8 @@ import { join } from 'node:path';
 import PDFDocument from 'pdfkit';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/index.js';
+import { contrast } from '../src/deliverables/color.js';
+import { normalizeDesign } from '../src/deliverables/design.js';
 import { renderAdCut, renderAdStoryboard } from '../src/deliverables/storyboard.js';
 import { textWidth } from '../src/deliverables/text.js';
 import { planCut } from '../src/deliverables/videoCut.js';
@@ -161,6 +163,13 @@ describe('renderAdCut: plain SVG, every machine', () => {
     }
   });
 
+  it('shows the buyer\'s words where the voice reads a review, never a « 5/5 » label', () => {
+    const scenes = SCENES.map((s, i) => (i === 3 ? { ...s, onScreenText: 'Avis vérifié : 5/5', voiceover: 'Un acheteur a écrit sur le guide : « enfin clair ».' } : s));
+    const frames = [...board(creativeOf('faceless_voiceover', { scenes }), '4:5'), ...renderAdStoryboard({ creative: creativeOf('faceless_voiceover', { scenes }), product: PRODUCT, design: DESIGN, brand: 'Pixel Agency' }).frames];
+    expect(frames.filter((f) => f.includes('enfin clair'))).toHaveLength(2);
+    expect(frames.some((f) => f.includes('5/5') && f.includes('<text') && />[^<]*5\/5[^<]*<\/text>/.test(f))).toBe(false);
+  });
+
   it('a last card says where to go, not to swipe', () => {
     const svg = board(creativeOf('carousel', { cta: 'Swipe jusqu’au bout et télécharge le guide (lien en bio)' }), '1:1').at(-1)!;
     expect(svg).toContain('>Télécharge le guide<');
@@ -305,6 +314,62 @@ describe.skipIf(!compose)('drawn on a canvas', { timeout: 60_000 }, () => {
       expect(seen(b.dur - 0.05)).toBe(all);
     });
 
+    it('stands an opening slide whole on the cut, then lights it at reading speed: a line cut after three words says nothing', async () => {
+      const { timeline, comp } = await stageUp(planned('text_slideshow'), '9:16', { width: 540 });
+      const b = timeline.beats[0]!;
+      expect(texts(comp.drawFrame(Math.round((b.t0 + 0.1) * timeline.fps))).toLocaleLowerCase('fr-FR')).toBe('5 erreurs sur un balcon');
+      const first = Uint8Array.from(comp.canvas.data());
+      comp.drawFrame(Math.round((b.t0 + b.dur - 0.05) * timeline.fps));
+      let moved = 0;
+      const last = comp.canvas.data();
+      for (let i = 0; i < first.length; i += 4) if (Math.abs(first[i]! - last[i]!) > 40) moved++;
+      expect(moved, 'the words light up').toBeGreaterThan(200);
+    });
+
+    it('a « jours » at the top size stays in the zone, on every ratio and every line: its « j » reaches left of the origin', async () => {
+      const scenes = SCENES.map((s, i) => (i === 2 ? { ...s, onScreenText: 'jours' } : i === 3 ? { ...s, onScreenText: 'je joue jusque juin' } : s));
+      for (const ratio of ['9:16', '4:5', '1:1'] as const) {
+        const { comp } = await stageUp(planned('text_slideshow', { scenes }), ratio);
+        const proof = compose!.textProof(comp);
+        const big = proof.frames.flatMap((f) => [...f.boxes]).filter((b) => /^j/.test((b as { text?: string }).text ?? ''));
+        expect(big.length, ratio).toBeGreaterThan(0);
+        expect(Math.max(...big.map((b) => b.h)), ratio).toBeGreaterThan(90);
+        for (const f of proof.frames) for (const b of f.boxes) expect(proof.inside(b), `${ratio}: ${JSON.stringify(b)}`).toBe(true);
+      }
+    });
+
+    it('reads a buyer on a real card on a silent format too: stars, the quote, the first name', async () => {
+      const review = { rating: 5, text: 'Enfin un guide qui tient ses promesses', customerId: 'c1', day: 1 };
+      const scenes = SCENES.map((s, i) => (i === 3 ? { ...s, onScreenText: 'Avis vérifié : 5/5', voiceover: `Un acheteur a écrit sur le guide : « ${review.text} ».` } : s));
+      const product = { ...PRODUCT, stats: { reviews: [review] } } as unknown as Product;
+      for (const format of ['text_slideshow', 'carousel'] as const) {
+        const creative = planned(format, { scenes }, 'standard', product);
+        const world = { ...worldOf(creative, product), market: { customers: [{ id: 'c1', name: 'Nathalie Durand' }] } } as unknown as WorldState;
+        const spec = buildRenderSpec(world, creative.id, '4:5');
+        expect(spec.reviews[3]).toEqual({ quote: review.text, rating: 5, name: 'Nathalie' });
+        const speech: SpokenLine[] = spec.cut.beats.map((b) => ({ text: '', voice: null, wav: null, speechSec: 0, words: [] }));
+        const timeline = buildTimeline(spec.cut, speech, TEMPO_BPM.standard);
+        const stage = stageFor('4:5', 540);
+        const comp = compose!.createCompositor(timeline, stage, await compose!.loadAssets(spec, timeline, stage, tmp, { pages: false }));
+        const b = timeline.beats.find((x) => x.scene === 3)!;
+        const all = texts(comp.drawFrame(Math.round((b.t0 + b.dur) * timeline.fps) - 1));
+        expect(all).toContain('Nathalie');
+        expect(all).toContain('promesses');
+        expect(all).not.toContain('5/5');
+        for (const x of comp.drawFrame(Math.round((b.t0 + b.dur) * timeline.fps) - 1)) expect(insideSafe(stage, x), x.text).toBe(true);
+      }
+    });
+
+    it('holds a line of « je » in the zone on a buyer\'s card: a « J » reaches left of its origin', async () => {
+      const quote = 'Je jure je jette je joue je jubile je jardine je jongle je juge je jouis je jauge je jase je jeûne';
+      const scenes = SCENES.map((s, i) => (i === 3 ? { ...s, voiceover: `Un acheteur a écrit sur le guide : « ${quote} ».` } : s));
+      for (const ratio of ['9:16', '4:5', '1:1'] as const) {
+        const { comp, timeline, stage } = await stageUp(planned('faceless_voiceover', { scenes }), ratio);
+        const b = timeline.beats.find((x) => x.scene === 3)!;
+        for (let i = 2; i < 6; i++) for (const x of comp.drawFrame(Math.round((b.t0 + b.dur * i / 6) * timeline.fps))) expect(insideSafe(stage, x), `${ratio} ${x.text} ${x.x}`).toBe(true);
+      }
+    });
+
     it('a slide on the first frame is not blank: QA reads it at 0,05 s', async () => {
       const { comp, timeline } = await stageUp(planned('text_slideshow'), '9:16', { width: 270 });
       expect(timeline.beats[0]!.kind).toBe('slide');
@@ -328,6 +393,53 @@ describe.skipIf(!compose)('drawn on a canvas', { timeout: 60_000 }, () => {
       };
       expect(await flash(planned('text_slideshow'))).toBeLessThan(4);
       expect(await flash(planned('faceless_voiceover'))).toBeGreaterThan(8);
+    });
+
+    /** Pixels in this ink, on the frame last drawn. */
+    const inkShare = (px: Uint8ClampedArray | Uint8Array, ink: string): number => {
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(ink.slice(i, i + 2), 16)) as [number, number, number];
+      let n = 0;
+      for (let i = 0; i < px.length; i += 4) if (Math.abs(px[i]! - r) < 26 && Math.abs(px[i + 1]! - g) < 26 && Math.abs(px[i + 2]! - b) < 26) n++;
+      return n / (px.length / 4);
+    };
+
+    it('opens on one coloured word, a dark plate and no end mark, a line with no figure and a quote too', async () => {
+      const gold = compose!.inksOf(normalizeDesign(DESIGN)).gold;
+      for (const screen of ['Personne ne vous dira cette vérité', '« rien ne pousse chez moi »']) {
+        const scenes = SCENES.map((s, i) => (i === 0 ? { ...s, onScreenText: screen } : s));
+        const { comp } = await stageUp(planned('text_slideshow', { scenes }), '9:16', { width: 540 });
+        const { stage } = await stageUp(planned('text_slideshow', { scenes }), '9:16', { width: 540 });
+        const boxes = comp.drawFrame(1);
+        comp.drawFrame(1);
+        const px = comp.canvas.data();
+        // Between the progress bar and the band: the art of the foot wears the same gold.
+        const plate = px.subarray(Math.round(stage.zones[0]!.y0 + 8) * stage.w * 4, Math.round(stage.band! - 12) * stage.w * 4);
+        expect(inkShare(plate, gold), screen).toBeGreaterThan(0.01);
+        let sum = 0;
+        for (let i = 0; i < plate.length; i += 4) sum += plate[i + 1]!;
+        expect(sum / (plate.length / 4), screen).toBeLessThan(110); // the plate of frame 1 is dark
+        expect(boxes.length, screen).toBeGreaterThan(0);
+      }
+      const { comp } = await stageUp(planned('text_slideshow', { scenes: SCENES.map((s, i) => (i === 0 ? { ...s, onScreenText: 'Tout est dans le plan.' } : s)) }), '9:16', { width: 540 });
+      expect(comp.drawFrame(1).map((b) => b.text).join(' ')).toBe('TOUT EST DANS LE PLAN');
+    });
+
+    it('leaves no short word alone on a line of a slide', async () => {
+      for (const screen of ['1. Identifier sa situation', 'La cérémonie civile', 'Le plan de la méthode est là']) {
+        const scenes = SCENES.map((s, i) => (i === 2 ? { ...s, onScreenText: screen } : s));
+        const { comp, timeline } = await stageUp(planned('text_slideshow', { scenes }), '9:16');
+        const b = timeline.beats.find((x) => x.scene === 2)!;
+        const boxes = comp.drawFrame(Math.round((b.t0 + b.dur) * timeline.fps) - 1).filter((x) => !/^ÉTAPE/.test(x.text));
+        const rows: { mid: number; words: string[] }[] = [];
+        for (const x of boxes) {
+          const mid = x.y + x.h / 2;
+          const row = rows.find((r) => Math.abs(r.mid - mid) < x.h * 0.7);
+          if (row) row.words.push(x.text);
+          else rows.push({ mid, words: [x.text] });
+        }
+        const lone = rows.filter((r) => r.words.length === 1 && r.words[0]!.replace(/[^\p{L}\p{N}]/gu, '').length < 4);
+        expect(lone, screen).toEqual([]);
+      }
     });
 
     it('a slide draws its plate: not the fact card it stood in for, and a quote sits on the light one', async () => {
@@ -453,6 +565,21 @@ describe.skipIf(!compose)('drawn on a canvas', { timeout: 60_000 }, () => {
       expect(texts(cards[2]!.boxes)).toContain('1. Mesurer le soleil, heure par heure');
     });
 
+    it('a title card is no card of a deck: it opens on its hook, and numbers from there', async () => {
+      const deck = planned('carousel');
+      const cut = deck.cut!;
+      const title = { kind: 'title_card', scene: 0, spoken: '', screen: '', estSec: 0.25, shots: 1 } as const;
+      const { comp, timeline } = await stageUp({ ...deck, cut: { ...cut, beats: [title, ...cut.beats] } }, '4:5', { width: 540 });
+      const dir = dirOf('titled');
+      const cards = await slide!.renderCards(comp, dir);
+      expect(cards).toHaveLength(timeline.beats.length - 1);
+      expect(cards[0]!.file).toBe('card-1.png');
+      expect(existsSync(join(dir, `card-${timeline.beats.length}.png`))).toBe(false);
+      expect(texts(cards[0]!.boxes).toLocaleLowerCase('fr-FR')).toContain('5 erreurs sur un balcon');
+      expect(texts(cards[0]!.boxes)).toContain(`1/${cards.length}`);
+      expect(texts(cards.at(-2)!.boxes)).toContain(`${cards.length - 1}/${cards.length}`);
+    });
+
     it('the last card of a deck says where to go, not to swipe', async () => {
       const { comp } = await stageUp(planned('carousel', { cta: 'Swipe jusqu’au bout et télécharge le guide (lien en bio)' }), '4:5', { width: 540 });
       const last = (await slide!.renderCards(comp, dirOf('swipe'))).at(-1)!;
@@ -461,7 +588,9 @@ describe.skipIf(!compose)('drawn on a canvas', { timeout: 60_000 }, () => {
     });
 
     it('a card is a picture: no progress bar, a place in the deck, an arrow until the last', async () => {
-      const gold = (px: Uint8ClampedArray | Uint8Array): number => { let n = 0; for (let i = 0; i < px.length; i += 4) if (px[i]! > 235 && px[i + 1]! > 195 && px[i + 2]! < 110) n++; return n; };
+      const ink = compose!.inksOf(normalizeDesign(DESIGN)).gold; // the bar wears the guide's own accent
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(ink.slice(i, i + 2), 16)) as [number, number, number];
+      const gold = (px: Uint8ClampedArray | Uint8Array): number => { let n = 0; for (let i = 0; i < px.length; i += 4) if (Math.abs(px[i]! - r) < 24 && Math.abs(px[i + 1]! - g) < 24 && Math.abs(px[i + 2]! - b) < 24) n++; return n; };
       const deck = await stageUp(planned('carousel'), '4:5', { width: 540 });
       const film = await stageUp(planned('text_slideshow'), '4:5', { width: 540 });
       const last = (t: typeof deck) => Math.round((t.timeline.beats[2]!.t0 + t.timeline.beats[2]!.dur) * t.timeline.fps) - 1;
@@ -471,6 +600,39 @@ describe.skipIf(!compose)('drawn on a canvas', { timeout: 60_000 }, () => {
       expect(gold(film.comp.canvas.data()) - onCard).toBeGreaterThan(300);
       expect(texts(boxes)).toContain(`3/${deck.timeline.beats.length}`);
       expect(texts(film.comp.drawFrame(last(film)))).not.toContain('3/');
+    });
+
+    it('keeps the words of a deck off its marks: the counter and the arrow have the foot of the card, on every ratio', async () => {
+      const tall = SCENES.map((s, i) => (i === 1 ? { ...s, onScreenText: '« on nous a dit de ne jamais arroser le soir et depuis les plantes vont bien mieux qu’avant, vraiment »' } : i === 2 ? { ...s, onScreenText: LONG_TEXT } : s));
+      for (const ratio of ['9:16', '4:5', '1:1'] as const) {
+        const { comp, timeline } = await stageUp(planned('carousel', { scenes: tall }), ratio);
+        for (const b of timeline.beats.filter((x) => x.kind === 'slide')) {
+          const boxes = comp.drawFrame(Math.round((b.t0 + b.dur) * timeline.fps) - 1);
+          const counter = boxes.find((x) => /^\d+\/\d+$/.test(x.text))!;
+          expect(counter, ratio).toBeDefined();
+          for (const x of boxes) {
+            if (x === counter) continue;
+            expect(x.y + x.h, `${ratio} card ${b.index}: ${x.text}`).toBeLessThanOrEqual(counter.y);
+          }
+        }
+      }
+    });
+
+    it('an arrow of a deck reads on its plate, whatever the button\'s colour', async () => {
+      const navy: DesignSpec = { ...DESIGN, palette: { ...DESIGN.palette, primary: '#1b2a5b', accent: '#1b2a5b', secondary: '#27396f' } };
+      const inks = compose!.inksOf(normalizeDesign(navy));
+      expect(contrast(inks.pop, inks.dark)).toBeLessThan(3); // the case at hand: the button's ink on the dark plate
+      const product = { ...PRODUCT, design: navy } as Product;
+      const { comp, timeline, stage } = await stageUp(planned('carousel', {}, 'standard', product), '4:5', { width: 540, product });
+      const b = timeline.beats[0]!; // scene 0 sits on the dark plate
+      comp.drawFrame(Math.round((b.t0 + b.dur) * timeline.fps) - 1);
+      const px = comp.canvas.data();
+      const k = stage.w / 1080;
+      let light = 0;
+      for (let y = Math.round(1130 * k); y < Math.round(1290 * k); y++) {
+        for (let x = Math.round(800 * k); x < Math.round(1030 * k); x++) if (px[(y * stage.w + x) * 4]! > 200) light++;
+      }
+      expect(light).toBeGreaterThan(150);
     });
 
     it('a pin is one PNG: the hook, the button, and all of it in the zone of its ratio', async () => {
@@ -484,6 +646,34 @@ describe.skipIf(!compose)('drawn on a canvas', { timeout: 60_000 }, () => {
         expect(cards[0]!.outside).toBe(0);
         expect(texts(cards[0]!.boxes)).toBe('5 CHOSES À ARRÊTER SI LE BALCON GRILLE EN ÉTÉ TÉLÉCHARGE LE GUIDE');
       }
+    });
+
+    it('a pin reads in a glance: a whole scene\'s text comes down to its first clause', async () => {
+      const long = '1. Tenir un journal de sommeil pendant 5 nuits, puis fixer une heure de lever stable chaque matin, à 30 minutes près, une étape à la fois, sans sauter la suivante';
+      const pin = creativeOf('static_image', { cut: null, scenes: [{ visual: '', onScreenText: long, voiceover: '', durationSec: 5 }] });
+      expect(specOf(pin, '2:3').cut.beats[0]!.screen).toBe('Tenir un journal de sommeil pendant 5 nuits');
+      const short = creativeOf('static_image', { cut: null, scenes: [{ visual: '', onScreenText: 'Tu te dis « dès que tu dis mariage les prix x2 » ?', voiceover: '', durationSec: 5 }] });
+      expect(specOf(short, '2:3').cut.beats[0]!.screen).toBe('Tu te dis « dès que tu dis mariage les prix x2 » ?');
+    });
+
+    it.each(['2:3', '4:5'] as VideoRatio[])('%s: the button of a pin never lies on the guide', async (ratio) => {
+      const pin = creativeOf('static_image', { cut: null, scenes: [{ visual: '', onScreenText: '5 choses à arrêter', voiceover: '', durationSec: 5 }] });
+      const { comp, stage, timeline } = await stageUp({ ...pin }, ratio);
+      const bare = await stageUp({ ...pin, cta: '' }, ratio); // no button: the book takes its whole slot
+      const boxes = comp.drawFrame(timeline.frames - 1);
+      const button = boxes.find((b) => b.text === 'TÉLÉCHARGE LE GUIDE')!;
+      const slot = stage.bookSlot;
+      const under = Math.round(button.y + button.h / 2 + 56 + 60); // past the pill and its glow
+      expect(under).toBeLessThan(Math.min(stage.h, slot.y + slot.h)); // a book kept in its slot reaches here
+      const a = Uint8Array.from(comp.canvas.data());
+      bare.comp.drawFrame(timeline.frames - 1);
+      const b = bare.comp.canvas.data();
+      let book = 0;
+      for (let x = Math.round(slot.x); x < slot.x + slot.w; x++) {
+        const i = (under * stage.w + x) * 4;
+        if (Math.abs(a[i]! - b[i]!) > 12) book++;
+      }
+      expect(book, 'the book of the bare card, gone from the card with a button').toBeGreaterThan(40);
     });
 
     it('draws the same card twice: a still does not depend on what was drawn before', async () => {

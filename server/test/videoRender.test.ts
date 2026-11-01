@@ -368,7 +368,7 @@ describe.skipIf(!ffmpeg || !compose)('the real pipeline', { timeout: 120_000 }, 
   };
   const SPEC: RenderSpec = {
     version: 1, runId: 'p64', creativeId: 'cre_mini', ratio: '9:16', format: 'faceless_voiceover', hook: 'Cinq erreurs.', hookStyle: 'listicle',
-    cta: 'Télécharge le guide (lien en bio)', cut: CUT, voice: null, brand: 'Pixel Agency', title: 'Le balcon en 8 étapes', design: DESIGN, pdf: null, cover: null,
+    cta: 'Télécharge le guide (lien en bio)', cut: CUT, voice: null, brand: 'Pixel Agency', title: 'Le balcon en 8 étapes', design: DESIGN, pdf: null, cover: null, price: null, reviews: {},
   };
   const spoken = (text: string): SpokenLine => {
     const words = estimatedWords(text);

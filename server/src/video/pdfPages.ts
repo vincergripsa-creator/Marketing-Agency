@@ -10,7 +10,11 @@ import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { Rect } from './stage.js';
 
 export interface PageImage { img: Canvas; w: number; h: number } // w, h in points: boxes share them whatever the scale
-export interface NeedleHit { page: number; boxes: Rect[] }        // one box per line of text, in points from the top left
+/**
+ * One box per line of text, in points from the top left. `inkEnd`: where the page's text stops, so a frame need not stare
+ * at bare paper. `bodyEnd`: where its folio starts. `headTop`: the top of a chapter's giant numeral over the line, on an opener.
+ */
+export interface NeedleHit { page: number; boxes: Rect[]; inkEnd: number; bodyEnd: number; headTop: number | null }
 
 export interface Guide {
   pages: number;
@@ -20,13 +24,16 @@ export interface Guide {
 }
 
 interface Run { x: number; y: number; w: number; h: number; length: number }
-interface PageText { chars: string; at: { run: number; index: number }[]; runs: Run[] }
+interface PageText { chars: string; at: { run: number; index: number }[]; runs: Run[]; h: number }
+
+const BODY_ENDS = 0.93;        // of the page's height: the folio sits below
+const HEAD_RATIO = 3;          // of the line's own height: display type, not a heading of the text
 
 /** Curly apostrophes, ligatures and case differ between the writer and the PDF. Spaces go too: a line wrap makes or eats one. */
 const fold = (s: string): string => s.normalize('NFKC').replace(/[’ʼ‘]/g, '\'').toLowerCase().replace(/\s+/g, '');
 
 function textOf(items: readonly unknown[], viewport: pdfjs.PageViewport): PageText {
-  const page: PageText = { chars: '', at: [], runs: [] };
+  const page: PageText = { chars: '', at: [], runs: [], h: viewport.height };
   for (const item of items as { str?: string; transform?: number[]; width?: number }[]) {
     if (!item.str?.trim() || !item.transform) continue;
     const [a, , , d, e, f] = item.transform as [number, number, number, number, number, number];
@@ -90,15 +97,21 @@ export async function openGuide(path: string): Promise<Guide> {
       page.cleanup();
       return { img, w: viewport.width / scale, h: viewport.height / scale };
     },
+    // A step is printed on its chapter's opener and again in its list: the page with the most on it fills the frame.
     findNeedle(needle) {
       const wanted = fold(needle);
       if (!wanted) return null;
-      for (let p = 0; p < texts.length; p++) {
-        const text = texts[p]!;
+      let best: { page: number; text: PageText; from: number } | null = null;
+      texts.forEach((text, p) => {
         const from = text.chars.indexOf(wanted);
-        if (from >= 0) return { page: p + 1, boxes: boxesOf(text, from, from + wanted.length) };
-      }
-      return null;
+        if (from >= 0 && (!best || text.chars.length > best.text.chars.length)) best = { page: p + 1, text, from };
+      });
+      if (!best) return null;
+      const { page, text, from } = best as { page: number; text: PageText; from: number };
+      const body = text.runs.filter((r) => r.y + r.h < text.h * BODY_ENDS); // the folio is no text to look at
+      const boxes = boxesOf(text, from, from + wanted.length);
+      const heads = body.filter((r) => r.h >= boxes[0]!.h * HEAD_RATIO && r.y < boxes[0]!.y);
+      return { page, boxes, inkEnd: Math.max(...body.map((r) => r.y + r.h)), bodyEnd: text.h * BODY_ENDS, headTop: heads.length ? Math.min(...heads.map((r) => r.y)) : null };
     },
     close: () => loading.destroy(),
   };

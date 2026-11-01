@@ -9,6 +9,7 @@ import { renderCoverSvg } from './cover.js';
 import { cssFontStack, normalizeDesign } from './design.js';
 import { placeMotif } from './motifs.js';
 import { escapeHtml as h, escapeXml as x, fitText, formatCount, hashString, n, slugify, stripEmoji, textWidth, truncate, wrapText } from './text.js';
+import { reviewQuote } from './videoCut.js';
 
 const W = 360;
 const H = 640;
@@ -51,6 +52,12 @@ const HOOK_LABEL: Record<AdCreative['hookStyle'], string> = {
   question: 'Question', contrarian: 'À contre-courant', story: 'Histoire', stat: 'Chiffre choc', pov: 'POV',
   mistake: 'Erreur à éviter', before_after: 'Avant / après', listicle: 'Liste',
 };
+
+/** On screen: the scene's text, or the buyer's own words when the voice reads a review. */
+function screenOf(s: AdScene | undefined): string {
+  const quote = s ? reviewQuote(s.voiceover ?? '') : null;
+  return quote ? `« ${quote} »` : s?.onScreenText ?? '';
+}
 
 function durationOf(s: AdScene): number {
   const d = Number(s?.durationSec);
@@ -247,7 +254,7 @@ function renderFrame(c: FrameCtx, i: number, opts: { progress: boolean }): strin
     + shade(c, uid)
     + topBar(c, i, opts.progress)
     + visualCaption(scene)
-    + textBlock(c, scene?.onScreenText ?? '', i, last)
+    + textBlock(c, screenOf(scene), i, last)
     + sideUi(c)
     + bottom(c, last);
   return svgFrame(c, scene, i, body);
@@ -273,7 +280,7 @@ function renderCutFrame(c: FrameCtx, i: number): string {
   const uid = uidOf(c, i);
   const mark = `<text x="${n(zone.x1 - CUT_PAD)}" y="${n(zone.y0 + 14)}" font-family="${SANS}" font-size="12" font-weight="bold" fill="#ffffff" opacity="0.85" text-anchor="end">${i + 1}/${c.scenes.length}</text>`;
   const end = last ? ctaPill(c, zone, zone.y1 - CTA_H - CUT_PAD) : `<text x="${n(zone.x0 + CUT_PAD)}" y="${n(zone.y1 - CUT_PAD)}" font-family="${SANS}" font-size="12.5" font-weight="bold" fill="#ffffff" opacity="0.9">${x(truncate(stripEmoji(c.product.title || ''), Math.floor((zone.x1 - zone.x0) / 7.5)))}</text>`;
-  return svgFrame(c, scene, i, background(c, i, uid) + art(c, i, uid, last) + shade(c, uid) + mark + textBlock(c, scene?.onScreenText ?? '', i, last) + end);
+  return svgFrame(c, scene, i, background(c, i, uid) + art(c, i, uid, last) + shade(c, uid) + mark + textBlock(c, screenOf(scene), i, last) + end);
 }
 
 /** The guide's own cover, as a nested SVG: it stays vector, and a frame is a file of its own, so its ids meet no others. */

@@ -18,7 +18,6 @@ const CLOSED_MOUTH = 0.12;
 const SKINS = [['#f2d0b8', '#dcb093'], ['#e8b796', '#d39c78'], ['#c68e6a', '#ad7652'], ['#8d5b3e', '#784a30']] as const;
 const LOUD = /\d|!|\p{L}{7,}/u; // what a voice leans on
 const BELOW_CAPTION = 70;      // the card ends under the caption
-const CAPTION_H = 90;          // ink above the caption's baseline
 const HEAD_PAD = 24;           // above the hair, in the card
 const BUBBLE_MAX = 60;
 const BUBBLE_MIN = 36;
@@ -94,7 +93,7 @@ function drawInset(s: SceneApi, proof: Proof, card: Rect, b: TimelineBeat, t: nu
   ctx.save();
   ctx.translate(px, py); ctx.rotate(PAGE_TILT);
   ctx.globalCompositeOperation = 'multiply';
-  ctx.fillStyle = C.gold;
+  ctx.fillStyle = C.marker;
   for (const h of proof.boxes) {
     s.roundBox((h.x - a.w / 2) * k - 3, (h.y - a.h / 2) * k - 2, (h.w * k + 6) * sweep, h.h * k + 4, 3);
     ctx.fill();
@@ -105,11 +104,12 @@ function drawInset(s: SceneApi, proof: Proof, card: Rect, b: TimelineBeat, t: nu
 /** Drawn on a 400-wide grid, the shoulders below the frame. */
 function figure(s: SceneApi, cx: number, cy: number, size: number, at: number, open: number, look: number, loud: boolean): void {
   const { ctx, C } = s;
+  const { plain } = s.timeline; // a still pose: it talks and it blinks, nothing else moves
   const [skin, skinDark] = SKINS[hashString(s.assets.spec.hook) % SKINS.length]!;
   const hair = mix(C.ink, '#1a0f0a', 0.6);
   const blink = eyeOpen(at);
   ctx.save();
-  ctx.translate(cx, cy + Math.sin(at * 2.3) * size * 0.012);
+  ctx.translate(cx, cy + (plain ? 0 : Math.sin(at * 2.3) * size * 0.012));
   ctx.scale(size / 400, size / 400);
   ctx.fillStyle = C.primary;
   ctx.beginPath(); ctx.moveTo(-300, 420); ctx.quadraticCurveTo(-290, 170, -90, 150); ctx.lineTo(90, 150); ctx.quadraticCurveTo(290, 170, 300, 420); ctx.closePath(); ctx.fill();
@@ -119,7 +119,7 @@ function figure(s: SceneApi, cx: number, cy: number, size: number, at: number, o
   s.roundBox(-56, 70, 112, 130, 40); ctx.fill();
 
   ctx.save();
-  ctx.rotate(Math.sin(at * 1.3) * 0.035 + look * 0.05);
+  ctx.rotate(plain ? 0 : Math.sin(at * 1.3) * 0.035 + look * 0.05);
   ctx.fillStyle = skin;
   ctx.beginPath(); ctx.ellipse(0, -30, 150, 176, 0, 0, Math.PI * 2); ctx.fill();
   ctx.beginPath(); ctx.ellipse(-150, -20, 26, 40, 0, 0, Math.PI * 2); ctx.fill();
@@ -127,7 +127,7 @@ function figure(s: SceneApi, cx: number, cy: number, size: number, at: number, o
   ctx.fillStyle = hair;
   ctx.beginPath(); ctx.moveTo(-158, -30); ctx.bezierCurveTo(-190, -240, 170, -270, 158, -40); ctx.bezierCurveTo(120, -120, 40, -150, -30, -128); ctx.bezierCurveTo(-90, -110, -140, -90, -158, -30); ctx.fill();
   ctx.strokeStyle = hair; ctx.lineWidth = 15; ctx.lineCap = 'round';
-  const raise = loud ? 12 : 0;
+  const raise = loud && !plain ? 12 : 0;
   ctx.beginPath(); ctx.moveTo(-96, -66 - raise); ctx.quadraticCurveTo(-66, -82 - raise, -38, -66 - raise); ctx.moveTo(38, -66 - raise); ctx.quadraticCurveTo(66, -82 - raise, 96, -66 - raise); ctx.stroke();
   ctx.fillStyle = '#23201f';
   ctx.beginPath(); ctx.ellipse(-66 + look * 6, -22, 19, 24 * blink, 0, 0, Math.PI * 2); ctx.fill();
@@ -159,7 +159,9 @@ function figure(s: SceneApi, cx: number, cy: number, size: number, at: number, o
 export function drawNarrator(s: SceneApi, b: TimelineBeat, t: number): void {
   const { ctx, C } = s;
   s.background(C.light, mix(C.light, C.secondary, 0.8), 0.2);
+  s.art(b.t0 + t, 0.1);
   s.floaters(t, rgba(C.primary, 0.08), 6, 5);
+  s.band(b.t0 + t);
   const l = s.memo(b, () => layout(s, b));
   const { card } = l;
   if (l.bubble) drawBubble(s, l, t);
@@ -187,14 +189,14 @@ export function drawNarrator(s: SceneApi, b: TimelineBeat, t: number): void {
     ctx.drawImage(a.img, -w / 2, -h / 2, w, h);
     ctx.restore();
   }
-  // The face stays above the caption, the caption sits on the shirt.
-  const above = Math.max(MIN_FACE, s.stage.captionY - CAPTION_H - card.y - HEAD_PAD);
+  // The face stays above a caption of two lines, the caption sits on the shirt.
+  const above = Math.max(MIN_FACE, s.captionTop - card.y - HEAD_PAD);
   const fitted = Math.min(above / (HEAD_RISE + HEAD_DROP), card.w * FIGURE_W / 400);
   const k = fitted * (proof ? INSET_SCALE : 1);
   const headTop = card.y + HEAD_PAD + (proof ? above - (HEAD_RISE + HEAD_DROP) * k : 0); // smaller, it keeps its chin on the caption
   const talking = b.words.find((w) => t >= w.at && t < w.end);
   const cx = card.x + card.w * (proof ? 0.26 : 0.5);
-  figure(s, cx, headTop + HEAD_RISE * k, 400 * k, b.t0 + t, mouthOpen(b.words, t), Math.sin((b.t0 + t) * 0.7), !!talking && LOUD.test(talking.text));
+  figure(s, cx, headTop + HEAD_RISE * k, 400 * k, b.t0 + t, mouthOpen(b.words, t), s.timeline.plain ? 0 : Math.sin((b.t0 + t) * 0.7), !!talking && LOUD.test(talking.text));
   ctx.restore();
   if (proof) drawInset(s, proof, card, b, t);
   ctx.restore();

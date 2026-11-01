@@ -172,7 +172,8 @@ export function sanitizeFor(face: FaceName, text: string): string {
   const has = (ch: string) => font.hasGlyphForCodePoint(ch.codePointAt(0) ?? 0);
   const marks: string[] = [];
   const held = String(text ?? '').normalize('NFC').replace(MARKS, (m) => (has(m) ? `¤${marks.push(m) - 1}¤` : m));
-  const clean = sanitizePdfText(held).replace(/¤(\d+)¤/g, (token, i: string) => marks[Number(i)] ?? token);
+  // an apostrophe between two letters is a typed one: the page sets the real one, whatever the string came from
+  const clean = sanitizePdfText(held).replace(/¤(\d+)¤/g, (token, i: string) => marks[Number(i)] ?? token).replace(/(?<=\p{L})'(?=\p{L})/gu, '’');
   let out = '';
   for (const ch of clean) {
     if (ch === '\n' || has(ch)) { out += ch; continue; }

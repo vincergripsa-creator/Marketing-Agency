@@ -32,6 +32,14 @@ export function themeFor(design: DesignSpec, voice: Voice): PdfTheme {
   return { v: voice, inks, page, aText: ensureContrast(inks.a, page, 4.5), bText: ensureContrast(inks.b, page, 4.5), muted: mix(inks.ink, page, 0.32), hair: mix(inks.ink, page, 0.68) };
 }
 
+/** Names as customers type them, in lower case: harmless in a comment, a slip on a page that quotes it. The stored words stay as they were said. */
+const PROPER: readonly (readonly [RegExp, string])[] = ([
+  ['jr pass', 'JR Pass'], ['tokyo', 'Tokyo'], ['kyoto', 'Kyoto'], ['osaka', 'Osaka'], ['japon', 'Japon'], ['suica', 'Suica'], ['icoca', 'Icoca'],
+  ['urssaf', 'URSSAF'], ['acre', 'ACRE'], ['cfe', 'CFE'], ['tva', 'TVA'], ['tjm', 'TJM'], ['linkedin', 'LinkedIn'], ['vinted', 'Vinted'], ['leboncoin', 'Leboncoin'], ['ikea', 'Ikea'],
+] as const).map(([word, name]) => [new RegExp(`(?<![\\p{L}\\d])${word}(?![\\p{L}\\d])`, 'gu'), name]);
+
+export const properNouns = (text: string): string => PROPER.reduce((out, [word, name]) => out.replace(word, name), text);
+
 /** Sanitised for the face it will be set in, wrapped to the box. */
 export const linesOf = (text: string, face: FaceName, size: number, width: number): string[] => wrapWords(sanitizeFor(face, text), face, size, width);
 
@@ -173,7 +181,7 @@ function checklistCard(v: VisualSpec, labels: string[], width: number, t: PdfThe
 function quote(v: VisualSpec, labels: string[], width: number, t: PdfTheme): VisualLayout {
   const { inks, v: voice } = t;
   const textW = width - 44;
-  const text = linesOf(`« ${labels[0] ?? ''} »`, voice.displayIt, 14.5, textW);
+  const text = linesOf(`« ${properNouns(labels[0] ?? '')} »`, voice.displayIt, 14.5, textW);
   const author = labels[1] ? linesOf(labels[1], voice.label, 8.6, textW) : [];
   const tags = labels.slice(2, 6).join(' · ');
   const tagLines = tags ? linesOf(tags, voice.labelB, 8.2, textW) : [];
@@ -218,7 +226,7 @@ function labelGrid(v: VisualSpec, labels: string[], width: number, t: PdfTheme):
   const cols = labels.length <= 4 ? Math.max(2, labels.length) : labels.length % 4 === 0 ? 4 : 3;
   const cellW = (width - (cols - 1) * GRID.gutter) / cols;
   const rows: string[][][] = [];
-  for (let k = 0; k < labels.length; k += cols) rows.push(labels.slice(k, k + cols).map((l) => linesOf(l, voice.text, TEXT.size, cellW)));
+  for (let k = 0; k < labels.length; k += cols) rows.push(labels.slice(k, k + cols).map((l) => linesOf(properNouns(l), voice.text, TEXT.size, cellW)));
   const rowH = rows.map((r) => 23.4 + Math.max(...r.map((l) => l.length * TEXT.leading)) + 10.8);
   return frame(t, v.title, width, rowH.reduce((a, h) => a + h, 0), (s, x, y) => {
     let cy = y;
@@ -311,6 +319,7 @@ interface GridRow { label: string[]; cells: (string[] | null)[]; h: number; writ
 export interface GridModel {
   rows: GridRow[];
   note: string;
+  ticks: boolean;               // the reader ticks lines rather than writes in them: a plan
   /** Height of rows [from, to[ under the header. */
   heightOf(from: number, to: number, extra?: number): number;
   /** Last row (exclusive) that fits under the header in `room` points, one row at least. */
@@ -386,6 +395,7 @@ export function gridModel(v: VisualSpec, width: number, t: PdfTheme): GridModel 
   return {
     rows,
     note,
+    ticks: !rows.some((r) => r.writable) && boxes.some(Boolean),
     heightOf,
     fit(from, room) {
       let to = from + 1;
@@ -422,9 +432,9 @@ export function gridModel(v: VisualSpec, width: number, t: PdfTheme): GridModel 
 }
 
 /** Lays out a visual, grid excepted (`gridModel`): its own diagram when it has one, else its older drawing. Null when there is nothing to draw. */
-export function layoutVisual(v: VisualSpec | null | undefined, width: number, t: PdfTheme): VisualLayout | null {
+export function layoutVisual(v: VisualSpec | null | undefined, width: number, t: PdfTheme, ticks = false): VisualLayout | null {
   if (!v || v.type === 'grid') return null;
-  const diagram = diagramFor(v, width, { voice: t.v, inks: t.inks });
+  const diagram = diagramFor(v, width, { voice: t.v, inks: t.inks, ticks });
   if (diagram) return { height: diagram.height, draw: (s, x, y) => { s.place(diagram.scene, x, y); } };
   const raw = (Array.isArray(v.labels) ? v.labels : []).map((l) => String(l ?? '')).filter((l) => sanitizePdfText(l).length > 0).slice(0, 12);
   const labels = raw.map((l) => sanitizeFor(t.v.text, l));

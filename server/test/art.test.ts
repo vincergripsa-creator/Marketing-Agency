@@ -9,6 +9,7 @@ import type { RunPaths } from '../src/contracts.js';
 import { artCandidate, artScore, coverHero, coverScore, fieldArt, pickArt, scoreField } from '../src/deliverables/art/evaluate.js';
 import { field, GROUNDS, groundsOf, HERO_CELL, shapeInk, type HeroPlace } from '../src/deliverables/art/field.js';
 import { HEROES, placeHero } from '../src/deliverables/art/heroes.js';
+import { closesOf, drawPose, poseGround, POSES, posesOf } from '../src/deliverables/art/poses.js';
 import { DRAWN_AS, heartD } from '../src/deliverables/art/tiles.js';
 import { COVER_TITLE_MAX_CHARS, coverAudit, coverScene, renderCoverSvg, splitTitle, titleBlock, type CoverInput } from '../src/deliverables/cover.js';
 import { contrast } from '../src/deliverables/color.js';
@@ -81,6 +82,26 @@ describe('the field', () => {
         }));
       }
     }
+  });
+
+  it('two tiles of one ink show no seam: every ground comes first, a shape runs under its neighbours and stops at the edge of the field', () => {
+    const s = new Scene(600, 500);
+    field(s, { x: 0, y: 0, u: 100, cols: 6, rows: 5, inks: INK_SET, motif: 'paw', seed: 11, hero: null });
+    const isGround = (o: Op) => o.k === 'path' && !!o.fill && /^M\d+ \d+h\d/.test(o.d) && /^M\d+ \d+h(?:100|100\.4)v(?:100|100\.4)h/.test(o.d);
+    expect(s.ops.slice(0, 30).every(isGround)).toBe(true);
+    expect(s.ops.slice(30).some(isGround)).toBe(false);
+    const numbers = (o: Op): [number, number][] => (o.k === 'path' && /^M/.test(o.d) && !/[hv]/.test(o.d) ? [...o.d.matchAll(/(-?[\d.]+) (-?[\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]) : []);
+    const points = s.ops.slice(30).flatMap(numbers);
+    expect(points.length).toBeGreaterThan(20);
+    for (const [x, y] of points) {
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThanOrEqual(600);
+      expect(y).toBeGreaterThanOrEqual(0);
+      expect(y).toBeLessThanOrEqual(500);
+    }
+    // a quarter disc reaches past the side of its tile
+    const off = (v: number) => Math.abs(v - Math.round(v / 100) * 100);
+    expect(points.some(([x, y]) => (off(x) > 0.2 && off(x) < 0.7) || (off(y) > 0.2 && off(y) < 0.7))).toBe(true);
   });
 
   it('no tile shares the ground of the hero it touches, so the hero never bleeds out of its box', () => {
@@ -159,10 +180,10 @@ describe('the field', () => {
 });
 
 describe('the heroes', () => {
-  it('eight drawings carry the 14 motifs, by the aliases of the plan', () => {
+  it('nine drawings carry the 14 motifs, by the aliases of the plan', () => {
     expect(Object.keys(HEROES).sort()).toEqual([...MOTIFS].sort());
-    expect(new Set(Object.values(HEROES).map((h) => h.draw)).size).toBe(8);
-    const aliases = { sparkle: 'sun', pot: 'leaf', bolt: 'chart', book: 'chart', dumbbell: 'coin', brush: 'home' } as const;
+    expect(new Set(Object.values(HEROES).map((h) => h.draw)).size).toBe(9);
+    const aliases = { sparkle: 'sun', pot: 'leaf', bolt: 'chart', book: 'chart', dumbbell: 'coin' } as const;
     for (const [motif, drawn] of Object.entries(aliases)) {
       expect(DRAWN_AS[motif as DesignSpec['motif']]).toBe(drawn);
       expect(HEROES[motif as DesignSpec['motif']]).toBe(HEROES[drawn]);
@@ -206,6 +227,103 @@ describe('the heroes', () => {
     expect(Math.min(...xs)).toBeCloseTo(60, 0);
     expect(Math.max(...xs)).toBeCloseTo(140, 0);
     expect(d.match(/M/g)).toHaveLength(3);
+  });
+});
+
+describe('the poses of a chapter (D66)', () => {
+  const BOX = { x: 100, y: 50, size: 300 };
+  const OPENERS = ['Pourquoi ça recommence malgré vos efforts', '3 jours d’observation avant de changer quoi que ce soit', 'Les 6 gestes qui changent la donne', 'Les 5 erreurs qui entretiennent le problème', 'Les 6 situations qui font tout dérailler', 'Le plan de 14 jours, jour après jour', 'Garder les acquis quand la vie reprend le dessus'];
+
+  it('five inks only and flat, at both sizes, on every drawing and every ink set', () => {
+    for (const inks of INKS) {
+      for (const motif of MOTIFS) {
+        POSES.forEach((pose, k) => {
+          for (const units of [3, 4]) {
+            const s = new Scene(600, 500);
+            drawPose(s, pose, motif, BOX, units, inks, 11, poseGround(pose, k, 3), k);
+            const { colors, flat } = colorsOf(s.ops);
+            expect(flat, `${pose} ${motif}`).toBe(true);
+            expect([...colors].filter((c) => !Object.values(inks).includes(c)), `${pose} ${motif}`).toEqual([]);
+          }
+        });
+      }
+    }
+  });
+
+  it('stays on its ground and in its box: nothing but the ground is drawn outside the crop', () => {
+    const square = 'M100 50h300v300h-300Z';
+    for (const motif of DRAWN) {
+      POSES.forEach((pose, k) => {
+        const ground = poseGround(pose, k, 3);
+        const s = new Scene(600, 500);
+        drawPose(s, pose, motif, BOX, 4, INK_SET, 11, ground, k);
+        expect(s.ops, `${pose} ${motif}`).toHaveLength(2);
+        expect(s.ops[0]).toMatchObject({ k: 'path', d: square, fill: INK_SET[ground ?? HEROES[motif].ground] });
+        expect(s.ops[1]).toMatchObject({ k: 'clip', d: square });
+      });
+    }
+  });
+
+  it('eight poses of one drawing are eight pictures, and a pose is the same picture twice', () => {
+    for (const motif of DRAWN) {
+      const pictures = POSES.map((pose, k) => {
+        const s = new Scene(600, 500);
+        drawPose(s, pose, motif, BOX, 4, INK_SET, 11, poseGround(pose, k, 3), k);
+        return JSON.stringify(s.ops);
+      });
+      expect(new Set(pictures).size, motif).toBe(POSES.length);
+      const again = new Scene(600, 500);
+      drawPose(again, POSES[3]!, motif, BOX, 4, INK_SET, 11, poseGround(POSES[3]!, 3, 3), 3);
+      expect(JSON.stringify(again.ops)).toBe(pictures[3]);
+    }
+  });
+
+  it('the tiles keep off the ground of a pose, and a field without a pose draws what it drew', () => {
+    for (let seed = 1; seed <= 60; seed++) {
+      const ground = poseGround('array', seed, 3)!;
+      const s = new Scene(600, 400);
+      field(s, { x: 0, y: 0, u: 100, cols: 6, rows: 4, inks: INK_SET, motif: 'paw', seed, hero: { c: 2, r: 0, s: 4, ground, pose: 'array', pick: seed } });
+      expect(heroEdge(s.meta!.grounds), `graine ${seed}`).not.toContain(GROUNDS.indexOf(ground));
+    }
+    const plain = new Scene(600, 400);
+    const same = new Scene(600, 400);
+    field(plain, { x: 0, y: 0, u: 100, cols: 6, rows: 4, inks: INK_SET, motif: 'moon', seed: 5, hero: { c: 2, r: 0, s: 4 } });
+    field(same, { x: 0, y: 0, u: 100, cols: 6, rows: 4, inks: INK_SET, motif: 'moon', seed: 5, hero: { c: 2, r: 0, s: 4, pose: 'portrait' } });
+    expect(same.ops).toEqual(plain.ops);
+  });
+
+  it('a section closes on a pose of its own: never its opener, never the band before, never the drawing itself', () => {
+    const titles = Array.from({ length: 8 }, (_, k) => `Sans indice ${k}`);
+    for (let seed = 0; seed < 40; seed++) {
+      const poses = posesOf(titles, seed);
+      const closes = closesOf(poses, poses.length + 2, seed);
+      expect(closes).toHaveLength(poses.length + 2);
+      expect(closesOf(poses, poses.length + 2, seed)).toEqual(closes);
+      closes.forEach((pose, k) => {
+        expect(pose, `graine ${seed}`).not.toBe(poses[k]);
+        expect(pose, `graine ${seed}`).not.toBe(closes[k - 1]);
+        expect(['portrait', 'closeup'], `graine ${seed}`).not.toContain(pose);
+      });
+      expect(new Set(closes).size, `graine ${seed}`).toBeGreaterThanOrEqual(5);
+    }
+    expect(new Set(Array.from({ length: 40 }, (_, seed) => closesOf(posesOf(titles, seed), 10, seed).join())).size).toBeGreaterThan(1);
+  });
+
+  it('a chapter is drawn from what it says, and no two chapters of a guide share a pose', () => {
+    expect(posesOf(OPENERS, 7)).toEqual(['closeup', 'array', 'trail', 'counter', 'target', 'stairs', 'arch']);
+    for (let seed = 0; seed < 200; seed++) {
+      const titles = Array.from({ length: 8 }, (_, k) => `Un titre sans indice numéro ${k}`);
+      for (const list of [OPENERS, titles, [...OPENERS, 'Bonus : le carnet'], ['Le plan', 'Le plan de secours', 'Le plan de la semaine']]) {
+        const poses = posesOf(list, seed);
+        expect(poses).toHaveLength(list.length);
+        expect(new Set(poses).size, `graine ${seed}`).toBe(list.length);
+        expect(posesOf(list, seed)).toEqual(poses);
+      }
+    }
+    const blind = Array.from({ length: 4 }, (_, k) => `Sans indice ${k}`);
+    expect(new Set(Array.from({ length: 40 }, (_, seed) => posesOf(blind, seed).join())).size).toBeGreaterThan(1);
+    // past eight openers a pose comes back: nothing is left blank
+    expect(posesOf(Array.from({ length: 11 }, (_, k) => `Sans indice ${k}`), 3).every(Boolean)).toBe(true);
   });
 });
 

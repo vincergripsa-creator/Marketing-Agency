@@ -6,17 +6,17 @@ import { circleD, ellipseD, n, type Scene } from '../scene.js';
 import type { Motif } from '../design.js';
 
 export type Corner = 0 | 1 | 2 | 3;
-export type DrawnMotif = 'moon' | 'sun' | 'paw' | 'heart' | 'leaf' | 'coin' | 'chart' | 'home';
+export type DrawnMotif = 'moon' | 'sun' | 'paw' | 'heart' | 'leaf' | 'coin' | 'chart' | 'home' | 'brush';
 export type TileKind = 'motif' | 'quarter' | 'half' | 'disc' | 'spot' | 'arcs' | 'dots' | 'ring' | 'stripes' | 'stairs';
 type Grammar = 'ciel' | 'empreinte' | 'herbier' | 'module';
 
-/** Eight drawings carry the 14 motifs of `DesignSpec`: the other six wear the closest one. */
+/** Nine drawings carry the 14 motifs of `DesignSpec`: the other five wear the closest one. */
 export const DRAWN_AS: Record<Motif, DrawnMotif> = {
   moon: 'moon', sun: 'sun', paw: 'paw', heart: 'heart', leaf: 'leaf', coin: 'coin', chart: 'chart', home: 'home',
-  sparkle: 'sun', pot: 'leaf', bolt: 'chart', book: 'chart', dumbbell: 'coin', brush: 'home',
+  brush: 'brush', sparkle: 'sun', pot: 'leaf', bolt: 'chart', book: 'chart', dumbbell: 'coin',
 };
 
-const GRAMMAR_OF: Record<DrawnMotif, Grammar> = { moon: 'ciel', sun: 'ciel', paw: 'empreinte', heart: 'empreinte', leaf: 'herbier', coin: 'module', chart: 'module', home: 'module' };
+const GRAMMAR_OF: Record<DrawnMotif, Grammar> = { moon: 'ciel', sun: 'ciel', paw: 'empreinte', heart: 'empreinte', leaf: 'herbier', coin: 'module', chart: 'module', home: 'module', brush: 'module' };
 
 /** What a family draws on its tiles, with weights that add up to 1. */
 const BAGS: Record<Grammar, readonly (readonly [TileKind, number])[]> = {
@@ -136,7 +136,7 @@ export function halftone(s: Scene, x: number, y: number, w: number, h: number, s
   s.path(d, color);
 }
 
-export function paw(s: Scene, cx: number, cy: number, size: number, color: string, rot = 0): void {
+function pawD(cx: number, cy: number, size: number, rot: number): string {
   const a = (rot * Math.PI) / 180;
   const cs = Math.cos(a);
   const sn = Math.sin(a);
@@ -149,7 +149,11 @@ export function paw(s: Scene, cx: number, cy: number, size: number, color: strin
   const P = (x: number, y: number) => at(x, y).map(n).join(' ');
   const pad = `M${P(50, 45)}C${P(63, 45)} ${P(80, 61)} ${P(82, 76)}C${P(83, 89)} ${P(71, 95)} ${P(60, 92)}C${P(54, 90.5)} ${P(46, 90.5)} ${P(40, 92)}C${P(29, 95)} ${P(17, 89)} ${P(18, 76)}C${P(20, 61)} ${P(37, 45)} ${P(50, 45)}Z`;
   const toe = (x: number, y: number, rx: number, ry: number, r: number) => ellipseD(...at(x, y), rx * k, ry * k, r + rot);
-  s.path(pad + toe(17, 44, 9.5, 13, -24) + toe(37, 23, 10.5, 14.5, -8) + toe(63, 23, 10.5, 14.5, 8) + toe(83, 44, 9.5, 13, 24), color);
+  return pad + toe(17, 44, 9.5, 13, -24) + toe(37, 23, 10.5, 14.5, -8) + toe(63, 23, 10.5, 14.5, 8) + toe(83, 44, 9.5, 13, 24);
+}
+
+export function paw(s: Scene, cx: number, cy: number, size: number, color: string, rot = 0): void {
+  s.path(pawD(cx, cy, size, rot), color);
 }
 
 export function crescent(s: Scene, cx: number, cy: number, r: number, off: number, fg: string, bg: string): void {
@@ -158,14 +162,14 @@ export function crescent(s: Scene, cx: number, cy: number, r: number, off: numbe
 }
 
 /** A small sun: disc and eight short rays, the tile that says `sun` where a moon guide has its crescent. */
-function sunlet(s: Scene, cx: number, cy: number, r: number, color: string): void {
+function sunletD(cx: number, cy: number, r: number): string {
   let d = circleD(cx, cy, r * 0.56);
   for (let i = 0; i < 8; i++) {
     const a = (i * Math.PI) / 4;
     const P = (dist: number, side: number) => `${n(cx + dist * Math.cos(a) - side * Math.sin(a))} ${n(cy + dist * Math.sin(a) + side * Math.cos(a))}`;
     d += `M${P(r * 0.72, -r * 0.09)}L${P(r, -r * 0.09)}L${P(r, r * 0.09)}L${P(r * 0.72, r * 0.09)}Z`;
   }
-  s.path(d, color);
+  return d;
 }
 
 const TILT = [-24, -10, 12, 26];
@@ -193,9 +197,66 @@ export function drawTile(s: Scene, t: Tile): void {
     case 'stairs': stairs(s, x, y, u, fg); return;
     case 'motif':
       if (motif === 'moon') s.clip(box, (cl) => crescent(cl, x + u * 0.46, cy, u * 0.36, u * 0.17, fg, bg));
-      else if (motif === 'sun') sunlet(s, cx, cy, u * 0.4, fg);
+      else if (motif === 'sun') s.path(sunletD(cx, cy, u * 0.4), fg);
       else if (motif === 'paw') paw(s, cx, cy + u * 0.02, u * 0.72, fg, TILT[Math.floor(pick * TILT.length)]!);
       else if (motif === 'heart') s.path(heartD(cx, cy, u * 0.66), fg);
       else s.path(vesicaD(x + u * 0.06, y + u * 0.06, u * 0.88, corner % 2 === 0), fg);
+  }
+}
+
+/** A brush along a diagonal, its tip on (x, y), `len` long: three pieces in order from the tip, bristles, ferrule, handle, each a closed path. */
+export function brushD(x: number, y: number, len: number, deg: number): { bristles: string; ferrule: string; handle: string } {
+  const a = (deg * Math.PI) / 180;
+  const P = (t: number, w: number) => `${n(x + len * (t * Math.cos(a) - w * Math.sin(a)))} ${n(y + len * (t * Math.sin(a) + w * Math.cos(a)))}`;
+  return {
+    bristles: `M${P(0, -0.075)}C${P(0.03, -0.1)} ${P(0.2, -0.105)} ${P(0.3, -0.075)}L${P(0.3, 0.075)}C${P(0.2, 0.105)} ${P(0.03, 0.1)} ${P(0, 0.075)}C${P(0.025, 0.03)} ${P(-0.02, -0.03)} ${P(0, -0.075)}Z`,
+    ferrule: `M${P(0.31, -0.072)}L${P(0.44, -0.062)}L${P(0.44, 0.062)}L${P(0.31, 0.072)}Z`,
+    handle: `M${P(0.45, -0.06)}C${P(0.56, -0.09)} ${P(0.68, -0.07)} ${P(0.95, -0.03)}C${P(1.01, -0.022)} ${P(1.01, 0.022)} ${P(0.95, 0.03)}C${P(0.68, 0.07)} ${P(0.56, 0.09)} ${P(0.45, 0.06)}Z`,
+  };
+}
+
+/** A crescent as one shape: the disc less the disc that hides it, nothing painted beyond its edge. */
+function crescentD(cx: number, cy: number, r: number): string {
+  const off = r * 0.46;
+  const hx = cx + off;
+  const hy = cy - off * 0.35;
+  const hr = r * 0.86;
+  const d = Math.hypot(hx - cx, hy - cy);
+  const along = (d * d + r * r - hr * hr) / (2 * d);
+  const across = Math.sqrt(r * r - along * along);
+  const [ux, uy] = [(hx - cx) / d, (hy - cy) / d];
+  const P = (side: number) => `${n(cx + along * ux - side * across * uy)} ${n(cy + along * uy + side * across * ux)}`;
+  return `M${P(-1)}A${n(r)} ${n(r)} 0 1 0 ${P(1)}A${n(hr)} ${n(hr)} 0 ${along > d ? 1 : 0} 1 ${P(-1)}Z`;
+}
+
+/** The hero as one small sign, for a picture made of several: `fg` on `bg`, centred on (cx, cy), `size` wide. */
+export function mark(s: Scene, motif: DrawnMotif, cx: number, cy: number, size: number, fg: string, bg: string, rot = 0): void {
+  const r = size / 2;
+  switch (motif) {
+    case 'moon': s.path(crescentD(cx, cy, r), fg); return;
+    case 'sun': s.path(sunletD(cx, cy, r), fg); return;
+    case 'paw': s.path(pawD(cx, cy + size * 0.045, size, rot), fg); return;
+    case 'heart': s.path(heartD(cx, cy, size), fg); return;
+    case 'leaf':
+      s.path(leafAt(cx - r * 0.3, cy + r * 0.95, size * 0.98, size * 0.24, -74) + leafAt(cx - r * 0.3, cy + r * 0.95, size * 0.68, size * 0.17, -24) + leafAt(cx - r * 0.3, cy + r * 0.95, size * 0.56, size * 0.14, -128), fg);
+      return;
+    case 'coin':
+      s.circle(cx, cy, r, fg);
+      s.circle(cx, cy, r * 0.68, undefined, { stroke: bg, sw: r * 0.1 });
+      return;
+    case 'chart': {
+      const bar = size * 0.25;
+      [0.42, 0.68, 1].forEach((h, k) => s.rect(cx - r + k * size * 0.375, cy + r - size * h, bar, size * h, fg));
+      return;
+    }
+    case 'home':
+      s.path(`M${n(cx - r)} ${n(cy - r * 0.05)}L${n(cx)} ${n(cy - r)}L${n(cx + r)} ${n(cy - r * 0.05)}L${n(cx + r * 0.72)} ${n(cy - r * 0.05)}V${n(cy + r)}H${n(cx - r * 0.72)}V${n(cy - r * 0.05)}Z`, fg);
+      s.rect(cx - r * 0.2, cy + r * 0.3, r * 0.4, r * 0.7, bg);
+      return;
+    case 'brush': {
+      const b = brushD(cx - r * 0.72, cy + r * 0.72, size * 1.04, -45);
+      s.path(b.bristles + b.handle, fg);
+      s.path(b.ferrule, fg);
+    }
   }
 }

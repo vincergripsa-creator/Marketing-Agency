@@ -61,8 +61,10 @@ beforeAll(async () => {
 }, 60_000);
 
 describe('the snapshot is what the tightest stream carries', () => {
-  it('keeps two days of ad rows and the last days of the KPIs', () => {
-    expect(new Set(snapshot.market.adStats.map((s) => s.day)).size).toBeLessThanOrEqual(2);
+  it('keeps at most two days of ad rows, the last closed one at least, and the last days of the KPIs', () => {
+    const days = new Set(snapshot.market.adStats.map((s) => s.day));
+    expect(days.size).toBeLessThanOrEqual(2);
+    expect(days.has(DAYS)).toBe(true);
     expect(snapshot.company.kpis[0]!.day).toBeGreaterThan(60);
   });
 });

@@ -1,11 +1,11 @@
 /**
  * The heroes (pdf §6.2): the only large shape of a page, the same drawing at every scale, so a guide reads as one object.
- * Eight drawings, each on its own ground, carry the 14 motifs. A hero draws inside its box and `placeHero` crops it.
+ * Nine drawings, each on its own ground, carry the 14 motifs. A hero draws inside its box and `placeHero` crops it.
  */
 import type { DesignSpec, InkSet } from '../../shared.js';
 import { decoRng } from '../text.js';
 import { circleD, ellipseD, n, type Scene } from '../scene.js';
-import { arcs, crescent, DRAWN_AS, halfD, halftone, heartD, leafAt, paw, quarterD, type DrawnMotif } from './tiles.js';
+import { arcs, brushD, crescent, DRAWN_AS, halfD, halftone, heartD, leafAt, paw, quarterD, type DrawnMotif } from './tiles.js';
 
 export interface HeroBox { x: number; y: number; size: number }
 export type Hero = (s: Scene, box: HeroBox, inks: InkSet, seed: number) => void;
@@ -101,6 +101,18 @@ const home: Hero = (s, { x, y, size }, inks) => {
   s.rect(x, y + size * 0.95, size, size * 0.05, inks.ink);
 };
 
+const brush: Hero = (s, { x, y, size }, inks) => {
+  // the stroke it has just laid: flat where the bristles passed, breaking up where the paint runs out
+  const top = y + size * 0.58;
+  const tall = size * 0.3;
+  halftone(s, x + size * 0.34, top, size * 0.66, tall, size * 0.035, inks.b, (u) => Math.max(0, 0.95 - u * 1.25));
+  s.path(`M${n(x)} ${n(top)}H${n(x + size * 0.42)}C${n(x + size * 0.47)} ${n(top + tall * 0.2)} ${n(x + size * 0.4)} ${n(top + tall * 0.4)} ${n(x + size * 0.45)} ${n(top + tall * 0.6)}C${n(x + size * 0.48)} ${n(top + tall * 0.8)} ${n(x + size * 0.42)} ${n(top + tall)} ${n(x + size * 0.38)} ${n(top + tall)}H${n(x)}Z`, inks.b);
+  const b = brushD(x + size * 0.27, y + size * 0.8, size * 0.98, -49);
+  s.path(b.handle, inks.a);
+  s.path(b.ferrule, inks.paper);
+  s.path(b.bristles, inks.ink);
+};
+
 const DRAWINGS: Record<DrawnMotif, { draw: Hero; ground: keyof InkSet }> = {
   moon: { draw: moon, ground: 'ink' },
   sun: { draw: sun, ground: 'a' },
@@ -110,18 +122,19 @@ const DRAWINGS: Record<DrawnMotif, { draw: Hero; ground: keyof InkSet }> = {
   coin: { draw: coin, ground: 'ink' },
   chart: { draw: chart, ground: 'a' },
   home: { draw: home, ground: 'c' },
+  brush: { draw: brush, ground: 'c' },
 };
 
 export const HEROES = Object.fromEntries(Object.entries(DRAWN_AS).map(([motif, drawn]) => [motif, DRAWINGS[drawn]])) as Record<DesignSpec['motif'], { draw: Hero; ground: keyof InkSet }>;
 
 /**
- * The hero on its ground, cropped by its box. Another `ground` swaps that ink with the hero's own, so the five inks stay
- * five and nothing the drawing cut out of its ground disappears.
+ * The hero on its ground, cropped by its box, or by `frame` for a close-up. Another `ground` swaps that ink with the hero's
+ * own, so the five inks stay five and nothing the drawing cut out of its ground disappears.
  */
-export function placeHero(s: Scene, motif: DesignSpec['motif'], box: HeroBox, inks: InkSet, seed: number, ground?: keyof InkSet): void {
+export function placeHero(s: Scene, motif: DesignSpec['motif'], box: HeroBox, inks: InkSet, seed: number, ground?: keyof InkSet, frame: HeroBox = box): void {
   const hero = HEROES[motif];
   const worn = ground && ground !== hero.ground ? { ...inks, [hero.ground]: inks[ground], [ground]: inks[hero.ground] } : inks;
-  const square = `M${n(box.x)} ${n(box.y)}h${n(box.size)}v${n(box.size)}h${n(-box.size)}Z`;
+  const square = `M${n(frame.x)} ${n(frame.y)}h${n(frame.size)}v${n(frame.size)}h${n(-frame.size)}Z`;
   s.path(square, worn[hero.ground]);
   s.clip(square, (cl) => hero.draw(cl, box, worn, seed));
 }
