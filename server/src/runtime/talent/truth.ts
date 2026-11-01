@@ -20,7 +20,7 @@ function forcedSkills(w: WorldState): Partial<Record<Skill, number>> {
   const out: Partial<Record<Skill, number>> = {};
   if (c?.videoSkill !== undefined) out.video = c.videoSkill;
   if (c?.designTalent !== undefined) out.design = c.designTalent;
-  for (const s of c?.talentOverride?.skills ?? []) out[s] = c!.talentOverride!.value;
+  for (const { skills, value } of [c?.talentOverride ?? []].flat()) for (const s of skills) out[s] = value;
   return out;
 }
 

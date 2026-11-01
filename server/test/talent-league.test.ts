@@ -33,6 +33,7 @@ import { talentPillar } from '../src/runtime/talent/index.js';
 import { closeSeason, dueSeasonClose, openPlans, reviewPlans } from '../src/runtime/talent/season.js';
 import { createTask, KIND_META } from '../src/runtime/tasks.js';
 import { mean } from '../src/runtime/util.js';
+import { armScenario } from '../scripts/calibrateLib.js';
 
 const roots: string[] = [];
 const rows = new Map<Skill, SkillTest | undefined>();
@@ -659,21 +660,21 @@ describe('the challenge (talent 16)', () => {
     }
   }, 60_000);
 
-  it('the required gap is 1,5 standard errors of the difference, pooled from the sits, and the report keeps it', async () => {
+  it('the required gap is 2 standard errors of the difference, pooled from the sits, and the report keeps it', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
     const a = holder(w, 'shop_lead');
     const plan = failing(w, a);
     const noise = [-4, -2, -1, 0, 0, 1, 2, 4];
     const variance = mean(noise.map((x) => x ** 2)) * noise.length / (noise.length - 1);
-    expect(TALENT.challenge).toMatchObject({ candidates: 6, sits: 8, claudeSits: 3, marginSe: 1.5, marginMin: 1 });
-    const gap = 1.5 * Math.sqrt((2 * variance) / 8);
+    expect(TALENT.challenge).toMatchObject({ candidates: 6, sits: 8, claudeSits: 3, marginSe: 2, marginMin: 1 });
+    const gap = 2 * Math.sqrt((2 * variance) / 8);
     rows.set('page', TEST_BY_SKILL.page);
     TEST_BY_SKILL.page = { par: () => 80, sit: async (_b, sitter, _i, k) => ({ score: (sitter.id === a.id ? 80 : 80 + gap - 0.5) + noise[k ?? 0]!, deliverable: 'Un test', work: [] }) };
     const report = await runChallenge(ctx, plan);
     expect(report.margin).toBeCloseTo(gap, 2);
     expect(report.hired).toBeNull();
-    expect(report.reason).toContain('écart exigé 1,8 points sur 8 passages');
+    expect(report.reason).toContain('écart exigé 2,5 points sur 8 passages');
     expect(plan.outcome).toBe('kept_no_better');
   }, 30_000);
 
@@ -932,6 +933,21 @@ describe('who can be replaced at a close (talent 15)', () => {
     failing(open.world, holder(open.world, 'shop_lead'));
     fixedRows(open.world, 60, 90);
     expect((await closeSeason(open.ctx)).hires).toHaveLength(1);
+  }, 30_000);
+
+  it('an arm of the calibration replaces on D56, a run of 60 days with an end cannot (D125)', async () => {
+    const closing = await lab({ horizonDays: 60 });
+    atClose(closing.world, 56);
+    failing(closing.world, holder(closing.world, 'shop_lead'));
+    fixedRows(closing.world, 60, 90);
+    const stopped = await closeSeason(closing.ctx);
+    expect(stopped.hires).toEqual([]);
+    expect(stopped.notes.join(' ')).toContain('trop près de la fin');
+    const arm = await lab({ horizonDays: 60, ...armScenario() });
+    atClose(arm.world, 56);
+    failing(arm.world, holder(arm.world, 'shop_lead'));
+    fixedRows(arm.world, 60, 90);
+    expect((await closeSeason(arm.ctx)).hires).toHaveLength(1);
   }, 30_000);
 
   it('none on a season over 3 disrupted days: the plan fails and waits for the next close', async () => {

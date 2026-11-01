@@ -76,8 +76,8 @@ function concludedPriceTest(p: Product, day: number, endDay: number, variants: [
 }
 
 const row = (day: number, over: Partial<DayRow> = {}): DayRow => ({
-  day, cash: 400, ledgerCash: 400, revenue: 0, adSpend: 10, cumulativeProfit: 0, sales: 0, impressions: 0, clicks: 0,
-  sellable: true, banned: false, survival: false, nan: [], ...over,
+  day, cash: 400, ledgerCash: 400, revenue: 0, adRevenue: 0, adSpend: 10, cumulativeProfit: 0, sales: 0, refunds: 0, impressions: 0, clicks: 0,
+  freshImpressions: 0, freshClicks: 0, fitSum: 0, fitImpressions: 0, sellable: true, banned: false, survival: false, nan: [], ...over,
 });
 
 // ───────────────────────────── benchmark helpers ─────────────────────────────
@@ -109,7 +109,7 @@ describe('benchmark helpers (scripts/balanceLib)', () => {
   });
 
   it('aggregates runs per difficulty (median, profitable, goal, bankrupt, learning)', () => {
-    const base = { difficulty: 'normal', cliffs: [], stalls: [], kpiMismatchDays: [], nanDays: [], firstProfitDay: 10 } as unknown as RunResult;
+    const base = { difficulty: 'normal', days: 182, rows: [], fresh1: null, fresh2: null, fit1: null, fit2: null, cliffs: [], stalls: [], kpiMismatchDays: [], nanDays: [], firstProfitDay: 10 } as unknown as RunResult;
     const rs = [
       { ...base, profit: 1200, goalDay: 40, bankrupt: false, ctr1: 0.02, ctr2: 0.025, roas1: 1.1, roas2: 1.4 },
       { ...base, profit: -100, goalDay: null, bankrupt: true, ctr1: 0.02, ctr2: 0.019, roas1: 1.1, roas2: 1.2 },
@@ -117,6 +117,14 @@ describe('benchmark helpers (scripts/balanceLib)', () => {
     ] as RunResult[];
     expect(aggregate(rs, 'normal')).toMatchObject({ runs: 3, medianProfit: 1200, profitable: 2, goal: 2, bankrupt: 1, ctrImproved: 1, roasImproved: 2, bothImproved: 1 });
     expect(aggregate(rs, 'facile')).toBeNull();
+    const dips = [
+      { ...base, rows: [row(50, { cash: -1 }), row(182, { cash: 900 })], fresh1: 0.02, fresh2: 0.03, fit1: 0.5, fit2: 0.9 },
+      { ...base, rows: [row(100, { cash: -1 }), row(182, { cash: -2 })], fresh1: 0.02, fresh2: 0.01, fit1: 0.5, fit2: 0.7 },
+      { ...base, rows: [row(181, { cash: -1 })] },
+      base,
+    ] as RunResult[];
+    expect(aggregate(dips, 'normal')).toMatchObject({ bankruptD60: 1, bankruptD180: 2, dead: 2, freshImproved: 1, fitImproved: 2, medianFresh1: 0.02, medianFit2: 0.8 });
+    expect(aggregate([{ ...base, days: 60 }], 'normal')).toMatchObject({ bankruptD60: 0, bankruptD180: null });
     expect(median([3, 1, 2, 10])).toBe(2.5);
     expect(improved(null, 2)).toBe(false);
   });

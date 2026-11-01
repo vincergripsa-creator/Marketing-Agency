@@ -1151,6 +1151,7 @@ export const LEGACY: Partial<ScenarioConfig> = {
 | `VISUAL` | `sim/visual.ts` | yes |
 | `GROWTH` | `sim/growth.ts` | yes |
 | `STAGE_POLICY`, `COMPACT` | `runtime/stages.ts`, `runtime/compaction.ts` | no |
+| `CFO`, `STAGE_GATES` | `runtime/cfo.ts`, `runtime/stages.ts` | no |
 
 ## 3. Build order
 
@@ -1486,7 +1487,7 @@ Done: A15 of §5 passes.
 
 ### S14. Calibration
 
-One package, §4. **P14.0** writes `server/scripts/calibrate.ts` and extends `server/scripts/balanceLib.ts`, `server/scripts/balance.ts`; **P14.1** runs it once, writes the winner, and re-records golden per D43.
+One package, §4. **P14.0** writes `server/scripts/calibrate.ts`, `server/scripts/calibrateLib.ts` and extends `server/scripts/balanceLib.ts`, `server/scripts/balance.ts`; **P14.1** runs it once, writes the winner, and re-records golden per D43.
 
 ### S15. Acceptance
 
@@ -1518,20 +1519,20 @@ Stages are sequential, so a later stage rebases on the earlier one, never the re
 
 One pass, at the very end, on the finished company. `server/src/sim/balance.ts` may change only here, and only by the winner's values. All numbers below are fixed now, before any result exists.
 
-**Tooling (P14.0, 45 min).** `RunResult` gains `league.parStats`, `talentTruth.samples`, `talentTruth.swaps` and `growth.weeks`. `applyOverrides` reaches the objects of §2.9. `calibrate.ts` runs the steps below at `--jobs 14`, writes per-seed JSON to `runs/calibration/`, and refuses any second candidate list.
+**Tooling (P14.0, 45 min).** `RunResult` gains `league.parStats`, `talentTruth.samples`, `talentTruth.swaps`, `growth.weeks`, what M1 to M7 read (`work`, `ratings`) and `cashOn`. ROAS and CTR halves, sales and refunds read the daily rows, which hold the whole run; next to them the fresh-creative CTR (TikTok rows under `FRESH_CREATIVE_IMPRESSIONS`) and the angle fit (hook × format of what ran over the niche's best pair, by impression), because falling ROAS at rising spend is saturation. A bankruptcy reads as in the health sweep and `RunResult.bankrupt`: at least one negative close up to that day, recovered or not; « dead » is cash below 0 on the last day. A run to D182 closes week 26. `applyOverrides` reaches the objects of §2.9, `LEARNING`, `PAID_TAIL`, `TIKTOK_OVERLAP`, `FAMILY_FATIGUE`, `COST_HINT` and `PORTFOLIO`, and an unknown path throws. `control.talentOverride` takes a list, so that one group at ,25 or ,8 leaves the others at ,56 (talent §10.1). `calibrate.ts` runs the steps below one at a time (`--step N`) at `--jobs 14`, writes per-seed JSON to `runs/calibration/step<N>/<arm>/<difficulty>-<seed>.json`, never re-runs a finished seed, so a killed step resumes by the same command, and refuses any second candidate list. Every arm is `openEnded`, as the product is (D125). A saved seed carries the stamp of the code that made it, another code stops the step, and `--winner-written` is checked against the code (D127). A `step<N>` path at the top of any run folder is server-only (D128).
 
-**Budget.** About 1 100 runs of 60 days at about 30 s each, plus 90 runs of 180 days: 50 minutes at 14 jobs. Hard stop at 90 minutes: report what finished.
+**Budget.** About 980 runs of 60 days at about 30 s each, 300 of 182 days at about 3 minutes, 90 of 270 days at about 6 minutes: about 2 h 30 at 14 jobs. Hard stop at 4 hours (D123): a step past it launches no new seed and reports what finished.
 
-**Step 1. Noise floor.** Candidate A, `normal`, seeds 1-30, twice: as is, and with `ADS.baseCtr × 1.0001`. `N` = median absolute paired difference. Every threshold written `420 €` below means `max(420, N)`.
+**Step 1. Noise floor.** Candidate A, `normal`, seeds 1-30, twice: as is, and with the placebo `ADS.baseCtr × 1.01`, the one of every noise arm below. `N` = median absolute paired difference over the seeds the placebo touched. A seed whose daily rows match to the byte measured nothing: it is printed and leaves `N`, and past 3 such seeds there is no `N` and the next steps refuse (D124). Every threshold written `420 €` below means `max(420, N)`.
 
 **Step 2. Pars and levers.** `talent: 'flat'`, 12 seeds, `normal`.
 
 | Run | Purpose | Rule |
 |---|---|---|
-| `talentOverride` all skills .56 | measures the evidence pars of talent §5.2, from `league.parStats` | writes `TALENT.par`, `TALENT.sd` once |
+| `talentOverride` all skills .56 | measures the evidence pars of talent §5.2, from `league.parStats` | writes `TALENT.par`, `TALENT.sd` once (`--write`, a marker refuses a second) |
 | `copy`, `page`, `longform + polish`, `buying` at .25 and .8 | paired median of `profit(.8) − profit(.25)` per group | ≥ 100 €: keep. Between 0 and 100 €: keep, report. Negative: that group's flaws go to 0, report. No re-run |
 
-**Step 3. Candidates.** Five, 30 seeds (1-30), 3 difficulties, 60 days, `normal` to D182 for K3 (D116), 500 €, heuristic: 450 runs. Two directions because the sign is unknown: payroll alone is -456 € and talent predicts -8 to -15 % of ROAS, channels and email push it up. E is there for reach: B moves revenue about +8 %, some +240 € over a 60-day run, which cannot close a gap of 800 €.
+**Step 3. Candidates.** It refuses to start before Step 2 has written the pars (D127). Seven, 30 seeds (1-30), 3 difficulties, 500 €, heuristic: `facile` and `cauchemar` to D60, `normal` to D182 for K3, K7, K8 (D116, D121): 630 runs. Two directions because the sign is unknown: payroll alone is -456 € and talent predicts -8 to -15 % of ROAS, channels and email push it up. E is there for reach: B moves revenue about +8 %, some +240 € over a 60-day run, which cannot close a gap of 800 €. F is there because seats reach t about ,70 by D84 and ,76 by D182 while the best of 6 candidates reads ,715: a league cannot select from a market worse than its seats (of 30 challenges, 5 replacements), raising `founderMean` as D does widens that gap, and pay alone already removes the deaths (10 of 10 never negative). G is there because the pool binds: revenue is flat from D85 and pool × 3 gave a median × 1,94 on D121-270. Scale §0.2 froze the pool, the founder's first demand is a company that scales, so the frozen pool gets one chance to earn its change, against pre-registered checks. It changes nothing unless it wins by the rule (D120).
 
 | Candidate | Change |
 |---|---|
@@ -1540,27 +1541,31 @@ One pass, at the very end, on the finished company. `server/src/sim/balance.ts` 
 | C | `CONVERSION.base` 0,018 → 0,0165 |
 | D | `ORG.payPerDay` × 0,75 and `TALENT.founderMean` 0,56 → 0,62 |
 | E | B and D together |
+| F | `ORG.payPerDay` × 0,75 and `TALENT.marketMean` 0,52 → 0,60 |
+| G | F, and `CONVERSION.poolBase` and `CONVERSION.poolDemand` both × 2 |
 
 **Checks** (a real challenge but fair, from `docs/BALANCE.md`):
 
 | # | Check |
 |---|---|
 | K1 | `normal`: goal (1 000 € by D60) reached on 15 to 27 of 30 seeds |
-| K2 | `normal`: median profit between 1 000 € and 4 000 € |
+| K2 | `normal`: median profit between 1 000 € and 4 000 €, read at D60 on the same runs that continue to D182 |
 | K3 | `normal`: at most 2 bankruptcies of 30 at D60, and at most 2 of 30 at D180 (D116) |
 | K4 | `facile`: goal on at least 24 of 30, no bankruptcy |
 | K5 | `cauchemar`: at most 8 bankruptcies of 30, median final cash ≥ 250 € |
-| K6 | All 90 runs: `stats.violations` 0, Σ ledger = cash, no NaN |
+| K6 | All runs of Step 3: `stats.violations` 0, Σ ledger = cash, no NaN |
+| K7 | `normal`: median of at least 1 replacement per seed by D182 |
+| K8 | `normal`: scale A3 on the candidate's own arm, Theil-Sen slope of weekly net revenue over weeks 9-26 above 0 on at least 24 of 30 seeds, and median week 26 / week 9 at least 2,0 |
 
-**Decision rule.** Keep the candidates that pass all six. Among them, the closest to a `normal` median of 1 800 €. None passes: the fewest failed checks. A tie, or a gap under `N`: the first in the order A, D, B, E, C. Write the winner's values, re-record golden per D43, run `npm test`, then stop. A failed check is reported with its number, never tuned. There is no step 3 bis.
+**Decision rule.** Keep the candidates that pass all eight. Among them, the closest to a `normal` median of 1 800 €. None passes: the fewest failed checks, then the closest. A tie, or a gap under `max(420, N)` (D124): the first in the order A, D, F, B, G, E, C. Write the winner's values, re-record golden per D43, run `npm test`, then stop. If K3 at D180 or K5 fails under the winner, the insurance held back by D117 is built, then `--step 3 --insurance` re-runs that candidate's `normal` and `cauchemar` arms once, the winner staying the winner (D123, D127). A failed check is reported with its number, never tuned. There is no step 3 bis.
 
-**Step 4. Paired controls on the winner.** `normal`, seeds 1-30, 60 days unless stated, paired per seed. Each mechanic has its rule, and the rule is applied without discussion.
+**Step 4. Paired controls on the winner.** `normal`, seeds 1-30, 60 days unless stated, paired per seed, the winner's values as overrides until they are written (`--winner-written`). A ratio between two arms keeps their order whatever the sign (D126). Each mechanic has its rule, and the rule is applied without discussion.
 
 | Control | Arm | Pass | On failure |
 |---|---|---|---|
 | **No learning** | `control.noLearning` | paired median ≥ +420 €, positive on ≥ 19/30 | Report: this is a defect, S15 looks at it |
-| **No league** | `talent: 'flat'` | talent M1, M2 (selection works), M3 (it pays), M4, M5, M6, M7 | M1, M2 pass and M3 fails: keep, report the effect. M4 < 50 %: firing off, routing stays. Median of 0 replacements by D180 in the full arm of the scaling control (A10): the plan gate `0,75 rd` becomes `0,5 rd`, this control and that arm re-run once, no more |
-| **No scaling** | `scaling: false`, **180 days**, first its own noise run | scale A1 to A5 | Report the measured numbers. If A1 misses, check `priceMove` first (scale §13.2), once |
+| **No league** | `talent: 'flat'` | talent M1, M2 (selection works), M3 (it pays), M7 on the 60-day arms, M7 pooling the persons of every seed per skill, since a lean team rarely holds 3 on one skill at D42; M4, M5, M6 on the full arm of the scaling control, since the first replacement cannot come before D56 (D79); the count of replacements by D60 and by D180 printed | M1, M2 pass and M3 fails: keep, report the effect. M4 < 50 %: firing off, routing stays. K7 holds the place of the old fallback on the plan gate, which has read `0,5 rd` since D79 (D123) |
+| **No scaling** | `scaling: false`, **182 days** so that week 26 closes (A2 reads D180), its own noise run alongside | scale A1 to A5 | Report the measured numbers. If A1 misses, check `priceMove` first (scale §13.2), once |
 | No hire | `org.autoHire: false` | paired median ≥ 0, bankruptcies ≤ control | Report |
 | Legacy 31 paid | `team: 'legacy31'`, payroll on | paired median > 0 | Report |
 | TikTok only | `channelControl: 'tiktok_only'` | median gain ≥ +25 % and ≤ ×2,5, bankruptcies ≤ control | Report |
@@ -1569,8 +1574,9 @@ One pass, at the very end, on the finished company. `server/src/sim/balance.ts` 
 | Video skill | `control.videoSkill` .2 and .9 | CTR ratio ≥ 1,12 on ≥ 24/30, profit gain > 0 | Report |
 | Tempo | `control.videoTempo: 'standard'` | learned CTR D31-60 above fixed on ≥ 18/30 | `tempoFit` = 1, tempo stays cosmetic and leaves the bandit |
 | Design talent | `control.designTalent` .25 and 1 | median gain > 0, ≥ 19/30 positive | One retry only: `VISUAL.cvr.slope` 0,25. Then keep the look, record « non prouvé » |
+| Retest rule (D122) | The winner, fresh seeds 31-60, 270 days, three arms paired per seed: winner, `PORTFOLIO.retestAny` 1 (arm R of D106), placebo `ADS.baseCtr` × 1,01. Revenue of weeks 27-38 from daily rows | median ratio R/winner ≥ 1,15, R above the winner on ≥ 19/30, median ratio above the placebo's, bankruptcies do not rise | Dropped for good, the flag leaves the code. This is the one and only second look |
 
-**Step 5. Final report.** If a « on failure » switch fired, one last run of the winner, 90 runs. No decision follows it. `docs/BALANCE.md` gets all of it: candidates, winner, every control with its number, what was switched off. The memory note on seeds gets the new reference median (1 408 € is no longer one).
+**Step 5. Final report.** If a « on failure » switch fired, one last run of the winner, 90 runs, by `scripts/balance.ts --open-ended`. No decision follows it. `calibrate.ts --step 5` only assembles the numbers into a block; `docs/BALANCE.md` gets all of it: candidates, winner, every control with its number, what was switched off. The memory note on seeds gets the new reference median (1 408 € is no longer one).
 
 ## 5. Acceptance: « works 100 % »
 
@@ -1750,3 +1756,13 @@ Taken by the orchestrator after reading each stage gate. They rank with §1.
 - D116. S14 is amended, K3 reads bankruptcies at D60 and at D180, at most 2 of 30 at each, and `normal` candidates run to D182. The founder is away, this is the orchestrator's decision: 7 of the 8 deaths on 48 seeds come after D60, so a read at D60 alone passes a company that dies later.
 - D117. The survival insurance (founders at 0, one test under the line) is held back. It is built only if K3 at D180 fails under the winner.
 - D118. The cliff and growth-floor changes are dropped.
+- D119. `TALENT.challenge.marginSe` goes back to 2, which closes what D82 left to the orchestrator: the fallback to 1,5 fired by its rule and bought one replacement, a wrong one, while false replacements among equals went from 12 % to 20 % of challenges (expected 10,2 % against 24,3 %).
+- D120. Step 3 gains F (`ORG.payPerDay` × 0,75, `TALENT.marketMean` 0,52 → 0,60) and G (F, with `CONVERSION.poolBase` and `poolDemand` × 2), before any result: a league cannot select from a market worse than its seats, and the pool binds. The frozen pool of scale §0.2 gets this one chance, it changes nothing unless it wins by the rule, and §4 keeps the numbers behind both.
+- D121. K7 and K8 join the checks, numbers fixed now: a median of 1 replacement per seed by D182, and scale A3 on the candidate's own arm. The rule reads all eight, then the closest to 1 800 €; none passes, the fewest failed then the closest; a tie or a gap under N, the first in A, D, F, B, G, E, C. K2 is read at D60 on the runs that go on to D182, K6 covers all 630 runs.
+- D122. The retest rule gets one confirmatory test, last row of Step 4: `PORTFOLIO.retestAny`, default 0 and golden unchanged, on the winner, seeds 31-60, 270 days, against a placebo. D106 said « not shown » on 8 seeds, this says yes or no on 30 fresh ones, and a no takes the flag out of the code.
+- D123. The hard stop of §4 goes from 90 minutes to 4 hours, at `--jobs 14`, because `normal` candidates run to D182. K7 replaces the moot fallback of the No league row, and if K3 at D180 or K5 fails under the winner, the insurance of D117 is built and that candidate's `normal` and `cauchemar` arms re-run once, in the run stage.
+- D124. The placebo goes from `ADS.baseCtr` × 1,0001 to × 1,01, in Step 1, the scaling noise run and the retest placebo, before any result. A CTR only feeds `rng.binomial`, so × 1,0001 moves one click in 10 000: seeds 2 and 3 stayed byte-identical to D40, N would have read the smallest gaps, and « a gap under N » would almost never fire. × 1,01 diverged by D14 on seeds 1, 2 and 3. A seed left untouched is printed and leaves N, past 3 of 30 there is no N, and the decision rule reads a gap under `max(420, N)`, the noise of every paired threshold, because an N under the project's own floor would hand the winner to whichever 30-seed median landed nearest by chance.
+- D125. Every arm of the calibration runs `openEnded`, as the product does. With an end, a 60-day arm opens no plan past D50 while the first replacement comes on D56 (D79), so M1 and M3 could not see one, and a 182-day arm closes D182 blocked, so K7 and M6 would have read D168. This only removes that guard, and a 60-day arm no longer stops the league where its 182-day twin goes on. `scripts/balance.ts --open-ended` gives Step 5's last run the same company.
+- D126. A ratio between two arms keeps their order when the base is at or under 0: the arm ahead reads above 1, the arm behind under, equal results read 1, losing 500 € against 100 € reads ,2 and the reverse 5. It used to read 0 whatever happened, on the third of the seeds at or under 0 at D60 that A4 and the TikTok row start from. A run's own end over its start, K8 and A3, keeps Infinity and 0: there a dead seed counts against.
+- D127. A saved seed carries the stamp of the code that made it, a hash of the content of `server/src`, `shared`, `server/assets` and `balanceLib.ts`, read by the process that runs it, so a commit moves nothing and a constant does, even mid-step. Another code stops the step. The one escape is `--step 3 --insurance` (D123): the winner's `normal` and `cauchemar` seeds run again, the others stay, the winner stays, and a second use is refused. Step 3 refuses until the pars are written, `--step 2 --write` until Step 1 is complete, Step 4 a Step 3 of another code, and `--winner-written` is read against the constants instead of trusted.
+- D128. A `step<N>` path at the top of a run folder is server-only, whatever `--out` named the folder: per-seed files hold true talent, and a check on the name `calibration` left every other folder served.

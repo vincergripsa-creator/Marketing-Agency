@@ -63,7 +63,7 @@ export const TALENT = {
     perFamily: 1, perSeason: 3,
   },
   challenge: {
-    candidates: 6, sits: 8, claudeSits: 3, marginSe: 1.5, marginMin: 1,
+    candidates: 6, sits: 8, claudeSits: 3, marginSe: 2, marginMin: 1,
     replacementsPerSeason: 2, replacementsPerFamily: 1, sameRoleDays: 28, horizonGuard: 10, disruptedDays: 3, refusalPinDays: 14,
     cloneRating: 1550, cloneMean: -0.02, cloneSd: 0.06,
   },

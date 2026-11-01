@@ -935,13 +935,14 @@ export interface OrgConfig {
   autoHire: boolean;           // false: the team stays as it is (paired control)
   payroll: boolean;            // false: agents are free (control, old tests)
 }
+export interface TalentOverride { skills: Skill[]; value: number }
 /** Benchmark arms. Never accepted by POST /api/scenario, never offered in the UI. */
 export interface ScenarioControls {
   noLearning?: boolean;        // chooseArm picks at random; addRule, replaceRuleEverywhere, syncDirective do nothing
   designTalent?: number;       // forces design talent, 0..1
   videoSkill?: number;         // forces the editor's skill, 0..1
   videoTempo?: VideoTempo;     // forces the tempo, no bandit
-  talentOverride?: { skills: Skill[]; value: number }; // lever test: every agent's t on these skills
+  talentOverride?: TalentOverride | TalentOverride[]; // lever test: every agent's t on these skills, later entries win
 }
 
 // ───────────────────────────── Organisation: roles, hires, departures ─────────────────────────────
