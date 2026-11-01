@@ -309,7 +309,11 @@ export interface QualityReport {
   evaluator: 'heuristic' | 'claude' | 'hybrid';
 }
 
-export interface Review { id: string; day: number; customerId: string; rating: 1 | 2 | 3 | 4 | 5; text: string }
+export interface Review {
+  id: string; day: number; customerId: string; rating: 1 | 2 | 3 | 4 | 5;
+  text: string;               // what the public reads
+  basis?: string;             // what the simulation reads (sim/feedback.ts). Absent = text
+}
 
 export interface ProductStats {
   views: number; sales: number; revenue: number; refunds: number; refundAmount: number;
@@ -931,13 +935,14 @@ export interface OrgConfig {
   autoHire: boolean;           // false: the team stays as it is (paired control)
   payroll: boolean;            // false: agents are free (control, old tests)
 }
+export interface TalentOverride { skills: Skill[]; value: number }
 /** Benchmark arms. Never accepted by POST /api/scenario, never offered in the UI. */
 export interface ScenarioControls {
   noLearning?: boolean;        // chooseArm picks at random; addRule, replaceRuleEverywhere, syncDirective do nothing
   designTalent?: number;       // forces design talent, 0..1
   videoSkill?: number;         // forces the editor's skill, 0..1
   videoTempo?: VideoTempo;     // forces the tempo, no bandit
-  talentOverride?: { skills: Skill[]; value: number }; // lever test: every agent's t on these skills
+  talentOverride?: TalentOverride | TalentOverride[]; // lever test: every agent's t on these skills, later entries win
 }
 
 // ───────────────────────────── Organisation: roles, hires, departures ─────────────────────────────
@@ -1035,13 +1040,13 @@ export interface AgentTruth {
 export interface TalentTruth {
   agents: Record<AgentId, AgentTruth>;      // leavers stay: the proof reads them
   samples: { day: number; meanLeague: number; workWeighted: number }[]; // one per evening, proof only
-  swaps: { day: number; skill: Skill; replaced: AgentId; hired: AgentId; tReplaced: number; tHired: number; familyMean: number }[]; // D58, proof only
+  swaps: { day: number; skill: Skill; replaced: AgentId; hired: AgentId; tReplaced: number; tHired: number; familyMean: number }[]; // D58, proof only. A family of one: the mean of all rated seats that day (M4)
 }
 
 export interface SkillRating {
   skill: Skill;
   rating: number;              // Elo-like, par = 1500
-  rd: number;                  // uncertainty, 200 → 70
+  rd: number;                  // standard error, 200 → 35
   n: number;                   // evidence events, all time
   seasonN: number;             // this season (weighted sum)
   metric: number | null;       // the role's readable number: mean QA score, reply score…
@@ -1054,16 +1059,17 @@ export interface LeagueEntry {
   agentId: AgentId; name: string; role: string; avatar: AvatarSpec;
   hiredDay: number; leftDay: number | null; status: LeagueStatus;
   ratings: Partial<Record<Skill, SkillRating>>;
-  primary: Skill | null;       // first core kind with a skill. Never a hat
+  primary: Skill | null;       // first core kind whose skill has an evidence route. Never a hat
   lineage: AgentId | null;
   trophies: { season: number; title: string }[];
   leftBecause: string | null;  // French, with numbers
+  underBar?: number;           // closes in a row under the bar, thin samples left out. Absent reads 0
 }
 export interface ProbationPlan {
   agentId: AgentId; skill: Skill; openedSeason: number; deadlineDay: number;
   metricLabel: string; baseline: number; target: number; coachId: AgentId | null;
   text: string;                // French, read out by the HR office
-  outcome: 'open' | 'met' | 'failed' | 'kept_no_better';
+  outcome: 'open' | 'met' | 'failed' | 'kept_no_better' | 'kept_no_test';
 }
 export interface Duel {
   id: string; season: number; skill: 'copy'; kind: 'formal' | 'natural';
@@ -1076,11 +1082,13 @@ export interface Duel {
 }
 export interface ChallengeEntry {
   id: AgentId; name: string; isIncumbent: boolean; lineage: AgentId | null;
-  score: number; deliverable: string; // what they produced, French, short
+  score: number; deliverable: string; // what they produced, French, short. `score` is the mean of `sits`
+  sits?: number[];             // each sit's score, in sit order
 }
 export interface HireReport {
   day: number; incumbent: AgentId; skill: Skill; hired: AgentId | null; // null: incumbent kept
   candidates: ChallengeEntry[]; reason: string;
+  margin?: number;             // the « écart exigé » of this challenge, in test points
 }
 export interface SeasonRow { agentId: AgentId; name: string; rating: number; delta: number; metric: number | null; n: number; status: LeagueStatus }
 export interface SeasonReport {
@@ -1089,6 +1097,8 @@ export interface SeasonReport {
   employee: { agentId: AgentId; name: string; skill: Skill; perk: string } | null;
   probations: string[]; dismissals: string[]; hires: string[]; notes: string[];
   disruptedDays: number;       // outage or ad ban: over 3, no dismissal this season
+  bar?: number;                // what this close read a seat against, `league` only
+  training?: { seats: number; eur: number }; // what the close paid for, when it paid
 }
 export type EvidenceSource = 'qa' | 'rejected' | 'duel' | 'natural' | 'market' | 'reply' | 'chargeback' | 'focus' | 'pick' | 'cut' | 'visual';
 export interface EvidenceEvent { day: number; agentId: AgentId; skill: Skill; source: EvidenceSource; s: number; w: number; label: string }
@@ -1104,6 +1114,7 @@ export interface LeagueState {
   perks: Perk[];
   events: EvidenceEvent[];     // ring buffer, 300
   parStats: Record<string, { n: number; sum: number; sq: number }>; // `${skill}:${source}`, raw x, all time (D58)
+  bar?: number;                // the last close's: max(par, median of the active rated seats)
 }
 
 // ───────────────────────────── Channels ─────────────────────────────
@@ -1330,7 +1341,7 @@ export interface ArchiveCounters { throughDay: number; tasks: number; missions: 
 export interface TaskTotals {
   days: DayTaskCounts[];
   depts: Partial<Record<DeptId, { done: number; delaySum: number; failed?: number }>>;
-  agents?: Record<AgentId, { done: number; approved: number; rejected: number; failed: number }>; // the HR review of someone with no perf counters reads the whole history
+  agents?: Record<AgentId, { done: number; approved: number; rejected: number; failed: number; days?: Record<number, number> }>; // the HR review of someone with no perf counters reads the whole history. days: what left the world of the last 30 days, by the day it was done
 }
 
 // ───────────────────────────── What the interface reads ─────────────────────────────
@@ -1425,6 +1436,7 @@ export interface LeagueRow {
   points: number; sample: number; confidence: 'faible' | 'moyenne' | 'forte';
   contract: PersonChip['contract'];
   metric?: string | null;      // ui §6.4 « métrique lisible »: METRICS[skill].text(SkillRating.metric), « 81/100 »
+  underBar: number;            // closes in a row under the bar
 }
 export interface DuelSide { agentId: AgentId; name: string; score: number | null; ratingDelta: number | null }
 export interface DuelView {
@@ -1438,8 +1450,15 @@ export interface AlumnusView {
   replacedBy: { id: AgentId; name: string } | null;
 }
 export interface LeagueDetail {
-  season: { no: number; fromDay: number; toDay: number; daysLeft: number; rules: string[] };
-  roles: { key: Skill; label: string; rows: LeagueRow[]; cutLine: number | null }[];
+  season: {
+    no: number; fromDay: number; toDay: number; daysLeft: number; rules: string[];
+    bar: number;                 // the rating the cut line reads
+    cut: string;                 // French: what happens under it
+    cutBlind: string;            // the same, for a family whose test cannot tell talents apart
+    training: { seats: number; eur: number; totalEur: number } | null; // the last close that paid for any, and all of them
+  };
+  roles: { key: Skill; label: string; rows: LeagueRow[]; cutLine: number | null; blindTest: boolean }[]; // blindTest: this skill's test cannot tell talents apart
+  outside: { agentId: AgentId; name: string; why: string }[]; // who has no rating, each with the reason
   plans: ProbationPlan[];
   lastHire: HireReport | null;
   duels: DuelView[];

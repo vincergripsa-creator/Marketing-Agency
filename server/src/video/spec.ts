@@ -101,7 +101,7 @@ export function buildRenderSpec(world: Readonly<WorldState>, creativeId: string,
 /**
  * A rework gets a new key. Same key, ready file: no render, and a new key deletes the file. So the key holds what makes
  * another ad, not what moves under a made film: a price test changes the price every day, and compaction lets the old
- * customers and reviews go. A card counts by its quote. A film keeps the price it was made with (D78).
+ * customers and reviews go. A card counts by its quote. A film keeps the price it was made with (D131).
  */
 export function renderKey(spec: RenderSpec): string {
   const quotes = Object.values(spec.reviews ?? {}).map((r) => r.quote);

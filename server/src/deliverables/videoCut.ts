@@ -58,7 +58,7 @@ function decide(x: number, tempo: VideoTempo): Decisions {
     guideSec: x >= 0.75 ? GUIDE_IN_HOOK_SEC : null,
     pain: x >= 0.4,
     captionWords: x < 0.3 ? 6 : x < 0.6 ? 3 : 2,
-    endHoldSec: x < 0.3 ? 0.8 : x < 0.5 ? 1.2 : x < 0.75 ? 1.5 : 1.8, // on the bands the title and the guide already show: a `lerp` gave his day away to anyone with the file (D76)
+    endHoldSec: x < 0.3 ? 0.8 : x < 0.5 ? 1.2 : x < 0.75 ? 1.5 : 1.8, // on the bands the title and the guide already show: a `lerp` gave the editor's day away to anyone with the file (D129)
     sfx: x >= 0.5,
   };
 }

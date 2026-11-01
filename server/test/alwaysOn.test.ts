@@ -687,6 +687,11 @@ describe('/runs/<id>/ and the routes', () => {
     for (const f of ['world.json', 'world.prev.json', 'world.bad.json', 'world.json.tmp-12-3', 'archive/customers.ndjson']) await writeFile(join(run, f), SECRET);
     await writeFile(join(run, 'checkpoints', 'day-0007.json.gz'), gzipSync(SECRET));
     await writeFile(join(run, 'session.log.json'), '[]');
+    for (const folder of ['calibration', 'calibration-2', 's14t-smoke']) {
+      await mkdir(join(root, folder, 'step3', 'A'), { recursive: true });
+      for (const f of ['step3/A/normal-1.json', 'step3.json', 'step5.md']) await writeFile(join(root, folder, f), SECRET);
+    }
+    await writeFile(join(run, 'files', 'step3.json'), 'un fichier du run, pas la calibration');
     await writeFile(join(run, 'files', 'world.json'), 'un fichier du run, pas la sauvegarde');
     const app = createAgencyServer({ session: { info: () => ({ runId: 'run-1', playing: false, speed: 1, mindMode: 'heuristic' }), status: () => 'paused', ...session } as SessionLike, runsRoot: root, webDist: join(root, 'no-dist'), sse: { heartbeatMs: 60_000 } });
     await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', () => r()));
@@ -716,16 +721,29 @@ describe('/runs/<id>/ and the routes', () => {
     await close();
   });
 
+  it('never serves what the calibration wrote, whatever --out named the folder: its seeds hold true talent', async () => {
+    const { port, close } = await serve({});
+    for (const id of ['calibration', 'CALIBRATION', '%63alibration', 'calibration-2', 's14t-smoke']) {
+      for (const f of ['step3/A/normal-1.json', 'STEP3/A/normal-1.json', '%73tep3/A/normal-1.json', 'step3.json', 'step5.md']) {
+        const res = await call(port, 'GET', `/runs/${id}/${f}`);
+        expect([id, f, res.status]).toEqual([id, f, 403]);
+        expect(res.body).not.toContain(SECRET);
+      }
+    }
+    await close();
+  });
+
   it('still serves the rest of the folder', async () => {
     const { port, close } = await serve({});
     expect((await call(port, 'GET', '/runs/run-1/session.log.json')).status).toBe(200);
     expect((await call(port, 'GET', '/runs/run-1/files/world.json')).status).toBe(200);
+    expect((await call(port, 'GET', '/runs/run-1/files/step3.json')).status).toBe(200);
     await close();
   });
 
   it('the guard is the one of D51', () => {
-    for (const f of ['world.json', 'world.prev.json', 'WORLD.JSON', 'checkpoints/x', 'archive\\customers.ndjson']) expect(isServerOnlyFile(f)).toBe(true);
-    for (const f of ['meta.json', 'files/world.json', 'session.log.json', 'checkpoints', 'worldly.txt']) expect(isServerOnlyFile(f)).toBe(false);
+    for (const f of ['world.json', 'world.prev.json', 'WORLD.JSON', 'checkpoints/x', 'archive\\customers.ndjson', 'step1/base/normal-1.json', 'STEP3\\A\\normal-1.json', 'step3.json', 'step5.md']) expect(isServerOnlyFile(f)).toBe(true);
+    for (const f of ['meta.json', 'files/world.json', 'files/step3.json', 'session.log.json', 'checkpoints', 'worldly.txt', 'step.json', 'stepladder/x']) expect(isServerOnlyFile(f)).toBe(false);
   });
 
   it('POST /api/run/extend prolongs the run and answers like a control', async () => {

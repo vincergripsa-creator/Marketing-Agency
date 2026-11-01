@@ -14,7 +14,7 @@ import { officerId, ownersOfAny } from '../org/officers.js';
 import { createTask, taskById } from '../tasks.js';
 import { pct, short } from '../util.js';
 import { TALENT } from './constants.js';
-import { phi, ratingOf } from './evidence.js';
+import { phi, ratingOf, settledRd } from './evidence.js';
 import { talentMode } from './truth.js';
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
@@ -150,7 +150,7 @@ function scoreOf(pA: number, nA: number, pB: number, nB: number, days: number): 
 function bookResult(league: LeagueState, day: number, r: SkillRating, id: AgentId, delta: number, s: number, label: string): void {
   const weight = TALENT.weight['copy:duel']!;
   r.rating = round1(r.rating + delta);
-  r.rd = Math.max(TALENT.rating.rdMin, r.rd - TALENT.rating.rdPerEvidence * weight);
+  r.rd = settledRd(r.rd, weight);
   r.n += 1;
   r.seasonN += weight;
   league.events.push({ day, agentId: id, skill: 'copy', source: 'duel', s: round4(s), w: weight, label });

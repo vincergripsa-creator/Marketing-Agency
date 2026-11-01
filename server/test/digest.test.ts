@@ -520,7 +520,8 @@ describe('what comes next', () => {
     ] };
     w.company.experiments.push({ id: 'exp', day: 1, owner: 'nora', hypothesis: 'Le hook liste bat le POV', dimension: 'hook_style', variants: [], metric: 'ctr', status: 'running', results: {}, winner: null, endDay: null });
     const { next } = buildDigest(w, 1, 7);
-    expect(next[0]).toBe(`Cette semaine : ${eur(83.5)} de pub par jour au plus, ${eur(70)} pour les tests. Cible pub 83,50 €/jour.`);
+    expect(next[0]).toBe('Cible pub 83,50 €/jour.'); // the CFO's own line: `testWeek` is room in a formula, no code spends it
+    expect(next.join(' ')).not.toContain('pour les tests');
     expect(next).toContain('« Guide a » : 30 € sur 100');
     expect(next).toContain('Test en cours : Le hook liste bat le POV');
     expect(next.join(' ')).not.toContain('Guide b');

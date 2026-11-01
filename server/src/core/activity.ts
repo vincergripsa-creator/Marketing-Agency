@@ -15,6 +15,13 @@ export function emit(world: WorldState, a: Omit<Activity, 'id' | 'day' | 'tick' 
   return activity;
 }
 
+/**
+ * A line left unsaid keeps its place: ids are one counter, and some key a stream. What the company stops claiming must not move what it does.
+ */
+export function unsaid(world: WorldState, lines = 1): void {
+  world.idCounter += lines;
+}
+
 export function onActivity(cb: (a: Activity) => void): () => void {
   listeners.add(cb);
   return () => listeners.delete(cb);

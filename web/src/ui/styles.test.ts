@@ -38,6 +38,12 @@ describe('focus stays visible on the text inputs that remove their own outline',
   }
 });
 
+describe('dead rules', () => {
+  it('no rule for a badge nothing renders', () => {
+    expect(css).not.toContain('.badge-red');
+  });
+});
+
 describe('panel opening', () => {
   for (const sel of ['.overlay', '.side-panel', '.modal']) {
     it(`${sel} opens in ≤ 150 ms without an opacity fade`, () => {

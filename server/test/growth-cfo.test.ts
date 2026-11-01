@@ -353,6 +353,7 @@ describe('stages (scale 7)', () => {
     expect(world.activity.at(-1)).toMatchObject({ agentId: 'camille', kind: 'meeting' });
     expect(world.activity.at(-1)!.text).toMatch(/^Camille : l'agence quitte l'étape Adéquation pour l'étape Accélération : /);
     expect(log.decisions[0]!.text.endsWith('Accélération')).toBe(true); // what the digest reads the move from
+    expect(log.decisions[0]!.text.charAt(0)).toBe('L'); // a line of its own in the digest and in a toast
   });
 
   it('the last gate reads contribution with follow-ups, niches, concentration and owned revenue', async () => {
@@ -442,7 +443,11 @@ describe('the CFO (scale 8)', () => {
     expect(a.testWeek).toBeCloseTo(105, 0);
     expect(a.roas14).toBeCloseTo(2, 1);
     expect(a).not.toHaveProperty('payrollCap'); // D7
-    expect(a.note).toContain('Cible pub');
+    // The line reads what is spent first, then the ceiling: 80 €/day against 230 €/day under a 570 € envelope.
+    expect(a.note.indexOf('80 €/jour de pub dépensés sur 7 jours')).toBe(0);
+    expect(a.note).toContain("jusqu'à 230,05 €/jour cette semaine");
+    expect(a.note).toContain('enveloppe du jour 570 €');
+    expect(a.note).not.toContain('Cible pub');
   });
 
   it('adTarget stays under the cap and out of the reserve on every ledger of the grid', async () => {

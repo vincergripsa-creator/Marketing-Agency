@@ -154,7 +154,7 @@ function shotTimes(shots: number, dur: number, groups: readonly SpokenWord[][]):
 
 /**
  * A plan of estimates: real speech must not bring a weak editor's guide up inside a hook that merely ran long. A kinetic hook
- * still lands on its guide, on its last words: that rise is the film's, the market pays for the early guide of `productSec` alone (D77).
+ * still lands on its guide, on its last words: that rise is the film's, the market pays for the early guide of `productSec` alone (D130).
  */
 function bookInHook(cut: VideoCut, plain: boolean): number | null {
   const { productSec, hookWordSec } = cut.metrics;

@@ -21,6 +21,7 @@ export const PORTFOLIO = {
   maxVersion: 3,                                  // a guide is rewritten twice, no more
   cvrDrop: 0.3, cvrDays: 14, cvrViews: 200,       // the fall in paid conversion that calls for a new version, and what it is read on
   retestDays: 45,                                 // a harvested guide waits this long for its one paid test
+  retestAny: 0 as number,                         // D122, arm R of D106: 1 tests every harvested guide, changed or not
 } as const;
 
 const VERDICT_LABELS: Record<PortfolioVerdict, string> = { test: 'en test', double_down: 'à pousser', keep: 'gardé(s)', rework: 'à réécrire', harvest: 'en récolte', kill: 'arrêté(s)' };
@@ -69,9 +70,9 @@ function paidSince(w: WorldState, p: Product, since: number): number {
 }
 
 /** Its one paid test, 45 days on, if the guide it would test is not the one that lost. */
-function retestDue(w: WorldState, p: Product): boolean {
+export function retestDue(w: WorldState, p: Product): boolean {
   const h = p.harvest;
-  return !!h && !h.retest && w.day - h.day >= PORTFOLIO.retestDays && (p.price !== h.price || p.version !== h.version) && !productHealth(w, p).severe && !isReworking(w, p.id);
+  return !!h && !h.retest && w.day - h.day >= PORTFOLIO.retestDays && (PORTFOLIO.retestAny !== 0 || p.price !== h.price || p.version !== h.version) && !productHealth(w, p).severe && !isReworking(w, p.id);
 }
 
 /** `standing`: this line changes nothing today, the existing paths or a harvest already at rest hold it. */

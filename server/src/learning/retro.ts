@@ -2,7 +2,7 @@
 import type { BrainNote, BrainVault, ContentEngine, LessonDraft, MindContext } from '../contracts.js';
 import type { AgentState, ChannelId, DailyKpi, Experiment, Lesson, WorldEvent, WorldState } from '../shared.js';
 import { CHANNELS, channelOf } from '../shared.js';
-import { clamp, emit, nextId } from '../core/index.js';
+import { clamp, emit, nextId, quietDay, unsaid } from '../core/index.js';
 import { isAnnouncedOutage } from '../sim/outage.js';
 import { armStats, HYPE_ARMS, nearestArm, PRICE_ARMS, rewardArm } from './bandits.js';
 import {
@@ -397,10 +397,10 @@ export function lessonHistory(body: string | null | undefined): string[] {
   return out;
 }
 
-function historyLine(world: WorldState, l: Lesson, day: number, revised: boolean, reached: readonly string[]): string {
+function historyLine(world: WorldState, l: Lesson, day: number, revised: boolean, reached: readonly string[], quiet: boolean): string {
   const agents = (world.company.agents ?? []).filter((a) => reached.includes(a.id));
   const who = agents.length ? ` · nouveaux playbooks : ${agents.map((a) => `[[${agentNoteName(world, a)}]]`).join(' · ')}` : '';
-  return `- **${revised ? 'Révision' : 'Confirmation'} — jour ${day}** ([[jour-${pad3(day)}]]) : ${shorten(l.evidence || 'sans chiffre', 220)} · confiance ${fmtPct(l.confidence, 0)}${who}`;
+  return `- **${revised ? 'Révision' : quiet ? 'Relecture' : 'Confirmation'} — jour ${day}** ([[jour-${pad3(day)}]]) : ${shorten(l.evidence || 'sans chiffre', 220)} · confiance ${fmtPct(l.confidence, 0)}${who}`;
 }
 
 // ───────────────────────────── external incidents ─────────────────────────────
@@ -605,6 +605,8 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
     });
 
   const stillActive = (x: { lesson: Lesson }): boolean => world.company.lessons.includes(x.lesson);
+  // The rolling windows still slide on a day with no number: the rules follow them, but nobody may call that a confirmation.
+  const quiet = quietDay(kpi);
   for (const { lesson, draft } of created.filter(stillActive)) await safely(lesson.notePath, () => writeLessonNote(lesson, draft));
   // a confirmed / revised lesson note is rewritten with the current insight and numbers on top and a short,
   // capped history below (instead of an endless stack of appended blocks)
@@ -612,7 +614,7 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
     await safely(lesson.notePath, async () => {
       const existing = await brain.read(lesson.notePath);
       const own = existing && existing.path === lesson.notePath ? existing : null;
-      const history = [...lessonHistory(own?.body), historyLine(world, lesson, day, revised, reached)];
+      const history = [...lessonHistory(own?.body), historyLine(world, lesson, day, revised, reached, quiet)];
       return writeLessonNote(lesson, draft, history, own?.tags ?? []);
     });
   }
@@ -661,7 +663,7 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
   if (outage) section.push(`- Note d'incident : [[${incidentNoteName(day)}]]`);
   section.push('', '### Leçons du jour');
   section.push(...(newLessons.length ? newLessons.map((l) => `- ${lessonLink(l)} — ${l.evidence ? shorten(l.evidence, 160) : 'sans chiffre'} _(confiance ${fmtPct(l.confidence, 0)})_`) : ['- Pas de nouvelle leçon aujourd’hui.']));
-  if (updated.length) {
+  if (updated.length && !quiet) {
     section.push('', '### Leçons confirmées ou révisées');
     section.push(...updated.map(({ lesson, revised }) => `- ${lessonLink(lesson)} — ${revised ? 'révisée' : 'confirmée'}, confiance ${fmtPct(lesson.confidence, 0)}`));
   }
@@ -685,7 +687,7 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
     banditRows.push(`| ${dimensionLabel(world, dim)} | ${armLabel(world, dim, stats[0]!.key)} | ${fmtPct(stats[0]!.mean, 0)} | ${fmtNum(pulls)} |`);
   }
   if (banditRows.length) section.push('', '### Ce que pensent les bandits', '', '| Décision | En tête | Score estimé | Essais |', '|---|---|---|---|', ...banditRows.slice(0, 16));
-  if (changedAgents.size) {
+  if (changedAgents.size && !quiet) {
     const names = (world.company.agents ?? []).filter((a) => changedAgents.has(a.id)).map((a) => `[[${agentNoteName(world, a)}]]`);
     section.push('', '### Playbooks mis à jour', names.join(' · '));
   }
@@ -727,13 +729,17 @@ export async function runRetro(world: WorldState, engine: ContentEngine, brain: 
         : `Expérience conclue (${dimensionLabel(world, e.dimension)}) sans gagnant net.`,
     });
   }
-  if (updated.length) emit(world, { agentId: hr.id, kind: 'lesson', text: `${plural(updated.length, 'leçon confirmée', 'leçons confirmées')} par les chiffres du jour.` });
+  if (updated.length) {
+    if (quiet) unsaid(world);
+    else emit(world, { agentId: hr.id, kind: 'lesson', text: `${plural(updated.length, 'leçon confirmée', 'leçons confirmées')} par les chiffres du jour.` });
+  }
   emit(world, {
     agentId: hr.id,
     kind: 'brain_write',
     text: `${hr.name} écrit le journal du jour ${day}${created.length ? ` et ${plural(created.length, 'leçon', 'leçons')}` : ''} dans le cerveau.`,
   });
-  if (changedAgents.size) {
+  if (changedAgents.size && quiet) unsaid(world);
+  else if (changedAgents.size) {
     const names = (world.company.agents ?? []).filter((a) => changedAgents.has(a.id)).map((a) => a.name);
     emit(world, {
       agentId: hr.id,

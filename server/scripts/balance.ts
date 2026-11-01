@@ -3,7 +3,7 @@
  *
  *   cd server && npx tsx scripts/balance.ts [--days 60] [--seeds 1,2,3,7,42] [--difficulties facile,normal,cauchemar]
  *                                           [--budget 500] [--jobs 3] [--keep] [--json fichier.json] [--details]
- *                                           [--team lean|legacy31] [--no-hire] [--no-payroll]
+ *                                           [--team lean|legacy31] [--no-hire] [--no-payroll] [--open-ended]
  *
  * Lance des entreprises sans interface (cerveau heuristique, dossiers temporaires supprimés sauf --keep),
  * en parallèle sur quelques processus (--jobs 1 = tout dans ce processus), puis affiche un tableau par run
@@ -32,6 +32,7 @@ interface Args {
   overrides: Record<string, number>;
   /** The team of every run, null to leave the scenario's own. */
   org: OrgConfig | null;
+  openEnded: boolean;
 }
 
 const USAGE = `Utilisation : npx tsx scripts/balance.ts [options]
@@ -46,15 +47,16 @@ const USAGE = `Utilisation : npx tsx scripts/balance.ts [options]
   --team T                 lean ou legacy31 (défaut : l'équipe du scénario, lean)
   --no-hire                l'équipe reste telle quelle (bras de contrôle)
   --no-payroll             les agents ne sont pas payés (bras de contrôle)
-  --set CHEMIN=N           remplace une constante de sim/balance.ts pour ce benchmark (répétable),
-                           par exemple --set ADS.baseCtr=0.008 --set DIFFICULTY.cauchemar.cpmMultiplier=1.5`;
+  --open-ended             sans fin, comme le produit et chaque bras de calibrate.ts (D125)
+  --set CHEMIN=N           remplace une constante du marché ou d'un pilier pour ce benchmark (répétable, PLAN §2.9),
+                           par exemple --set ADS.baseCtr=0.008 --set TALENT.challenge.marginSe=2 --set TALENT.par.copy:qa=89`;
 
 class ArgError extends Error {}
 
 function parseArgs(argv: string[]): Args {
   const a: Args = {
     days: 60, seeds: [1, 2, 3, 7, 42], difficulties: [...DIFFICULTIES], budget: 500,
-    jobs: Math.max(1, Math.min(3, cpus().length - 1)), keep: false, json: null, details: false, worker: null, overrides: {}, org: null,
+    jobs: Math.max(1, Math.min(3, cpus().length - 1)), keep: false, json: null, details: false, worker: null, overrides: {}, org: null, openEnded: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i]!;
@@ -65,6 +67,7 @@ function parseArgs(argv: string[]): Args {
     if (key === 'details') { a.details = true; continue; }
     if (key === 'no-hire') { a.org = { ...(a.org ?? LEAN_ORG), autoHire: false }; continue; }
     if (key === 'no-payroll') { a.org = { ...(a.org ?? LEAN_ORG), payroll: false }; continue; }
+    if (key === 'open-ended') { a.openEnded = true; continue; }
     if (key === 'help') throw new ArgError('');
     const value = eq >= 0 ? tok.slice(eq + 1) : argv[++i];
     if (value === undefined) throw new ArgError(`L'option --${key} attend une valeur.`);
@@ -84,7 +87,7 @@ function parseArgs(argv: string[]): Args {
         a.org = { ...(a.org ?? LEAN_ORG), team: value };
         break;
       case 'set': {
-        const m = /^([A-Za-z_][\w.]*)=(-?\d+(?:\.\d+)?)$/.exec(value);
+        const m = /^([A-Za-z_][\w.:]*)=(-?\d+(?:\.\d+)?)$/.exec(value);
         if (!m) throw new ArgError('--set attend CHEMIN=nombre, par exemple --set ADS.baseCtr=0.008.');
         a.overrides[m[1]!] = Number(m[2]);
         break;
@@ -167,12 +170,12 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const specs: RunSpec[] = [];
-  const scenario = args.org ? { org: args.org } : undefined;
+  const scenario = { ...(args.org ? { org: args.org } : {}), ...(args.openEnded ? { openEnded: true } : {}) };
   for (const difficulty of args.difficulties) for (const seed of args.seeds) specs.push({ difficulty, seed, days: args.days, budget: args.budget, keep: args.keep, overrides: args.overrides, scenario });
   try {
     applyOverrides(args.overrides); // validates the paths before spawning anything
   } catch (e) {
-    console.error(`Erreur : ${e instanceof Error ? e.message : String(e)} (voir server/src/sim/balance.ts).`);
+    console.error(`Erreur : ${e instanceof Error ? e.message : String(e)} (voir PLAN §2.9).`);
     return 1;
   }
   const set = Object.entries(args.overrides).map(([k, v]) => `${k}=${v}`).join(', ');
@@ -197,7 +200,9 @@ async function main(argv: string[]): Promise<number> {
   console.log('\nArtefacts : F = falaise de profit (> 40 % du pic perdu en < 7 jours), S = plus de 2 jours sans pub avec trésorerie et produit vendable, K = KPI ≠ grand livre, N = NaN.');
   console.log('Effectif : agents le dernier jour. Masse salariale : salaires, embauches et départs sur tout le run. Violations : invariants d\'organisation rompus, doit rester à 0.');
   const half = Math.floor(args.days / 2);
-  console.log(`ROAS/CTR 1→2 : jours 1-${half} → jours ${half + 1}-${args.days} (↑ = meilleur en 2e moitié ; ROAS pub brut, « — » sous 20 € de pub ou 2 000 impressions).`);
+  console.log(`ROAS/CTR 1→2 : jours 1-${half} → jours ${half + 1}-${args.days}, lus sur les lignes du jour (↑ = meilleur en 2e moitié ; ROAS pub brut, « — » sous 20 € de pub ou 2 000 impressions).`);
+  console.log('CTR neuf : TikTok, créations sous 30 000 impressions. Angle : accroche × format de ce qui a tourné sur le meilleur couple de la niche, pondéré par les impressions. Un ROAS qui baisse quand la dépense monte, c\'est la saturation : l\'apprentissage se lit ici.');
+  console.log('Faillite : au moins une clôture négative jusqu\'à ce jour, remontée ou non (lecture de RunResult.bankrupt et du sweep santé). Morte : trésorerie négative le dernier jour. Survie : jours sous la ligne du CFO.');
   console.log('Objectif : 1er jour où le profit cumulé atteint 1 000 €. J>0 : 1er jour où le profit cumulé (frais de démarrage compris) passe au-dessus de 0.\n');
   console.log('Synthèse par difficulté');
   for (const d of args.difficulties) {
@@ -207,7 +212,7 @@ async function main(argv: string[]): Promise<number> {
   const ls = learningShare(results);
   if (ls.runs) {
     const share = (k: number) => `${Math.round((k / ls.runs) * 100)} %`;
-    console.log(`\nApprentissage visible (normal + cauchemar, ${ls.runs} run${ls.runs > 1 ? 's' : ''}) : CTR ${share(ls.ctr)} · ROAS ${share(ls.roas)} · les deux ${share(ls.both)} des runs font mieux en 2e moitié.`);
+    console.log(`\nApprentissage visible (normal + cauchemar, ${ls.runs} run${ls.runs > 1 ? 's' : ''}) : CTR ${share(ls.ctr)} · ROAS ${share(ls.roas)} · les deux ${share(ls.both)} · CTR neuf ${share(ls.fresh)} · angle ${share(ls.fit)} des runs font mieux en 2e moitié.`);
   }
   if (args.details) {
     for (const r of results) {

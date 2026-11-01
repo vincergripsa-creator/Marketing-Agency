@@ -20,7 +20,7 @@ function forcedSkills(w: WorldState): Partial<Record<Skill, number>> {
   const out: Partial<Record<Skill, number>> = {};
   if (c?.videoSkill !== undefined) out.video = c.videoSkill;
   if (c?.designTalent !== undefined) out.design = c.designTalent;
-  for (const s of c?.talentOverride?.skills ?? []) out[s] = c!.talentOverride!.value;
+  for (const { skills, value } of [c?.talentOverride ?? []].flat()) for (const s of skills) out[s] = value;
   return out;
 }
 
@@ -99,6 +99,24 @@ export function practice(w: WorldState): void {
       truth.practicedLevel += 1;
     }
   }
+}
+
+/** A seat a close can train: its primary skill below the top of the scale, and not forced by a control arm. */
+export function trainable(w: WorldState, a: AgentState): boolean {
+  const skill = primaryOf(a.roleId);
+  const t = skill ? truthOf(w, a)?.talent[skill] : undefined;
+  return skill !== null && t !== undefined && t < TALENT.ceilingCap && forcedSkills(w)[skill] === undefined;
+}
+
+/** One funded seat: the same step towards the top of the scale for everyone, and the ceiling goes along, so practice can follow. Draws nothing. */
+export function trainSeat(w: WorldState, a: AgentState): void {
+  const skill = primaryOf(a.roleId);
+  const truth = truthOf(w, a);
+  const t = skill ? truth?.talent[skill] : undefined;
+  if (!skill || !truth || t === undefined) return;
+  const gain = TALENT.training.rate * (TALENT.ceilingCap - t);
+  truth.talent[skill] = t + gain;
+  truth.ceiling[skill] = Math.min(TALENT.ceilingCap, Math.max(t + gain, (truth.ceiling[skill] ?? t) + gain));
 }
 
 /** Open plans, `league` only: the coach pays each morning, and each week a coach who really is better pulls the pupil up (§4.10). */

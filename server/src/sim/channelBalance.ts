@@ -26,7 +26,7 @@ export const CHANNEL_SIM: Record<PaidChannel, {
 };
 
 /** How much of the other channels' views also lands in TikTok's pool. TikTok's other numbers stay in ADS. */
-export const TIKTOK_OVERLAP = 0.3;
+export let TIKTOK_OVERLAP = 0.3;
 
 export const FORMAT_FIT: Record<PaidChannel, Partial<Record<AdFormat, number>>> = {
   meta: { carousel: 1.15, ugc_avatar: 1.1, static_image: 1, faceless_voiceover: 0.95, text_slideshow: 0.9 },
@@ -67,7 +67,13 @@ export const SEARCH = { baseCtr: 0.05, cpc: { min: 0.55, span: 1.1, exp: 1.5 }, 
 export const ASSIST = { decay: 0.8, weights: { tiktok: 1, meta: 1, youtube: 0.7, pinterest: 0.5 } as Partial<Record<ChannelId, number>>, halfStock: 0.5, maxLift: 0.6 };
 
 /** Share of what a creative's family showed on the other channels that weighs on its fatigue here. */
-export const FAMILY_FATIGUE = 0.25;
+export let FAMILY_FATIGUE = 0.25;
+
+/** A bare number has no object for applyOverrides to reach: these two are live bindings, and the calibration moves them here. */
+export function setChannelNumber(name: 'TIKTOK_OVERLAP' | 'FAMILY_FATIGUE', value: number): void {
+  if (name === 'TIKTOK_OVERLAP') TIKTOK_OVERLAP = value;
+  else FAMILY_FATIGUE = value;
+}
 
 /** A paid pin keeps earning: free clicks on the 3 days after, as a share of the clicks paid for. */
 export const PAID_TAIL = { channel: 'pinterest' as PaidChannel, shares: [0.25, 0.12, 0.06] as readonly number[], noiseSd: 0.3 };

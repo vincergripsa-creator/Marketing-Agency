@@ -28,7 +28,7 @@ const scratch = vi.hoisted(() => ({ root: `${process.env.TEMP ?? process.env.TMP
 
 vi.mock('../src/core/index.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../src/core/index.js')>()), repoRoot: () => scratch.root }));
 
-const SENTINEL = 0.7391;
+const SENTINEL = 0.739127;
 const DAYS = 30;
 
 interface Lab { world: WorldState; company: Company; paths: RunPaths; reopen(w: WorldState): Company }
@@ -448,6 +448,7 @@ describe('the detail views', () => {
       const day = e.type === 'salary' && /^payroll:(\d+)$/.exec(e.ref ?? '')?.[1];
       if (day) e.amount = -w.company.agents.filter((a) => a.hiredDay <= Number(day)).reduce((n, a) => n + payOf(a) * (a.founder ? 0.5 : 1), 0);
     }
+    w.ledger.push({ ...w.ledger.at(-1)!, type: 'recruiting', amount: -60, ref: 'training:9', day: w.day - 1 });
     const d = orgDetail(w);
     const heads = d.depts.flatMap((x) => x.heads);
     const founder = w.company.agents.find((a) => a.founder)!;

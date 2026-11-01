@@ -15,7 +15,7 @@ import type { RuntimeCtx } from '../src/runtime/ctx.js';
 import { HANDLERS } from '../src/runtime/handlers/index.js';
 import { sim } from '../src/runtime/modules.js';
 import { TALENT } from '../src/runtime/talent/constants.js';
-import { applyDailyEvidence, naturalResult, onDone, onReviewed, onStrike, phi, ratingOf, recordEvidence, recordScore, routeBonus } from '../src/runtime/talent/evidence.js';
+import { applyDailyEvidence, naturalResult, onDone, onReviewed, onStrike, phi, ratingOf, recordEvidence, recordScore, routeBonus, settledRd } from '../src/runtime/talent/evidence.js';
 import { talentPillar } from '../src/runtime/talent/index.js';
 import { assignReady, capableAgents, createTask } from '../src/runtime/tasks.js';
 import { LEGACY } from './legacy.js';
@@ -95,12 +95,47 @@ describe('the rating (§5.1)', () => {
     const r = ratingOf(world, a!.id, 'copy');
     expect(before).toBe(1500);
     expect(r.rating).toBeGreaterThan(1520); // K 50 on a game won at .98
-    expect(r.rd).toBe(194);
+    expect(r.rd).toBeCloseTo(200 / Math.SQRT2, 9); // one game worth 200 on a prior worth 200
     expect(r).toMatchObject({ n: 1, seasonN: 1 });
     for (let i = 0; i < 400; i++) recordScore(world, a!.id, 'copy', 'qa', TALENT.par['copy:qa']! + 0.5 * TALENT.sd['copy:qa']!, 'pub');
     expect(ratingOf(world, a!.id, 'copy').rating).toBeGreaterThan(1625);
     expect(ratingOf(world, a!.id, 'copy').rating).toBeLessThan(1655);
     expect(ratingOf(world, a!.id, 'copy').rd).toBe(TALENT.rating.rdMin);
+  });
+
+  it('rd is a standard error: games of weight w add up as w of them would, down to 35, and K stays rd / 4 clamped', async () => {
+    const { world } = await lab();
+    const [a] = writers(world);
+    const r = ratingOf(world, a!.id, 'copy');
+    r.rd = 100;
+    recordEvidence(world, a!.id, 'copy', 'natural', 0.5, 0.25, 'x');
+    expect(r.rd).toBeCloseTo(1 / Math.sqrt(1 / 100 ** 2 + 0.25 / 200 ** 2), 9);
+    r.rd = 100;
+    for (let i = 0; i < 8; i++) recordEvidence(world, a!.id, 'copy', 'natural', 0.5, 0.25, 'x');
+    const once = settledRd(100, 2);
+    expect(r.rd).toBeCloseTo(once, 9);
+    expect(TALENT.rating.rdMin).toBe(35);
+    expect(settledRd(35.01, 1000)).toBe(35);
+    const moved = (rd: number): number => {
+      r.rd = rd;
+      r.rating = 1500;
+      recordEvidence(world, a!.id, 'copy', 'natural', 1, 1, 'x');
+      return r.rating - 1500;
+    };
+    expect(moved(200)).toBeCloseTo(50 * 0.5, 1); // rd / 4
+    expect(moved(100)).toBeCloseTo(25 * 0.5, 1);
+    expect(moved(35)).toBeCloseTo(12 * 0.5, 1);  // the floor of K
+  });
+
+  it('pars and spreads are the measured ones, the same keys as `league.parStats`', () => {
+    expect(TALENT.par).toEqual({
+      'copy:qa': 89.38, 'video:cut': 77.55, 'longform:qa': 81.18, 'longform:market': 4.64, 'polish:qa': 3.86, 'polish:market': 4.64,
+      'page:qa': 85.96, 'page:market': -0.19, 'design:visual': 85.11, 'buying:focus': 0.45, 'buying:market': -0.29, 'support:reply': 81.55,
+    });
+    expect(TALENT.sd).toEqual({
+      'copy:qa': 4.49, 'video:cut': 8.67, 'longform:qa': 3.48, 'longform:market': 0.33, 'polish:qa': 1.46, 'polish:market': 0.33,
+      'page:qa': 5.75, 'page:market': 0.68, 'design:visual': 3.93, 'buying:focus': 0.24, 'buying:market': 1.19, 'support:reply': 18.39,
+    });
   });
 
   it('a result the noise can eat moves almost nothing: s is worth what it says, and w weighs it', async () => {

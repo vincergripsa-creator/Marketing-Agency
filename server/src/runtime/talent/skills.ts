@@ -30,9 +30,22 @@ export function roleSkills(role: RoleId): Skill[] {
   return skillsIn([...core, ...assist]);
 }
 
-/** The skill of the first core kind that has one. Never a hat: Zoé wearing `produce_ad` is not judged on `copy` (D14). */
+/** The kinds whose work reaches a skill's rating (§5.2). A hook has `copy` for a skill, and no row of evidence reads it: the ad does. */
+const EVIDENCE_KINDS: Record<Skill, readonly TaskKind[]> = {
+  copy: ['produce_ad'], video: ['produce_ad'], longform: ['write_pdf'], polish: ['humanize_pdf'], page: ['write_sales_page'],
+  design: ['render_pdf'], buying: ['launch_campaign'], research: ['pick_opportunity'], support: ['reply_inbox'],
+};
+
+/**
+ * The skill of the first core kind with an evidence route in this role, core or assist: the hook writer's ads are read, the
+ * Head of Growth, who writes no ad, is read on his campaigns. A role no route reaches keeps its first skill, unrated, and
+ * still sits that test when hired (D16). Never a hat: Zoé wearing `produce_ad` is not judged on `copy` (D14).
+ */
 export function primaryOf(role: RoleId): Skill | null {
-  return skillsIn(ROLES[role].core)[0] ?? null;
+  const { core, assist } = ROLES[role];
+  const own = new Set<TaskKind>([...core, ...assist]);
+  const skills = skillsIn(core);
+  return skills.find((skill) => EVIDENCE_KINDS[skill].some((k) => own.has(k))) ?? skills[0] ?? null;
 }
 
 export function primarySkill(w: WorldState, id: AgentId): Skill | null {

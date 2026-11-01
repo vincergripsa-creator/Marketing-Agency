@@ -12,7 +12,7 @@ import { REVIEWS_KEPT } from '../sim/feedback.js';
 import { isOpen } from './tasks.js';
 
 export const COMPACT = {
-  taskDays: 21, missionDays: 14, orderDays: 120, ledgerDays: 150, commentsDays: 14, creativeDays: 45,
+  taskDays: 21, outputDays: 31, missionDays: 14, orderDays: 120, ledgerDays: 150, commentsDays: 14, creativeDays: 45,
   campaignDays: 100, experimentDays: 90, killedProductDays: 30, reviewsPerProduct: REVIEWS_KEPT, deliverables: 300, retiredLessons: 40, journalDays: 60,
 } as const;
 
@@ -70,7 +70,11 @@ function foldTask(w: WorldState, t: Task, totals: TaskTotals): void {
   row(t.dayCreated).created += 1;
   if (t.assignee) {
     const who = ((totals.agents ??= {})[t.assignee] ??= { done: 0, approved: 0, rejected: 0, failed: 0 });
-    if (t.status === 'done' && t.dayDone != null) who.done += 1;
+    if (t.status === 'done' && t.dayDone != null) {
+      who.done += 1;
+      const days = (who.days ??= {});
+      days[t.dayDone] = (days[t.dayDone] ?? 0) + 1;
+    }
     if (t.status === 'failed') who.failed += 1;
     for (const r of t.reviews) if (r.verdict === 'approve') who.approved += 1; else if (r.verdict === 'reject') who.rejected += 1;
   }
@@ -107,6 +111,9 @@ function compactTasks(w: WorldState): Task[] {
   });
   for (const t of leaving) foldTask(w, t, totals);
   totals.days.sort((a, b) => a.day - b.day);
+  for (const who of Object.values(totals.agents ?? {})) {
+    for (const day of Object.keys(who.days ?? {}).map(Number)) if (w.day - day > COMPACT.outputDays) delete who.days![day];
+  }
   return leaving;
 }
 

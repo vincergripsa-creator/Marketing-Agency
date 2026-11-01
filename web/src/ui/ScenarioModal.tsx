@@ -197,7 +197,7 @@ export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded
                   <div className="run-main">
                     <strong>{r.companyName ?? r.name ?? r.runId}</strong>
                     <span className="muted small">
-                      {[r.name && r.companyName ? r.name : null, r.difficulty ? DIFFICULTY_INFO[r.difficulty as Difficulty]?.label ?? r.difficulty : null, typeof r.day === 'number' ? `jour ${r.day}` : null, r.status ? RUN_STATUS[r.status] ?? r.status : null].filter(Boolean).join(' · ') || r.runId}
+                      {[r.name && r.companyName ? r.name : null, r.difficulty ? DIFFICULTY_INFO[r.difficulty as Difficulty]?.label ?? r.difficulty : null, typeof r.day === 'number' ? `jour ${r.day}` : null, r.status ? (r.status === 'finished' && (r.cash ?? 0) < 0 ? RUN_STATUS.bankrupt : RUN_STATUS[r.status] ?? r.status) : null].filter(Boolean).join(' · ') || r.runId}
                     </span>
                     {typeof r.profit === 'number' || typeof r.cash === 'number' ? (
                       <span className="small">
@@ -206,7 +206,7 @@ export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded
                       </span>
                     ) : null}
                   </div>
-                  {r.runId === snapshot?.runId ? <Pill tone={currentRunPill(snapshot.status).tone}>{currentRunPill(snapshot.status).label}</Pill> : (
+                  {r.runId === snapshot?.runId ? <Pill tone={currentRunPill(snapshot.status, snapshot.finance?.bankrupt).tone}>{currentRunPill(snapshot.status, snapshot.finance?.bankrupt).label}</Pill> : (
                     <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void load(r.runId)}>Charger</button>
                   )}
                 </div>

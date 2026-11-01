@@ -1,7 +1,7 @@
 // Turns snapshot changes into toasts: world events, sale bursts, run status changes, and what the chronicle records.
 import { useEffect, useRef } from 'react';
 import type { ChronicleEntry, ChronicleKind, CompanySnapshot, DeptId, SceneView, WorldEvent, WorldEventKind } from '../../../shared/types';
-import { goalLate, goalTitle } from './derive';
+import { endedBankrupt, goalLate, goalTitle } from './derive';
 import { fmtEur } from './format';
 import type { IconName } from './icons';
 import type { TabId } from './labels';
@@ -59,10 +59,12 @@ export function useEventToasts(snapshot: CompanySnapshot | null, push: (t: Toast
     for (const o of orders) s.orders.add(o.id);
 
     if (s.status !== snapshot.status) {
-      const hadEvent = fresh.some((e) => e.kind === 'goal_reached' || e.kind === 'bankrupt');
+      // A bankruptcy speaks through its event, once per episode: the status flickers with cash around zero, the toast does not.
+      const hadEvent = fresh.some((e) => e.kind === 'goal_reached');
       if (!hadEvent && snapshot.status === 'goal_reached') push({ tone: goalLate(snapshot) ? 'info' : 'good', icon: 'sparkle', title: goalTitle(snapshot), text: `Profit cumulé ${fmtEur(snapshot.finance?.profit)}`, ttl: 9000 });
-      if (!hadEvent && snapshot.status === 'bankrupt') push({ tone: 'bad', icon: 'alert', title: 'Faillite', text: 'La trésorerie est négative : l’agence continue en mode survie.', ttl: 9000 });
-      if (snapshot.status === 'finished') push({ tone: 'info', icon: 'flag', title: 'Fin de la simulation', text: `Horizon atteint au jour ${snapshot.day}.` });
+      if (snapshot.status === 'finished') push(endedBankrupt(snapshot)
+        ? { tone: 'bad', icon: 'alert', title: 'Faillite', text: `La simulation s’arrête au jour ${snapshot.day} sur une trésorerie négative.`, ttl: 9000 }
+        : { tone: 'info', icon: 'flag', title: 'Fin de la simulation', text: `Horizon atteint au jour ${snapshot.day}.` });
       s.status = snapshot.status;
     }
   }, [snapshot, push, enabled, onOpenProduct]);

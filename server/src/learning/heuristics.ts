@@ -3,7 +3,7 @@ import type { BrainNote, LessonDraft } from '../contracts.js';
 import type { AdCreative, AdFormat, ChannelId, DailyKpi, DeptId, Experiment, HookStyle, Lesson, Product, TaskKind, WorldState } from '../shared.js';
 import { CHANNEL_IDS, CHANNELS, channelOf, droppedBeforeSubmission } from '../shared.js';
 import { clamp } from '../core/index.js';
-import { recentReviews } from '../sim/feedback.js';
+import { recentReviews, reviewBasis } from '../sim/feedback.js';
 import { isScamFlag } from '../sim/market.js';
 import { RECON } from './attribution.js';
 import { empiricalMean, nearestArm, PRICE_ARMS } from './bandits.js';
@@ -546,7 +546,7 @@ function hypeAndQuality(inp: RetroInput): HeuristicDraft[] {
       topic: 'product',
       title: `Guide v${(p.version ?? 1) + 1} : ${shorten(p.title, 50)}`,
       insight: `Retravailler « ${shorten(p.title, 70)} » en v${(p.version ?? 1) + 1} à partir des plaintes clients : ${soberRefunds ? `${fmtPct(x.rate)} de remboursements malgré une promesse sobre` : `note moyenne de ${fmtRatio(p.stats.rating)}/5`}.`,
-      evidence: `${plural(x.n, 'vente', 'ventes')} et ${plural(x.refunded, 'remboursement', 'remboursements')} sur 10 jours, note ${p.stats?.rating ? `${fmtRatio(p.stats.rating)}/5 (${count} avis)` : 'sans avis'}${worstReview ? ` — pire avis : « ${shorten(worstReview.text, 90)} »` : ''}.`,
+      evidence: `${plural(x.n, 'vente', 'ventes')} et ${plural(x.refunded, 'remboursement', 'remboursements')} sur 10 jours, note ${p.stats?.rating ? `${fmtRatio(p.stats.rating)}/5 (${count} avis)` : 'sans avis'}${worstReview ? ` — pire avis : « ${shorten(reviewBasis(worstReview), 90)} »` : ''}.`,
       confidence: sampleConfidence(x.n + count * 3, 30),
       links: ["Structure d'un PDF qui vend", ...productLink(inp, p)],
       tags: ['qualite', 'v2'],

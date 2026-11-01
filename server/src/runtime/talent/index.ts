@@ -6,6 +6,7 @@ import { craftFor } from './craft.js';
 import { scheduleDuel, settleDuels } from './duels.js';
 import { applyDailyEvidence, onDone, onReviewed } from './evidence.js';
 import { dueSeasonClose } from './season.js';
+import { leagueSeats, primaryOf } from './skills.js';
 import { coachTick, emptyLeague, practice, sampleTalent, seedTruth, talentMode } from './truth.js';
 
 export * from './challenge.js';
@@ -22,6 +23,10 @@ export const talentPillar: Pillar = {
     if (talentMode(w) === 'off') return;
     w.talentTruth ??= seedTruth(w);
     w.company.league ??= emptyLeague(w);
+    for (const a of leagueSeats(w)) { // an older save holds the primary of its day
+      const entry = w.company.league.entries[a.id];
+      if (entry) entry.primary = primaryOf(a.roleId);
+    }
   },
   async morning(ctx) {
     if (talentMode(ctx.world) === 'off') return;

@@ -269,7 +269,7 @@ export const HEROES: Record<DesignSpec['motif'], { draw: Hero; ground: keyof Ink
 ### 6.3 Variation
 
 - **Cover:** `field({ cols: 6, rows, hero })`. `rows = head.length > 40 ? 4 : 5`, so a long title gets more room.
-- **Chapter openers:** `rows = 4`, seed `artSeed + n × 7`. Each takes its own pose (`art/poses.ts`, D80). Before D66: odd chapters a 4-unit hero, even chapters a 3-unit hero on the other side, which left eight openers alike.
+- **Chapter openers:** `rows = 4`, seed `artSeed + n × 7`. Each takes its own pose (`art/poses.ts`, D133). Before D66: odd chapters a 4-unit hero, even chapters a 3-unit hero on the other side, which left eight openers alike.
 - **Bonus:** hero on ground `b`, label « CADEAU ».
 - **Introduction and final page:** 2 rows.
 
@@ -340,7 +340,7 @@ export function paginate(blocks: Block[], params: LayoutParams): PagePlan[];
 4. Rail blocks sit on the baseline of their anchor. A rail block that does not fit moves to the next page's top.
 5. A `steps` item is never split.
 6. A `sheet` block ends the chapter on its own full-bleed tinted page.
-7. No body page stops under `PAGE_FLOOR` (0.6, D80): lines move from the pages before it (`PAGE_AIM`, trims of at most 6 lines), a short page breathes up to `PAGE_BREATH`, then its section closes on a band of the guide's tiles or on ruled « Vos notes ». Sheets get the same notes under a short table. `fill` means ink, a close counts at half weight, so it cannot game the score. It was: under `fill < 0.45`, try the next params, then ruled notes.
+7. No body page stops under `PAGE_FLOOR` (0.6, D133): lines move from the pages before it (`PAGE_AIM`, trims of at most 6 lines), a short page breathes up to `PAGE_BREATH`, then its section closes on a band of the guide's tiles or on ruled « Vos notes ». Sheets get the same notes under a short table. `fill` means ink, a close counts at half weight, so it cannot game the score. It was: under `fill < 0.45`, try the next params, then ruled notes.
 
 Because block heights are known, one `paginate` call is pure arithmetic. That is why a designer can try 24 layouts for free.
 

@@ -52,7 +52,7 @@ function lifetimeFactor(w: WorldState): number {
 /** The week's allocation. Reads the world, moves nothing. */
 export function allocationOf(w: WorldState): Allocation {
   const policy = policyOf(w);
-  const { cash, rate } = computeBudget(w);
+  const { adCap, cash, rate } = computeBudget(w);
   const week = closedWindow(w, 7);
   const fortnight = closedWindow(w, 14);
   const month = closedWindow(w, 28);
@@ -84,9 +84,10 @@ export function allocationOf(w: WorldState): Allocation {
   const testWeek = CFO.targetDays * (testAdd + (leak ? CFO.leakToTests * spend7 : 0)); // a leaking bucket funds exploration, not more of itself
   adTarget = Math.floor(adTarget * 100) / 100; // down, or a cent could reach past the cap or into the reserve
 
+  const spent = `${eur(spend7)}/jour de pub dépensés sur 7 jours`;
   const note = leak
-    ? `Fuite : ROAS ${dec(roas14 ?? 0)} sur 14 jours sous le point mort de ${dec(beRoas)}, rien de plus sur ce qui tourne, ${eur(testWeek)} pour tester du neuf.`
-    : `Cible pub ${eur(adTarget)}/jour, réserve ${eur(reserve)}, ${eur(free)} libres : une campagne grandit au-dessus d'un ROAS de ${dec(scaleRoas)}.`;
+    ? `Fuite : ${spent}, ROAS ${dec(roas14 ?? 0)} sur 14 jours sous le point mort de ${dec(beRoas)}. Rien ne monte sur ce qui tourne.`
+    : `${spent}. ${adTarget > spend7 ? `La pub peut monter jusqu'à ${eur(adTarget)}/jour cette semaine, enveloppe du jour ${eur(adCap)} : seule une campagne au-dessus d'un ROAS de ${dec(scaleRoas)} grandit.` : `Rien ne monte cette semaine : plafond ${eur(adTarget)}/jour, enveloppe du jour ${eur(adCap)}.`} Réserve ${eur(reserve)}, ${eur(free)} libres.`;
   return {
     week: Math.ceil(w.day / 7), day: w.day,
     profit7: round2(profit7), profit28: round2(books28.profit), spend7: round2(spend7), roas14: roas14 === null ? null : round2(roas14), net: round2(net), ltv: round2(ltv),
@@ -106,7 +107,7 @@ export function cfoMonday(ctx: RuntimeCtx): void {
   growth.ltvFactor = a.ltv;
   logDecision(w, {
     kind: 'budget', who: officerId(w, 'cfo'),
-    text: `Semaine ${a.week} : ${eur(a.adTarget)}/jour de pub, ${eur(a.testWeek)} de tests`,
+    text: `Semaine ${a.week} : ${eur(a.spend7)}/jour de pub dépensés, plafond ${eur(a.adTarget)}/jour`,
     why: `profit 7 j ${eur(a.profit7)}, pub ${eur(a.spend7)}/jour, ROAS 14 j ${a.roas14 === null ? '—' : dec(a.roas14)}, point mort ${dec(a.beRoas)}, réserve ${eur(a.reserve)}`,
     impactEur: round2(CFO.targetDays * (a.adTarget - a.spend7)),
   });

@@ -198,10 +198,10 @@ Worst error +8 %. The model is slightly long, the safe side for a budget.
 | Tightening | x < 0,35: none. x < 0,60: level 1. Else level 2 | The voice, the duration |
 | Shot target | `lerp(3.4, 1.4, x) × tempoFactor` (calm 1,2, standard 1, fast 0,8) | `shots = max(1, ceil(estSec / target))` |
 | Proof | With a needle found in `product.content`: x < 0,10: `fact_card`. x < 0,30: one page, held on one shot. x < 0,50: one page. Else every page it can | Real page or a text plate |
-| Product early | x ≥ 0,75: the guide enters during the hook at 0,45 s. Else from its first page, the bonus or the end. The late rise of a kinetic hook is the film's, it does not enter here (D77) | `productSec` |
+| Product early | x ≥ 0,75: the guide enters during the hook at 0,45 s. Else from its first page, the bonus or the end. The late rise of a kinetic hook is the film's, it does not enter here (D130) | `productSec` |
 | Pain | x ≥ 0,40: `pain_bubble`. Else `fact_card` | `kinds` |
 | Captions | x < 0,30: 6 words a line. x < 0,60: 3 words. Else 2-3 with the spoken word on a pill | `captionWords` |
-| End hold | After the last word. x < 0,30: 0,8 s. x < 0,50: 1,2 s. x < 0,75: 1,5 s. Else 1,8 s (D76) | `endHoldSec` |
+| End hold | After the last word. x < 0,30: 0,8 s. x < 0,50: 1,2 s. x < 0,75: 1,5 s. Else 1,8 s (D129) | `endHoldSec` |
 | SFX | x ≥ 0,50 | `sfx` |
 
 **Tightening** only deletes at sentence or clause boundaries, never mid-clause, so a negation cannot be lost:

@@ -40,8 +40,8 @@ export function safeResolve(base: string, requested: string): string | null {
   return full;
 }
 
-/** What a run folder holds of the hidden truth: saves and checkpoints are whole worlds, the archive keeps customers with their archetype (D51). */
-const SERVER_ONLY = /^(world[^/]*\.json|checkpoints\/|archive\/)/i;
+/** What a run folder holds of the hidden truth: saves and checkpoints are whole worlds, the archive keeps customers with their archetype (D51), and a folder of scripts/calibrate.ts keeps every seed's true talent under step<N>, whatever --out named it. */
+const SERVER_ONLY = /^(world[^/]*\.json|checkpoints\/|archive\/|step\d+[/.])/i;
 
 /** `rel`: a path inside a run folder. */
 export function isServerOnlyFile(rel: string): boolean {

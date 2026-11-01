@@ -20,11 +20,12 @@ import { HANDLERS } from '../src/runtime/handlers/index.js';
 import { addHold, pinHold } from '../src/runtime/holds.js';
 import { sim } from '../src/runtime/modules.js';
 import { ROLES } from '../src/runtime/org/catalog.js';
+import { LEGACY_ORG } from '../src/runtime/org/constants.js';
 import { completeDeparture, requestDeparture } from '../src/runtime/org/departure.js';
 import { drawCandidates, hireAgent, openPosition } from '../src/runtime/org/hiring.js';
 import { reviewerFor, roleHolders } from '../src/runtime/org/officers.js';
 import { auditOrg } from '../src/runtime/org/reconcile.js';
-import { benchFor, closeEntry, decidedSwap, runChallenge, scoreCandidates, spearman, swapRefused, TEST_BY_SKILL, testDeliverable } from '../src/runtime/talent/challenge.js';
+import { benchFor, closeEntry, decidedSwap, METRICS, runChallenge, scoreCandidates, spearman, swapRefused, TEST_BY_SKILL, testDeliverable } from '../src/runtime/talent/challenge.js';
 import type { SkillTest, TestResult } from '../src/runtime/talent/challenge.js';
 import { MIN_SEASON_N, TALENT } from '../src/runtime/talent/constants.js';
 import { craftFor } from '../src/runtime/talent/craft.js';
@@ -32,6 +33,7 @@ import { talentPillar } from '../src/runtime/talent/index.js';
 import { closeSeason, dueSeasonClose, openPlans, reviewPlans } from '../src/runtime/talent/season.js';
 import { createTask, KIND_META } from '../src/runtime/tasks.js';
 import { mean } from '../src/runtime/util.js';
+import { armScenario } from '../scripts/calibrateLib.js';
 
 const roots: string[] = [];
 const rows = new Map<Skill, SkillTest | undefined>();
@@ -93,10 +95,16 @@ function fixedRow(skill: Skill, score: (sitter: AgentState) => number): void {
   TEST_BY_SKILL[skill] = { par: () => 80, sit: async (_b, sitter) => ({ score: score(sitter), deliverable: 'Un test', work: [] }) };
 }
 
-/** Every skill of the five founders the league can judge: the incumbent scores `own`, whoever else `others`. */
+/** Every skill a challenge can decide: the incumbent scores `own`, whoever else `others`. */
 function fixedRows(w: WorldState, own: number, others: number): void {
   const here = new Set(w.company.agents.map((a) => a.id));
-  for (const skill of ['copy', 'longform', 'design', 'page', 'research', 'buying'] as const) fixedRow(skill, (s) => (here.has(s.id) ? own : others));
+  for (const skill of ['copy', 'video', 'longform', 'polish', 'page'] as const) fixedRow(skill, (s) => (here.has(s.id) ? own : others));
+}
+
+/** Enough in the till for a close to spend, and what a season sold. */
+function wealthy(w: WorldState, revenue: number): void {
+  sim.recordLedger(w, { type: 'capital', amount: 5000, memo: 'Pour le test', ref: null });
+  if (revenue) sim.recordLedger(w, { type: 'revenue', amount: revenue, memo: 'Ventes', ref: null });
 }
 
 async function liveProduct(ctx: RuntimeCtx): Promise<Product> {
@@ -163,16 +171,19 @@ describe('the calendar of a season', () => {
     expect(league(w).seasons.map((s) => s.season)).toEqual([1]);
   }, 30_000);
 
-  it('decays rd, keeps the sample in the report, and starts the next sample at zero', async () => {
+  it('rd is a standard error: it grows back only on a rating nobody played, the sample stays in the report, the next one starts at zero', async () => {
     const { world: w, ctx } = await lab({ talent: 'flat' });
     atClose(w, 14);
-    const a = holder(w, 'growth_lead');
+    const a = holder(w, 'shop_lead');
     rate(w, a, { rating: 1560, rd: 100, seasonN: 6, metric: 92 });
+    const idle = holder(w, 'editor_in_chief');
+    rate(w, idle, { rating: 1500, rd: 100, seasonN: 0, metric: null });
     const report = await closeSeason(ctx);
-    const r = league(w).entries[a.id]!.ratings.copy!;
-    expect(r.rd).toBeCloseTo(100 * TALENT.rating.rdSeasonGrowth, 6);
+    const r = league(w).entries[a.id]!.ratings.page!;
+    expect(r.rd).toBe(100);
+    expect(league(w).entries[idle.id]!.ratings.longform!.rd).toBeCloseTo(100 * TALENT.rating.rdSeasonGrowth, 6);
     expect(r.seasonN).toBe(0);
-    expect(report.tables.copy).toEqual([{ agentId: a.id, name: a.name, rating: 1560, delta: 60, metric: 92, n: 6, status: 'active' }]);
+    expect(report.tables.page).toEqual([{ agentId: a.id, name: a.name, rating: 1560, delta: 60, metric: 92, n: 6, status: 'active' }]);
     expect(league(w).seasons[0]).toBe(report);
   }, 30_000);
 });
@@ -189,9 +200,12 @@ describe('flat is a control', () => {
     failing(w, c);
     const headcount = w.company.agents.length;
     const report = await closeSeason(ctx);
-    expect(report.tables.copy?.[0]?.rating).toBe(1300);
+    expect(report.tables.buying?.[0]?.rating).toBe(1300);
     expect(report.employee).toBeNull();
     expect(report.probations).toEqual([]);
+    expect(report.bar).toBeUndefined();
+    expect(league(w).bar).toBeUndefined();
+    expect(league(w).entries[a.id]!.underBar).toBeUndefined();
     expect(league(w).plans.map((p) => p.outcome)).toEqual(['failed']);
     expect(league(w).perks).toEqual([]);
     expect(w.company.agents).toHaveLength(headcount);
@@ -200,71 +214,90 @@ describe('flat is a control', () => {
 
 describe('who enters a plan (talent 15)', () => {
   const report = (w: WorldState) => ({ season: league(w).season, fromDay: 1, toDay: w.day, tables: {}, employee: null, probations: [] as string[], dismissals: [], hires: [], notes: [] as string[], disruptedDays: 0 });
-  /** Under the gate on a full sample: the person the rules should catch. */
+  /** Under the bar on a full sample: the person the rules should catch. */
   const weak = { rating: 1400, rd: 80, seasonN: 10, metric: 81 };
+  /** Two closes under the bar already behind them. */
+  const judged = (w: WorldState, a: AgentState, numbers = weak, skill?: Skill): void => {
+    rate(w, a, numbers, skill);
+    league(w).entries[a.id]!.underBar = TALENT.plan.underCloses;
+  };
 
-  it('someone confidently under par, with the numbers said out loud', async () => {
+  it('someone two closes under the bar, with the numbers said out loud', async () => {
     const { world: w, ctx } = await lab();
-    atClose(w, 14);
-    league(w).season = 2;
-    const a = holder(w, 'growth_lead');
-    rate(w, a, weak);
-    league(w).closedSeasons = 1;
+    atClose(w, 42);
+    Object.assign(league(w), { season: 4, closedSeasons: 3, bar: 1520 });
+    const a = holder(w, 'shop_lead');
+    judged(w, a);
     openPlans(ctx, report(w));
     const plan = league(w).plans[0]!;
-    expect(plan).toMatchObject({ agentId: a.id, skill: 'copy', openedSeason: 2, deadlineDay: 28, baseline: 81, target: 81 + 0.5 * TALENT.sd['copy:qa']!, outcome: 'open' });
+    expect(plan).toMatchObject({ agentId: a.id, skill: 'page', openedSeason: 4, deadlineDay: 56, baseline: 81, target: Math.round((81 + 0.5 * TALENT.sd['page:qa']!) * 100) / 100, outcome: 'open' });
     expect(plan.text).toContain(a.name);
+    expect(plan.text).toContain('sous la barre de 1 520 depuis 2 clôtures');
     expect(plan.text).toContain('81/100');
     expect(plan.text).toContain('84/100');
     expect(plan.text).toContain('14 jours');
     expect(league(w).entries[a.id]!.status).toBe('probation');
   });
 
-  it('not before 14 days in the job', async () => {
+  it('not before day 42, whatever the count says', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
-    rate(w, a, weak);
-    league(w).entries[a.id]!.hiredDay = 15;
+    const a = holder(w, 'shop_lead');
+    judged(w, a);
+    league(w).entries[a.id]!.underBar = 5;
     openPlans(ctx, report(w));
     expect(league(w).plans).toEqual([]);
-    league(w).entries[a.id]!.hiredDay = 14;
+    atClose(w, 42);
+    openPlans(ctx, report(w));
+    expect(league(w).plans).toHaveLength(1);
+  });
+
+  it('not on one close under the bar: « pendant un certain temps » is two', async () => {
+    const { world: w, ctx } = await lab();
+    atClose(w, 42);
+    const a = holder(w, 'shop_lead');
+    judged(w, a);
+    league(w).entries[a.id]!.underBar = 1;
+    openPlans(ctx, report(w));
+    expect(league(w).plans).toEqual([]);
+    league(w).entries[a.id]!.underBar = 2;
+    openPlans(ctx, report(w));
+    expect(league(w).plans).toHaveLength(1);
+  });
+
+  it('not before 14 days in the job', async () => {
+    const { world: w, ctx } = await lab();
+    atClose(w, 42);
+    const a = holder(w, 'shop_lead');
+    judged(w, a);
+    league(w).entries[a.id]!.hiredDay = 29;
+    openPlans(ctx, report(w));
+    expect(league(w).plans).toEqual([]);
+    league(w).entries[a.id]!.hiredDay = 28;
     openPlans(ctx, report(w));
     expect(league(w).plans).toHaveLength(1);
   });
 
   it('not under the sample, whatever the rating says, and the report says why', async () => {
     const { world: w, ctx } = await lab();
-    atClose(w, 28);
-    const a = holder(w, 'growth_lead');
-    rate(w, a, { ...weak, rating: 1200, seasonN: MIN_SEASON_N.copy - 0.5 });
+    atClose(w, 42);
+    const a = holder(w, 'shop_lead');
+    judged(w, a, { ...weak, rating: 1200, seasonN: MIN_SEASON_N.page - 0.5 });
     const r = report(w);
     openPlans(ctx, r);
     expect(league(w).plans).toEqual([]);
     expect(r.notes.join(' ')).toContain('échantillon insuffisant');
   });
 
-  it('not on a rating the uncertainty could explain: rating + 0,75 rd stays under par', async () => {
-    const { world: w, ctx } = await lab();
-    atClose(w, 28);
-    const a = holder(w, 'growth_lead');
-    rate(w, a, { ...weak, rating: 1460, rd: 60 });
-    openPlans(ctx, report(w));
-    expect(league(w).plans).toEqual([]);
-    rate(w, a, { ...weak, rating: 1454, rd: 60 });
-    openPlans(ctx, report(w));
-    expect(league(w).plans).toHaveLength(1);
-  });
-
   it('only the lowest of a family, one per family, three a season', async () => {
     const { world: w, ctx } = await lab();
-    atClose(w, 28);
-    const lead = holder(w, 'growth_lead');
+    atClose(w, 42);
+    const lead = await hireInto(ctx, 'community_manager');
     const writer = await hireInto(ctx, 'hook_writer');
-    league(w).entries[writer.id]!.hiredDay = 0;
-    rate(w, lead, { ...weak, rating: 1420 });
-    rate(w, writer, { ...weak, rating: 1380 });
-    for (const role of ['editor_in_chief', 'shop_lead', 'research_lead'] as const) rate(w, holder(w, role), weak);
+    for (const a of [lead, writer]) league(w).entries[a.id]!.hiredDay = 0;
+    judged(w, lead, { ...weak, rating: 1420 });
+    judged(w, writer, { ...weak, rating: 1380 });
+    for (const role of ['editor_in_chief', 'shop_lead', 'research_lead'] as const) judged(w, holder(w, role));
     openPlans(ctx, report(w));
     const plans = league(w).plans;
     expect(plans).toHaveLength(TALENT.plan.perSeason);
@@ -273,11 +306,11 @@ describe('who enters a plan (talent 15)', () => {
 
   it('a colleague rated lower but still unsure keeps the person out: the lowest of the family is the one judged', async () => {
     const { world: w, ctx } = await lab();
-    atClose(w, 28);
-    const lead = holder(w, 'growth_lead');
+    atClose(w, 42);
+    const lead = await hireInto(ctx, 'community_manager');
     const writer = await hireInto(ctx, 'hook_writer');
-    league(w).entries[writer.id]!.hiredDay = 0;
-    rate(w, lead, { ...weak, rating: 1420, rd: 80 });
+    for (const a of [lead, writer]) league(w).entries[a.id]!.hiredDay = 0;
+    judged(w, lead, { ...weak, rating: 1420, rd: 80 });
     rate(w, writer, { ...weak, rating: 1380, rd: 200 });
     openPlans(ctx, report(w));
     expect(league(w).plans).toEqual([]);
@@ -285,42 +318,43 @@ describe('who enters a plan (talent 15)', () => {
 
   it('two people level at the bottom of a family: one plan, not two', async () => {
     const { world: w, ctx } = await lab();
-    atClose(w, 28);
-    const lead = holder(w, 'growth_lead');
+    atClose(w, 42);
+    const lead = await hireInto(ctx, 'community_manager');
     const writer = await hireInto(ctx, 'hook_writer');
-    league(w).entries[writer.id]!.hiredDay = 0;
-    rate(w, lead, weak);
-    rate(w, writer, weak);
+    for (const a of [lead, writer]) {
+      league(w).entries[a.id]!.hiredDay = 0;
+      judged(w, a);
+    }
     openPlans(ctx, report(w));
     expect(league(w).plans).toHaveLength(TALENT.plan.perFamily);
   }, 30_000);
 
   it('never the CEO, who is out of the league (D13), whatever a hat brought her', async () => {
     const { world: w, ctx } = await lab();
-    atClose(w, 28);
+    atClose(w, 42);
     const ceo = holder(w, 'ceo');
     expect(league(w).entries[ceo.id]).toBeUndefined();
     league(w).entries[ceo.id] = { ...league(w).entries[holder(w, 'growth_lead').id]!, agentId: ceo.id, primary: null };
-    rate(w, ceo, { ...weak, rating: 1100 }, 'research');
+    judged(w, ceo, { ...weak, rating: 1100 }, 'research');
     openPlans(ctx, report(w));
     expect(league(w).plans).toEqual([]);
   });
 
   it('never on a hat: the art director is judged on design, not on the ads she wears (D14)', async () => {
     const { world: w, ctx } = await lab();
-    atClose(w, 28);
+    atClose(w, 42);
     const zoe = holder(w, 'art_director');
     expect(league(w).entries[zoe.id]!.primary).toBe('design');
-    rate(w, zoe, { ...weak, rating: 1100 }, 'copy');
+    judged(w, zoe, { ...weak, rating: 1100 }, 'copy');
     openPlans(ctx, report(w));
     expect(league(w).plans).toEqual([]);
   });
 
   it('nobody pinned, nobody under a firing hold', async () => {
     const { world: w, ctx } = await lab();
-    atClose(w, 28);
-    const a = holder(w, 'growth_lead');
-    rate(w, a, weak);
+    atClose(w, 42);
+    const a = holder(w, 'shop_lead');
+    judged(w, a);
     addHold(w, { kind: 'pin', productId: null, agentId: a.id, until: null, reason: 'garde' });
     openPlans(ctx, report(w));
     expect(league(w).plans).toEqual([]);
@@ -333,23 +367,23 @@ describe('who enters a plan (talent 15)', () => {
   it('nobody in the last 10 days of a run with an end, and an open-ended run has none (D20)', async () => {
     const closing = await lab({ horizonDays: 90 });
     atClose(closing.world, 84);
-    rate(closing.world, holder(closing.world, 'growth_lead'), weak);
+    judged(closing.world, holder(closing.world, 'shop_lead'));
     openPlans(closing.ctx, report(closing.world));
     expect(league(closing.world).plans).toEqual([]);
     const open = await lab({ horizonDays: 90, openEnded: true });
     atClose(open.world, 84);
-    rate(open.world, holder(open.world, 'growth_lead'), weak);
+    judged(open.world, holder(open.world, 'shop_lead'));
     openPlans(open.ctx, report(open.world));
     expect(league(open.world).plans).toHaveLength(1);
   });
 
   it('the coach is the best colleague on the skill, else the chief, never the person', async () => {
     const { world: w, ctx } = await lab();
-    atClose(w, 28);
-    const lead = holder(w, 'growth_lead');
+    atClose(w, 42);
+    const lead = await hireInto(ctx, 'community_manager');
     const writer = await hireInto(ctx, 'hook_writer');
     league(w).entries[writer.id]!.hiredDay = 0;
-    rate(w, writer, { ...weak, rating: 1380 });
+    judged(w, writer, { ...weak, rating: 1380 });
     rate(w, lead, { rating: 1600, metric: 92 });
     openPlans(ctx, report(w));
     expect(league(w).plans[0]).toMatchObject({ agentId: writer.id, coachId: lead.id });
@@ -369,7 +403,7 @@ describe('the end of a plan (§7.2)', () => {
   it('met on the season\'s number', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
+    const a = holder(w, 'shop_lead');
     const plan = open(w, a);
     rate(w, a, { rating: 1420, metric: 84 });
     reviewPlans(ctx, report(w));
@@ -377,12 +411,17 @@ describe('the end of a plan (§7.2)', () => {
     expect(league(w).entries[a.id]!.status).toBe('active');
   });
 
-  it('met on a rating back near par', async () => {
+  it('met on a rating back within 10 of the bar, and the bar moves with the team', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
+    const a = holder(w, 'shop_lead');
     const plan = open(w, a);
-    rate(w, a, { rating: TALENT.plan.metRating, metric: 70 });
+    league(w).bar = 1560;
+    rate(w, a, { rating: 1549.9, metric: 70 });
+    reviewPlans(ctx, report(w));
+    expect(plan.outcome).toBe('failed');
+    plan.outcome = 'open';
+    rate(w, a, { rating: 1550, metric: 70 });
     reviewPlans(ctx, report(w));
     expect(plan.outcome).toBe('met');
   });
@@ -390,10 +429,10 @@ describe('the end of a plan (§7.2)', () => {
   it('failed otherwise, and an older season\'s number proves nothing', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
+    const a = holder(w, 'shop_lead');
     const plan = open(w, a);
     rate(w, a, { rating: 1420, metric: 95 });
-    league(w).entries[a.id]!.ratings.copy!.metricBase!.season = league(w).season - 1;
+    league(w).entries[a.id]!.ratings.page!.metricBase!.season = league(w).season - 1;
     reviewPlans(ctx, report(w));
     expect(plan.outcome).toBe('failed');
     expect(league(w).entries[a.id]!.status).toBe('probation');
@@ -402,7 +441,7 @@ describe('the end of a plan (§7.2)', () => {
   it('a sample too small can fail nobody: one more season, once, then the plan closes', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
+    const a = holder(w, 'shop_lead');
     const plan = open(w, a);
     plan.openedSeason = 1;
     league(w).seasons.push({ season: 1, fromDay: 1, toDay: 14, tables: {}, employee: null, probations: [], dismissals: [], hires: [], notes: [], disruptedDays: 0 });
@@ -421,7 +460,7 @@ describe('the end of a plan (§7.2)', () => {
   it('waits for its deadline', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
+    const a = holder(w, 'shop_lead');
     const plan = open(w, a);
     plan.deadlineDay = 42;
     rate(w, a, { rating: 1420, metric: 70 });
@@ -589,75 +628,154 @@ describe('the test everyone sits (D16)', () => {
 });
 
 describe('the challenge (talent 16)', () => {
-  it('each score is the scorer\'s, recomputed on what was written, incumbent first', async () => {
+  it('each sit is the scorer\'s, recomputed on what was written, incumbent first, and a score is the mean of the sits', async () => {
     const { world: w, ctx } = await lab();
     const product = await liveProduct(ctx);
     w.day = 28;
-    const a = holder(w, 'growth_lead');
+    const a = await hireInto(ctx, 'hook_writer');
     const plan = failing(w, a);
     const real = TEST_BY_SKILL.copy!;
-    const written = new Map<string, TestResult>();
+    const written = new Map<string, TestResult[]>();
     rows.set('copy', real);
-    TEST_BY_SKILL.copy = { par: real.par, sit: async (b, sitter, i) => {
-      const result = await real.sit(b, sitter, i);
-      if (result) written.set(sitter.id, result);
+    TEST_BY_SKILL.copy = { par: real.par, sit: async (b, sitter, i, k) => {
+      const result = await real.sit(b, sitter, i, k);
+      if (result) written.set(sitter.id, [...(written.get(sitter.id) ?? []), result]);
       return result;
     } };
     const voc = w.company.research.voc[product.nicheId];
     const report = await runChallenge(ctx, plan);
-    expect(report.candidates.map((c) => c.isIncumbent)).toEqual([true, false, false, false]);
+    expect(report.candidates.map((c) => c.isIncumbent)).toEqual([true, false, false, false, false, false, false]); // six candidates
     expect(report.candidates[0]!.id).toBe(a.id);
     expect(report.candidates.map((c) => c.deliverable).every(Boolean)).toBe(true);
     for (const entry of report.candidates) {
-      const creatives = written.get(entry.id)!.work as AdCreative[];
-      expect(creatives).toHaveLength(2);
-      expect(entry.score).toBeCloseTo(mean(creatives.map((c) => sim.scoreCreative(c, product, voc).overall)), 1);
+      const sits = written.get(entry.id)!;
+      expect(sits).toHaveLength(8);
+      expect(entry.sits).toHaveLength(8);
+      sits.forEach((sit, k) => {
+        const creatives = sit.work as AdCreative[];
+        expect(creatives).toHaveLength(2);
+        expect(entry.sits![k]).toBeCloseTo(mean(creatives.map((c) => sim.scoreCreative(c, product, voc).overall)), 1);
+      });
+      expect(entry.score).toBeCloseTo(mean(entry.sits!), 2);
     }
-  }, 30_000);
+  }, 60_000);
 
-  it('the incumbent stays when nobody beats them by 3 (2,9 is not enough), and is left alone for a season', async () => {
+  it('the required gap is 2 standard errors of the difference, pooled from the sits, and the report keeps it', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
+    const a = holder(w, 'shop_lead');
     const plan = failing(w, a);
-    fixedRow('copy', (s) => (s.id === a.id ? 80 : 82.9));
-    const headcount = w.company.agents.length;
+    const noise = [-4, -2, -1, 0, 0, 1, 2, 4];
+    const variance = mean(noise.map((x) => x ** 2)) * noise.length / (noise.length - 1);
+    expect(TALENT.challenge).toMatchObject({ candidates: 6, sits: 8, claudeSits: 3, marginSe: 2, marginMin: 1 });
+    const gap = 2 * Math.sqrt((2 * variance) / 8);
+    rows.set('page', TEST_BY_SKILL.page);
+    TEST_BY_SKILL.page = { par: () => 80, sit: async (_b, sitter, _i, k) => ({ score: (sitter.id === a.id ? 80 : 80 + gap - 0.5) + noise[k ?? 0]!, deliverable: 'Un test', work: [] }) };
     const report = await runChallenge(ctx, plan);
+    expect(report.margin).toBeCloseTo(gap, 2);
+    expect(report.hired).toBeNull();
+    expect(report.reason).toContain('écart exigé 2,5 points sur 8 passages');
+    expect(plan.outcome).toBe('kept_no_better');
+  }, 30_000);
+
+  it('a gap clear of the noise takes the job, at 1 point at the least: a scorer that repeats itself proves nothing under that', async () => {
+    const stays = await lab();
+    atClose(stays.world, 28);
+    const a = holder(stays.world, 'shop_lead');
+    const plan = failing(stays.world, a);
+    fixedRow('page', (s) => (s.id === a.id ? 80 : 80.9));
+    const headcount = stays.world.company.agents.length;
+    const report = await runChallenge(stays.ctx, plan);
+    expect(report.margin).toBe(TALENT.challenge.marginMin);
     expect(report.hired).toBeNull();
     expect(plan.outcome).toBe('kept_no_better');
     expect(report.reason).toContain(`${a.name} reste`);
-    expect(league(w).entries[a.id]!.status).toBe('active');
-    expect(league(w).hires).toEqual([report]);
-    expect(w.company.agents).toHaveLength(headcount);
-    expect(w.company.org!.positions).toEqual([]);
+    expect(league(stays.world).entries[a.id]!.status).toBe('active');
+    expect(league(stays.world).hires).toEqual([report]);
+    expect(stays.world.company.agents).toHaveLength(headcount);
+    expect(stays.world.company.org!.positions).toEqual([]);
 
-    rate(w, a, { rating: 1350 });
-    w.day = 42;
-    Object.assign(league(w), { closedSeasons: 2, season: 3 });
-    openPlans(ctx, { season: 3, fromDay: 29, toDay: 42, tables: {}, employee: null, probations: [], dismissals: [], hires: [], notes: [], disruptedDays: 0 });
-    expect(league(w).plans.filter((p) => p.outcome === 'open')).toEqual([]);
+    const goes = await lab();
+    atClose(goes.world, 28);
+    const b = holder(goes.world, 'shop_lead');
+    fixedRow('page', (s) => (s.id === b.id ? 80 : 81));
+    const won = await runChallenge(goes.ctx, failing(goes.world, b));
+    expect(won.hired).not.toBeNull();
+    expect(won.reason).toContain('écart exigé 1,0 points');
+    const own = won.candidates.find((c) => c.isIncumbent)!.score;
+    expect(won.candidates.find((c) => c.id === won.hired)!.score - own).toBeGreaterThanOrEqual(won.margin!);
+  }, 30_000);
+
+  it('someone a challenge kept is left alone for a season', async () => {
+    const { world: w, ctx } = await lab();
+    atClose(w, 42);
+    const a = holder(w, 'shop_lead');
+    const plan = failing(w, a);
+    fixedRow('page', (s) => (s.id === a.id ? 80 : 80.5));
+    await runChallenge(ctx, plan);
+    const under = (): void => {
+      rate(w, a, { rating: 1350 });
+      league(w).entries[a.id]!.underBar = 2;
+    };
+    under();
     w.day = 56;
-    Object.assign(league(w), { closedSeasons: 3, season: 4 });
-    rate(w, a, { rating: 1350 });
-    openPlans(ctx, { season: 4, fromDay: 43, toDay: 56, tables: {}, employee: null, probations: [], dismissals: [], hires: [], notes: [], disruptedDays: 0 });
+    Object.assign(league(w), { closedSeasons: 4, season: 5 });
+    openPlans(ctx, { season: 5, fromDay: 43, toDay: 56, tables: {}, employee: null, probations: [], dismissals: [], hires: [], notes: [], disruptedDays: 0 });
+    expect(league(w).plans.filter((p) => p.outcome === 'open')).toEqual([]);
+    under();
+    w.day = 70;
+    Object.assign(league(w), { closedSeasons: 5, season: 6 });
+    openPlans(ctx, { season: 6, fromDay: 57, toDay: 70, tables: {}, employee: null, probations: [], dismissals: [], hires: [], notes: [], disruptedDays: 0 });
     expect(league(w).plans.filter((p) => p.outcome === 'open')).toHaveLength(1);
   }, 30_000);
 
-  it('a candidate exactly 3 ahead takes the job, and every score beats the rule of A10', async () => {
+  it('a sit is an index: each has its own text, a sit reads the same alone, after a reload, on any world that stands the same', async () => {
+    const { world: w, ctx, reopen } = await lab();
+    await liveProduct(ctx);
+    w.day = 28;
+    const writer = await hireInto(ctx, 'hook_writer');
+    w.talentTruth!.agents[writer.id]!.talent.copy = 0.2; // one draft a sit: nothing but the key can tell two sits apart
+    const bench = benchFor(ctx, 'copy', writer);
+    const sits = [];
+    for (let k = 0; k < TALENT.challenge.sits; k++) sits.push((await testDeliverable(bench, { ...writer, tier: 'haiku' }, 0, k))!.work);
+    expect(new Set(sits.map((work) => JSON.stringify(work))).size).toBeGreaterThan(2);
+    expect(JSON.stringify((await testDeliverable(bench, { ...writer, tier: 'haiku' }, 0))!.work)).toBe(JSON.stringify(sits[0])); // sit 0 is the test of a single sit
+    const again = JSON.parse(JSON.stringify(w)) as WorldState;
+    const after = (reopen(again) as unknown as { ctx: RuntimeCtx }).ctx;
+    const seat = again.company.agents.find((a) => a.id === writer.id)!;
+    expect(JSON.stringify((await testDeliverable(benchFor(after, 'copy', seat), { ...seat, tier: 'haiku' }, 0, 5))!.work)).toBe(JSON.stringify(sits[5]));
+  }, 60_000);
+
+  it('a reload at the close ends identical: same sits, same margin, same winner', async () => {
+    const { world: w, ctx, reopen } = await lab();
+    await liveProduct(ctx);
+    w.day = 28;
+    const writer = await hireInto(ctx, 'hook_writer');
+    failing(w, writer);
+    const saved = JSON.parse(JSON.stringify(w)) as WorldState;
+    const straight = await runChallenge(ctx, league(w).plans[0]!);
+    const after = (reopen(saved) as unknown as { ctx: RuntimeCtx }).ctx;
+    const reloaded = await runChallenge(after, saved.company.league!.plans[0]!);
+    expect(reloaded).toEqual(straight);
+    expect(straight.candidates[1]!.sits).toHaveLength(TALENT.challenge.sits);
+    expect(new Set(straight.candidates[1]!.sits).size).toBeGreaterThan(1);
+  }, 60_000);
+
+  it('through Claude a person sits 3 times', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
-    fixedRow('copy', (s) => (s.id === a.id ? 80 : 83));
+    const a = holder(w, 'shop_lead');
+    (ctx as { engine: unknown }).engine = Object.create(ctx.engine, { mode: { value: 'claude' } });
+    fixedRow('page', (s) => (s.id === a.id ? 60 : 90));
     const report = await runChallenge(ctx, failing(w, a));
-    expect(report.hired).not.toBeNull();
-    const own = report.candidates.find((c) => c.isIncumbent)!.score;
-    expect(report.candidates.find((c) => c.id === report.hired)!.score - own).toBeGreaterThanOrEqual(TALENT.challenge.margin);
+    expect(report.candidates.map((c) => c.sits?.length)).toEqual(Array<number>(TALENT.challenge.candidates + 1).fill(TALENT.challenge.claudeSits));
+    expect(report.reason).toContain('sur 3 passages');
   }, 30_000);
 
   it('no test possible: the seat is kept', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'research_lead');
+    const a = holder(w, 'editor_in_chief');
     const plan = failing(w, a);
     const report = await runChallenge(ctx, plan);
     expect(report.hired).toBeNull();
@@ -665,10 +783,10 @@ describe('the challenge (talent 16)', () => {
     expect(report.candidates).toEqual([]);
   }, 30_000);
 
-  it('two from the market and a clone of the best colleague, who inherits from their teacher (lineage)', async () => {
+  it('the market and a clone of the best colleague, who inherits from their teacher (lineage)', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const lead = holder(w, 'growth_lead');
+    const lead = await hireInto(ctx, 'community_manager');
     const writer = await hireInto(ctx, 'hook_writer');
     rate(w, lead, { rating: TALENT.challenge.cloneRating, seasonN: MIN_SEASON_N.copy });
     w.talentTruth!.agents[lead.id]!.talent.copy = 0.9;
@@ -679,6 +797,7 @@ describe('the challenge (talent 16)', () => {
       return lineage ? 95 : 70;
     });
     const report = await runChallenge(ctx, failing(w, writer));
+    expect(report.candidates.filter((c) => c.lineage)).toHaveLength(1);
     const entry = report.candidates.find((c) => c.lineage)!;
     expect(entry).toMatchObject({ id: clone, lineage: lead.id, isIncumbent: false });
     expect(report.hired).toBe(clone);
@@ -689,24 +808,24 @@ describe('the challenge (talent 16)', () => {
     expect(w.company.agents.find((a) => a.id === clone)?.persona).toContain(`Élève de ${lead.name}`);
   }, 30_000);
 
-  it('three from the market without a top performer, and a sample too thin teaches nobody', async () => {
+  it('all from the market without a top performer, and a sample too thin teaches nobody', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const lead = holder(w, 'growth_lead');
+    const lead = await hireInto(ctx, 'community_manager');
     const writer = await hireInto(ctx, 'hook_writer');
     rate(w, lead, { rating: 1700, seasonN: MIN_SEASON_N.copy - 1 });
     fixedRow('copy', () => 70);
     const report = await runChallenge(ctx, failing(w, writer));
-    expect(report.candidates).toHaveLength(4);
+    expect(report.candidates).toHaveLength(TALENT.challenge.candidates + 1);
     expect(report.candidates.every((c) => c.lineage === null)).toBe(true);
   }, 30_000);
 
   it('a candidate turned down leaves no truth and no entry', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
+    const a = holder(w, 'shop_lead');
     const known = Object.keys(w.talentTruth!.agents);
-    fixedRow('copy', (s) => (s.id === a.id ? 80 : 81));
+    fixedRow('page', (s) => (s.id === a.id ? 80 : 80.5));
     await runChallenge(ctx, failing(w, a));
     expect(Object.keys(w.talentTruth!.agents)).toEqual(known);
     expect(Object.keys(league(w).entries)).not.toContain(league(w).hires[0]!.candidates[1]!.id);
@@ -715,11 +834,11 @@ describe('the challenge (talent 16)', () => {
   it('holds stop it before anyone sits', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
+    const a = holder(w, 'shop_lead');
     const plan = failing(w, a);
     let sat = 0;
-    rows.set('copy', TEST_BY_SKILL.copy);
-    TEST_BY_SKILL.copy = { par: () => 80, sit: async () => { sat += 1; return { score: 90, deliverable: 'x', work: [] }; } };
+    rows.set('page', TEST_BY_SKILL.page);
+    TEST_BY_SKILL.page = { par: () => 80, sit: async () => { sat += 1; return { score: 90, deliverable: 'x', work: [] }; } };
     addHold(w, { kind: 'firing', productId: null, until: null, reason: 'ne vire personne' });
     expect((await runChallenge(ctx, plan)).hired).toBeNull();
     w.company.holds = [];
@@ -732,12 +851,12 @@ describe('the challenge (talent 16)', () => {
 });
 
 describe('who can be replaced at a close (talent 15)', () => {
-  const founders = ['growth_lead', 'editor_in_chief', 'shop_lead', 'research_lead', 'art_director'] as const;
-
   it('at most 2 a season, even with 5 forced failures, and the others wait for the next close', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    for (const role of founders) failing(w, holder(w, role));
+    const seats = [holder(w, 'editor_in_chief'), holder(w, 'shop_lead'), await hireInto(ctx, 'hook_writer'), await hireInto(ctx, 'motion_designer'), await hireInto(ctx, 'humanizer')];
+    wealthy(w, 0);
+    for (const seat of seats) failing(w, seat);
     fixedRows(w, 60, 90);
     const report = await closeSeason(ctx);
     expect(report.hires).toHaveLength(TALENT.challenge.replacementsPerSeason);
@@ -754,7 +873,8 @@ describe('who can be replaced at a close (talent 15)', () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
     const writer = await hireInto(ctx, 'hook_writer');
-    failing(w, holder(w, 'growth_lead'));
+    const other = await hireInto(ctx, 'community_manager');
+    failing(w, other);
     failing(w, writer);
     fixedRows(w, 60, 90);
     const report = await closeSeason(ctx);
@@ -764,27 +884,27 @@ describe('who can be replaced at a close (talent 15)', () => {
   it('at least 28 days between two replacements of a role', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const lead = holder(w, 'growth_lead');
+    const lead = holder(w, 'shop_lead');
     failing(w, lead);
     fixedRows(w, 60, 90);
     await closeSeason(ctx);
-    const next = holder(w, 'growth_lead');
+    const next = holder(w, 'shop_lead');
     atClose(w, 42);
     failing(w, next);
     fixedRows(w, 60, 90);
     await closeSeason(ctx);
-    expect(holder(w, 'growth_lead').id).toBe(next.id);
+    expect(holder(w, 'shop_lead').id).toBe(next.id);
     atClose(w, 56);
     fixedRows(w, 60, 90);
     await closeSeason(ctx);
-    expect(holder(w, 'growth_lead').id).not.toBe(next.id);
+    expect(holder(w, 'shop_lead').id).not.toBe(next.id);
   }, 60_000);
 
   it('nobody under a firing hold, nobody pinned', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
-    const b = holder(w, 'shop_lead');
+    const a = holder(w, 'shop_lead');
+    const b = holder(w, 'editor_in_chief');
     failing(w, a);
     failing(w, b);
     fixedRows(w, 60, 90);
@@ -805,20 +925,35 @@ describe('who can be replaced at a close (talent 15)', () => {
   it('none in the last 10 days, except in a run with no end (D20)', async () => {
     const closing = await lab({ horizonDays: 90 });
     atClose(closing.world, 84);
-    failing(closing.world, holder(closing.world, 'growth_lead'));
+    failing(closing.world, holder(closing.world, 'shop_lead'));
     fixedRows(closing.world, 60, 90);
     expect((await closeSeason(closing.ctx)).hires).toEqual([]);
     const open = await lab({ horizonDays: 90, openEnded: true });
     atClose(open.world, 84);
-    failing(open.world, holder(open.world, 'growth_lead'));
+    failing(open.world, holder(open.world, 'shop_lead'));
     fixedRows(open.world, 60, 90);
     expect((await closeSeason(open.ctx)).hires).toHaveLength(1);
+  }, 30_000);
+
+  it('an arm of the calibration replaces on D56, a run of 60 days with an end cannot (D125)', async () => {
+    const closing = await lab({ horizonDays: 60 });
+    atClose(closing.world, 56);
+    failing(closing.world, holder(closing.world, 'shop_lead'));
+    fixedRows(closing.world, 60, 90);
+    const stopped = await closeSeason(closing.ctx);
+    expect(stopped.hires).toEqual([]);
+    expect(stopped.notes.join(' ')).toContain('trop près de la fin');
+    const arm = await lab({ horizonDays: 60, ...armScenario() });
+    atClose(arm.world, 56);
+    failing(arm.world, holder(arm.world, 'shop_lead'));
+    fixedRows(arm.world, 60, 90);
+    expect((await closeSeason(arm.ctx)).hires).toHaveLength(1);
   }, 30_000);
 
   it('none on a season over 3 disrupted days: the plan fails and waits for the next close', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const a = holder(w, 'growth_lead');
+    const a = holder(w, 'shop_lead');
     const plan = failing(w, a);
     plan.outcome = 'open';
     w.market.events.push({ id: 'evt_ban', day: 18, kind: 'ad_account_banned', title: 'Compte suspendu', description: '', severity: 'danger' });
@@ -837,7 +972,7 @@ describe('who can be replaced at a close (talent 15)', () => {
   it('3 disrupted days change nothing', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    failing(w, holder(w, 'growth_lead'));
+    failing(w, holder(w, 'shop_lead'));
     for (const day of [16, 18, 20]) w.market.events.push({ id: `evt_${day}`, day: day - 1, kind: 'platform_outage', title: 'Panne', description: '', severity: 'warn', refs: { day } });
     fixedRows(w, 60, 90);
     const report = await closeSeason(ctx);
@@ -863,9 +998,9 @@ describe('a replacement is one tick (talent 17, D1, D17)', () => {
   it('the old person is in the alumni, the new one holds the role, the team is the same size', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const old = holder(w, 'growth_lead');
+    const old = holder(w, 'shop_lead');
     const headcount = w.company.agents.length;
-    const assigned = createTask(w, { kind: 'optimize_ads', title: 'Une tâche en cours', assignee: old.id, createdBy: old.id });
+    const assigned = createTask(w, { kind: 'publish_product', title: 'Une tâche en cours', assignee: old.id, createdBy: old.id });
     assigned.status = 'in_progress';
     const before = w.activity.length;
     fixedRows(w, 60, 90);
@@ -878,7 +1013,7 @@ describe('a replacement is one tick (talent 17, D1, D17)', () => {
     expect(w.company.agents.some((a) => a.id === old.id)).toBe(false);
     expect(w.company.org!.alumni).toHaveLength(1);
     expect(w.company.org!.alumni[0]).toMatchObject({ id: old.id, kind: 'fired', leftDay: w.day, replacedBy: hired, founder: true });
-    expect(roleHolders(w, 'growth_lead').map((a) => a.id)).toEqual([hired]);
+    expect(roleHolders(w, 'shop_lead').map((a) => a.id)).toEqual([hired]);
     expect(league(w).entries[old.id]).toMatchObject({ status: 'gone', leftDay: w.day });
     expect(league(w).entries[hired]).toMatchObject({ status: 'active', hiredDay: w.day });
     expect(league(w).hires).toEqual([report]);
@@ -891,7 +1026,7 @@ describe('a replacement is one tick (talent 17, D1, D17)', () => {
 
     const position = w.company.org!.positions.at(-1)!;
     expect(position).toMatchObject({ reason: 'replacement', status: 'filled', replaces: old.id, hiredId: hired, taskId: null });
-    expect(position.candidates).toHaveLength(3);
+    expect(position.candidates).toHaveLength(TALENT.challenge.candidates);
     expect(w.company.tasks.filter((t) => t.kind === 'recruit')).toEqual([]);
 
     const said = w.activity.slice(before).map((a) => a.text).join('\n');
@@ -899,32 +1034,33 @@ describe('a replacement is one tick (talent 17, D1, D17)', () => {
     expect(said).toContain('reprend le poste');
   }, 30_000);
 
-  it('leftBecause says it with numbers: metric, target, rating, coach, who takes over', async () => {
+  it('leftBecause says it with numbers: closes under the bar, metric, target, rating, coach, who takes over', async () => {
     const { world: w, ctx } = await lab();
-    atClose(w, 28);
-    const old = holder(w, 'growth_lead');
+    atClose(w, 56);
+    const old = holder(w, 'shop_lead');
     const plan = failing(w, old);
     plan.target = 84;
-    plan.coachId = holder(w, 'shop_lead').id;
+    plan.coachId = holder(w, 'editor_in_chief').id;
+    league(w).bar = 1530;
+    league(w).entries[old.id]!.underBar = 4;
     rate(w, old, { rating: 1412, metric: 79 });
-    fixedRow('copy', (s) => (s.id === old.id ? 60 : 91));
+    fixedRow('page', (s) => (s.id === old.id ? 60 : 91));
     await runChallenge(ctx, plan);
     const why = league(w).entries[old.id]!.leftBecause!;
-    for (const part of ['79/100', '84/100', '1 412', holder(w, 'shop_lead').name, 'pendant 14 jours', '91/100 au test', 'reprend le poste']) expect(why).toContain(part);
+    for (const part of ['4 clôtures sous la barre de 1 530', '79/100', '84/100', '1 412', holder(w, 'editor_in_chief').name, 'pendant 14 jours', '91/100 au test', 'reprend le poste']) expect(why).toContain(part);
     expect(w.company.org!.alumni[0]!.reason).toBe(why);
   }, 30_000);
 
   it('talentTruth.swaps keeps what the proof cannot rebuild later (D58), and it stays hidden', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const old = holder(w, 'growth_lead');
-    w.talentTruth!.agents[old.id]!.talent.copy = 0.1234567;
-    fixedRow('copy', (s) => (s.id === old.id ? 60 : 91));
+    const old = holder(w, 'shop_lead');
+    w.talentTruth!.agents[old.id]!.talent.page = 0.1234567;
+    fixedRow('page', (s) => (s.id === old.id ? 60 : 91));
     const report = await runChallenge(ctx, failing(w, old));
     const swap = w.talentTruth!.swaps[0]!;
-    expect(swap).toMatchObject({ day: 28, skill: 'copy', replaced: old.id, hired: report.hired, tReplaced: 0.1234567 });
-    expect(swap.tHired).toBe(w.talentTruth!.agents[report.hired!]!.talent.copy);
-    expect(swap.familyMean).toBeCloseTo(0.1234567, 6);
+    expect(swap).toMatchObject({ day: 28, skill: 'page', replaced: old.id, hired: report.hired, tReplaced: 0.1234567 });
+    expect(swap.tHired).toBe(w.talentTruth!.agents[report.hired!]!.talent.page);
     const snapshot = JSON.stringify(toSnapshot(w, false));
     expect(snapshot).not.toContain('1234567');
     expect(JSON.stringify(w.company)).not.toContain('1234567');
@@ -933,13 +1069,13 @@ describe('a replacement is one tick (talent 17, D1, D17)', () => {
   it('a leaver plays no more: a late result moves no rating', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const old = holder(w, 'growth_lead');
-    fixedRow('copy', (s) => (s.id === old.id ? 60 : 91));
+    const old = holder(w, 'shop_lead');
+    fixedRow('page', (s) => (s.id === old.id ? 60 : 91));
     await runChallenge(ctx, failing(w, old));
     const before = JSON.stringify(league(w).entries[old.id]);
     ctx.world.company.league!.events.length = 0;
     const { recordEvidence } = await import('../src/runtime/talent/evidence.js');
-    recordEvidence(w, old.id, 'copy', 'qa', 1, 1, 'Trop tard', undefined, 99);
+    recordEvidence(w, old.id, 'page', 'qa', 1, 1, 'Trop tard', undefined, 99);
     expect(JSON.stringify(league(w).entries[old.id])).toBe(before);
   }, 30_000);
 
@@ -958,8 +1094,8 @@ describe('the money of a replacement (talent 18, D6)', () => {
   it('books the hire\'s week and the leaver\'s week, once each, and the books stay right', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const old = holder(w, 'growth_lead');
-    fixedRow('copy', (s) => (s.id === old.id ? 60 : 91));
+    const old = holder(w, 'shop_lead');
+    fixedRow('page', (s) => (s.id === old.id ? 60 : 91));
     const report = await runChallenge(ctx, failing(w, old));
     const lines = w.ledger.filter((e) => e.type === 'recruiting');
     expect(lines.map((e) => e.ref)).toEqual([`hire:${report.hired}`, `leave:${old.id}`]);
@@ -980,7 +1116,7 @@ describe('the money of a replacement (talent 18, D6)', () => {
   it('no hire in survival: the plan waits for the next close, and the CFO says so', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const old = holder(w, 'growth_lead');
+    const old = holder(w, 'shop_lead');
     const plan = failing(w, old);
     sim.recordLedger(w, { type: 'ad_spend', amount: -420, memo: 'Pub', ref: null });
     fixedRows(w, 60, 90);
@@ -1026,7 +1162,7 @@ describe('the founder signs (D17, D48, D49)', () => {
     const l = await lab({ founderApproval: true });
     const { world: w, ctx } = l;
     atClose(w, 28);
-    const old = holder(w, 'growth_lead');
+    const old = holder(w, 'shop_lead');
     const plan = failing(w, old);
     fixedRows(w, 60, 90);
     const report = await closeSeason(ctx);
@@ -1144,7 +1280,7 @@ describe('the whole cycle, on a real run of seed 8 (talent 4)', () => {
    * the rest is the company's own evidence. Runs `ticks` ticks, or until that person has left, and says how many it took.
    */
   async function play(reloadEvery: number, ticks: number): Promise<{ world: WorldState; ticks: number; dump: string; audit: string[] }> {
-    // TikTok alone: this pins seed 8's road through a firing, and buyers change who gets hired, and when (D23). The growth pillar changes it too, and so does what a cut holds (D79).
+    // TikTok alone: this pins seed 8's road through a firing, and buyers change who gets hired, and when (D23). The growth pillar changes it too, and so does what a cut holds (D132).
     const m = await lab({ seed: 8, openEnded: true, channelControl: 'tiktok_only', scaling: false });
     let { world, company } = m;
     let target: string | undefined;
@@ -1177,8 +1313,8 @@ describe('the whole cycle, on a real run of seed 8 (talent 4)', () => {
     expect(plans.at(-1)!.text).toContain("Plan d'amélioration de");
     const report = league(w).hires.find((h) => h.incumbent === gone.id)!;
     expect(report.hired).toBe(gone.replacedBy);
-    expect(report.candidates).toHaveLength(4);
-    expect(report.candidates.find((c) => c.id === report.hired)!.score - report.candidates.find((c) => c.isIncumbent)!.score).toBeGreaterThanOrEqual(TALENT.challenge.margin);
+    expect(report.candidates).toHaveLength(TALENT.challenge.candidates + 1);
+    expect(report.candidates.find((c) => c.id === report.hired)!.score - report.candidates.find((c) => c.isIncumbent)!.score).toBeGreaterThanOrEqual(report.margin!);
 
     const hire = w.company.agents.find((a) => a.id === report.hired)!;
     const position = w.company.org!.positions.find((p) => p.replaces === gone.id)!;
@@ -1201,17 +1337,331 @@ describe('the whole cycle, on a real run of seed 8 (talent 4)', () => {
   }, 600_000);
 });
 
+describe('the bar, and a certain time under it (L4)', () => {
+  const low = { rating: 1400, rd: 60, seasonN: 10, metric: 81 };
+
+  it('is par, or the median of the active rated seats when the team stands higher, stored and in the report', async () => {
+    const { world: w, ctx } = await lab();
+    atClose(w, 28);
+    rate(w, holder(w, 'shop_lead'), { rating: 1600 });
+    rate(w, holder(w, 'editor_in_chief'), { rating: 1640 });
+    rate(w, holder(w, 'research_lead'), { rating: 1560 });
+    rate(w, holder(w, 'art_director'), { rating: 1100, n: 0 });  // nobody has seen them work
+    const gone = holder(w, 'growth_lead');
+    rate(w, gone, { rating: 1900 });
+    league(w).entries[gone.id]!.status = 'probation';            // not an active seat: the bar is not read off the seats it judges
+    const report = await closeSeason(ctx);
+    expect(report.bar).toBe(1600);
+    expect(league(w).bar).toBe(1600);
+    expect(league(w).seasons.at(-1)!.bar).toBe(1600);
+
+    const flat = await lab();
+    atClose(flat.world, 28);
+    rate(flat.world, holder(flat.world, 'shop_lead'), { rating: 1450 });
+    expect((await closeSeason(flat.ctx)).bar).toBe(TALENT.rating.par);
+  }, 30_000);
+
+  it('counts a close under it on a real sample, leaves a thin sample alone, and starts over above it', async () => {
+    const { world: w, ctx } = await lab();
+    const a = holder(w, 'shop_lead');
+    const entry = league(w).entries[a.id]!;
+    const close = async (day: number, numbers: Parameters<typeof rate>[2]): Promise<number | undefined> => {
+      atClose(w, day);
+      rate(w, a, numbers);
+      await closeSeason(ctx);
+      return entry.underBar;
+    };
+    expect(await close(14, low)).toBe(1);
+    expect(await close(28, low)).toBe(2);
+    expect(await close(42, { ...low, seasonN: MIN_SEASON_N.page - 0.1 })).toBe(2);
+    expect(await close(56, { ...low, rating: 1470, rd: 60 })).toBe(0);           // 1470 + 0,5 × 60 is not under 1500
+    expect(await close(70, { ...low, rating: 1469, rd: 60 })).toBe(1);
+  }, 60_000);
+
+  it('no replacement before day 56, and then only after two closes under the bar and a failed plan of 14 days', async () => {
+    const { world: w, ctx } = await lab({ horizonDays: 200 });
+    const a = holder(w, 'shop_lead');
+    const coach = holder(w, 'editor_in_chief');
+    fixedRows(w, 60, 90);
+    const close = async (day: number): Promise<{ plans: number; gone: boolean; hires: number }> => {
+      atClose(w, day);
+      rate(w, a, low);
+      rate(w, coach, { rating: 1500, seasonN: 0, n: 0 });
+      const report = await closeSeason(ctx);
+      return { plans: report.probations.length, gone: !w.company.agents.some((x) => x.id === a.id), hires: report.hires.length };
+    };
+    expect(await close(14)).toEqual({ plans: 0, gone: false, hires: 0 });
+    expect(await close(28)).toEqual({ plans: 0, gone: false, hires: 0 });
+    const third = await close(42);
+    expect(third).toEqual({ plans: 1, gone: false, hires: 0 });
+    expect(league(w).plans[0]).toMatchObject({ agentId: a.id, openedSeason: 3, deadlineDay: 56, outcome: 'open' });
+    expect(league(w).plans[0]!.text).toContain('depuis 3 clôtures');
+    expect(await close(56)).toEqual({ plans: 0, gone: true, hires: 1 });
+    expect(league(w).plans[0]!.outcome).toBe('failed');
+    expect(w.company.org!.alumni[0]).toMatchObject({ id: a.id, leftDay: 56, kind: 'fired' });
+    expect(w.company.org!.alumni[0]!.reason).toContain('4 clôtures sous la barre de 1 500');
+  }, 60_000);
+});
+
+describe('a test that cannot see talent decides nothing (L5)', () => {
+  for (const [role, skill] of [['art_director', 'design'], ['growth_lead', 'buying'], ['research_lead', 'research'], ['support_lead', 'support']] as const) {
+    it(`a failed plan on ${skill} ends kept_no_test, nobody sits, and the seat is left alone for a season`, async () => {
+      const { world: w, ctx } = await lab();
+      atClose(w, 56);
+      const a = role === 'support_lead' ? await hireInto(ctx, role) : holder(w, role);
+      const plan = failing(w, a);
+      expect(plan.skill).toBe(skill);
+      let sat = 0;
+      rows.set(skill, TEST_BY_SKILL[skill]);
+      TEST_BY_SKILL[skill] = { par: () => 80, sit: async () => { sat += 1; return { score: 99, deliverable: 'x', work: [] }; } };
+      const report = await closeSeason(ctx);
+      expect(sat).toBe(0);
+      expect(plan.outcome).toBe('kept_no_test');
+      expect(report.hires).toEqual([]);
+      expect(report.notes.join(' ')).toContain('poste conservé : le test de ce métier ne sépare pas encore les talents');
+      expect(w.company.agents.some((x) => x.id === a.id)).toBe(true);
+      expect(league(w).entries[a.id]!.status).toBe('active');
+      expect(league(w).hires.at(-1)).toMatchObject({ incumbent: a.id, hired: null, candidates: [] });
+      league(w).entries[a.id]!.underBar = 3;
+      rate(w, a, { rating: 1300 });
+      w.day = 70;
+      Object.assign(league(w), { closedSeasons: 5, season: 6 });
+      openPlans(ctx, { season: 6, fromDay: 57, toDay: 70, tables: {}, employee: null, probations: [], dismissals: [], hires: [], notes: [], disruptedDays: 0 });
+      expect(league(w).plans.filter((p) => p.outcome === 'open')).toEqual([]);
+    }, 30_000);
+  }
+
+  it('video and polish keep their challenge: nothing says those tests are blind', async () => {
+    const { world: w, ctx } = await lab();
+    atClose(w, 28);
+    const a = await hireInto(ctx, 'motion_designer');
+    fixedRow('video', (s) => (s.id === a.id ? 60 : 90));
+    expect((await runChallenge(ctx, failing(w, a))).hired).not.toBeNull();
+  }, 30_000);
+
+  it('the plan and its coach still help', async () => {
+    const { world: w, ctx } = await lab();
+    atClose(w, 42);
+    const a = holder(w, 'growth_lead');
+    const buyer = await hireInto(ctx, 'media_buyer_tiktok');
+    league(w).entries[buyer.id]!.hiredDay = 0;
+    rate(w, a, { rating: 1400, rd: 60 });
+    rate(w, buyer, { rating: 1600 });
+    league(w).entries[a.id]!.underBar = 2;
+    league(w).closedSeasons = 3;
+    openPlans(ctx, { season: 4, fromDay: 29, toDay: 42, tables: {}, employee: null, probations: [], dismissals: [], hires: [], notes: [], disruptedDays: 0 });
+    expect(league(w).plans[0]).toMatchObject({ agentId: a.id, skill: 'buying', coachId: buyer.id, outcome: 'open' });
+  }, 30_000);
+});
+
+describe('M4 for a family of one (L8)', () => {
+  it('reads the mean of all rated seats that day: a person is never compared with themselves', async () => {
+    const { world: w, ctx } = await lab();
+    atClose(w, 28);
+    const old = holder(w, 'shop_lead');
+    const other = holder(w, 'editor_in_chief');
+    rate(w, other, { rating: 1500 });
+    rate(w, holder(w, 'research_lead'), { rating: 1500, n: 0 }); // not rated
+    w.talentTruth!.agents[old.id]!.talent.page = 0.3;
+    w.talentTruth!.agents[other.id]!.talent.longform = 0.8;
+    fixedRow('page', (s) => (s.id === old.id ? 60 : 91));
+    await runChallenge(ctx, failing(w, old));
+    expect(w.talentTruth!.swaps[0]!.familyMean).toBeCloseTo((0.3 + 0.8) / 2, 9);
+  }, 30_000);
+
+  it('a family of two keeps its own mean', async () => {
+    const { world: w, ctx } = await lab();
+    atClose(w, 28);
+    const a = await hireInto(ctx, 'hook_writer');
+    const b = await hireInto(ctx, 'community_manager');
+    rate(w, holder(w, 'editor_in_chief'), { rating: 1500 });
+    w.talentTruth!.agents[a.id]!.talent.copy = 0.3;
+    w.talentTruth!.agents[b.id]!.talent.copy = 0.5;
+    fixedRow('copy', (s) => (s.id === a.id ? 60 : 91));
+    await runChallenge(ctx, failing(w, a));
+    expect(w.talentTruth!.swaps[0]!.familyMean).toBeCloseTo(0.4, 9);
+  }, 30_000);
+});
+
+describe('formation continue (L7)', () => {
+  const close = async (over: Partial<ScenarioConfig> = {}, revenue = 2000) => {
+    const l = await lab({ scaling: true, ...over });
+    atClose(l.world, 28);
+    wealthy(l.world, revenue);
+    return l;
+  };
+  const seatsOf = (w: WorldState) => w.company.agents.filter((a) => league(w).entries[a.id]?.primary);
+  const primary = (w: WorldState, a: AgentState) => league(w).entries[a.id]!.primary!;
+  const talentOf = (w: WorldState, a: AgentState) => w.talentTruth!.agents[a.id]!.talent[primary(w, a)]!;
+
+  it('funds the lowest ratings first, for 15 € a seat out of 5 % of the 14 days of revenue, and moves t and its ceiling', async () => {
+    const { world: w, ctx } = await close({}, 700); // 35 €: two seats out of five
+    const seats = seatsOf(w);
+    expect(seats.length).toBeGreaterThan(2);
+    seats.forEach((a, i) => rate(w, a, { rating: 1600 - 10 * i }));
+    const [first, second] = [seats.at(-1)!, seats.at(-2)!];
+    const untouched = seats[0]!;
+    const truth = w.talentTruth!.agents;
+    Object.assign(truth[first.id]!, { talent: { ...truth[first.id]!.talent, [primary(w, first)]: 0.5 }, ceiling: { ...truth[first.id]!.ceiling, [primary(w, first)]: 0.6 } });
+    const before = { t: talentOf(w, first), ceiling: truth[first.id]!.ceiling[primary(w, first)]!, other: talentOf(w, untouched) };
+    const report = await closeSeason(ctx);
+    const gain = TALENT.training.rate * (TALENT.ceilingCap - before.t);
+    expect(report.training).toEqual({ seats: 2, eur: 30 });
+    expect(talentOf(w, first)).toBeCloseTo(before.t + gain, 12);
+    expect(truth[first.id]!.ceiling[primary(w, first)]!).toBeCloseTo(before.ceiling + gain, 12);
+    expect(talentOf(w, second)).toBeGreaterThan(truth[second.id]!.start[primary(w, second)]!);
+    expect(talentOf(w, untouched)).toBe(before.other);
+  }, 30_000);
+
+  it('caps at 15 € a seat, and a ceiling under t comes back above it', async () => {
+    const { world: w, ctx } = await close({}, 100_000);
+    const seats = seatsOf(w);
+    const a = seats[0]!;
+    const skill = primary(w, a);
+    Object.assign(w.talentTruth!.agents[a.id]!, { talent: { ...w.talentTruth!.agents[a.id]!.talent, [skill]: 0.8 }, ceiling: { ...w.talentTruth!.agents[a.id]!.ceiling, [skill]: 0.75 } });
+    expect((await closeSeason(ctx)).training).toEqual({ seats: seats.length, eur: 15 * seats.length });
+    expect(w.talentTruth!.agents[a.id]!.ceiling[skill]).toBe(talentOf(w, a));
+  }, 30_000);
+
+  it('books one line, of type recruiting, the ledger stays the cash', async () => {
+    const { world: w, ctx } = await close();
+    const report = await closeSeason(ctx);
+    const lines = w.ledger.filter((e) => e.ref === `training:${report.season}`);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ type: 'recruiting', amount: -report.training!.eur, day: w.day });
+    expect(lines[0]!.memo).toContain('Formation continue');
+    expect(cash(w)).toBeCloseTo(sim.financeSnapshot(w).cash, 2);
+  }, 30_000);
+
+  it('the evening of a close leaves the KPI of the day on the ledger: cash, profit, cumulative profit', async () => {
+    const { world: w, company } = await close();
+    await (company as unknown as { evening(): Promise<void> }).evening();
+    const report = league(w).seasons.at(-1)!;
+    expect(report.training!.eur).toBeGreaterThan(0);
+    const kpi = w.company.kpis.find((k) => k.day === w.day)!;
+    const profitable = w.ledger.filter((e) => e.type !== 'capital');
+    expect(kpi.cash).toBeCloseTo(cash(w), 2);
+    expect(kpi.cumulativeProfit).toBeCloseTo(profitable.reduce((s, e) => s + e.amount, 0), 2);
+    expect(kpi.profit).toBeCloseTo(profitable.filter((e) => e.day === w.day).reduce((s, e) => s + e.amount, 0), 2);
+  }, 30_000);
+
+  it('says it in the feed and the note, seats and euros, no truth in any text', async () => {
+    const { world: w, ctx, root } = await close();
+    for (const a of seatsOf(w)) w.talentTruth!.agents[a.id]!.talent[primary(w, a)] = 0.1234567;
+    const report = await closeSeason(ctx);
+    const after = seatsOf(w).map((a) => String(talentOf(w, a)).slice(0, 8));
+    const said = w.activity.map((x) => x.text).join('\n');
+    expect(said).toContain('formation continue');
+    const note = readFileSync(join(root, 'brain', 'rh', `saison-${report.season}.md`), 'utf8');
+    expect(note).toContain('Formation continue');
+    const texts = `${said}${note}${JSON.stringify(league(w))}${JSON.stringify(w.ledger)}`;
+    for (const t of [...after, '1234567']) expect(texts).not.toContain(t);
+    expect(JSON.stringify(toSnapshot(w, false))).not.toContain('1234567');
+  }, 30_000);
+
+  it('runs in flat too, which it leaves a control in everything else', async () => {
+    const { world: w, ctx } = await close({ talent: 'flat' });
+    expect((await closeSeason(ctx)).training?.seats).toBeGreaterThan(0);
+    expect(league(w).plans).toEqual([]);
+    expect(league(w).bar).toBeUndefined();
+  }, 30_000);
+
+  it('never without growth, in survival, or under 3 times the starting budget', async () => {
+    const control = await close({ scaling: false });
+    expect((await closeSeason(control.ctx)).training).toBeUndefined();
+    const poor = await lab({ scaling: true });
+    atClose(poor.world, 28);
+    sim.recordLedger(poor.world, { type: 'revenue', amount: 2000, memo: 'Ventes', ref: null });
+    sim.recordLedger(poor.world, { type: 'ad_spend', amount: -(cash(poor.world) - 1499), memo: 'Pub', ref: null });
+    expect((await closeSeason(poor.ctx)).training).toBeUndefined();
+    const enough = await lab({ scaling: true });
+    atClose(enough.world, 28);
+    sim.recordLedger(enough.world, { type: 'revenue', amount: 2000, memo: 'Ventes', ref: null });
+    sim.recordLedger(enough.world, { type: 'ad_spend', amount: -(cash(enough.world) - 1500), memo: 'Pub', ref: null });
+    expect((await closeSeason(enough.ctx)).training?.seats).toBeGreaterThan(0);
+    expect(poor.world.ledger.filter((e) => e.ref?.startsWith('training:'))).toEqual([]);
+  }, 30_000);
+
+  it('never past the founder: his stop on spending or on every ad holds, and the report says why', async () => {
+    for (const [hold, read] of [
+      [{ kind: 'advances', reason: 'plus aucune avance' }, 'plus aucune avance'],
+      [{ kind: 'ads', reason: 'les pubs sont coupées' }, 'les pubs sont coupées'],
+    ] as const) {
+      const { world: w, ctx } = await close();
+      addHold(w, { ...hold, productId: null, until: null });
+      const talent = JSON.stringify(w.talentTruth);
+      const report = await closeSeason(ctx);
+      expect(report.training, read).toBeUndefined();
+      expect(w.ledger.filter((e) => e.ref?.startsWith('training:')), read).toEqual([]);
+      expect(JSON.stringify(w.talentTruth), read).toBe(talent);
+      expect(report.notes.join(' '), read).toContain(`Formation continue non versée : ${read}`);
+    }
+  }, 60_000);
+
+  it('a stop on one channel or one guide is no stop on training', async () => {
+    for (const hold of [{ productId: null, channel: 'meta' as const }, { productId: 'prd_a' }]) {
+      const { world: w, ctx } = await close();
+      addHold(w, { kind: 'ads', until: null, reason: 'une partie seulement', ...hold });
+      expect((await closeSeason(ctx)).training?.seats).toBeGreaterThan(0);
+    }
+  }, 60_000);
+
+  it('in approval mode nothing goes out without his yes', async () => {
+    const { world: w, ctx } = await close({ founderApproval: true });
+    const report = await closeSeason(ctx);
+    expect(report.training).toBeUndefined();
+    expect(w.ledger.filter((e) => e.ref?.startsWith('training:'))).toEqual([]);
+    expect(report.notes.join(' ')).toContain('Formation continue non versée : en mode validation');
+  }, 30_000);
+
+  it('the fixed team of legacy31 pays nothing, with talent and scaling left at their defaults', async () => {
+    const { world: w, ctx } = await close({ org: { ...LEGACY_ORG } });
+    expect(w.scenario.talent).toBe('league');
+    expect(w.scenario.scaling).toBe(true);
+    const talent = JSON.stringify(w.talentTruth);
+    expect((await closeSeason(ctx)).training).toBeUndefined();
+    expect(w.ledger.filter((e) => e.ref?.startsWith('training:'))).toEqual([]);
+    expect(JSON.stringify(w.talentTruth)).toBe(talent);
+  }, 30_000);
+
+  it('a forced talent never moves, nothing is paid for it, and no draw is taken', async () => {
+    const { world: w, ctx } = await close({ control: { talentOverride: { skills: ['page', 'longform'], value: 0.56 } } });
+    const shop = holder(w, 'shop_lead');
+    const buyer = holder(w, 'growth_lead');
+    const before = talentOf(w, buyer);
+    const report = await closeSeason(ctx);
+    expect(talentOf(w, shop)).toBe(0.56);
+    expect(w.talentTruth!.agents[shop.id]!.ceiling.page).toBe(0.56);
+    expect(talentOf(w, buyer)).toBeGreaterThan(before);
+    expect(report.training!.seats).toBe(seatsOf(w).length - seatsOf(w).filter((a) => ['page', 'longform'].includes(primary(w, a))).length);
+
+    const all = await close({ control: { talentOverride: { skills: ['copy', 'video', 'longform', 'polish', 'page', 'design', 'buying', 'research', 'support'], value: 0.56 } } });
+    expect((await closeSeason(all.ctx)).training).toBeUndefined();
+    expect(all.world.ledger.filter((e) => e.ref?.startsWith('training:'))).toEqual([]);
+  }, 30_000);
+
+  it('the same world trains the same seats after a reload', async () => {
+    const { world: w, ctx, reopen } = await close();
+    const saved = JSON.parse(JSON.stringify(w)) as WorldState;
+    await closeSeason(ctx);
+    await closeSeason((reopen(saved) as unknown as { ctx: RuntimeCtx }).ctx);
+    expect(saved.talentTruth).toEqual(w.talentTruth);
+    expect(saved.ledger.filter((e) => e.ref?.startsWith('training:')).map((e) => e.amount)).toEqual(w.ledger.filter((e) => e.ref?.startsWith('training:')).map((e) => e.amount));
+  }, 30_000);
+});
+
 describe('what a season leaves', () => {
   it('a report, a brain note and a feed line, and nothing of the truth in any of them (A21)', async () => {
     const { world: w, ctx, root } = await lab();
     atClose(w, 28);
     const a = holder(w, 'growth_lead');
-    rate(w, a, { rating: 1400, metric: 81 });
+    rate(w, a, { rating: 1400, metric: 1.1 });
     for (const t of Object.values(w.talentTruth!.agents)) t.talent.copy = 0.1234567;
     const report = await closeSeason(ctx);
     const note = readFileSync(join(root, 'brain', 'rh', `saison-${report.season}.md`), 'utf8');
     expect(note).toContain(a.name);
     expect(note).toContain('1 400');
+    expect(note).toContain('Barre de la saison : 1 500');
     expect(`${note}${JSON.stringify(league(w))}`).not.toContain('1234567');
     expect(w.activity.map((x) => x.text).join('\n')).toContain(`saison ${report.season} close`);
   }, 30_000);

@@ -125,7 +125,7 @@ function moveStage(ctx: RuntimeCtx, g: GrowthState, to: StageId, why: string): v
   const text = `l'agence quitte l'étape ${STAGE_LABELS[g.stage]} pour l'étape ${STAGE_LABELS[to]}`; // the label last: the digest reads the move off it
   Object.assign(g, { stage: to, stageSinceDay: w.day, gateWeeks: 0, floorWeeks: 0 });
   g.gate = evaluateStage(ctx);
-  logDecision(w, { kind: 'stage', who: officerId(w, 'ceo'), text, why });
+  logDecision(w, { kind: 'stage', who: officerId(w, 'ceo'), text: text.charAt(0).toUpperCase() + text.slice(1), why });
   speak(ctx, 'ceo', `${text} : ${why}`, 'meeting');
 }
 

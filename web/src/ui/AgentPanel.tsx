@@ -4,7 +4,7 @@ import type { Activity, AgentState, AlumnusView, ChatMessage, DeptId, HeadRow, L
 import { api } from '../api';
 import { Avatar, Bar, ChiefBadge, cx, DeliverableLink, Empty, Pill, SectionTitle, Segmented } from './common';
 import { useApp } from './context';
-import { fmtClock, fmtEur, fmtInt, fmtPct, safeDiv } from './format';
+import { fmtClock, fmtEur, fmtInt, fmtPct, plural, safeDiv } from './format';
 import { Icon } from './icons';
 import {
   ACTIVITY_META, AGENT_STATUS_LABEL, AGENT_STATUS_TONE, agentName, ALUMNUS_KIND_LABEL, CONTRACT_LABEL, CONTRACT_TONE, DELIVERABLE_ICON, DELIVERABLE_LABEL,
@@ -276,7 +276,7 @@ export function CareerBody({ agent, chip, league, head }: { agent: AgentState; c
         <div><strong>{head ? fmtEur(head.pay30d, 0) : '—'}</strong><span>coût 30 j</span></div>
       </div>
       {contract ? <div className="chip-row"><Pill tone={CONTRACT_TONE[contract]}>{CONTRACT_LABEL[contract]}</Pill></div> : null}
-      {!chip && !notes.length ? <div className="muted small">Hors ligue : poste sans effet mesurable sur un résultat.</div> : null}
+      {!chip && !notes.length ? <div className="muted small">{league?.outside.find((o) => o.agentId === agent.id)?.why ?? 'Hors ligue : poste sans effet mesurable sur un résultat'}.</div> : null}
       {notes.map(({ label, row }) => (
         <div key={label} className="small">
           {label} : note {fmtInt(row.rating)}, rang {row.rank}{row.metric ? `, ${row.metric}` : ''}{row.confidence === 'faible' ? ', peu de données' : ''}
@@ -318,13 +318,16 @@ export function FicheTab({ agent }: { agent: AgentState }) {
   const groups = toolGroupsOf(agent.tools);
   const perf = agent.perf ?? { done: 0, approved: 0, rejected: 0, failed: 0, score: 0 };
   const reviewed = perf.approved + perf.rejected;
+  const noted = reviewed + perf.failed > 0; // without a verdict or a failure the score is only its prior
+  const chip = snapshot?.scene?.people[agent.id] ?? null;
 
   return (
     <div className="fiche">
       <div className="chip-row">
         <span className="chip" style={{ borderColor: color }}><span className="eyebrow-dot" style={{ background: color }} />{deptName(lookups, agent.dept)}</span>
         <span className={cx('chip', `tier-${agent.tier}`)}><Icon name="sparkle" size={11} /> {TIER_LABEL[agent.tier] ?? agent.tier}</span>
-        <span className="chip">Niveau {agent.level} · {fmtInt(agent.xp)} xp</span>
+        <span className="chip" title={`Arrivée au jour ${fmtInt(Math.max(1, agent.hiredDay))}`}>Ancienneté {plural(Math.max(0, (snapshot?.day ?? 0) - agent.hiredDay), 'jour', 'jours')}</span>
+        <span className="chip">{chip ? `Ligue : ${chip.rank}/${chip.of}, note ${fmtInt(chip.rating)}` : 'Pas classé en ligue'}</span>
       </div>
       <p className="persona">{agent.persona}</p>
 
@@ -346,7 +349,7 @@ export function FicheTab({ agent }: { agent: AgentState }) {
 
       <SectionTitle>Performance</SectionTitle>
       <div className="perf-grid">
-        <div><strong>{Math.round(perf.score)}</strong><span>score /100</span></div>
+        <div><strong>{noted ? Math.round(perf.score) : '—'}</strong><span>{noted ? 'score /100' : 'pas encore noté'}</span></div>
         <div><strong>{fmtInt(perf.done)}</strong><span>tâches faites</span></div>
         <div><strong>{reviewed ? fmtPct(safeDiv(perf.approved, reviewed), 0) : '—'}</strong><span>approuvées</span></div>
         <div><strong className={perf.failed ? 'txt-bad' : undefined}>{fmtInt(perf.failed)}</strong><span>échecs</span></div>
