@@ -191,7 +191,7 @@ export function AdsTab({ onClose }: { onClose(): void }) {
                 const roas = safeDiv(a.revenue, a.spend);
                 return (
                   <tr key={c.id}>
-                    <td><strong>{c.name}</strong><div className="muted small">par {agentName(lookups, c.createdBy)}</div></td>
+                    <td><strong>{c.name}</strong><div className="muted small">{c.seq === undefined ? '' : `n° ${c.seq + 1} · `}par {agentName(lookups, c.createdBy)}</div></td>
                     <td><ChannelPill id={channelOf(c)} />{c.test ? <div className="muted small">Test</div> : null}</td>
                     <td className="small">{lookups.products.get(c.productId)?.title ?? c.productId}</td>
                     <td>

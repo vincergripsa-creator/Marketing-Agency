@@ -8,7 +8,10 @@ import type { RuntimeCtx } from '../ctx.js';
 import { speak } from '../ctx.js';
 import { activeHolds } from '../holds.js';
 import { sim } from '../modules.js';
-import { closeEntry } from '../talent/challenge.js';
+import { closeEntry, ratingText } from '../talent/challenge.js';
+import { TALENT } from '../talent/constants.js';
+import { primaryOf } from '../talent/skills.js';
+import { talentMode } from '../talent/truth.js';
 import { eur, pct, round2, sum } from '../util.js';
 import { CANDIDATES, ROLES } from './catalog.js';
 import { isLegacyOrg, ORG } from './constants.js';
@@ -110,19 +113,36 @@ function byLayoffOrder(w: WorldState, org: OrgState, days: number): (a: AgentSta
   return (a, b) => utilisation(w, org, a, days) - utilisation(w, org, b, days) || payOf(b) - payOf(a) || a.id.localeCompare(b.id);
 }
 
+/** The rating a layoff reads: `league` only, the flat control has no consequence. */
+function layoffRating(w: WorldState, a: AgentState): number | null {
+  const skill = primaryOf(a.roleId);
+  return talentMode(w) === 'league' && skill ? w.company.league?.entries[a.id]?.ratings[skill]?.rating ?? null : null;
+}
+
+/** Who goes first among seats already idle enough to go: the lowest rating, the old order breaking the ties, which leaves the flat control the old order alone. */
+function firstOut(w: WorldState, org: OrgState, idle: readonly AgentState[], days: number): AgentState | undefined {
+  const order = byLayoffOrder(w, org, days);
+  const rating = (a: AgentState): number => layoffRating(w, a) ?? TALENT.rating.par;
+  return [...idle].sort((a, b) => rating(a) - rating(b) || order(a, b))[0];
+}
+
+/** The rating a layoff states, when the league holds one: nobody leaves on a number the texts do not show. */
+function ratingLine(w: WorldState, a: AgentState): string {
+  const rating = layoffRating(w, a);
+  return rating === null ? '' : `, classement ${ratingText(rating)}`;
+}
+
 /** L2: a role with at least two holders carries someone it has not needed for two weeks. */
 function idleDuplicate(w: WorldState, org: OrgState, free: readonly AgentState[]): AgentState | undefined {
   const { idleDays, idleUtil } = ORG.layoff;
   if (org.load.filter((d) => d.day > w.day - idleDays).length < idleDays) return undefined;
-  return free
-    .filter((a) => w.day - a.hiredDay >= idleDays && roleHolders(w, a.roleId).length >= 2 && utilisation(w, org, a, idleDays) < idleUtil)
-    .sort(byLayoffOrder(w, org, idleDays))[0];
+  return firstOut(w, org, free.filter((a) => w.day - a.hiredDay >= idleDays && roleHolders(w, a.roleId).length >= 2 && utilisation(w, org, a, idleDays) < idleUtil), idleDays);
 }
 
 /** L1 and L2, founders outside both, at most one per cooldown. Nora signs, Gabriel gives the numbers. */
 async function layoffs(ctx: RuntimeCtx, org: OrgState): Promise<void> {
   const w = ctx.world;
-  const { cashDays, cooldownDays, idleDays, lossDays } = ORG.layoff;
+  const { cashDays, cooldownDays, idleDays, idleUtil, lossDays } = ORG.layoff;
   const { cash, margin, payroll, fixed } = moneyRead(w, 'ceo');
   const costs = round2(payroll + fixed);
   org.lossDays = cash < cashDays * costs && margin < costs ? org.lossDays + 1 : 0;
@@ -133,10 +153,12 @@ async function layoffs(ctx: RuntimeCtx, org: OrgState): Promise<void> {
   const free = w.company.agents.filter((a) => !a.founder && !a.notice && canLeave(w, a.id).ok && !holds.some((h) => h.kind === 'pin' && h.agentId === a.id));
   const hr = officerId(w, 'hr');
   if (org.lossDays >= lossDays) {
-    const target = [...free].sort(byLayoffOrder(w, org, idleDays))[0];
+    const idle = free.filter((a) => utilisation(w, org, a, idleDays) < idleUtil);
+    const target = idle.length ? firstOut(w, org, idle, idleDays) : [...free].sort(byLayoffOrder(w, org, idleDays))[0];
     if (!target) return;
+    const seat = talentMode(w) === 'league' ? `${ratingLine(w, target)}, ${pct(utilisation(w, org, target, idleDays), 0)} d'occupation` : '';
     speak(ctx, 'cfo', `${eur(cash)} en caisse, moins de ${cashDays} jours de frais, et ${eur(margin)} de marge par jour pour ${eur(costs)} de frais, ${org.lossDays} soirs de suite.`, 'org');
-    await requestDeparture(ctx, target.id, `licenciement, ${eur(cash)} en caisse et ${eur(margin)} de marge par jour pour ${eur(costs)} de frais`, hr, 'layoff');
+    await requestDeparture(ctx, target.id, `licenciement${seat}, ${eur(cash)} en caisse et ${eur(margin)} de marge par jour pour ${eur(costs)} de frais`, hr, 'layoff');
     org.lossDays = 0;
     return;
   }
@@ -144,7 +166,7 @@ async function layoffs(ctx: RuntimeCtx, org: OrgState): Promise<void> {
   if (!idle) return;
   const util = pct(utilisation(w, org, idle, idleDays), 0);
   speak(ctx, 'cfo', `${eur(payOf(idle) * 30)} de salaire par mois pour ${idle.role}, ${util} d'occupation sur ${idleDays} jours.`, 'org');
-  await requestDeparture(ctx, idle.id, `licenciement, ${util} d'occupation sur ${idleDays} jours sur un rôle tenu à plusieurs`, hr, 'layoff');
+  await requestDeparture(ctx, idle.id, `licenciement${ratingLine(w, idle)}, ${util} d'occupation sur ${idleDays} jours sur un rôle tenu à plusieurs`, hr, 'layoff');
 }
 
 /** Runs each evening, after the hire logic. Lean teams only: the legacy team stays as it is, notes included. */

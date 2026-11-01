@@ -1,7 +1,8 @@
 /**
  * The talent pillar's numbers (talent §3 to §7, D12, D15). sim/balance.ts stays frozen: each pillar keeps its own.
  * `founderMean`, `marketMean` and `offRoleMean` say what the truth looks like: they never reach the UI (§2.9).
- * `par` and `sd` are estimates until S14 measures them, once, from `league.parStats`.
+ * `par` and `sd` are measured: `league.parStats` of the diagnosis runs at a6b9b5d, rounded. They describe the company that
+ * produced them, and S14 re-measures and overwrites them once.
  */
 import type { Skill } from '../../shared.js';
 
@@ -31,17 +32,17 @@ export const TALENT = {
   practiceRate: 0.25,
   coach: { gain: 0.02, overCeiling: 0.05, energy: 10, everyDays: 7 },
 
-  // The rating (§5.1)
-  rating: { par: 1500, rd: 200, rdMin: 70, rdPerEvidence: 6, rdSeasonGrowth: 1.1, kOverRd: 4, kMin: 12, kMax: 50, hireRd: 150, hirePerPoint: 8, hireSpread: 150, historyMax: 40 },
+  // The rating (§5.1). `rd` is a standard error: a game of weight 1 is worth one `rdGame`, and it grows back only over a season without a game
+  rating: { par: 1500, rd: 200, rdMin: 35, rdGame: 200, rdSeasonGrowth: 1.1, kOverRd: 4, kMin: 12, kMax: 50, hireRd: 150, hirePerPoint: 8, hireSpread: 150, historyMax: 40 },
 
   // Evidence (§5.2, D12): par and sd of the raw x, keyed `${skill}:${source}` like `league.parStats`, then what each weighs
   par: {
-    'copy:qa': 88, 'video:cut': 80, 'longform:qa': 80, 'longform:market': 4.3, 'polish:qa': 3, 'polish:market': 4.3,
-    'page:qa': 80, 'page:market': 0, 'design:visual': 75, 'buying:focus': 0.5, 'buying:market': 0, 'support:reply': 85,
+    'copy:qa': 89.38, 'video:cut': 77.55, 'longform:qa': 81.18, 'longform:market': 4.64, 'polish:qa': 3.86, 'polish:market': 4.64,
+    'page:qa': 85.96, 'page:market': -0.19, 'design:visual': 85.11, 'buying:focus': 0.45, 'buying:market': -0.29, 'support:reply': 81.55,
   } as Record<string, number>,
   sd: {
-    'copy:qa': 5, 'video:cut': 12, 'longform:qa': 6, 'longform:market': 0.35, 'polish:qa': 3, 'polish:market': 0.35,
-    'page:qa': 6, 'page:market': 0.35, 'design:visual': 10, 'buying:focus': 0.15, 'buying:market': 0.5, 'support:reply': 15,
+    'copy:qa': 4.49, 'video:cut': 8.67, 'longform:qa': 3.48, 'longform:market': 0.33, 'polish:qa': 1.46, 'polish:market': 0.33,
+    'page:qa': 5.75, 'page:market': 0.68, 'design:visual': 3.93, 'buying:focus': 0.24, 'buying:market': 1.19, 'support:reply': 18.39,
   } as Record<string, number>,
   weight: {
     'copy:qa': 1, 'copy:rejected': 1, 'copy:natural': 0.4, 'copy:duel': 1, 'video:cut': 1, 'longform:qa': 1.5, 'longform:market': 1,
@@ -56,15 +57,19 @@ export const TALENT = {
   duel: { everyDays: 7, day: 3, k: 32, tenureDays: 7, minBudget: 10, maxCreatives: 2, dropAbove: 0.85, drawBelow: 0.7, drawAbove: 0.3 },
   routePerPoint: 100, perkRouting: 1, perkDraws: 1,
 
-  // Consequences (§7)
+  // Consequences (§7). « Sous la barre pendant un certain temps » : two closes under it, day 42 at the earliest, then a plan of 14 days
   plan: {
-    gateRd: 0.75, tenureDays: 14, days: 14, targetSd: 0.5, metRating: 1490,
+    underRd: 0.5, underCloses: 2, firstDay: 42, tenureDays: 14, days: 14, targetSd: 0.5, metUnderBar: 10,
     perFamily: 1, perSeason: 3,
   },
   challenge: {
-    margin: 3, replacementsPerSeason: 2, replacementsPerFamily: 1, sameRoleDays: 28, horizonGuard: 10, disruptedDays: 3, refusalPinDays: 14,
+    candidates: 6, sits: 8, claudeSits: 3, marginSe: 1.5, marginMin: 1,
+    replacementsPerSeason: 2, replacementsPerFamily: 1, sameRoleDays: 28, horizonGuard: 10, disruptedDays: 3, refusalPinDays: 14,
     cloneRating: 1550, cloneMean: -0.02, cloneSd: 0.06,
   },
+
+  // Formation continue: what keeps a seat improving once practice has reached the level cap
+  training: { seatEur: 15, revenueShare: 0.05, revenueDays: 14, minCashTimes: 3, rate: 0.04 },
 };
 
 /** Under this sample a person is « échantillon insuffisant » and can neither enter nor fail a plan (§5.3, D12). Support's 4 is a weighted sum: 16 replies. */

@@ -161,7 +161,7 @@ function mockRows(agents: AgentState[]): LeagueRow[] {
       spark: [3, 2, 1, 0].map((w) => rating - w * ((h % 17) - 8)),
       form: [...FORM.slice(h % 5), ...FORM.slice(0, h % 5)],
       points: Math.round(rating - 1500), sample, confidence: sample < 4 ? 'faible' : sample < 9 ? 'moyenne' : 'forte',
-      contract: 'active', metric: `${60 + (h % 35)}/100`,
+      contract: 'active', metric: `${60 + (h % 35)}/100`, underBar: 0,
     };
   });
 }
@@ -170,7 +170,7 @@ function mockLeague(god: boolean): LeagueDetail {
   const s = mockSnapshot();
   const { agents } = s.company;
   const roles = MOCK_FAMILIES
-    .map((f) => ({ key: f.key, label: f.label, rows: mockRows(agents.filter((a) => f.depts.includes(a.dept) && a.dept !== 'direction')), cutLine: null as number | null }))
+    .map((f) => ({ key: f.key, label: f.label, rows: mockRows(agents.filter((a) => f.depts.includes(a.dept) && a.dept !== 'direction')), cutLine: null as number | null, blindTest: false }))
     .filter((f) => f.rows.length > 0);
   const family = roles[0];
   const last = family?.rows[family.rows.length - 1];
@@ -193,8 +193,12 @@ function mockLeague(god: boolean): LeagueDetail {
         'Sous la barre avec assez de preuves : un plan de 14 jours et un coach.',
         'Plan raté : test réel contre trois candidats, le poste change de main seulement si l’un bat le titulaire de 3 points.',
       ],
+      bar: 1500, cut: 'Sous la barre de 1 500 : après 2 clôtures de suite, un plan d’amélioration de 14 jours, puis, si le plan échoue, le poste passe au marché.',
+      cutBlind: 'Sous la barre de 1 500 : après 2 clôtures de suite, un plan d’amélioration de 14 jours. Ce métier n’a pas de test fiable : le poste est conservé.',
+      training: { seats: 3, eur: 45, totalEur: 90 },
     },
     roles,
+    outside: agents.filter((a) => !roles.some((r) => r.rows.some((x) => x.agentId === a.id))).map((a) => ({ agentId: a.id, name: a.name, why: 'Hors ligue : poste sans effet mesurable sur un résultat' })),
     plans: last ? [{
       agentId: last.agentId, skill: family?.key ?? 'copy', openedSeason: 2, deadlineDay: 22, metricLabel: 'Qualité moyenne des pubs', baseline: 71, target: 74, coachId: best?.agentId ?? null,
       text: `Plan d’amélioration de ${last.name} : qualité moyenne des pubs 71/100, objectif 74/100 en 14 jours. Coach : ${best?.name ?? 'personne'}.`, outcome: 'open',

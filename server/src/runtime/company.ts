@@ -12,7 +12,7 @@ import { TICKS_PER_DAY } from '../shared.js';
 import type {
   BrainVault, CompanyApi, CompanyOptions, ContentEngine, DayPlan, DayPlanItem, MarketTools, MindContext, RunPaths, Rng, StepResult,
 } from '../contracts.js';
-import { emit, nextId, streamRng } from '../core/index.js';
+import { emit, nextId, quietDay, streamRng, unsaid } from '../core/index.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, nameOf, productOf, speak } from './ctx.js';
 import { learning, sim } from './modules.js';
@@ -24,7 +24,7 @@ import {
 } from './tasks.js';
 import { buildHeuristicPlan, keywordMission, materialize, mergePlans, normalizeItem, prepareFounderItem, reactToOutage } from './strategy.js';
 import { addHold, liftHolds, productHold, REFUSAL_COOLDOWN_DAYS } from './holds.js';
-import { linkProductTasks, productInNiche, routeMission, startNicheChain, tellFounder, type MissionRoute } from './missions.js';
+import { linkProductTasks, productInNiche, requestBeside, routeMission, startNicheChain, tellFounder, type MissionRoute } from './missions.js';
 import { executeOrders } from './orders.js';
 import { shelveProduct, cancelProductTasks } from './pipeline.js';
 import { situationFor } from './situation.js';
@@ -39,6 +39,8 @@ import { STREAM } from './streams.js';
 import { dec, errorText, eur, idNum, round2, short, uniq } from './util.js';
 
 const MAX_CONCURRENT_CLAUDE = 6;
+/** Closes in a row above zero before a new dip counts as a new bankruptcy. */
+const SOLVENT_DAYS = 7;
 
 export function phaseOf(tick: number): DayPhase {
   if (tick <= 0) return 'morning';
@@ -185,15 +187,16 @@ export class Company implements CompanyApi {
     const target = agentById(w, agentId);
     const ceo = officerOf(w, 'ceo');
     emit(w, { agentId: target?.id ?? ceo.id, kind: 'founder', text: `Mission du fondateur${target ? ` pour ${target.name}` : ''} : « ${short(clean, 120)} »` });
+    const asked = requestBeside(clean) || clean; // an order said beside a request: the team plans the request alone
     let items: DayPlanItem[] = [];
     try {
-      const raw = await this.engine.interpretMission({ text: clean, allowedKinds: target ? target.taskKinds.filter((k) => PLAN_KINDS.includes(k)) : PLAN_KINDS }, await this.mindFor(target ?? ceo, target?.taskKinds[0] ?? 'plan_day', clean));
+      const raw = await this.engine.interpretMission({ text: asked, allowedKinds: target ? target.taskKinds.filter((k) => PLAN_KINDS.includes(k)) : PLAN_KINDS }, await this.mindFor(target ?? ceo, target?.taskKinds[0] ?? 'plan_day', clean));
       items = (Array.isArray(raw) ? raw : []).map((it) => normalizeItem(this.ctx, it)).filter((it): it is DayPlanItem => !!it);
     } catch {
       items = [];
     }
-    if (!items.length) items = keywordMission(this.ctx, clean);
-    const route = routeMission(this.ctx, clean, items);
+    if (!items.length) items = keywordMission(this.ctx, asked);
+    const route = routeMission(this.ctx, clean, items, target?.id);
     items = route.kind === 'tasks' ? route.items.slice(0, 5).map((it) => prepareFounderItem(this.ctx, it, route.wantsProduct)) : [];
     const lead = target ? (target.isChief ? target : chiefOf(w, target.dept)) : route.kind === 'tasks' ? chiefOf(w, items[0]?.dept ?? 'direction') : route.kind === 'order' ? ceo : chiefOf(w, 'recherche');
     const owner = lead ?? ceo;
@@ -206,10 +209,11 @@ export class Company implements CompanyApi {
     const created = route.kind === 'tasks' || route.kind === 'new_product' ? this.missionTasks(mission, route, items, target) : [];
     if (route.kind === 'order') await executeOrders(this.ctx, mission, route.orders);
     else this.answerMission(mission, route, created.length);
-    if (route.kind === 'tasks' && route.orders) {
-      const { status } = mission; // his tasks go on: the order said beside them closes nothing
+    if (route.kind !== 'order' && route.orders) {
+      const { status, outcome } = mission; // what he asked goes on: the order said beside it closes nothing
       await executeOrders(this.ctx, mission, route.orders);
       mission.status = status;
+      mission.outcome = [mission.outcome, outcome].filter(Boolean).join(' ');
     }
     if (created.length) {
       if (owner.id !== ceo.id) emit(w, { agentId: ceo.id, toAgentId: owner.id, kind: 'delegate', text: `${ceo.name} confie la mission du fondateur à ${owner.name} (${created.length} tâche(s))` });
@@ -533,9 +537,13 @@ export class Company implements CompanyApi {
     // A departure books its severance after the retro froze the day. Only the ledger's columns follow it: the rest of the
     // row is the retro's, and a fresh tasksDone would count the retro itself.
     const { cash, profit, cumulativeProfit } = learning.computeDailyKpi(w, w.day);
-    Object.assign(w.company.kpis.find((k) => k.day === w.day)!, { cash, profit, cumulativeProfit });
+    const today = w.company.kpis.find((k) => k.day === w.day)!;
+    Object.assign(today, { cash, profit, cumulativeProfit });
     const closed = closeMissions(w);
-    if (closed.length) speak(this.ctx, 'chief_of_staff', `${closed.length} mission(s) bouclée(s) aujourd'hui`);
+    if (closed.length) {
+      if (quietDay(today)) unsaid(w); // a day of nothing closes nothing worth a line
+      else speak(this.ctx, 'chief_of_staff', `${closed.length} mission(s) bouclée(s) aujourd'hui`);
+    }
     const staff = officerId(w, 'chief_of_staff');
     for (const m of closed) {
       if (m.from !== 'founder') continue;
@@ -854,7 +862,7 @@ export class Company implements CompanyApi {
     const level = learning.levelForXp(agent.xp);
     if (level <= agent.level) return;
     agent.level = level;
-    emit(this.world, { agentId: agent.id, kind: 'thought', text: `${agent.name} passe niveau ${level} !` });
+    emit(this.world, { agentId: agent.id, kind: 'thought', text: `${agent.name} gagne en pratique : niveau ${level} atteint à force de tâches.` });
   }
 
   /** Dependents of failed/cancelled tasks can never run: cancel them (the CEO's watchdog rebuilds chains). */
@@ -957,16 +965,20 @@ export class Company implements CompanyApi {
     const fin = sim.financeSnapshot(w);
     if (fin.cash < 0) {
       if (w.status !== 'bankrupt') {
+        const again = this.sameBankruptcy();
         w.status = 'bankrupt';
-        this.pushEvent('bankrupt', 'Faillite : trésorerie négative', `La trésorerie est passée à ${eur(fin.cash)}. Plus aucune dépense payante : support, organique et créateurs à la commission uniquement.`, 'danger');
+        if (again) unsaid(w, 2); // its event and the event's line
+        else this.pushEvent('bankrupt', 'Faillite : trésorerie négative', `La trésorerie est passée à ${eur(fin.cash)}. Plus aucune dépense payante : support, organique et créateurs à la commission uniquement.`, 'danger');
         for (const c of activeCampaigns(w)) {
           try { if (this.tools.updateCampaign(c.id, { status: 'paused' }).ok) c.status = 'paused'; } catch { /* ignore */ }
         }
-        speak(this.ctx, 'cfo', `trésorerie à ${eur(fin.cash)}, toutes les pubs sont coupées`, 'finance');
+        if (again) unsaid(w);
+        else speak(this.ctx, 'cfo', `trésorerie à ${eur(fin.cash)}, toutes les pubs sont coupées`, 'finance');
       }
     } else if (w.status === 'bankrupt') {
       w.status = w.company.goalReachedDay !== undefined ? 'goal_reached' : 'running';
-      speak(this.ctx, 'cfo', `la trésorerie redevient positive (${eur(fin.cash)})`, 'finance');
+      if (this.firstWayBack()) speak(this.ctx, 'cfo', `la trésorerie redevient positive (${eur(fin.cash)})`, 'finance');
+      else unsaid(w);
     }
     if (fin.profit >= w.scenario.goal.targetProfit && w.company.goalReachedDay === undefined) {
       w.company.goalReachedDay = w.day;
@@ -979,6 +991,19 @@ export class Company implements CompanyApi {
     }
     const b = currentBudget(w);
     if (b.survival) speak(this.ctx, 'cfo', `trésorerie ${eur(fin.cash)} (${dec(fin.cash / Math.max(1, w.scenario.startingCash) * 100, 0)} % du départ) — on reste en mode survie`, 'finance');
+  }
+
+  /** A dip inside SOLVENT_DAYS of the last negative close is the same bankruptcy: cash flickering around zero fails once, not each time it dips. */
+  private sameBankruptcy(): boolean {
+    const { day, company } = this.world;
+    return company.kpis.some((k) => k.day < day && k.day >= day - SOLVENT_DAYS && k.cash < 0);
+  }
+
+  /** The first close above zero since this bankruptcy was declared: the next ones of the same episode say nothing new. */
+  private firstWayBack(): boolean {
+    const { day, company, market } = this.world;
+    const since = market.events.findLast((e) => e.kind === 'bankrupt')?.day ?? 0;
+    return company.kpis.every((k) => k.day < since || k.day >= day || k.cash < 0);
   }
 
   private pushEvent(kind: WorldEvent['kind'], title: string, description: string, severity: WorldEvent['severity']): void {
@@ -1023,7 +1048,8 @@ export class Company implements CompanyApi {
       if (!w.scenario.openEnded && w.day > w.scenario.horizonDays) {
         w.status = 'finished';
         const fin = sim.financeSnapshot(w);
-        emit(w, { agentId: officerId(w, 'ceo'), kind: 'event', text: `Fin de la simulation après ${w.scenario.horizonDays} jours : profit cumulé ${eur(fin.profit)}, trésorerie ${eur(fin.cash)}.` });
+        const end = fin.bankrupt ? `Faillite : la simulation s'arrête après ${w.scenario.horizonDays} jours sur une trésorerie négative` : `Fin de la simulation après ${w.scenario.horizonDays} jours`;
+        emit(w, { agentId: officerId(w, 'ceo'), kind: 'event', text: `${end} : profit cumulé ${eur(fin.profit)}, trésorerie ${eur(fin.cash)}.` });
       }
     }
     w.phase = phaseOf(w.tick);

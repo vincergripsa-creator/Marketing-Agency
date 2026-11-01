@@ -15,7 +15,7 @@ export const TABS: { id: TabId; label: string; icon: IconName; key: string; more
   { id: 'bureau', label: 'Bureau', icon: 'building', key: '1' },
   { id: 'taches', label: 'Tâches', icon: 'list', key: '2' },
   { id: 'produits', label: 'Produits', icon: 'package', key: '3' },
-  { id: 'pub', label: 'Acquisition', icon: 'megaphone', key: '4' },
+  { id: 'pub', label: 'Publicité', icon: 'megaphone', key: '4' },
   { id: 'canaux', label: 'Canaux', icon: 'globe', key: '5' },
   { id: 'croissance', label: 'Croissance', icon: 'trendUp', key: '6' },
   { id: 'effectif', label: 'Effectif', icon: 'users', key: '7' },
@@ -176,8 +176,8 @@ export const CONTRACT_TONE: Record<PersonChip['contract'], Tone> = { trial: 'blu
 export const REQ_STATUS_LABEL: Record<HiringReqView['status'], string> = { open: 'Ouvert', filled: 'Pourvu', cancelled: 'Annulé' };
 export const REQ_STATUS_TONE: Record<HiringReqView['status'], Tone> = { open: 'amber', filled: 'green', cancelled: 'neutral' };
 
-export const PLAN_OUTCOME_LABEL: Record<ProbationPlan['outcome'], string> = { open: 'En cours', met: 'Atteint', failed: 'Échoué', kept_no_better: 'Maintenu : personne de mieux' };
-export const PLAN_OUTCOME_TONE: Record<ProbationPlan['outcome'], Tone> = { open: 'amber', met: 'green', failed: 'red', kept_no_better: 'neutral' };
+export const PLAN_OUTCOME_LABEL: Record<ProbationPlan['outcome'], string> = { open: 'En cours', met: 'Atteint', failed: 'Échoué', kept_no_better: 'Maintenu : personne de mieux', kept_no_test: 'Maintenu : pas de test fiable' };
+export const PLAN_OUTCOME_TONE: Record<ProbationPlan['outcome'], Tone> = { open: 'amber', met: 'green', failed: 'red', kept_no_better: 'neutral', kept_no_test: 'neutral' };
 
 export const DUEL_STATUS_LABEL: Record<DuelView['status'], string> = { open: 'En cours', done: 'Terminé', void: 'Annulé' };
 export const DUEL_STATUS_TONE: Record<DuelView['status'], Tone> = { open: 'blue', done: 'green', void: 'neutral' };
@@ -207,7 +207,7 @@ export const HOOK_LABEL: Record<HookStyle, string> = {
   mistake: 'Erreur à éviter', before_after: 'Avant / après', listicle: 'Liste',
 };
 export const FORMAT_LABEL: Record<AdFormat, string> = {
-  faceless_voiceover: 'Voix off faceless', text_slideshow: 'Diaporama texte', ugc_avatar: 'Avatar UGC', carousel: 'Carrousel',
+  faceless_voiceover: 'Voix off faceless', text_slideshow: 'Diaporama texte', ugc_avatar: 'Narrateur animé', carousel: 'Carrousel',
   static_image: 'Image fixe', search_text: 'Annonce Search',
 };
 

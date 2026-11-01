@@ -26,6 +26,8 @@ import { officerId } from '../src/runtime/org/officers.js';
 import { payOf, payrollToday } from '../src/runtime/org/payroll.js';
 import { auditOrg, reconcileOrg } from '../src/runtime/org/reconcile.js';
 import { ALL_KINDS, depState, isOpen } from '../src/runtime/tasks.js';
+import { primaryOf } from '../src/runtime/talent/skills.js';
+import { leagueEntry } from '../src/runtime/talent/truth.js';
 import { dec } from '../src/runtime/util.js';
 import { LEGACY } from './legacy.js';
 
@@ -375,6 +377,86 @@ describe('layoffs', () => {
     expect(org(w).decisions.at(-1)!.numbers).toHaveProperty('cash');
     const said = w.activity.filter((a) => a.kind === 'org').map((a) => a.agentId);
     expect(said).toEqual(expect.arrayContaining([officerId(w, 'cfo'), officerId(w, 'hr')]));
+  });
+
+  describe('the league selects among the idle (L6)', () => {
+    /** Two idle holders of one role, with enough days on the books to read them. */
+    function idleTwins(over: Partial<ScenarioConfig> = {}): { w: WorldState; ctx: RuntimeCtx; low: AgentState; high: AgentState } {
+      const w = leanWorld(7, over);
+      const { ctx } = mount(w);
+      const low = hired(w, 'lucas', 1);
+      const high = hired(w, 'fatou', 1);
+      w.day = 15;
+      for (let d = 2; d <= 15; d++) org(w).load.push(loadDay(d, { [low.id]: 1, [high.id]: 0 }));
+      return { w, ctx, low, high };
+    }
+    const rated = (w: WorldState, a: AgentState, rating: number) => {
+      const skill = primaryOf(a.roleId)!;
+      w.company.league!.entries[a.id] ??= leagueEntry(w, a);
+      w.company.league!.entries[a.id]!.ratings[skill] = { skill, rating, rd: 80, n: 20, seasonN: 4, metric: 70, history: [] };
+    };
+
+    it('the lowest rating goes first, even a little busier, and the reason names the rating and the occupation', async () => {
+      const { w, ctx, low, high } = idleTwins();
+      rated(w, low, 1412);
+      rated(w, high, 1600);
+      await layoffsEvening(ctx);
+      expect(agent(w, low.id)).toBeUndefined();
+      expect(agent(w, high.id)).toBeDefined();
+      expect(org(w).alumni[0]).toMatchObject({ id: low.id, kind: 'layoff' });
+      expect(org(w).alumni[0]!.reason).toContain('classement 1 412');
+      expect(org(w).alumni[0]!.reason).toContain("d'occupation");
+      expect(w.company.league!.entries[low.id]!.leftBecause).toBe(org(w).alumni[0]!.reason);
+    });
+
+    it('occupation breaks a tie', async () => {
+      const { w, ctx, low, high } = idleTwins();
+      rated(w, low, 1500);
+      rated(w, high, 1500);
+      await layoffsEvening(ctx);
+      expect(agent(w, high.id)).toBeUndefined(); // the less busy of the two
+      expect(agent(w, low.id)).toBeDefined();
+    });
+
+    it('nobody who is not idle enough goes, whatever the rating', async () => {
+      const { w, ctx, low, high } = idleTwins();
+      rated(w, low, 1200);
+      rated(w, high, 1600);
+      for (const d of org(w).load) d.busy[low.id] = 9;
+      await layoffsEvening(ctx);
+      expect(agent(w, low.id)).toBeDefined();
+      expect(agent(w, high.id)).toBeUndefined();
+    });
+
+    it('cash under water reads the same way among the idle, and today\'s order when nobody is idle', async () => {
+      const { w, ctx, low, high } = idleTwins();
+      rated(w, low, 1412);
+      rated(w, high, 1600);
+      setCash(w, 5);
+      org(w).lossDays = ORG.layoff.lossDays - 1;
+      await layoffsEvening(ctx);
+      expect(agent(w, low.id)).toBeUndefined();
+      expect(org(w).alumni[0]!.reason).toContain('classement 1 412');
+
+      const busy = idleTwins();
+      rated(busy.w, busy.low, 1412);
+      rated(busy.w, busy.high, 1600);
+      for (const d of org(busy.w).load) Object.assign(d.busy, { [busy.low.id]: 9, [busy.high.id]: 6 });
+      setCash(busy.w, 5);
+      org(busy.w).lossDays = ORG.layoff.lossDays - 1;
+      await layoffsEvening(busy.ctx);
+      expect(agent(busy.w, busy.high.id)).toBeUndefined();
+    });
+
+    it('the flat control keeps today\'s order and today\'s words', async () => {
+      const { w, ctx, low, high } = idleTwins({ talent: 'flat' });
+      rated(w, low, 1412);
+      rated(w, high, 1600);
+      await layoffsEvening(ctx);
+      expect(agent(w, high.id)).toBeUndefined();
+      expect(agent(w, low.id)).toBeDefined();
+      expect(org(w).alumni[0]!.reason).not.toContain('classement');
+    });
   });
 
   it('a layoff of the evening lands after the retro, and the day still closes on the ledger', async () => {

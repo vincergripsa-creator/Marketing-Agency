@@ -118,10 +118,10 @@ function AllocationCard({ allocation: a }: { allocation: Allocation | null }) {
       <SectionTitle right={a ? <span className="muted small">semaine {fmtInt(a.week)} · jour {fmtInt(a.day)}</span> : null}>L’argent de la semaine</SectionTitle>
       {!a ? <div className="muted small">Le CFO fait ses comptes chaque lundi.</div> : (
         <>
-          {a.leak ? <div className="banner-inline banner-warn"><Icon name="alert" size={14} /> Le ROAS est sous le seuil de rentabilité : l’argent frais va aux tests, pas aux pubs qui tournent.</div> : null}
+          {a.leak ? <div className="banner-inline banner-warn"><Icon name="alert" size={14} /> Le ROAS est sous le seuil de rentabilité : rien ne monte sur ce qui tourne.</div> : null}
           <div className="kpi-mini">
-            <div><span>Pub visée / jour</span><strong>{fmtEur(a.adTarget, 0)}</strong></div>
-            <div><span>Tests / semaine</span><strong>{fmtEur(a.testWeek, 0)}</strong></div>
+            <div><span>Pub dépensée / jour</span><strong>{fmtEur(a.spend7, 0)}</strong></div>
+            <div title="Là où la pub peut monter cette semaine, seulement sur ce qui dépasse le seuil"><span>Plafond / jour</span><strong>{fmtEur(a.adTarget, 0)}</strong></div>
             <div><span>Réserve</span><strong>{fmtEur(a.reserve, 0)}</strong></div>
             <div><span>Disponible</span><strong>{fmtEur(a.free, 0)}</strong></div>
             <div><span>Profit 7 j</span><strong className={a.profit7 >= 0 ? 'txt-good' : 'txt-bad'}>{fmtEurSigned(a.profit7, 0)}</strong></div>

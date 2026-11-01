@@ -133,7 +133,7 @@ const AWAY_DAYS_PER_WEEK = 365;
 const BACKOFF_MS = [30_000, 300_000] as const;
 /** Failures on one tick before the clock moves on without it. */
 const SKIP_AFTER = 8;
-const RUN_FINISHED = 'Ce run est terminé (horizon atteint) : lance une nouvelle simulation.';
+const RUN_FINISHED = 'Ce run est terminé (horizon atteint) : continue-le sans fin ou lance une nouvelle simulation.';
 const NO_DIRECTOR = 'Rendu vidéo indisponible sur ce serveur';
 /** D52: the stream carries the videos of what it shows, no more. GET /api/state and GET /api/videos keep them all. */
 const LIVE_VIDEOS = 30;

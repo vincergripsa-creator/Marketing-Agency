@@ -61,6 +61,8 @@ describe('run status', () => {
     expect(currentRunPill('finished')).toEqual({ label: 'terminée', tone: 'neutral' });
     expect(currentRunPill('running')).toEqual({ label: 'en cours', tone: 'green' });
     expect(currentRunPill('bankrupt')).toEqual({ label: 'faillite', tone: 'red' });
+    expect(currentRunPill('finished', true)).toEqual({ label: 'faillite', tone: 'red' });
+    expect(currentRunPill('finished', false)).toEqual({ label: 'terminée', tone: 'neutral' });
   });
 
   it('a goal reached after the deadline is not the goal of the scenario, on the deadline it is', () => {

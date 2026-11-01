@@ -262,6 +262,7 @@ describe('settling a duel', () => {
     expect(result!.delta).toBeCloseTo(32 * (result!.s - 0.5), 0);
     expect(w.company.league!.events.filter((e) => e.source === 'duel').map((e) => [e.agentId, e.w])).toEqual([[a, 1], [b, 1]]);
     expect(w.company.league!.entries[a]!.ratings.copy!.seasonN).toBe(1);
+    expect(w.company.league!.entries[a]!.ratings.copy!.rd).toBeCloseTo(TALENT.rating.rd / Math.SQRT2, 9); // a duel is a game like any other: rd is a standard error
     expect(s.duel.endDay).toBe(10);
   });
 

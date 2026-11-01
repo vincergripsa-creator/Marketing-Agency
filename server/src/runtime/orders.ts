@@ -2,20 +2,21 @@
  * The founder's orders, executed on the spot: a stop is a standing hold the plan and the handlers respect until he lifts
  * it, not a task that may or may not reach its goal. An order that cannot be carried out is said so, never closed as done.
  */
-import type { AgentState, ChannelId, Mission, Task } from '../shared.js';
-import { CHANNELS } from '../shared.js';
+import type { AgentState, Campaign, ChannelId, Mission, Task } from '../shared.js';
+import { CHANNELS, channelOf } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
+import { nicheName, productOf } from './ctx.js';
 import { addHold, adsHold, firingHold, liftHolds } from './holds.js';
 import { committedAdBudget, currentBudget } from './metrics.js';
 import type { FounderOrder, OrderAction, PersonOrder } from './missions.js';
-import { tellFounder } from './missions.js';
+import { campaignNumber, tellFounder } from './missions.js';
 import { isLegacyOrg } from './org/constants.js';
 import { requestDeparture } from './org/departure.js';
 import { officerId } from './org/officers.js';
 import { closeProductMissions, dropTask, killProduct, shelveProduct, stopPaidAds } from './pipeline.js';
 import { redTeamGate } from './redteam.js';
 import { resumeCampaigns } from './strategy.js';
-import { createTask, openTasks, taskById } from './tasks.js';
+import { createTask, KIND_META, openTasks, taskById } from './tasks.js';
 import { eur, short } from './util.js';
 
 const ASKED_FR: Partial<Record<OrderAction, string>> = {
@@ -44,28 +45,64 @@ async function fireAgent(ctx: RuntimeCtx, agent: AgentState): Promise<{ text: st
 
 const channelNames = (order: { channels?: readonly ChannelId[] }): string => (order.channels ?? []).map((ch) => CHANNELS[ch].label).join(', ');
 
+/**
+ * What « sauf » spares keeps running under the hold, on his word: the hold stops what is new, and a campaign he kept is
+ * not cut by the plan or the buyer. The stop-loss still reads it.
+ */
 function stopAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'stop_ads' }, when: string): string {
-  const { product, channels } = order;
+  const { product, channels, spared = [] } = order;
   const names = channelNames(order);
   let paused = 0, cancelled = 0;
   for (const channel of channels?.length ? channels : [null]) {
-    const stopped = stopPaidAds(ctx, product?.id ?? null, `ordre du fondateur du jour ${ctx.world.day}`, channel);
+    const stopped = stopPaidAds(ctx, product?.id ?? null, `ordre du fondateur du jour ${ctx.world.day}`, channel, spared);
     paused += stopped.paused;
     cancelled += stopped.cancelled;
     addHold(ctx.world, { kind: 'ads', productId: product?.id ?? null, until: null, ...(channel ? { channel } : {}), reason: `les pubs${channel ? ` ${CHANNELS[channel].label}` : ''}${product ? ` de « ${short(product.title, 50)} »` : ''} sont coupées sur ordre du fondateur (jour ${ctx.world.day})` });
   }
-  return `C'est fait${when} : ${paused} campagne(s) en pause, ${cancelled} tâche(s) de pub annulée(s). Aucune pub ne repartira${names ? ` sur ${names}` : ''}${product ? ` sur « ${short(product.title, 50)} »` : ''} tant que tu ne me dis pas « reprends ${names || 'les pubs'} ».`;
+  const running = spared.filter((c) => c.status === 'active');
+  for (const c of running) c.founderForced = true;
+  const kept = running.length ? ` Restent en cours sur ton ordre : ${running.map((c) => campaignLabel(c, numberOf(ctx, c))).join(', ')}.` : '';
+  return `C'est fait${when} : ${paused} campagne(s) en pause, ${cancelled} tâche(s) de pub annulée(s).${kept} Aucune ${running.length ? 'autre ' : ''}pub ne repartira${names ? ` sur ${names}` : ''}${product ? ` sur « ${short(product.title, 50)} »` : ''} tant que tu ne me dis pas « reprends ${names || 'les pubs'} ».`;
 }
 
 /** « Reprends Meta » lifts what he said about Meta: an order on every channel still stands, and he is told so. */
 function resumeAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'resume_ads' }): { text: string; resumed: boolean } {
   const w = ctx.world;
-  const { product, channels } = order;
+  const { product, channels, spared } = order;
   const lifted = liftHolds(w, (h) => h.kind === 'ads' && (!product || h.productId === null || h.productId === product.id) && (!channels || (!!h.channel && channels.includes(h.channel))));
   const stands = (channels ?? []).map((ch) => adsHold(w, product?.id ?? null, ch)).find(Boolean);
   if (stands) return { text: `Je n'ai rien relancé : ${stands.reason}. Dis « reprends les pubs » pour lever cet ordre.`, resumed: false };
-  const { resumed, left } = resumeCampaigns(ctx, 'founder', product?.id, channels);
+  const { resumed, left } = resumeCampaigns(ctx, 'founder', { productId: product?.id, channels, spared });
   return { text: `C'est reparti${channels ? ` sur ${channelNames(order)}` : ''} : ${lifted.length} blocage(s) levé(s), ${resumed.length} campagne(s) relancée(s)${left.length ? `, ${left.length} restée(s) en pause (produit, budget ou règles de la pub)` : ''}. Le plan de demain reprend les lancements.`, resumed: true };
+}
+
+const campaignLabel = (c: Campaign, number: number): string => `n° ${number} « ${short(c.name, 60)} »`;
+
+const numberOf = (ctx: RuntimeCtx, c: Campaign): number => campaignNumber(c, ctx.world.company.campaigns.indexOf(c));
+
+/**
+ * One campaign, on his word: the others go on, and no hold stops the company from running them. The plan may give the same
+ * guide a new campaign the next days, and he is told so with the sentence that stops it for good.
+ */
+function stopCampaign(ctx: RuntimeCtx, c: Campaign, number: number): string {
+  if (c.status !== 'active') return `La campagne ${campaignLabel(c, number)} ne tourne pas : je n'ai rien changé.`;
+  try { ctx.tools.updateCampaign(c.id, { status: 'paused' }); } catch { /* the runtime status below is authoritative */ }
+  c.status = 'paused';
+  c.pausedFor = 'founder';
+  const product = productOf(ctx, c.productId);
+  const forGood = product ? ` L'équipe peut relancer une autre campagne sur ce guide : pour l'arrêter pour de bon, dis « coupe les pubs du guide ${nicheName(ctx, product.nicheId)} ».` : '';
+  return `C'est fait : la campagne ${campaignLabel(c, number)} est en pause, les autres continuent.${forGood} Dis « reprends la campagne ${number} » pour la relancer.`;
+}
+
+/** His order on all the ads still stands over one campaign: he lifts it first. A refused resume keeps his stop: the next try reads it. */
+function resumeCampaign(ctx: RuntimeCtx, c: Campaign, number: number): { text: string; resumed: boolean } {
+  const hold = adsHold(ctx.world, c.productId, channelOf(c));
+  if (hold) return { text: `Je n'ai rien relancé : ${hold.reason}. Dis « reprends les pubs » pour lever cet ordre.`, resumed: false };
+  const stopped = c.pausedFor;
+  const { resumed } = resumeCampaigns(ctx, 'founder', { campaignId: c.id });
+  if (resumed.length) return { text: `C'est reparti : la campagne ${campaignLabel(c, number)} tourne de nouveau.`, resumed: true };
+  if (stopped) c.pausedFor = stopped;
+  return { text: `Je n'ai pas relancé la campagne ${campaignLabel(c, number)} : ${stopped === 'founder' ? 'son produit, son budget ou les règles de la pub l\'en empêchent pour l\'instant' : 'elle n\'est pas en pause sur ton ordre'}.`, resumed: false };
 }
 
 /** Every order of one sentence on one mission: he reads each answer, and one refused order shows on it. */
@@ -91,6 +128,26 @@ async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): P
     case 'no_target': {
       const titles = w.company.products.filter((p) => p.status !== 'killed').slice(-4).map((p) => `« ${short(p.title, 50)} »`);
       refuse(`${ASKED_FR[order.asked] ?? 'Je n’ai rien fait'} : ${order.topic ? `je ne trouve aucun guide sur « ${order.topic} »` : 'je ne sais pas de quel guide tu parles'}.${titles.length ? ` Nos guides : ${titles.join(', ')}.` : ''}`);
+      return;
+    }
+    case 'no_campaign': {
+      const running = w.company.campaigns.flatMap((c, i) => (c.status === 'active' ? [campaignLabel(c, campaignNumber(c, i))] : []));
+      refuse(`${ASKED_FR[order.asked] ?? 'Je n’ai rien fait'} : aucune campagne ne porte le n° ${order.number}.${running.length ? ` En cours : ${running.slice(0, 6).join(', ')}.` : ''}`);
+      return;
+    }
+    case 'negated':
+      done(`Compris (« ${short(order.text.trim(), 80)} ») : je ne change rien.`);
+      return;
+    case 'trim_ads':
+      m.taskIds.push(createTask(w, { kind: 'optimize_ads', title: KIND_META.optimize_ads.label, input: order.channel ? { channel: order.channel } : {}, createdBy: 'founder', missionId: m.id, priority: 1 }).id);
+      done('C’est noté : on coupe ce qui ne rapporte pas, le reste continue.');
+      return;
+    case 'stop_campaign':
+      done(stopCampaign(ctx, order.campaign, order.number));
+      return;
+    case 'resume_campaign': {
+      const { text, resumed } = resumeCampaign(ctx, order.campaign, order.number);
+      if (resumed) done(text); else refuse(text);
       return;
     }
     case 'no_agent':

@@ -332,6 +332,34 @@ describe('HUD', () => {
   });
 });
 
+describe('the card reads what the world holds (T3, T4)', () => {
+  const card = (patch: Partial<AgentState>) => {
+    const s = mockSnapshot();
+    const a = { ...s.company.agents[1]!, level: 10, xp: 12000, hiredDay: 12, ...patch };
+    return text(render(<FicheTab agent={a} />, { snapshot: { ...s, day: 60, company: { ...s.company, agents: s.company.agents.map((x) => (x.id === a.id ? a : x)) } }, demo: true }));
+  };
+  const prior = { done: 9, approved: 0, rejected: 0, failed: 0, score: 70 };
+
+  it('seniority and the league, never an xp counter read as merit', () => {
+    const page = card({ perf: prior });
+    expect(page).toContain('Ancienneté 48 jours');
+    expect(page).not.toMatch(/Niveau \d|\bxp\b/);
+    expect(page).toMatch(/Ligue : \d+\/\d+, note|Pas classé en ligue/);
+  });
+
+  it('a score that is only its prior is not a score', () => {
+    const page = card({ perf: prior });
+    expect(page).toContain('pas encore noté');
+    expect(page).not.toContain('score /100');
+    expect(page).not.toContain('<strong>70</strong>');
+    for (const perf of [{ ...prior, approved: 2, score: 84 }, { ...prior, rejected: 1, score: 40 }, { ...prior, failed: 1, score: 63 }]) {
+      const noted = card({ perf });
+      expect(noted).toContain('score /100');
+      expect(noted).not.toContain('pas encore noté');
+    }
+  });
+});
+
 describe('end of a run', () => {
   const banner = (s: CompanySnapshot, onExtend?: () => void) => text(render(<EndBanner onNewScenario={noop} onDismiss={noop} onFinance={noop} onExtend={onExtend} />, { snapshot: s }));
 
@@ -339,6 +367,16 @@ describe('end of a run', () => {
     expect(banner({ ...mockSnapshot(), status: 'finished' }, noop)).toContain('Continuer sans fin');
     expect(banner({ ...mockSnapshot(), status: 'finished' })).not.toContain('Continuer sans fin');
     expect(banner({ ...mockSnapshot(), status: 'bankrupt' }, noop)).not.toContain('Continuer sans fin');
+  });
+
+  it('a run that ends below zero says bankruptcy, not end of simulation, and may still go on', () => {
+    const base = mockSnapshot();
+    const page = banner({ ...base, status: 'finished', finance: { ...base.finance!, bankrupt: true } }, noop);
+    expect(page).toContain('Faillite');
+    expect(page).toContain('sur une trésorerie négative');
+    expect(page).not.toContain('Fin de la simulation');
+    expect(page).toContain('Continuer sans fin');
+    expect(banner({ ...base, status: 'finished', finance: { ...base.finance!, bankrupt: false } })).toContain('Fin de la simulation');
   });
 
   it('a goal reached on a run without an end assumes no end', () => {
@@ -523,6 +561,10 @@ describe('agent card', () => {
     const page = text(render(<CareerBody agent={agentOf(s)} chip={null} league={null} head={null} />, { snapshot: s }));
     expect(page).toContain('Hors ligue');
     expect(page).not.toMatch(/Coach|Élève de|Titres/);
+    const told = { ...(mockDetail('/api/league') as LeagueDetail), roles: [], outside: [{ agentId: agentOf(s).id, name: agentOf(s).name, why: 'Pas encore noté : aucun résultat à lire en guides' }] };
+    const unrated = text(render(<CareerBody agent={agentOf(s)} chip={null} league={told} head={null} />, { snapshot: s }));
+    expect(unrated).toContain('Pas encore noté : aucun résultat à lire en guides.');
+    expect(unrated).not.toContain('Hors ligue');
   });
 
   it('never prints a true talent: the card reads the league without god mode', () => {

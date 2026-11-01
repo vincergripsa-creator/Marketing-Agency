@@ -8,7 +8,7 @@ import { CHANNELS } from '../../../shared/channels';
 import type { AdCreative, AudienceView, ChannelNicheState, ChannelPlan, ChannelRow, ChannelsDetail, CompanySnapshot } from '../../../shared/types';
 import { mockSnapshot } from '../world/mockSnapshot';
 import { AppContext, type AppCtx } from './context';
-import { buildLookups } from './labels';
+import { buildLookups, FORMAT_LABEL, TABS } from './labels';
 import { accountRows, AdsTab, reviewsOf } from './tabs/AdsTab';
 import { budgetShares, CanauxBody, channelStateText, roasTone, shareBands, tiktokDetail } from './tabs/CanauxTab';
 import { CroissanceBody, type GrowthDetail } from './tabs/CroissanceTab';
@@ -269,8 +269,9 @@ describe('Croissance', () => {
     expect(html).toContain('Chiffre d’affaires par semaine');
   });
   it('the allocation of the week comes with its thresholds and its note', () => {
-    expect(html).toMatch(/Pub visée \/ jour<\/span><strong>230\s€/);
-    expect(html).toMatch(/Tests \/ semaine<\/span><strong>84\s€/);
+    expect(html).toMatch(/Pub dépensée \/ jour<\/span><strong>80\s€/);
+    expect(html).toMatch(/Plafond \/ jour<\/span><strong>230\s€/);
+    expect(html).not.toContain('Tests / semaine'); // no code spends that line
     expect(html).toContain('0,95×');
     expect(html).toContain('1,25×');
     expect(html).toContain('On réinvestit le profit de la semaine.');
@@ -307,6 +308,15 @@ describe('Croissance', () => {
     expect(blank).toContain('La première semaine se clôt au jour 7.');
     expect(blank).toContain('Le CFO fait ses comptes chaque lundi.');
     expect(blank).toContain('Aucune décision de croissance');
+  });
+});
+
+describe('one word for one thing', () => {
+  it('the tab of the nav and the panel it opens carry the same name', () => {
+    expect(TABS.find((t) => t.id === 'pub')?.label).toBe('Publicité');
+  });
+  it('the UGC format reads as the video shows it', () => {
+    expect(FORMAT_LABEL.ugc_avatar).toBe('Narrateur animé');
   });
 });
 

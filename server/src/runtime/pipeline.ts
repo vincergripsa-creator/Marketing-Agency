@@ -9,7 +9,7 @@
  *   Red Team on the guide (see redteam.ts): a « fix » adds humanize → render → red_team before the publish, a « kill »
  *   adds outline → pdf → humanize → fact_check → render → sales page + red_team.
  */
-import type { AgentId, ChannelId, NicheCloseReason, NicheRecord, Product, Task, TaskKind, WorldState } from '../shared.js';
+import type { AgentId, Campaign, ChannelId, NicheCloseReason, NicheRecord, Product, Task, TaskKind, WorldState } from '../shared.js';
 import { channelOf } from '../shared.js';
 import { productHealth } from './acquisition.js';
 import { creditOf } from './channels.js';
@@ -209,11 +209,11 @@ export const PAID_AD_TASKS: TaskKind[] = ['write_ad_hooks', 'produce_ad', 'launc
  * The founder stops paid ads, on one product or on all of them, on one channel or on all of them: running campaigns pause
  * until he lifts it (a campaign off for an outage stays off), and the work leading to a launch stops. Organic posts go on.
  */
-export function stopPaidAds(ctx: RuntimeCtx, productId: string | null, reason: string, channel: ChannelId | null = null): { paused: number; cancelled: number } {
+export function stopPaidAds(ctx: RuntimeCtx, productId: string | null, reason: string, channel: ChannelId | null = null, spared: readonly Campaign[] = []): { paused: number; cancelled: number } {
   const w = ctx.world;
   let paused = 0;
   for (const c of w.company.campaigns) {
-    if ((productId && c.productId !== productId) || (channel && channelOf(c) !== channel)) continue;
+    if ((productId && c.productId !== productId) || (channel && channelOf(c) !== channel) || spared.some((s) => s.id === c.id)) continue;
     if (c.status === 'active') {
       try { ctx.tools.updateCampaign(c.id, { status: 'paused' }); } catch { /* ignore */ }
       c.status = 'paused';

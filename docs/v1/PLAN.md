@@ -1008,6 +1008,7 @@ export const STREAM = { company: 1, tools: 2, market: 3, idleBreak: 4, org: 5, t
 | Channel decisions | `ctx.channelRng`: `streamRng(seed, STREAM.channels, day, tick)` |
 | Video cut, tempo | video §3.1 |
 | Market, on `dayKey` | `CHANNEL_STREAM` 1001-1008 and the table below |
+| Public line of a review (D92) | `REVIEW_TEXT_STREAM` 1009 in `sim/feedback.ts`. It sets a text, no market number |
 | Market truth at creation | `streamRng(seed, 0xc4a701, nicheIndex)` for cells, `0xc4a702` for tempo |
 
 `hashString` moves from `deliverables/text.ts`, which imports pdfkit, to `core/ids.ts`. `text.ts` re-exports it.
@@ -1530,7 +1531,7 @@ One pass, at the very end, on the finished company. `server/src/sim/balance.ts` 
 | `talentOverride` all skills .56 | measures the evidence pars of talent §5.2, from `league.parStats` | writes `TALENT.par`, `TALENT.sd` once |
 | `copy`, `page`, `longform + polish`, `buying` at .25 and .8 | paired median of `profit(.8) − profit(.25)` per group | ≥ 100 €: keep. Between 0 and 100 €: keep, report. Negative: that group's flaws go to 0, report. No re-run |
 
-**Step 3. Candidates.** Five, 30 seeds (1-30), 3 difficulties, 60 days, 500 €, heuristic: 450 runs. Two directions because the sign is unknown: payroll alone is -456 € and talent predicts -8 to -15 % of ROAS, channels and email push it up. E is there for reach: B moves revenue about +8 %, some +240 € over a 60-day run, which cannot close a gap of 800 €.
+**Step 3. Candidates.** Five, 30 seeds (1-30), 3 difficulties, 60 days, `normal` to D182 for K3 (D116), 500 €, heuristic: 450 runs. Two directions because the sign is unknown: payroll alone is -456 € and talent predicts -8 to -15 % of ROAS, channels and email push it up. E is there for reach: B moves revenue about +8 %, some +240 € over a 60-day run, which cannot close a gap of 800 €.
 
 | Candidate | Change |
 |---|---|
@@ -1546,7 +1547,7 @@ One pass, at the very end, on the finished company. `server/src/sim/balance.ts` 
 |---|---|
 | K1 | `normal`: goal (1 000 € by D60) reached on 15 to 27 of 30 seeds |
 | K2 | `normal`: median profit between 1 000 € and 4 000 € |
-| K3 | `normal`: at most 2 bankruptcies of 30 |
+| K3 | `normal`: at most 2 bankruptcies of 30 at D60, and at most 2 of 30 at D180 (D116) |
 | K4 | `facile`: goal on at least 24 of 30, no bankruptcy |
 | K5 | `cauchemar`: at most 8 bankruptcies of 30, median final cash ≥ 250 € |
 | K6 | All 90 runs: `stats.violations` 0, Σ ledger = cash, no NaN |
@@ -1586,7 +1587,7 @@ Run in order in S15. Each row is pass or fail.
 | A7 | 365 days, 10 seeds | same, seeds 1-10 | no crash, no NaN |
 | A8 | Runs alone | `server/scripts/autonomy.ts`, 30 seeds, 90 days, no founder action | a guide live by D15 on ≥ 28/30, no task open over 10 days without a logged reason, hires happen without a call |
 | A9 | Right team size | same output | day-60 headcount differs across seeds; no constant 31; median between 9 and 25; payroll in the ledger |
-| A10 | Competition is real | full arm of the scaling control, 180 days (D62), and the forced-low run of P3.5 | median of at least 1 replacement by D180, the count by D60 printed; every `leftBecause` has its numbers; each hire's `HireReport` score beats the incumbent's by `CHALLENGE_MARGIN` |
+| A10 | Competition is real | full arm of the scaling control, 180 days (D62), and the forced-low run of P3.5 | median of at least 1 replacement by D180, the count by D60 printed; every `leftBecause` has its numbers; each hire's `HireReport` score beats the incumbent's by the margin of its `HireReport` |
 | A11 | Agents improve | talent test 12, `talent-levers.test.ts`, `talentTruth.samples` of the `flat` arm | t changes the text and the score; `meanLeague` D60 above D1 on ≥ 24/30 seeds |
 | A12 | Scales alone | scaling control of §4 | scale A1 to A5 as reported; the weekly revenue curve printed |
 | A13 | Real MP4 | `cd server && npx tsx scripts/renderAd.ts` on a real run: one `faceless_voiceover`, one `text_slideshow`, one `ugc_avatar`, one 4:5 cut. Then `ffprobe -v error -show_entries stream=codec_name,width,height,pix_fmt,r_frame_rate:format=duration,size -of json <file>` | h264, yuv420p, 30/1, 1080×1920 or 1080×1350, aac, 9 to 34 s, ≤ 12 MB, `qa.ok`, moov before mdat |
@@ -1706,3 +1707,46 @@ Taken by the orchestrator after reading each stage gate. They rank with §1.
 - D73. `isServerOnlyFile` also tests the real path of the file: Windows short names such as `WORLD~1.JSO` pass the regex of D51.
 - D74. A `test` guide has no bounded wait yet: 23 lines stay after S11, 11 idle for 30 days or more. S14 reads them and decides.
 - D75. One existing test was loosened at S10 for a stated reason: « a competent policy that never learns » in `sim.test.ts` reads `cash > -50` instead of `bankrupt === false`, because a clone now takes 10 % of conversion at once. S14 re-reads it after calibration.
+- D76. `primaryOf` takes the first core skill with an evidence route in the role, read per role through `EVIDENCE_KINDS`, core or assist kinds: `growth_lead` is `buying`, no longer `copy`. A role no route reaches keeps its first skill, unrated, so `cover_designer` stays `design` (D16). Mount refreshes an older save.
+- D77. `TALENT.par` and `TALENT.sd` hold values measured before S14, the one exception to « no tuning before S14 »: a league read against pars of the design selects nobody. S14 overwrites them once.
+- D78. `rd` is a standard error: it falls with evidence to `rdMin` 35, stops at `rdGame` 200, and grows back only on a rating nobody played this season. K is unchanged.
+- D79. « Sous la barre pendant un certain temps » is a chain. The bar is par or the median of the rated seats of status `active`, whichever is higher, stored at each close. Two closes in a row under it on a real sample, day 42 at the earliest, then the plan of 14 days, met at the bar minus 10. The first replacement cannot come before D56. This overrides talent §5.1, §5.3, §7 and §10 where they read a fixed par.
+- D80. A seat not under the bar restarts at 0 whatever its sample; a seat under it on a thin sample keeps its count. The strict « only the lowest of the family » stays, so an unsure lower colleague still blocks a plan. No cooldown after a met plan: 11 of 80 plans opened on the close that met the last one.
+- D81. A challenge is 6 candidates and 8 sits each, 3 when Claude writes. The sit key is the index `k` through `mind.day + 1000 × k`, not `mind.draw`, which would change the heuristic text; sit 0 is the single-sit test, so hire tests do not move. The margin is `marginSe` standard errors pooled over the seven who sat, floor 1, stored in `HireReport.margin`. It replaces `CHALLENGE_MARGIN`.
+- D82. `marginSe` is 1,5, by the fixed rule of the health stage (median 0 replacements, 4 of 4 truly better at 2). Seeds 31-42 at 182 days: 5 replacements, 4 truly better, median 0, so A10 is missed; the noise arm gives 5 false replacements on 25 challenges, 3 of them founders. At 2: 4 replacements, 4 truly better, 3 false. Left to the orchestrator: going back is one constant and two test lines.
+- D83. `design`, `support`, `buying` and `research` have no test that sees talent. A failed plan there ends `kept_no_test` on the spot, before the gates of talent §7.6, with a `HireReport` without candidates so that `keptLately` reads it. `video` and `polish` keep their challenge.
+- D84. A layoff takes the lowest rating among the idle, occupation then pay as ties, in the league only. On the cash-loss path idle means under `idleUtil`, and if nobody is the old order applies. A seat with no rating reads par.
+- D85. Formation continue: at a close, growth on, cash at least 3 times the start, 15 € a seat within 5 % of 14 days of revenue, lowest rating first, after replacements. It moves `t` and its ceiling (cap 0,97), draws nothing, skips forced talent and seats on notice, and books `recruiting` with ref `training:<season>`. `flat` pays it too.
+- D86. Training stops at his word: nothing is paid under his stop on spending or on every ad, and the report says why. A stop on one channel or one guide does not count. In approval mode it is skipped with the same note rather than opening a task at every close: A22 reads « waits for him », and a skipped line waits.
+- D87. `team: 'legacy31'` pays no training, whatever its talent and scaling: a control keeps its spending. L1 to L8 themselves do run on a plain legacy31 run, whose talent defaults to `league`. Golden uses `LEGACY`, talent off, and does not move; the « Legacy 31 paid » row of S14 reads that arm with the new league rules.
+- D88. A family of one reads the mean of all rated seats of that day in `swaps.familyMean`, the only field any reader uses.
+- D89. `LeagueDetail` gains `season.bar`, `season.cut`, `season.cutBlind`, `season.training`, `roles[].blindTest`, `outside[]` and `LeagueRow.underBar`. The cut line of a blind family ends at the plan. The rules give both counts of sits, because the view has no engine.
+- D90. The digest no longer prints `testWeek`: it prints what channel tests spent, and the CFO note reads real spend first, then the ceiling, then the envelope. `Allocation.testWeek` stays in the world because `scalingRoom` reads it, only the claim goes. « Tests de canaux » counts campaigns flagged `test`; a guide's first paid test is not flagged.
+- D91. The fiche shows seniority and league instead of the level. The level law is untouched, and the brain line « Promotion : » and the playbook's `**Niveau**` stay: tests pin the first and it reflects a real gate.
+- D92. A review's public line comes from `sim/reviewBank.ts` on stream 1009 (§2.6). `Review.basis` keeps the old sentence for the sim's readers and is stripped from snapshots and GET product, so market draws do not move.
+- D93. So an ad's proof scene quotes the basis, which no public review holds: 60 quotes, 0 in a public review, on seed 36 at D81. Kept, it is what buys the neutrality of D92. S14 may show the public text of the same review while scoring keeps the basis.
+- D94. `unsaid()`: a line left unsaid still burns its id. `idCounter` keys some streams, so suppressing a line would move the market.
+- D95. A quiet day (no sale, refund or ad) drops the feed's claims of progress, in words only: the retro still raises confidence as its windows slide. Stopping that would change later decisions on dying seeds, so S14 decides.
+- D96. One bankruptcy event per episode: a dip within `SOLVENT_DAYS` 7 of a negative close is the same one. The status law, the ad pause and payroll do not change. `world.status` stays `finished` at the end, « ended bankrupt » is read from `finance.bankrupt`.
+- D97. A campaign's number is `(seq ?? index) + 1`, kept by `trimCampaigns` and compaction. Stopping one adds no hold: the plan gave the same guide a new campaign within 4 days in 9 of 10 stops, so the answer says so and gives the sentence that stops it for good. A refused resume keeps `pausedFor`, or the campaign would read as ended.
+- D98. `trim_ads` is an executed order only beside a request, alone it stays a plain task. An order reads only its own clauses, so the subject of a request cannot become its target.
+- D99. A sentence ending in « ? » orders nothing, except a polite ask that stops spending (« tu peux couper les pubs ? »): a stop must not be lost to a question mark, a lift waits for a plain word, and `kill_product` is never polite. A verb after an auxiliary is a report. A refusal needs a real shape: « pas », « plus » and « jamais » refuse only right before an infinitive, or after « ne ».
+- D100. What an order leaves alone is read apart from what it acts on: « sauf », « hors », « excepté », « à part », « mais pas » and « sans » plus an order verb. A number there is spared, not targeted, and a guide named there spares its campaigns. The hold stands, and what is spared is `founderForced`: the buyer and the plan leave it, the stop-loss still reads it. A number nobody carries refuses. « Coupe tout » alone is still no order, only with a limit.
+- D101. A name after a bare comma is someone he speaks to: a list needs its « et ». The mission's target is never taken from a list. The test « a list goes on past two names » changed for this.
+- D102. Left as read: a question or a report can start the routine `optimize_ads` on the word « coupe », with no stop and no hold; « arrête la campagne 2 et reprends la campagne 3 » runs the resume rule on both numbers and answers the refusal.
+- D103. `HeadRow.output30d` adds compaction's folds, `taskTotals.agents[id].days`, pruned past 31 days. An old save undercounts until it fills.
+- D104. `LIVE_TIGHT_LIMITS` also takes `reviewsPerProduct` 1 and `deliverables` 20, to hold the 400 000 bytes of D70 with the larger world the league leaves.
+- D105. Server texts also say « narrateur animé », beyond the UI label: the digest printed the old name through experiment text. Lesson and playbook text move, no action does.
+- D106. The bounded test of what ends a winner adopted nothing: base, J, R, A and two placebos, seeds 31-38, 270 days, 48 runs. R reads 1,26 of base on 6 of 8 seeds, between the placebos at 1,33 and 0,95, whose seeds run from ×0,17 to ×4,14. `judge()`, `retestDue`, `waterFill` and Search stay. The fall past D180 is read to D270 only: median 0,84 of base, falling on 7 of 8. Nothing answers past D270.
+- D107. `RunResult` gains `replacements`, the seats a challenge gave to the market, read by the health sweep: A10 had no count outside the world.
+- D108. `LIVE_TIGHT_LIMITS` moved at S12: kpis 60, chats 12, adComments 14, doneTasks 15, inbox 15, adStatsDays 2.
+- D109. New contract fields at S12 and S13: `kpiBaseline`, `AdTotals.week`, `counts.catalogue`, `GateCheck.lower`.
+- D110. New file `shared/trends.ts`, outside the list of §2.4.
+- D111. `pay30d` is derived: the `salary:<id>` ref of ui §2.2 does not exist.
+- D112. The Growth department is named Acquisition.
+- D113. P12.3: the carry anchor is 12 px, the cheer arms stand at x 3 and 12.
+- D114. `SessionLike.digestSeen` and `sessionViews(live)` are added to what the API reads of a session.
+- D115. `/api/deliverables` returns `{items,page,pages,pageSize,total}`.
+- D116. S14 is amended, K3 reads bankruptcies at D60 and at D180, at most 2 of 30 at each, and `normal` candidates run to D182. The founder is away, this is the orchestrator's decision: 7 of the 8 deaths on 48 seeds come after D60, so a read at D60 alone passes a company that dies later.
+- D117. The survival insurance (founders at 0, one test under the line) is held back. It is built only if K3 at D180 fails under the winner.
+- D118. The cliff and growth-floor changes are dropped.

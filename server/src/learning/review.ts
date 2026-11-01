@@ -142,7 +142,7 @@ export async function performanceReview(world: WorldState, brain: BrainVault): P
     lines.push(line);
     promotionLines.push(line);
     changed.add(a.id);
-    emit(world, { agentId: hrId, kind: 'meeting', toAgentId: a.id, text: `Félicitations ${a.name} : promotion au niveau ${a.level} !` });
+    emit(world, { agentId: hrId, kind: 'meeting', toAgentId: a.id, text: `${a.name} gagne en pratique : niveau ${a.level}.` });
   }
 
   // XP levels for everyone else

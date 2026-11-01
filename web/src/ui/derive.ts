@@ -184,8 +184,14 @@ export function deptCalendar(s: CompanySnapshot | null | undefined, dept: DeptId
 
 export const RUN_STATUS: Record<string, string> = { running: 'en cours', paused: 'en pause', bankrupt: 'faillite', goal_reached: 'objectif atteint', finished: 'terminée' };
 
-/** The pill of the run on screen: a finished run is not « en cours ». */
-export function currentRunPill(status: CompanySnapshot['status'] | undefined): { label: string; tone: 'green' | 'neutral' | 'red' } {
+/** A run that reached its horizon below zero ended on a bankruptcy, not on a date. */
+export function endedBankrupt(s: Pick<CompanySnapshot, 'status' | 'finance'> | null | undefined): boolean {
+  return s?.status === 'finished' && !!s.finance?.bankrupt;
+}
+
+/** The pill of the run on screen: a finished run is not « en cours », and a run that ended bankrupt says so. */
+export function currentRunPill(status: CompanySnapshot['status'] | undefined, bankrupt = false): { label: string; tone: 'green' | 'neutral' | 'red' } {
+  if (status === 'finished' && bankrupt) return { label: RUN_STATUS.bankrupt!, tone: 'red' };
   return { label: RUN_STATUS[status ?? 'running'] ?? 'en cours', tone: status === 'finished' ? 'neutral' : status === 'bankrupt' ? 'red' : 'green' };
 }
 

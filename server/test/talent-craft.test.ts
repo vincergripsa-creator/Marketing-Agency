@@ -25,6 +25,7 @@ import {
   armSharp, bestDraft, coachTick, craftFor, craftOf, drawPerson, effectiveT, emptyLeague, familyOf, KIND_SKILL, leagueSeats, MIN_SEASON_N, practice, primaryOf, primarySkill, pruneRead, rampOf,
   roleSkills, sampleTalent, seedTruth, shrunkRoas, SKILLS, skillOf, TALENT, talentMode, truthOf,
 } from '../src/runtime/talent/index.js';
+import { talentPillar } from '../src/runtime/talent/index.js';
 import { ALL_KINDS } from '../src/runtime/tasks.js';
 import { LEGACY } from './legacy.js';
 
@@ -303,7 +304,15 @@ describe('who has talent', () => {
     expect(Object.keys(MIN_SEASON_N).sort()).toEqual([...SKILLS].sort());
   });
 
-  it('primary is the first core kind with a skill, never a hat, and the CEO is out of the league (D13, D14)', () => {
+  it('an older save takes the primary of today on mount', () => {
+    const world = createWorld(scenario(), 't');
+    world.company.league = emptyLeague(world);
+    world.company.league.entries.leo!.primary = 'copy';
+    talentPillar.mount!(world);
+    expect(world.company.league.entries.leo!.primary).toBe('buying');
+  });
+
+  it('primary is the first core kind whose skill has an evidence route, never a hat, and the CEO is out of the league (D13, D14)', () => {
     const world = createWorld(scenario(), 't');
     const zoe = agentOf(world, 'zoe');
     zoe.taskKinds = ['produce_ad', ...zoe.taskKinds];
@@ -313,6 +322,12 @@ describe('who has talent', () => {
     expect(primaryOf('fact_checker')).toBeNull();
     expect(primaryOf('video_editor')).toBe('copy');
     expect(primaryOf('motion_designer')).toBe('video');
+    expect(primaryOf('hook_writer')).toBe('copy');        // a hook is read through the ad of the same hand
+    expect(primaryOf('growth_lead')).toBe('buying');      // he writes hooks, no ad: he is read on his campaigns
+    expect(primaryOf('media_buyer_tiktok')).toBe('buying');
+    expect(primaryOf('cover_designer')).toBe('design');   // no route: the first skill stays, unrated, and the hire test with it (D16)
+    expect(primarySkill(world, 'leo')).toBe('buying');
+    expect(emptyLeague(world).entries.leo!.primary).toBe('buying');
     const seats = leagueSeats(world).map((a) => a.id);
     expect(seats).not.toContain('camille');
     expect(seats).not.toContain('gabriel');

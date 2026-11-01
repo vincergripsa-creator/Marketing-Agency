@@ -36,5 +36,5 @@ export const HOOK_LABELS: Record<string, string> = {
 };
 
 export const FORMAT_LABELS: Record<string, string> = {
-  faceless_voiceover: 'voix off sans visage', text_slideshow: 'diaporama texte', ugc_avatar: 'avatar UGC', carousel: 'carrousel',
+  faceless_voiceover: 'voix off sans visage', text_slideshow: 'diaporama texte', ugc_avatar: 'narrateur animé', carousel: 'carrousel',
 };

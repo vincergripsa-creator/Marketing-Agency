@@ -76,6 +76,12 @@ function addMetric(r: SkillRating, season: number, x: number, weight: number): v
   r.metric = round2(r.metricBase.sum / r.metricBase.w);
 }
 
+/** What is left of a standard error after one more game of this weight. */
+export function settledRd(rd: number, weight: number): number {
+  const { rdGame, rdMin } = TALENT.rating;
+  return Math.max(rdMin, 1 / Math.sqrt(1 / rd ** 2 + weight / rdGame ** 2));
+}
+
 /**
  * One game. `s` is the result in 0..1, `x` the raw number behind it when there is one: `parStats` sums it in `flat` too,
  * since S14 sets the pars from it and `events` only keeps `s` (D58). A world without a league records nothing, and a
@@ -92,11 +98,11 @@ export function recordEvidence(w: WorldState, agentId: AgentId, skill: Skill, so
   }
   if (!w.company.agents.some((a) => a.id === agentId)) return;
   const r = ratingOf(w, agentId, skill);
-  const { kOverRd, kMin, kMax, rdPerEvidence, rdMin } = TALENT.rating;
+  const { kOverRd, kMin, kMax } = TALENT.rating;
   const expected = 1 / (1 + 10 ** ((opponent - r.rating) / 400));
   const k = clamp(r.rd / kOverRd, kMin, kMax);
   r.rating = round1(r.rating + k * weight * (s - expected));
-  r.rd = Math.max(rdMin, r.rd - rdPerEvidence * weight);
+  r.rd = settledRd(r.rd, weight);
   r.n += 1;
   r.seasonN += weight;
   const metric = METRIC[skill];

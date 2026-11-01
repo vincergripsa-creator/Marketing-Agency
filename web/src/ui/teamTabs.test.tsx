@@ -274,13 +274,23 @@ describe('Compétition', () => {
     role.cutLine = rows[1]!.rank;
     rows[1]!.confidence = 'faible';
     const html = render(<CompetitionBody data={data} />);
-    expect(count(html, 'Sous cette ligne, le contrat est menacé')).toBe(1);
-    const line = html.indexOf('Sous cette ligne');
+    expect(count(html, 'Sous la barre de 1 500 : après 2 clôtures de suite')).toBe(1);
+    const line = html.indexOf('Sous la barre de 1 500');
     expect(html.indexOf(`Ouvrir la fiche de ${rows[0]!.name}`)).toBeLessThan(line);
     expect(html.indexOf(`Ouvrir la fiche de ${rows[1]!.name}`)).toBeGreaterThan(line);
     expect(html).toContain('peu de données');
     role.cutLine = null;
-    expect(render(<CompetitionBody data={data} />)).not.toContain('Sous cette ligne');
+    expect(render(<CompetitionBody data={data} />)).not.toContain('Sous la barre de 1 500');
+  });
+
+  it('a family with no reliable test draws its own cut line, which never says the seat goes to the market', () => {
+    const data = league();
+    const role = data.roles[0]!;
+    role.cutLine = role.rows[1]!.rank;
+    role.blindTest = true;
+    const html = unescape(render(<CompetitionBody data={data} />));
+    expect(html).toContain(data.season.cutBlind);
+    expect(html).not.toContain(data.season.cut);
   });
 
   it('names who sits outside the league', () => {
@@ -293,9 +303,30 @@ describe('Compétition', () => {
     expect(html).toContain(outside.name);
   });
 
+  it('a seat on a skill with no reliable test says so, and is not called unmeasurable', () => {
+    const data = league();
+    data.roles[0]!.blindTest = true;
+    data.outside = [{ agentId: 'nora', name: 'Nora', why: 'Pas encore noté, et le test de ce métier (support) ne sépare pas les talents' }];
+    const html = unescape(render(<CompetitionBody data={data} />));
+    expect(html).toContain('Ce métier n’a pas de test fiable : sous la barre, le plan reste, avec un coach s’il y en a un');
+    expect(html).toContain('ne sépare pas les talents (Nora)');
+    expect(html).not.toContain('sans effet mesurable sur un résultat');
+  });
+
+  it('the season shows what training paid, and each row how long it has been under the bar', () => {
+    const data = league();
+    data.roles[0]!.rows[0]!.underBar = 1;
+    const html = unescape(render(<CompetitionBody data={data} />));
+    expect(html).toMatch(/Formation continue : 3 postes à la dernière clôture, 45\s€/);
+    expect(html).toMatch(/Depuis le début : 90\s€/);
+    expect(html).toContain('1 clôture sous la barre');
+    data.season.training = null;
+    expect(render(<CompetitionBody data={data} />)).not.toContain('Formation continue');
+  });
+
   it('season, rules, form, plan, running duel before the settled one', () => {
     const data = league();
-    data.season = { no: 3, fromDay: 12, toDay: 41, daysLeft: 18, rules: ['Une règle lisible.'] };
+    data.season = { ...data.season, no: 3, fromDay: 12, toDay: 41, daysLeft: 18, rules: ['Une règle lisible.'] };
     const html = render(<CompetitionBody data={data} />);
     expect(html).toContain('Saison 3 · J12 → J41 · 18 jours restants');
     expect(html).toContain('<li>Une règle lisible.</li>');

@@ -21,6 +21,8 @@ import { HANDLERS } from '../src/runtime/handlers/index.js';
 import { supportHandlers } from '../src/runtime/handlers/support.js';
 import { claimedMessageIds } from '../src/runtime/metrics.js';
 import { learning } from '../src/runtime/modules.js';
+import { TALENT } from '../src/runtime/talent/constants.js';
+import { phi } from '../src/runtime/talent/evidence.js';
 import { emptyLeague } from '../src/runtime/talent/truth.js';
 import { createTask } from '../src/runtime/tasks.js';
 import { LEGACY } from './legacy.js';
@@ -283,15 +285,15 @@ describe('support evidence (talent §5.2)', () => {
     const { league, agentId, events } = await played(100, 'none', 0.5);
     const [reply] = events('reply');
     expect(reply).toMatchObject({ agentId, skill: 'support', w: 0.25 });
-    expect(reply!.s).toBeCloseTo(0.8413, 3); // Φ(1)
+    expect(reply!.s).toBeCloseTo(phi((100 - TALENT.par['support:reply']!) / TALENT.sd['support:reply']!), 3);
     expect(reply!.label).toMatch(/Question 0/);
     expect(league.parStats['support:reply']).toEqual({ n: 1, sum: 100, sq: 10_000 }); // what S14 sets the par from
     expect(events('chargeback')).toEqual([]);
   });
 
   it('par is a coin flip, and a bad reply says so', async () => {
-    expect((await played(85, 'none', 0.5)).events('reply')[0]!.s).toBeCloseTo(0.5, 3);
-    expect((await played(40, 'none', 0.5)).events('reply')[0]!.s).toBe(0.0013); // Φ(-3), as the ring rounds it
+    expect((await played(TALENT.par['support:reply']!, 'none', 0.5)).events('reply')[0]!.s).toBeCloseTo(0.5, 3);
+    expect((await played(TALENT.par['support:reply']! - 2 * TALENT.sd['support:reply']!, 'none', 0.5)).events('reply')[0]!.s).toBeCloseTo(0.0228, 3); // Φ(-2), as the ring rounds it
   });
 
   it('a chargeback after a reply is a lost game on top of it', async () => {

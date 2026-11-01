@@ -5,7 +5,7 @@
 import { summarizeLedger } from '../core/index.js';
 import type {
   AdCreative, AdTotals, AdWeekRow, ArchiveCounters, Campaign, CatalogueTotals, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DailyKpi, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, DesignSpec, FinanceSnapshot,
-  GrowthState, InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, QualityReport, Task, TaskKind, TaskStats, TaskTotals, VisualReport, WorldState,
+  GrowthState, InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, QualityReport, Review, Task, TaskKind, TaskStats, TaskTotals, VisualReport, WorldState,
 } from '../shared.js';
 import { channelOf, kpiBaselineOf } from '../shared.js';
 import { addAdTotals } from '../sim/adTotals.js';
@@ -75,8 +75,8 @@ export const LIVE_LIMITS: SnapshotLimits = {
   growthWeeks: 12, growthDecisions: 10,
 };
 export const LIVE_TIGHT_LIMITS: SnapshotLimits = {
-  ...LIVE_LIMITS, creatives: 15, campaigns: 10, doneTasks: 15, deliverables: 30, lessons: 15, inbox: 15, activity: 40, growthWeeks: 4, growthDecisions: 5,
-  adStatsDays: 2, adComments: 14, reviewsPerProduct: 2, threadPerMessage: 3, ledger: 50, orders: 30, creators: 20, missions: 15,
+  ...LIVE_LIMITS, creatives: 15, campaigns: 10, doneTasks: 15, deliverables: 20, lessons: 15, inbox: 15, activity: 40, growthWeeks: 4, growthDecisions: 5,
+  adStatsDays: 2, adComments: 14, reviewsPerProduct: 1, threadPerMessage: 3, ledger: 50, orders: 30, creators: 20, missions: 15,
   experiments: 10, organicPosts: 10, events: 15, partnerships: 20, taskLog: 2,
 };
 
@@ -194,6 +194,9 @@ function cardProduct({ brief: _brief, pagePrint: _pagePrint, ...p }: Product): P
   };
 }
 
+/** A review as the public reads it: what the simulation reads stays in the world. */
+const publicReview = ({ basis: _basis, ...r }: Review): Review => r;
+
 export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS): Product {
   const stats = p.stats ?? { views: 0, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, rating: 0, reviews: [], upsellSales: 0 };
   // What compaction leaves the company to read (scale §7.2): no panel reads it, and at its caps it weighs 9 KB a product.
@@ -203,7 +206,7 @@ export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS)
     ...(p.visual ? { visual: publicVisual(p.visual) } : {}),
     content: trimContent(p.content, limits.light),
     salesPage: limits.light ? null : p.salesPage,
-    stats: { ...stats, reviews: lastN(stats.reviews, limits.reviewsPerProduct) },
+    stats: { ...stats, reviews: lastN(stats.reviews, limits.reviewsPerProduct).map(publicReview) },
     priceHistory: lastN(p.priceHistory, limits.live ? 14 : 60),
   };
   if (!limits.light) return trimmed;
@@ -212,7 +215,8 @@ export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS)
 
 /** GET /api/product/:id: the whole guide, which no snapshot carries. What only the company reads stays behind, as in every view. */
 export function fullProduct({ hooks: _hooks, feedback: _feedback, artExplored: _artExplored, paidRead: _paidRead, ...p }: Product): Product {
-  return p.visual ? { ...p, visual: publicVisual(p.visual) } : p;
+  const shown = { ...p, stats: { ...p.stats, reviews: (p.stats?.reviews ?? []).map(publicReview) } };
+  return p.visual ? { ...shown, visual: publicVisual(p.visual) } : shown;
 }
 
 /** Stopped guides that light limits still show. */
@@ -248,7 +252,7 @@ function trimCreatives(creatives: AdCreative[], keepIds: Set<string>, limits: Sn
 /** The running campaigns and the latest others: paused ones pile up for ever. */
 function trimCampaigns(campaigns: Campaign[], limit: number): Campaign[] {
   const start = Math.max(0, campaigns.length - limit);
-  return campaigns.filter((k, i) => i >= start || k.status === 'active');
+  return campaigns.map((k, i) => ({ ...k, seq: k.seq ?? i })).filter((k, i) => i >= start || k.status === 'active'); // a cut list still prints each one's number
 }
 
 /** The latest missions, the open ones and every mission of the founder; their progress is counted on the whole task list. */

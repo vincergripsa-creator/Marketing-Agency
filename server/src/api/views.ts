@@ -13,9 +13,9 @@ import { ROLES } from '../runtime/org/catalog.js';
 import { ORG } from '../runtime/org/constants.js';
 import { payOf } from '../runtime/org/payroll.js';
 import { STAGE_LABELS, STAGES } from '../runtime/stages.js';
-import { METRICS } from '../runtime/talent/challenge.js';
+import { METRICS, ratingText, testSeesTalent } from '../runtime/talent/challenge.js';
 import { TALENT } from '../runtime/talent/constants.js';
-import { SKILLS } from '../runtime/talent/skills.js';
+import { primaryOf, SKILLS } from '../runtime/talent/skills.js';
 import { dec, round2, short, sum } from '../runtime/util.js';
 import type {
   AdCreative, AgentId, AgentState, Alumnus, AlumnusView, BoardRow, ChannelChip, ChannelDayKpi, ChannelId, ChannelRow, ChannelsDetail, ChannelState, ChronicleEntry, ChronicleKind,
@@ -39,7 +39,6 @@ const LOAD_DAYS = 7;
 const SPARK_POINTS = 12;
 const FORM_POINTS = 5;
 const WEEK_FORM_DELTA = 10;
-const CUT_RD = 0.75;
 const VIEW_PLANS = 30;
 const VIEW_DUELS = 30;
 const VIEW_REQS = 30;
@@ -141,11 +140,12 @@ function delta7dOf(w: WorldState, r: SkillRating): number {
   return past ? Math.round(r.rating - past.rating) : 0;
 }
 
-/** Top 3 of a close, its employee first. A row keeps no `rd`, so the rest follows the rating: a closed season cannot reorder later. */
+/** Top 3 of a close, its employee first, each person once. A row keeps no `rd`, so the rest follows the rating: a closed season cannot reorder later. */
 function seasonTop(report: SeasonReport): SeasonRow[] {
   const first = report.employee?.agentId;
   const rows = (Object.values(report.tables) as SeasonRow[][]).flat().filter((r) => r.status !== 'gone' || r.agentId === first);
-  return rows.sort((a, b) => Number(b.agentId === first) - Number(a.agentId === first) || b.rating - a.rating || a.agentId.localeCompare(b.agentId)).slice(0, 3);
+  const ranked = rows.sort((a, b) => Number(b.agentId === first) - Number(a.agentId === first) || b.rating - a.rating || a.agentId.localeCompare(b.agentId));
+  return ranked.filter((r, i) => ranked.findIndex((x) => x.agentId === r.agentId) === i).slice(0, 3);
 }
 
 function podiumOf(w: WorldState, people: PeopleIndex): PodiumView | null {
@@ -243,8 +243,10 @@ export function sceneOf(world: WorldState): SceneView {
 function headRow(w: WorldState, a: AgentState, books: Books, founderShare: number): HeadRow {
   const pay = w.scenario.org?.payroll ? payOf(a) * daysIn(books, a.hiredDay) * (a.founder ? founderShare : 1) : 0;
   const pay30d = round2(pay + (books.oneOff30.get(`hire:${a.id}`) ?? 0));
-  // Compaction keeps 21 days of finished tasks: past that, this counts what the world still holds of the 30.
-  const output30d = (w.company.tasks ?? []).filter((t) => t.assignee === a.id && t.status === 'done' && (t.dayDone ?? 0) >= books.fromDay).length;
+  // Compaction keeps 21 days of finished tasks: the 30 are what the world holds and what it folded by day.
+  const held = (w.company.tasks ?? []).filter((t) => t.assignee === a.id && t.status === 'done' && (t.dayDone ?? 0) >= books.fromDay).length;
+  const folded = Object.entries(w.company.taskTotals?.agents?.[a.id]?.days ?? {}).filter(([day]) => Number(day) >= books.fromDay);
+  const output30d = held + sum(folded.map(([, n]) => n));
   const entry = w.company.league?.entries[a.id];
   const rating = entry?.primary ? entry.ratings[entry.primary]?.rating : undefined;
   return {
@@ -307,11 +309,37 @@ function seasonRules(): string[] {
   const { seasonDays, plan, challenge, rating } = TALENT;
   return [
     `Une saison dure ${seasonDays} jours : chacun est noté sur ce qu'il a produit et sur ce que le marché en a fait.`,
-    `Sous ${rating.par}, avec assez de preuves et ${plan.tenureDays} jours de maison : plan d'amélioration de ${plan.days} jours.`,
-    `Plan raté : le titulaire repasse le même test que les candidats, il faut le battre de ${challenge.margin} points pour le remplacer.`,
+    `Sous la barre ${plan.underCloses} clôtures de suite, avec assez de preuves et ${plan.tenureDays} jours de maison : plan d'amélioration de ${plan.days} jours, avec un coach si un collègue ou un chef peut l'être, jamais avant le jour ${plan.firstDay}. La barre est ${rating.par}, ou la médiane de l'équipe si elle est plus haute.`,
+    `Plan raté : le titulaire repasse ${challenge.sits} fois (${challenge.claudeSits} fois quand Claude écrit) le même test que ${challenge.candidates} candidats, le meilleur prend le poste s'il dépasse l'écart exigé, ce que le test sait séparer du bruit. Si le test du métier ne sépare pas les talents, le poste est conservé.`,
     `Au plus ${challenge.replacementsPerSeason} remplacements par saison, et ${challenge.sameRoleDays} jours entre deux sur un même poste.`,
     'La CEO et les postes sans effet mesurable restent hors ligue.',
   ];
+}
+
+/** What happens under the line, in the rules' own numbers. A family whose test sees no talent ends at the plan. */
+function cutText(bar: number, blind: boolean): string {
+  const { underCloses, days } = TALENT.plan;
+  const plan = `Sous la barre de ${ratingText(bar)} : après ${underCloses} clôtures de suite, un plan d'amélioration de ${days} jours`;
+  return blind ? `${plan}. Ce métier n'a pas de test fiable : le poste est conservé.` : `${plan}, puis, si le plan échoue, le poste passe au marché.`;
+}
+
+/** Who holds no rating: a post no result reads, or a seat with nothing to read yet. Nobody here is called unmeasurable because of a thin week. */
+function outsideLeague(w: WorldState, rated: readonly Rated[]): LeagueDetail['outside'] {
+  const ranked = new Set(rated.map((r) => r.entry.agentId));
+  return w.company.agents.filter((a) => !ranked.has(a.id)).map((a) => {
+    const skill = primaryOf(a.roleId);
+    const why = !skill ? 'Hors ligue : poste sans effet mesurable sur un résultat'
+      : testSeesTalent(skill) ? `Pas encore noté : aucun résultat à lire en ${SKILL_LABELS[skill].toLowerCase()}`
+        : `Pas encore noté, et le test de ce métier (${SKILL_LABELS[skill].toLowerCase()}) ne sépare pas les talents`;
+    return { agentId: a.id, name: a.name, why };
+  });
+}
+
+/** Seats and euros of the last close that paid for training, and of all of them. */
+function trainingOf(reports: readonly SeasonReport[]): LeagueDetail['season']['training'] {
+  const paid = reports.flatMap((r) => (r.training ? [r.training] : []));
+  const last = paid.at(-1);
+  return last ? { ...last, totalEur: round2(sum(paid.map((t) => t.eur))) } : null;
 }
 
 /** The person's last 5 duels, else their last 5 weeks (talent §9.0). */
@@ -331,7 +359,7 @@ function leagueRow(w: WorldState, r: Rated, rank: number, before: readonly Seaso
     rank, rankDelta: previous < 0 ? 0 : previous + 1 - rank, rating: Math.round(rating.rating), delta7d: delta7dOf(w, rating), spark: rating.history.slice(-SPARK_POINTS).map((p) => Math.round(p.rating)),
     form: formOf(w, entry.agentId, rating), points: Math.round(rating.rating - TALENT.rating.par), sample: Math.round(rating.seasonN * 10) / 10,
     confidence: rating.rd < 100 ? 'forte' : rating.rd < 150 ? 'moyenne' : 'faible', contract: agent ? contractOf(w, agent) : 'active',
-    metric: rating.metric === null ? null : METRICS[r.skill].text(rating.metric),
+    metric: rating.metric === null ? null : METRICS[r.skill].text(rating.metric), underBar: entry.underBar ?? 0,
   };
 }
 
@@ -379,12 +407,13 @@ export function leagueDetail(world: WorldState, god: boolean): LeagueDetail {
   const rated = ratedPeople(world);
   const last = league?.seasons.at(-1);
   const seasonEnd = ((league?.closedSeasons ?? 0) + 1) * TALENT.seasonDays;
+  const bar = league?.bar ?? TALENT.rating.par;
   const roles = SKILLS.flatMap((skill): LeagueDetail['roles'] => {
     const family = rated.filter((r) => r.skill === skill);
     if (!family.length) return [];
     const before = last?.tables[skill];
-    const at = family.findIndex((r) => r.rating.rating + CUT_RD * r.rating.rd < TALENT.rating.par);
-    return [{ key: skill, label: SKILL_LABELS[skill], rows: family.map((r, i) => leagueRow(world, r, i + 1, before)), cutLine: at < 0 ? null : at + 1 }];
+    const at = family.findIndex((r) => r.rating.rating + TALENT.plan.underRd * r.rating.rd < bar);
+    return [{ key: skill, label: SKILL_LABELS[skill], rows: family.map((r, i) => leagueRow(world, r, i + 1, before)), cutLine: at < 0 ? null : at + 1, blindTest: !testSeesTalent(skill) }];
   });
   const duels = league?.duels ?? [];
   const open = duels.filter((d) => d.status === 'ordered' || d.status === 'running');
@@ -398,8 +427,12 @@ export function leagueDetail(world: WorldState, god: boolean): LeagueDetail {
   });
   const books = books30(world);
   return {
-    season: { no: league?.season ?? 1, fromDay: Math.max(1, league?.seasonStartDay ?? 1), toDay: seasonEnd, daysLeft: Math.max(0, seasonEnd - world.day), rules: seasonRules() },
+    season: {
+      no: league?.season ?? 1, fromDay: Math.max(1, league?.seasonStartDay ?? 1), toDay: seasonEnd, daysLeft: Math.max(0, seasonEnd - world.day), rules: seasonRules(),
+      bar: Math.round(bar), cut: cutText(bar, false), cutBlind: cutText(bar, true), training: trainingOf(league?.seasons ?? []),
+    },
     roles,
+    outside: outsideLeague(world, rated),
     plans: (league?.plans ?? []).slice(-VIEW_PLANS),
     lastHire: league?.hires.at(-1) ?? null,
     duels: [...open, ...duels.filter((d) => !open.includes(d)).slice(-VIEW_DUELS)].map((d) => duelView(d, people)),

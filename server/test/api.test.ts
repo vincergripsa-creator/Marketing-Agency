@@ -1414,7 +1414,7 @@ describe('live session', () => {
     const missionsAtEnd = s.world.company.missions.length;
     await expect(s.control('step')).rejects.toMatchObject({ status: 409 });
     await expect(s.control('day')).rejects.toMatchObject({ status: 409 });
-    await expect(s.mission('Lance un guide sur le sommeil du bébé')).rejects.toMatchObject({ status: 409 });
+    await expect(s.mission('Lance un guide sur le sommeil du bébé')).rejects.toMatchObject({ status: 409, message: expect.stringContaining('continue-le sans fin') });
     s.world.company.tasks.push({ id: 'tsk_end' } as WorldState['company']['tasks'][number]);
     await expect(s.approve('tsk_end', true)).rejects.toMatchObject({ status: 409 });
     s.world.company.tasks.pop();

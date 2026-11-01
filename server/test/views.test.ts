@@ -28,7 +28,7 @@ const scratch = vi.hoisted(() => ({ root: `${process.env.TEMP ?? process.env.TMP
 
 vi.mock('../src/core/index.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../src/core/index.js')>()), repoRoot: () => scratch.root }));
 
-const SENTINEL = 0.7391;
+const SENTINEL = 0.739127;
 const DAYS = 30;
 
 interface Lab { world: WorldState; company: Company; paths: RunPaths; reopen(w: WorldState): Company }

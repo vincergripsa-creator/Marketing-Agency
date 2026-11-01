@@ -1,8 +1,9 @@
 /** Public feedback in French: product reviews (stars + text) and TikTok ad comments. */
-import { nextId } from '../core/index.js';
+import { hashString, nextId, streamRng } from '../core/index.js';
 import type { Rng } from '../contracts.js';
 import type { AdComment, NicheTruth, Product, Review, WorldState } from '../shared.js';
 import { handleFor } from './customers.js';
+import { REVIEW_BANK, type ReviewPool } from './reviewBank.js';
 import { fill } from './text.js';
 
 const GOOD = [
@@ -66,21 +67,80 @@ export function recentReviews(product: Product): Review[] {
   return (product.stats?.reviews ?? []).slice(-REVIEWS_KEPT);
 }
 
-export function reviewText(rng: Rng, rating: number, product: Product, niche: NicheTruth | undefined, kind: ReviewKind = 'product'): string {
-  if (kind === 'support_bad') return rng.pick(ANGRY_SUPPORT);
-  if (kind === 'support_good') return rng.pick(GOOD_SUPPORT);
-  if (kind === 'troll') return rng.pick(TROLL_REVIEWS);
+/**
+ * What the simulation reads of a review: ad quotes, rework briefs, lesson evidence, all of which steer the company. It stays the sentence the
+ * market's own stream drew, so a richer bank for the public moves no decision. A review written before the bank has only its text.
+ */
+export const reviewBasis = (r: Review): string => r.basis ?? r.text;
+
+interface Draft { basis: string; said: Record<string, string> }
+
+/** The market stream's draws: their number and their order are the stream's, whatever the public ends up reading. */
+function draftReview(rng: Rng, rating: number, product: Product, niche: NicheTruth | undefined, kind: ReviewKind): Draft {
+  if (kind === 'support_bad') return { basis: rng.pick(ANGRY_SUPPORT), said: {} };
+  if (kind === 'support_good') return { basis: rng.pick(GOOD_SUPPORT), said: {} };
+  if (kind === 'troll') return { basis: rng.pick(TROLL_REVIEWS), said: {} };
   const pool = rating >= 4 ? GOOD : rating === 3 ? MID : BAD;
   // two buyers do not write the same sentence: a template already on this product waits for the others
-  const seen = recentReviews(product).map((r) => r.text);
+  const seen = recentReviews(product).map(reviewBasis);
   const fresh = pool.filter((t) => !seen.some((text) => text.startsWith(t.split('{')[0]!)));
-  return fill(rng.pick(fresh.length ? fresh : pool), vars(rng, product, niche));
+  const template = rng.pick(fresh.length ? fresh : pool);
+  const said = vars(rng, product, niche);
+  return { basis: fill(template, said), said };
+}
+
+export function reviewText(rng: Rng, rating: number, product: Product, niche: NicheTruth | undefined, kind: ReviewKind = 'product'): string {
+  return draftReview(rng, rating, product, niche, kind).basis;
+}
+
+/** Next free key of the market's table (PLAN §2.6): the words a buyer picks draw on their own stream. */
+const REVIEW_TEXT_STREAM = 1009;
+const POOLS: readonly ReviewPool[] = ['good', 'mid', 'bad', 'support_bad', 'support_good', 'troll'];
+
+function poolOf(rating: number, kind: ReviewKind): ReviewPool {
+  return kind !== 'product' ? kind : rating >= 4 ? 'good' : rating === 3 ? 'mid' : 'bad';
+}
+
+const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+
+/** One line of a pool, read as a number written in its slots. */
+function lineAt(slots: readonly (readonly string[])[], n: number, said: Record<string, string>): string {
+  const parts: string[] = [];
+  let rest = n;
+  for (const slot of slots) {
+    parts.push(slot[rest % slot.length]!);
+    rest = Math.floor(rest / slot.length);
+  }
+  return fill(parts.filter(Boolean).join(' '), said);
+}
+
+/**
+ * The line the public reads. Each product walks its pool in its own order, one step per review it ever got, so a line comes back only
+ * after the whole pool: the rows compaction cut cannot bring one back early, and the walk skips what the product still holds.
+ */
+export function reviewLine(seed: number, pool: ReviewPool, product: Product, said: Record<string, string>): string {
+  const slots = REVIEW_BANK[pool];
+  const size = slots.reduce((n, slot) => n * slot.length, 1);
+  const rng = streamRng(seed, REVIEW_TEXT_STREAM, hashString(product.id), POOLS.indexOf(pool));
+  const start = rng.int(0, size - 1);
+  let step = rng.int(1, size - 1);
+  while (gcd(step, size) !== 1) step = step % (size - 1) + 1;
+  const { reviews } = product.stats;
+  const held = new Set(reviews.map((r) => r.text));
+  const turn = product.stats.ratingCount ?? reviews.length;
+  for (let k = 0; k < size; k++) {
+    const line = lineAt(slots, (start + step * (turn + k)) % size, said);
+    if (!held.has(line)) return line;
+  }
+  return lineAt(slots, (start + step * turn) % size, said);
 }
 
 /** Pushes a review on the product and refreshes its average rating. */
 export function addReview(world: WorldState, rng: Rng, product: Product, customerId: string, rating: number, niche: NicheTruth | undefined, kind: ReviewKind = 'product'): Review {
   const r = Math.max(1, Math.min(5, Math.round(rating))) as Review['rating'];
-  const review: Review = { id: nextId(world, 'rev'), day: world.day, customerId, rating: r, text: reviewText(rng, r, product, niche, kind) };
+  const id = nextId(world, 'rev');
+  const { basis, said } = draftReview(rng, r, product, niche, kind);
+  const review: Review = { id, day: world.day, customerId, rating: r, text: reviewLine(world.scenario.seed, poolOf(r, kind), product, said), basis };
   const { stats } = product;
   stats.ratingSum = (stats.ratingSum ?? stats.reviews.reduce((s, x) => s + x.rating, 0)) + r;
   stats.ratingCount = (stats.ratingCount ?? stats.reviews.length) + 1;

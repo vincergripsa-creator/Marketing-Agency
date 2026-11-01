@@ -92,6 +92,8 @@ export interface RunResult {
   payroll: number;
   hires: number;
   departures: number;
+  /** Seats the league gave to someone from the market: a challenge the incumbent lost. */
+  replacements: number;
   /** Broken org invariants, summed over every evening. Must stay 0. */
   violations: number;
   cliffs: Cliff[];
@@ -297,6 +299,7 @@ export async function runOne(spec: RunSpec): Promise<RunResult> {
       payroll: summarizeLedger(world.ledger, world.day).payroll,
       hires: org?.hires ?? 0,
       departures: org?.departures ?? 0,
+      replacements: (world.company.league?.hires ?? []).filter((h) => h.hired).length,
       violations: org?.violations ?? 0,
       cliffs: findCliffs(world, rows),
       stalls: findStalls(rows, spec.budget),

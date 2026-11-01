@@ -30,12 +30,16 @@ import { upsellContextOf } from '../upsell.js';
 import { clamp, dec, eur, idNum, mean, round2, short, sum, uniq } from '../util.js';
 import { MIN_SEASON_N, TALENT } from './constants.js';
 import { bestDraft, craftFor, craftOf, effectiveT, pruneRead } from './craft.js';
-import { familyOf, primaryOf } from './skills.js';
+import { familyOf, leagueSeats, primaryOf } from './skills.js';
 import { drawPerson, leagueEntry, talentMode } from './truth.js';
 
 /** What a role without a skill scores, and a role with one while there is nothing to be tested on (D16). */
 const NO_TEST = 50;
-const CANDIDATES_PER_CHALLENGE = 3;
+/**
+ * The tests that cannot see talent: Spearman within a bench .17, 0, .38 and .49, against .83, .77 and .76 for page,
+ * longform and copy. Hire tests still run on them, a challenge never does.
+ */
+const BLIND_TESTS: ReadonlySet<Skill> = new Set<Skill>(['design', 'support', 'buying', 'research']);
 const REVENUE_DAYS = 14;
 /** The ad test: two formats, on hooks of two styles, the same for everyone. */
 const TEST_STYLES: readonly HookStyle[] = ['question', 'mistake'];
@@ -49,6 +53,8 @@ const TEST_MESSAGES = 12;
 const DESIGN_BASELINE = 0.3;
 const MIN_NICHES = 3;
 const BUYING_SCALE = 1000;
+/** The heuristic engine keys a text on the mind's day: a sit reads as another day's work, by its index alone. */
+const SIT_DAYS = 1000;
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
@@ -72,14 +78,20 @@ export interface TestResult {
 
 export interface SkillTest {
   par(): number;               // the score of a hire who starts at 1500
-  sit(b: Bench, sitter: AgentState, i: number): Promise<TestResult | null>; // null: nothing to be tested on today
+  /** `i` tells people apart, `k` is the sit: both are indexes, never a counter, so that a reload sits the same test. Sit 0 is the test of a single sit. */
+  sit(b: Bench, sitter: AgentState, i: number, k?: number): Promise<TestResult | null>; // null: nothing to be tested on today
 }
 
-function mindOf(b: Bench, sitter: AgentState, kind: TaskKind): MindContext {
+/** Claude reads the day in its prompt, and needs no key to write another text. */
+function mindOf(b: Bench, sitter: AgentState, kind: TaskKind, k = 0): MindContext {
   const w = b.ctx.world;
   const craft = craftFor(w, sitter, kind);
-  return { agent: sitter, playbook: b.playbook, brainNotes: [], lessons: [], day: w.day, brand: w.scenario.companyName || w.company.name, ...(craft ? { craft } : {}) };
+  const day = b.ctx.engine.mode === 'claude' ? w.day : w.day + SIT_DAYS * k;
+  return { agent: sitter, playbook: b.playbook, brainNotes: [], lessons: [], day, brand: w.scenario.companyName || w.company.name, ...(craft ? { craft } : {}) };
 }
+
+/** The key of a reading inside a sit. */
+const sitKey = (purpose: string, k: number): string => (k ? `${purpose}:${k}` : purpose);
 
 function scratchCreative(w: WorldState, product: Product, sitter: AgentState, d: Pick<AdCreative, 'hook' | 'hookStyle' | 'format' | 'scenes' | 'caption' | 'hashtags' | 'cta'>): AdCreative {
   return {
@@ -88,21 +100,21 @@ function scratchCreative(w: WorldState, product: Product, sitter: AgentState, d:
   };
 }
 
-async function copyTest(b: Bench, sitter: AgentState): Promise<TestResult | null> {
+async function copyTest(b: Bench, sitter: AgentState, _i: number, k = 0): Promise<TestResult | null> {
   const { ctx, product, voc } = b;
   if (!product) return null;
   const w = ctx.world;
   const upsellOf = upsellContextOf(w, product);
   const score = (c: AdCreative): number => sim.scoreCreative(c, product, voc).overall;
-  const hooks = (await ctx.engine.writeAdHooks({ product, voc, styles: [...TEST_STYLES], upsellOf, usedHooks: [] }, mindOf(b, sitter, 'write_ad_hooks'))).filter((h) => h?.hook);
+  const hooks = (await ctx.engine.writeAdHooks({ product, voc, styles: [...TEST_STYLES], upsellOf, usedHooks: [] }, mindOf(b, sitter, 'write_ad_hooks', k))).filter((h) => h?.hook);
   if (!hooks.length) return null;
   const bannedClaims = uniq([...voc.bannedClaims, ...COMPLIANCE_WORDS]);
-  const mind = mindOf(b, sitter, 'produce_ad');
+  const mind = mindOf(b, sitter, 'produce_ad', k);
   const work: AdCreative[] = [];
   for (const [i, format] of TEST_FORMATS.entries()) {
     const hook = hooks[i % hooks.length]!;
     const write = async (m: MindContext): Promise<AdCreative> => scratchCreative(w, product, sitter, await ctx.engine.writeAd({ product, voc, hook: hook.hook, hookStyle: hook.hookStyle, format, bannedClaims, upsellOf }, m));
-    work.push((await bestDraft(ctx, sitter, mind, `test:ad:${i}`, write, score)).draft);
+    work.push((await bestDraft(ctx, sitter, mind, sitKey(`test:ad:${i}`, k), write, score)).draft);
   }
   return { score: round1(mean(work.map(score))), deliverable: `Deux pubs : ${work.map((c) => `« ${short(c.hook, 40)} »`).join(' et ')}`, work };
 }
@@ -114,12 +126,12 @@ function bestScript(w: WorldState, product: Product): AdCreative | null {
 }
 
 /** The same script, tempo and day's luck for everyone: only the editor differs (D16). */
-async function videoTest(b: Bench, sitter: AgentState): Promise<TestResult | null> {
+async function videoTest(b: Bench, sitter: AgentState, _i: number, k = 0): Promise<TestResult | null> {
   const { ctx, product, voc } = b;
   const w = ctx.world;
   const creative = product && bestScript(w, product);
   if (!product || !creative) return null;
-  const rng = streamRng(w.scenario.seed, STREAM.videoCut, hashString(`test|${creative.id}`));
+  const rng = streamRng(w.scenario.seed, STREAM.videoCut, hashString(sitKey(`test|${creative.id}`, k)));
   const cut = planCut({ creative, product, voc, skill: effectiveT(w, sitter, 'video') ?? EDIT_BASELINE, tempo: 'standard', rng });
   const { craft } = sim.scoreCut(cut);
   return { score: craft, deliverable: `Montage de « ${short(creative.hook, 40)} » : ${cut.beats.length} séquences, ${dec(cut.metrics.estSec, 0)} s`, work: [{ ...cut, craft }] };
@@ -135,11 +147,11 @@ async function writeGuide(b: Bench, product: Product, mind: MindContext, revisio
   return ctx.engine.writePdfContent({ title: product.title, outline, niche, voc, upsellTitle: null, revision }, mind);
 }
 
-async function longformTest(b: Bench, sitter: AgentState, i: number): Promise<TestResult | null> {
+async function longformTest(b: Bench, sitter: AgentState, i: number, k = 0): Promise<TestResult | null> {
   const { ctx, product } = b;
   if (!product) return null;
   const revision = TEST_REVISION + i;
-  const { draft, realScore } = await bestDraft(ctx, sitter, mindOf(b, sitter, 'write_pdf'), 'test:guide', (m) => writeGuide(b, product, m, revision), (c) => pdfScore(b, product, c));
+  const { draft, realScore } = await bestDraft(ctx, sitter, mindOf(b, sitter, 'write_pdf', k), sitKey('test:guide', k), (m) => writeGuide(b, product, m, revision), (c) => pdfScore(b, product, c));
   return { score: round1(realScore), deliverable: `Guide en ${draft.chapters.length} chapitres : « ${short(draft.title, 50)} »`, work: [draft] };
 }
 
@@ -151,12 +163,12 @@ async function sharedDraft(b: Bench, product: Product): Promise<PdfContent> {
   return b.draft;
 }
 
-async function polishTest(b: Bench, sitter: AgentState): Promise<TestResult | null> {
+async function polishTest(b: Bench, sitter: AgentState, _i: number, k = 0): Promise<TestResult | null> {
   const { ctx, product, voc } = b;
   if (!product) return null;
   const draft = await sharedDraft(b, product);
   const flagged = flaggedSentences(draft, genericPhrases());
-  const mind = mindOf(b, sitter, 'humanize_pdf');
+  const mind = mindOf(b, sitter, 'humanize_pdf', k);
   let content = draft;
   let score = pdfScore(b, product, draft);
   for (let pass = 0; pass < (mind.craft?.passes ?? 1); pass++) {
@@ -180,13 +192,13 @@ async function designTest(b: Bench, sitter: AgentState): Promise<TestResult | nu
   return { score: coverScore(audit), deliverable: `Couverture de « ${short(product.title, 40)} » : art ${Math.round(audit.art)}/100`, work: [{ ...audit, seed: art.seed, explored: art.explored }] };
 }
 
-async function pageTest(b: Bench, sitter: AgentState): Promise<TestResult | null> {
+async function pageTest(b: Bench, sitter: AgentState, _i: number, k = 0): Promise<TestResult | null> {
   const { ctx, product, voc } = b;
   if (!product?.content) return null;
   const { content } = product;
   const hype = product.salesPage?.hypeLevel ?? 0.4;
   const upsellOf = upsellContextOf(ctx.world, product);
-  const { draft, realScore } = await bestDraft(ctx, sitter, mindOf(b, sitter, 'write_sales_page'), 'test:page', async (m) => {
+  const { draft, realScore } = await bestDraft(ctx, sitter, mindOf(b, sitter, 'write_sales_page', k), sitKey('test:page', k), async (m) => {
     const sp = await ctx.engine.writeSalesPage({ product, content, voc, hype, upsellOf }, m);
     return { ...sp, hypeLevel: hype, priceWritten: product.price };
   }, (sp) => sim.scoreSalesPage(sp, product, voc).overall);
@@ -300,8 +312,8 @@ export function benchFor(ctx: RuntimeCtx, skill: Skill, seat?: AgentState): Benc
 }
 
 /** The test of `b.skill`, through the run's engine, with `sitter`'s craft. Writes nothing to the world. */
-export async function testDeliverable(b: Bench, sitter: AgentState, i: number): Promise<TestResult | null> {
-  return (await TEST_BY_SKILL[b.skill]?.sit(b, sitter, i)) ?? null;
+export async function testDeliverable(b: Bench, sitter: AgentState, i: number, k = 0): Promise<TestResult | null> {
+  return (await TEST_BY_SKILL[b.skill]?.sit(b, sitter, i, k)) ?? null;
 }
 
 /** A copy that has nothing to learn yet: a test measures the person, not their first week. Everyone sits on the cheapest tier (talent §4.9). */
@@ -310,7 +322,7 @@ function sitterOf(w: WorldState, c: Candidate): AgentState {
 }
 
 /** A candidate holds no truth until hired: theirs is lent for the length of the test, then gone. */
-async function sit(b: Bench, c: Candidate, i: number): Promise<TestResult | null> {
+async function sit(b: Bench, c: Candidate, i: number, k = 0): Promise<TestResult | null> {
   const w = b.ctx.world;
   const agents = w.talentTruth?.agents;
   if (!agents) return null;
@@ -318,7 +330,7 @@ async function sit(b: Bench, c: Candidate, i: number): Promise<TestResult | null
   const known = agents[c.id];
   agents[c.id] = known ?? drawPerson(w, sitter, c.lineage);
   try {
-    return await testDeliverable(b, sitter, i);
+    return await testDeliverable(b, sitter, i, k);
   } finally {
     if (!known) delete agents[c.id];
   }
@@ -379,7 +391,7 @@ export const METRICS: Record<Skill, Metric> = {
 export const ratingText = (r: number): string => String(Math.round(r)).replace(/\B(?=(\d{3})+$)/g, ' ');
 
 /** A test score as it reads: « 91,5/100 ». */
-const testText = (score: number): string => `${String(score).replace('.', ',')}/100`;
+const testText = (score: number): string => `${String(round1(score)).replace('.', ',')}/100`;
 
 // ───────────────────────────── The challenge ─────────────────────────────
 
@@ -404,9 +416,9 @@ function teacherFor(w: WorldState, skill: Skill, leaver: AgentId): AgentState | 
     .sort((a, b) => rating(b)!.rating - rating(a)!.rating || a.id.localeCompare(b.id))[0];
 }
 
-/** Two from the market and a clone of the best colleague, or three from the market. Its own key on the hire stream: nobody meets the same three twice. */
+/** All from the market, the last one a clone of the best colleague when there is one. Its own key on the hire stream: nobody meets the same people twice. */
 function challengers(ctx: RuntimeCtx, plan: ProbationPlan, leaver: AgentState): Candidate[] {
-  const drawn = drawCandidates(ctx, leaver.roleId, hashString(`${plan.agentId}:${plan.openedSeason}`), CANDIDATES_PER_CHALLENGE);
+  const drawn = drawCandidates(ctx, leaver.roleId, hashString(`${plan.agentId}:${plan.openedSeason}`), TALENT.challenge.candidates);
   const teacher = teacherFor(ctx.world, plan.skill, leaver.id);
   const clone = drawn[drawn.length - 1];
   if (teacher && clone) {
@@ -416,6 +428,9 @@ function challengers(ctx: RuntimeCtx, plan: ProbationPlan, leaver: AgentState): 
   return drawn;
 }
 
+/** Whether this skill's test can tell a better person from a worse one. */
+export const testSeesTalent = (skill: Skill): boolean => !BLIND_TESTS.has(skill);
+
 /** Why nobody sits today: the founder's word comes before any test. */
 function blocked(w: WorldState, id: AgentId): string | null {
   const hold = firingHold(w) ?? pinHold(w, id);
@@ -423,9 +438,9 @@ function blocked(w: WorldState, id: AgentId): string | null {
 }
 
 /** The incumbent stayed: the plan ends there, and the person is out of plans for one season. */
-function keep(ctx: RuntimeCtx, plan: ProbationPlan, report: HireReport): HireReport {
+function keep(ctx: RuntimeCtx, plan: ProbationPlan, report: HireReport, outcome: ProbationPlan['outcome'] = 'kept_no_better'): HireReport {
   const league = ctx.world.company.league!;
-  plan.outcome = 'kept_no_better';
+  plan.outcome = outcome;
   const entry = league.entries[plan.agentId];
   if (entry && entry.status === 'probation') entry.status = 'active';
   league.hires.push(report);
@@ -433,13 +448,34 @@ function keep(ctx: RuntimeCtx, plan: ProbationPlan, report: HireReport): HireRep
   return report;
 }
 
-/** Why someone left, as read in the feed and in `leftBecause`: their numbers, then who takes over. */
+/** A failed plan on a test that sees nothing: the plan and its coach still helped, nobody is judged on noise. */
+export function keepNoTest(ctx: RuntimeCtx, plan: ProbationPlan): HireReport {
+  const reason = `${nameOf(ctx, plan.agentId)}, poste conservé : le test de ce métier ne sépare pas encore les talents.`;
+  return keep(ctx, plan, { day: ctx.world.day, incumbent: plan.agentId, skill: plan.skill, hired: null, candidates: [], reason }, 'kept_no_test');
+}
+
+/** Why someone left, as read in the feed and in `leftBecause`: how long under the bar, their numbers, then who takes over. */
 function leaveReason(ctx: RuntimeCtx, plan: ProbationPlan, winner: Candidate): string {
-  const R = ctx.world.company.league!.entries[plan.agentId]?.ratings[plan.skill];
+  const league = ctx.world.company.league!;
+  const entry = league.entries[plan.agentId];
+  const R = entry?.ratings[plan.skill];
   const m = METRICS[plan.skill];
   const metric = R?.metric ?? plan.baseline;
+  const under = (entry?.underBar ?? 0) > 1 ? `${entry!.underBar} clôtures sous la barre de ${ratingText(league.bar ?? TALENT.rating.par)}, ` : '';
   const coach = plan.coachId ? `, coach ${nameOf(ctx, plan.coachId)} pendant ${TALENT.plan.days} jours` : '';
-  return `${m.label} ${m.text(metric)} pour un objectif de ${m.text(plan.target)}, classement ${ratingText(R?.rating ?? TALENT.rating.par)}${coach}. ${winner.name} (${testText(winner.interview)} au test) reprend le poste.`;
+  return `${under}${m.label} ${m.text(metric)} pour un objectif de ${m.text(plan.target)}, classement ${ratingText(R?.rating ?? TALENT.rating.par)}${coach}. ${winner.name} (${testText(winner.interview)} au test) reprend le poste.`;
+}
+
+/** What a replaced person is compared with (M4): their family that day, and a family of one says nothing of its only member, so every rated seat does. */
+function yardstick(w: WorldState, skill: Skill): number {
+  const truth = w.talentTruth!.agents;
+  const family = familyOf(w, skill).flatMap((a) => truth[a.id]?.talent[skill] ?? []);
+  if (family.length >= 2) return mean(family);
+  const seats = leagueSeats(w).flatMap((a) => {
+    const primary = primaryOf(a.roleId)!;
+    return w.company.league?.entries[a.id]?.ratings[primary]?.n ? truth[a.id]?.talent[primary] ?? [] : [];
+  });
+  return mean(seats.length ? seats : family);
 }
 
 /** D17, the only way out of the league: notice, position, hire, and `hireAgent` completes the departure. Same tick, one path. */
@@ -456,8 +492,7 @@ async function swap(ctx: RuntimeCtx, plan: ProbationPlan, report: HireReport, wi
   }
   position.candidates = candidates;
   const truth = w.talentTruth!;
-  const family = familyOf(w, plan.skill).flatMap((a) => truth.agents[a.id]?.talent[plan.skill] ?? []);
-  const familyMean = mean(family);
+  const familyMean = yardstick(w, plan.skill);
   const tReplaced = truth.agents[leaver.id]?.talent[plan.skill] ?? 0;
   const hire = await hireAgent(ctx, position, winner);
   truth.swaps.push({ day: w.day, skill: plan.skill, replaced: leaver.id, hired: hire.id, tReplaced, tHired: truth.agents[hire.id]?.talent[plan.skill] ?? 0, familyMean });
@@ -473,9 +508,42 @@ function askFounder(ctx: RuntimeCtx, plan: ProbationPlan, report: HireReport, wi
   createTask(w, { kind: 'league_review', title, input: { swap: { plan: plan.agentId, season: plan.openedSeason, report, winner, candidates } }, assignee: hr, createdBy: hr, reviewer: null, workLeft: 0, priority: 1 });
 }
 
+/** How many times each person sits: a sit is a real draft, and through Claude a draft is real money. */
+function sitsOf(ctx: RuntimeCtx): number {
+  return ctx.engine.mode === 'claude' ? TALENT.challenge.claudeSits : TALENT.challenge.sits;
+}
+
+interface Sitting { result: TestResult; sits: number[] }
+
+/** One person's sits. The first deliverable is the one the report shows, the mean is the score. Null: nothing to be tested on today. */
+async function sittings(ctx: RuntimeCtx, one: (k: number) => Promise<TestResult | null>): Promise<Sitting | null> {
+  const sits: number[] = [];
+  let first: TestResult | null = null;
+  for (let k = 0; k < sitsOf(ctx); k++) {
+    const result = await one(k);
+    if (!result) return null;
+    first ??= result;
+    sits.push(result.score);
+  }
+  return { result: { ...first!, score: round2(mean(sits)) }, sits };
+}
+
+/** The gap a mean must show over another's: `marginSe` standard errors of that difference, the spread pooled from everyone who sat, and never under `marginMin`. */
+function marginOf(sat: readonly number[][]): number {
+  const { marginSe, marginMin } = TALENT.challenge;
+  const full = sat.filter((v) => v.length >= 2);
+  if (!full.length) return marginMin;
+  const spread = mean(full.map((v) => {
+    const m = mean(v);
+    return sum(v.map((x) => (x - m) ** 2)) / (v.length - 1);
+  }));
+  return round2(Math.max(marginMin, marginSe * Math.sqrt((2 * spread) / full[0]!.length)));
+}
+
 /**
- * Everyone sits the same test, the incumbent first, and the best candidate takes the job only by beating them by
- * `margin`: the market may be worse than the person in the seat. A hold of the founder stops it before anyone sits.
+ * Everyone sits the same test several times, the incumbent first, and the best mean takes the job only by beating theirs
+ * by the gap these very sits can tell from noise: the market may be worse than the person in the seat. A hold of the
+ * founder stops it before anyone sits.
  */
 export async function runChallenge(ctx: RuntimeCtx, plan: ProbationPlan): Promise<HireReport> {
   const w = ctx.world;
@@ -485,22 +553,25 @@ export async function runChallenge(ctx: RuntimeCtx, plan: ProbationPlan): Promis
   if (!leaver || stop) return { ...base, hired: null, candidates: [], reason: stop ?? '' };
 
   const bench = benchFor(ctx, plan.skill, leaver);
-  const own = await testDeliverable(bench, { ...leaver, tier: 'haiku' }, 0);
+  const ownSits = await sittings(ctx, (k) => testDeliverable(bench, { ...leaver, tier: 'haiku' }, 0, k));
+  const own = ownSits?.result;
   if (!own) return keep(ctx, plan, { ...base, hired: null, candidates: [], reason: `Pas de test possible aujourd'hui, ${leaver.name} reste.` });
   const candidates = challengers(ctx, plan, leaver);
-  const entries: ChallengeEntry[] = [{ id: leaver.id, name: leaver.name, isIncumbent: true, lineage: null, score: own.score, deliverable: own.deliverable }];
+  const entries: ChallengeEntry[] = [{ id: leaver.id, name: leaver.name, isIncumbent: true, lineage: null, score: own.score, deliverable: own.deliverable, sits: ownSits.sits }];
   for (const [i, c] of candidates.entries()) {
-    const result = await sit(bench, c, i + 1);
-    c.interview = result?.score ?? NO_TEST;
-    c.deliverable = result?.deliverable ?? null;
-    entries.push({ id: c.id, name: c.name, isIncumbent: false, lineage: c.lineage, score: c.interview, deliverable: c.deliverable ?? 'Rien à rendre' });
+    const done = await sittings(ctx, (k) => sit(bench, c, i + 1, k));
+    c.interview = done?.result.score ?? NO_TEST;
+    c.deliverable = done?.result.deliverable ?? null;
+    entries.push({ id: c.id, name: c.name, isIncumbent: false, lineage: c.lineage, score: c.interview, deliverable: c.deliverable ?? 'Rien à rendre', sits: done?.sits ?? [] });
   }
 
   const winner = rankCandidates(candidates)[0];
-  if (!winner || winner.interview < own.score + TALENT.challenge.margin) {
-    return keep(ctx, plan, { ...base, hired: null, candidates: entries, reason: `Personne de mieux sur le marché, ${leaver.name} reste (${testText(own.score)} au test${winner ? `, ${winner.name} ${testText(winner.interview)}` : ''}).` });
+  const margin = marginOf(entries.map((e) => e.sits ?? []));
+  const required = `écart exigé ${dec(margin, 1)} points sur ${sitsOf(ctx)} passages`;
+  if (!winner || winner.interview < own.score + margin) {
+    return keep(ctx, plan, { ...base, hired: null, candidates: entries, margin, reason: `Personne de mieux sur le marché, ${leaver.name} reste (${testText(own.score)} au test${winner ? `, ${winner.name} ${testText(winner.interview)}` : ''}, ${required}).` });
   }
-  const report: HireReport = { ...base, hired: winner.id, candidates: entries, reason: `${winner.name} (${testText(winner.interview)} au test) bat ${leaver.name} (${testText(own.score)}) de ${dec(winner.interview - own.score, 1)} points.` };
+  const report: HireReport = { ...base, hired: winner.id, candidates: entries, margin, reason: `${winner.name} (${testText(winner.interview)} au test) bat ${leaver.name} (${testText(own.score)}) de ${dec(winner.interview - own.score, 1)} points, ${required}.` };
   if (w.scenario.founderApproval) {
     askFounder(ctx, plan, report, winner, candidates);
     return report;

@@ -8,7 +8,7 @@
  */
 import type { AdFormat, AdScene, CreatorProfile, HookStyle, Product, Review, VoiceOfCustomer } from '../../shared.js';
 import type { AdDraft, SearchAdDraft, UpsellContext } from '../../contracts.js';
-import { recentReviews } from '../../sim/feedback.js';
+import { recentReviews, reviewBasis } from '../../sim/feedback.js';
 import { NAMED_CASE, RISK_RULES, RISKY_AD_PHRASES } from '../lexicon.js';
 import { AD_FORMATS, conflictsWith, containsBanned, HOOK_STYLES } from '../playbook.js';
 import { bare, bestLabel, cap, clauseLabel, clean, fit, fmtEur, fmtNum, fmtPct, labelOf, lf, lowerFirst, norm, ofAud, plainTitle, q, theUnit, uniqStrings, withArticle, type LocalRng } from '../util.js';
@@ -378,8 +378,8 @@ function riskyLine(phrase: string, c: NicheCtx): { vo: string; screen: string } 
 
 /** A buyer's good review about the guide itself, short enough to be read out, free of any claim the platform refuses. */
 function quotableReviews(p: Product | null | undefined): Review[] {
-  return (p ? recentReviews(p) : []).filter((r) => r && r.rating >= 4 && bare(r.text).length >= 12 && bare(r.text).length <= 110
-    && !/support|service client/i.test(r.text) && !RISK_RULES.some((x) => x.re.test(r.text)));
+  return (p ? recentReviews(p) : []).filter((r) => r && r.rating >= 4 && bare(reviewBasis(r)).length >= 12 && bare(reviewBasis(r)).length <= 110
+    && !/support|service client/i.test(reviewBasis(r)) && !RISK_RULES.some((x) => x.re.test(reviewBasis(r))));
 }
 
 /** Stock lines of a tired writer: each holds a cliché the scorer really counts. */
@@ -455,10 +455,11 @@ export function heuristicAd(
     voiceover: `La méthode commence par un geste tout simple : ${inline(step)}. Ensuite : ${inline(step2)}. Une étape à la fois.`,
     durationSec: rng.int(4, 6),
   });
-  // the proof is a buyer's real review, else a fact from the research: a fictional persona never appears in an ad
+  // the proof quotes a real review, else a fact from the research: a fictional persona never appears in an ad. The quote is the
+  // review's basis, the sentence the simulation scores, not the line the sales page shows (D93): both come from the same buyer.
   const reviews = quotableReviews(input.product);
   const review = reviews.length ? rng.pick(reviews) : null;
-  const quote = review ? q(review.text) : '';
+  const quote = review ? q(reviewBasis(review)) : '';
   const proofVo = review ? `Un acheteur a écrit sur le guide : ${quote}.`
     : fact ? `Un repère à garder en tête : ${inline(factScreen ?? fact)}.` : `Le plan tient en ${n} ${unit}, avec une checklist à chaque chapitre.`;
   scenes.push({

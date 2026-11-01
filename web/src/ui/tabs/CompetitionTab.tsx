@@ -13,8 +13,7 @@ import {
 import { useDetail } from '../useDetail';
 import { ChronicleList, DetailNotice } from './EffectifTab';
 
-const OUT_OF_LEAGUE = 'Hors ligue : poste sans effet mesurable sur un résultat';
-const CUT_LINE = 'Sous cette ligne, le contrat est menacé';
+const BLIND_TEST = 'Ce métier n’a pas de test fiable : sous la barre, le plan reste, avec un coach s’il y en a un, mais le poste n’est jamais remis au marché.';
 const FORM_LABEL: Record<LeagueRow['form'][number], string> = { V: 'Victoire', N: 'Nul', D: 'Défaite' };
 
 export function CompetitionTab({ onClose }: { onClose(): void }) {
@@ -74,6 +73,7 @@ function Season({ season }: { season: LeagueDetail['season'] }) {
     <div className="card">
       <strong>Saison {season.no} · J{fmtInt(season.fromDay)} → J{fmtInt(season.toDay)} · {plural(season.daysLeft, 'jour restant', 'jours restants')}</strong>
       {season.rules.length ? <ul className="bullets small">{season.rules.map((r) => <li key={r}>{r}</li>)}</ul> : null}
+      {season.training ? <div className="small">Formation continue : {plural(season.training.seats, 'poste', 'postes')} à la dernière clôture, {fmtEur(season.training.eur, 0)}. Depuis le début : {fmtEur(season.training.totalEur, 0)}.</div> : null}
     </div>
   );
 }
@@ -81,14 +81,12 @@ function Season({ season }: { season: LeagueDetail['season'] }) {
 // ───────────────────────────── Classement ─────────────────────────────
 
 function Standings({ data, god }: { data: LeagueDetail; god: Record<string, TalentTruthView> | undefined }) {
-  const { snapshot } = useApp();
   const [picked, setPicked] = useState<Skill | null>(null);
   const roles = data.roles.filter((r) => r.rows.length > 0);
   const role = roles.find((r) => r.key === picked) ?? roles[0];
   if (!role) return <Empty compact>Personne n’est encore classé : les notes viennent avec les premiers résultats.</Empty>;
 
-  const ranked = new Set(data.roles.flatMap((r) => r.rows.map((x) => x.agentId)));
-  const outside = (snapshot?.company?.agents ?? []).filter((a) => !ranked.has(a.id));
+  const reasons = [...new Set(data.outside.map((o) => o.why))];
   const columns = god ? 11 : 10;
   return (
     <>
@@ -104,22 +102,23 @@ function Standings({ data, god }: { data: LeagueDetail; god: Record<string, Tale
           </thead>
           <tbody>
             {role.rows.map((row, i) => (
-              <LeagueLine key={row.agentId} row={row} cut={role.cutLine !== null && row.rank >= role.cutLine && (i === 0 || role.rows[i - 1]!.rank < role.cutLine)} columns={columns} god={god} />
+              <LeagueLine key={row.agentId} row={row} cut={role.cutLine !== null && row.rank >= role.cutLine && (i === 0 || role.rows[i - 1]!.rank < role.cutLine) ? (role.blindTest ? data.season.cutBlind : data.season.cut) : null} columns={columns} god={god} />
             ))}
           </tbody>
         </table>
       </div>
-      {outside.length ? <div className="muted small">{OUT_OF_LEAGUE} ({outside.map((a) => a.name).join(', ')}).</div> : null}
+      {role.blindTest ? <div className="muted small">{BLIND_TEST}</div> : null}
+      {reasons.map((why) => <div key={why} className="muted small">{why} ({data.outside.filter((o) => o.why === why).map((o) => o.name).join(', ')}).</div>)}
     </>
   );
 }
 
-function LeagueLine({ row, cut, columns, god }: { row: LeagueRow; cut: boolean; columns: number; god: Record<string, TalentTruthView> | undefined }) {
+function LeagueLine({ row, cut, columns, god }: { row: LeagueRow; cut: string | null; columns: number; god: Record<string, TalentTruthView> | undefined }) {
   const { openAgent } = useApp();
   const truth = god?.[row.agentId];
   return (
     <>
-      {cut ? <tr className="cut-line"><td colSpan={columns}>{CUT_LINE}</td></tr> : null}
+      {cut ? <tr className="cut-line"><td colSpan={columns}>{cut}</td></tr> : null}
       <tr>
         <td className="num"><strong>{row.rank}</strong></td>
         <td className={cx('rank-delta', row.rankDelta > 0 && 'txt-good', row.rankDelta < 0 && 'txt-bad')}>{row.rankDelta > 0 ? `▲${row.rankDelta}` : row.rankDelta < 0 ? `▼${-row.rankDelta}` : '='}</td>
@@ -132,6 +131,7 @@ function LeagueLine({ row, cut, columns, god }: { row: LeagueRow; cut: boolean; 
             </span>
           </button>
           {row.contract !== 'active' ? <Pill tone={CONTRACT_TONE[row.contract]}>{CONTRACT_LABEL[row.contract]}</Pill> : null}
+          {row.underBar > 0 ? <span className="muted small"> {plural(row.underBar, 'clôture', 'clôtures')} sous la barre</span> : null}
         </td>
         <td className="num"><strong>{fmtInt(row.rating)}</strong></td>
         <td className={cx('num', row.delta7d > 0 && 'txt-good', row.delta7d < 0 && 'txt-bad')}>{signed(row.delta7d)}</td>

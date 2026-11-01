@@ -14,7 +14,7 @@ import { COMPACT } from './compaction.js';
 import type { RuntimeCtx } from './ctx.js';
 import { writeNote } from './ctx.js';
 import { activeHolds } from './holds.js';
-import { isUpsellProduct } from './metrics.js';
+import { closedWindow, isUpsellProduct } from './metrics.js';
 import { ROLES } from './org/catalog.js';
 import { officerId } from './org/officers.js';
 import { growthOn, STAGE_LABELS, STAGES } from './stages.js';
@@ -289,11 +289,20 @@ function waitingOf(w: WorldState): string[] {
   ];
 }
 
+/** What channel tests really cost over the last closed week, from the ad rows of the campaigns paid as tests. */
+function testSpend(w: WorldState): number {
+  const { fromDay, toDay } = closedWindow(w, 7);
+  const tests = new Set(w.company.campaigns.filter((c) => c.test).map((c) => c.id));
+  return round2(sum(w.market.adStats.filter((s) => s.day >= fromDay && s.day <= toDay && tests.has(s.campaignId)).map((s) => s.spend)));
+}
+
 function nextOf(w: WorldState): string[] {
   const growth = w.company.growth;
   const a = growth?.allocation;
+  const tested = testSpend(w);
   return [
-    ...(a ? [`Cette semaine : ${eur(a.adTarget)} de pub par jour au plus, ${eur(a.testWeek)} pour les tests. ${a.note}`] : []),
+    ...(a ? [a.note] : []),
+    ...(tested > 0 ? [`Tests de canaux : ${eur(tested)} dépensés sur 7 jours.`] : []),
     ...(growth?.portfolio?.lines ?? []).filter((l) => l.verdict === 'test' || l.verdict === 'double_down').map((l) => `« ${short(l.title, 60)} » : ${l.reason}`),
     ...w.company.experiments.filter((e) => e.status === 'running').map((e) => `Test en cours : ${short(e.hypothesis, 100)}`),
     ...(w.company.org?.positions ?? []).filter((p) => p.status === 'open').map((p) => `Poste ouvert : ${ROLES[p.roleId].title}`),

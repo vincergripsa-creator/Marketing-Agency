@@ -5,13 +5,14 @@
  * Then the ContentEngine (Claude mode) may adjust it; the runtime materializes the plan into tasks.
  */
 import type { DayPlanItem, DayPlan } from '../contracts.js';
-import type { ChannelId, Lesson, Product, Task, TaskKind, WorldState } from '../shared.js';
+import type { Campaign, ChannelId, Lesson, Product, Task, TaskKind, WorldState } from '../shared.js';
 import { CHANNELS, channelOf } from '../shared.js';
 import { multiChannel, openChannels, planChannels } from './channels.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, latestOutput, nameOf, productOf, speak, vocOf } from './ctx.js';
 import { learning, sim } from './modules.js';
 import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, feedbackOf, isProductFeedback, isUpsellProduct, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO, recentReviews, referenceChannel } from './metrics.js';
+import { reviewBasis } from '../sim/feedback.js';
 import { adsHeldSince, launchHold, productHold } from './holds.js';
 import { officerId, ownersOfAny } from './org/officers.js';
 import { buyersLike, buyersRead, closedNiches, createProductPipeline, createUpsellPipeline, createV2Pipeline, killProduct, openTasksForProduct, paidOn, pauseProduct, resumePipeline, stopAds } from './pipeline.js';
@@ -97,7 +98,7 @@ function reworkItem(ctx: RuntimeCtx, p: Product, why: string, priority: 1 | 2 | 
 /** What buyers said about the current version: a v2 brief never quotes someone who did not buy, nor an insult. */
 export function customerFeedback(ctx: RuntimeCtx, p: Product, since: number): string[] {
   const out = feedbackOf(ctx.world, p.id).filter((f) => f.day >= since && f.text && isProductFeedback(f.text)).map((f) => f.text);
-  for (const r of recentReviews(p)) if (r.day >= since && r.rating <= 2 && isProductFeedback(r.text)) out.push(`Avis ${r.rating}/5 : ${r.text}`);
+  for (const r of recentReviews(p)) if (r.day >= since && r.rating <= 2 && isProductFeedback(reviewBasis(r))) out.push(`Avis ${r.rating}/5 : ${reviewBasis(r)}`);
   return uniq(out).slice(0, 6);
 }
 
@@ -341,12 +342,13 @@ export function reactToOutage(ctx: RuntimeCtx): boolean {
 }
 
 /** Campaigns paused for this reason start again inside the CFO's envelope, unless their product or their channel can no longer take ads. */
-export function resumeCampaigns(ctx: RuntimeCtx, reason: 'outage' | 'founder', productId?: string, channels?: readonly ChannelId[]): { resumed: string[]; left: string[] } {
+export function resumeCampaigns(ctx: RuntimeCtx, reason: 'outage' | 'founder', only: { productId?: string; channels?: readonly ChannelId[]; campaignId?: string; spared?: readonly Campaign[] } = {}): { resumed: string[]; left: string[] } {
   const w = ctx.world;
   let room = currentBudget(w).adCap - committedAdBudget(w);
   const resumed: string[] = [];
   const left: string[] = [];
-  for (const c of w.company.campaigns.filter((x) => x.pausedFor === reason && (!productId || x.productId === productId) && (!channels || channels.includes(channelOf(x))))) {
+  const { productId, channels, campaignId, spared } = only;
+  for (const c of w.company.campaigns.filter((x) => x.pausedFor === reason && (!productId || x.productId === productId) && (!channels || channels.includes(channelOf(x))) && (!campaignId || x.id === campaignId) && !spared?.some((s) => s.id === x.id))) {
     delete c.pausedFor;
     const p = productOf(ctx, c.productId);
     const daily = Math.min(c.dailyBudget, Math.floor(room));

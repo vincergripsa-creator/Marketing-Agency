@@ -2,7 +2,7 @@
  * Pure summary of the ledger: the one place that says what the entries mean for cash and profit.
  * The sim's financeSnapshot and the API's fallbacks (run list, snapshot) all read it, so they cannot disagree.
  */
-import type { FinanceSnapshot, LedgerEntry } from '../shared.js';
+import type { DailyKpi, FinanceSnapshot, LedgerEntry } from '../shared.js';
 import { round2 } from './ids.js';
 
 /** Refs with these prefixes keep the caller's sign (reversals, payment reserves). */
@@ -43,6 +43,9 @@ export interface LedgerSummary extends FinanceSnapshot {
  * the open one. Amounts are signed by recordLedger, so a reversal cancels its payout and a hold its release.
  * @param outageDays announced outage days: nothing could sell, so they do not measure the ads (ROAS)
  */
+/** A day with nothing to read: no sale, no refund, no ad. No number of that day can confirm anything. */
+export const quietDay = (k: Pick<DailyKpi, 'sales' | 'refunds' | 'adSpend'>): boolean => k.sales === 0 && k.refunds === 0 && k.adSpend === 0;
+
 export function summarizeLedger(ledger: readonly LedgerEntry[], day: number, outageDays: Iterable<number> = []): LedgerSummary {
   let cash = 0, capital = 0;
   let revenue = 0, refunds = 0, adSpend = 0, fees = 0, compute = 0, payroll = 0, otherCosts = 0, profit = 0;
