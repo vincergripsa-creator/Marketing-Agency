@@ -336,12 +336,12 @@ describe('delivery on another channel', () => {
   });
 
   it('each channel\'s line reads its own ROAS, never the day\'s', () => {
-    const world = makeWorld(53);
+    const world = makeWorld(60);
     const p = addProduct(world, 'prd_a', 'sommeil-bebe');
     addCampaign(world, 'cpg_meta', p, [metaCut(world, 'cre_1', p)], 400, 'meta');
     addCampaign(world, 'cpg_tk', p, [addCreative(world, 'cre_2', p)], 400);
     world.day = 1;
-    const { notes } = tickMarket(world, streamRng(53, 3, 1));
+    const { notes } = tickMarket(world, streamRng(60, 3, 1));
     const roas = (id: string) => rowsOf(world, id).reduce((t, r) => t + r.revenue, 0) / sum(rowsOf(world, id), 'spend');
     expect(roas('cpg_tk')).toBeGreaterThan(0);
     expect(roas('cpg_meta')).toBeGreaterThan(0);

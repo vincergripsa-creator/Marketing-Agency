@@ -101,6 +101,7 @@ Le run de référence (entreprise d'avant la V1, 25 jours, graine 7) ne se réen
 |---|---|---|---|---|
 | P8.1 | Texte des guides : détail des étapes sous son propre intertitre, plan sans lignes répétées, exemple pour chaque chapitre, citations et notes en marge | `dc93c9d2173be97aade7336c20a776dd70652baf` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `ledger` et `kpis` (le texte change la note de qualité, donc les ventes) ; `tasks` et `events` inchangés. Enregistrée sur `HEAD` plus les seuls fichiers de P8.1 |
 | P10.2 | Les rivaux remplacent la pénalité permanente des clones ; liste e-mail et kit côté marché | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` (identique) | Rien : en 25 jours, la graine 7 ne voit ni clone ni rival (0 événement `competitor_clone`, `market.rivals` vide) et l'entreprise n'a ni liste ni kit. `--record` réécrit le même fichier, sur `HEAD` plus les seuls fichiers de P10.2 |
+| P14.1 (S14, D145) | Le gagnant E écrit `CONVERSION.base` 0,0195, que le run de référence lit | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `bf66359a8b97fe09b4a55e417d303d0608f69ac7` | `ledger`, `kpis` et `tasks` ; `events` inchangés |
 | Dernière liste (D135 à D143) | Texte des guides (D1, D2, N1, `bare`) et couvertures (D3, D138) | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` (identique) | Rien : l'empreinte est restée la même, aucun réenregistrement. Elle couvre l'entreprise d'avant la V1 sur 25 jours, pas le marché ci-dessous |
 
 ### Dernière liste : à lire à S14

@@ -177,7 +177,7 @@ export const studioHandlers: HandlerMap = {
       const before = scoreContent(ctx, product, product.content);
       const gaps = task.input.gaps && typeof task.input.gaps === 'object' ? task.input.gaps as GuideGaps : null;
       const m = studioMind(ctx, task, mind);
-      // the passes are real because an editor's `reach` leaves text behind (talent §4.4). Claude writes one: a pass there costs money.
+      // A pass after the first finds what the first left: since D144 `reach` is 1, so nothing. Claude writes one: a pass there costs money.
       const passes = ctx.engine.mode === 'claude' ? 1 : mind.craft?.passes ?? 1;
       const phrases = [...genericPhrases(), ...banned];
       const seen = flaggedSentences(product.content, phrases).length;

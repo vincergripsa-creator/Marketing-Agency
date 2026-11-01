@@ -635,15 +635,17 @@ const planted = (content: PdfContent, phrases: readonly string[]): PdfContent =>
   chapters: content.chapters.map((c) => ({ ...c, paragraphs: [...c.paragraphs, ...phrases] })),
 });
 
-/** `humanize_pdf` at talent `t` on a guide with planted clichés; `null` is an editor without talent. */
+/** `humanize_pdf` at talent `t` on a guide with planted clichés; `null` is an editor without talent. `passes` counts the calls the handler made. */
 async function polish(t: number | null, seed: number) {
   const { world, ctx, engine, product, voc, brief, outline } = await live(seed);
   const clean = await engine.writePdfContent({ title: product.title, outline, niche: brief, voc, upsellTitle: null }, mindOn(seed));
   const stripped = await engine.humanize({ content: clean, flagged: findCliches(clean), voc }, mindOn(seed));
   product.content = planted(stripped, CLICHE_TEMPLATES.filter((x) => !x.includes('{')));
+  let passes = 0;
+  ctx.engine = new Proxy(engine, { get: (e, k) => (k === 'humanize' ? (input: Parameters<typeof engine.humanize>[0], m: MindContext) => { passes += 1; return e.humanize(input, m); } : Reflect.get(e, k)) });
   const task = createTask(world, { kind: 'humanize_pdf', input: { productId: product.id } });
   const out = await studioHandlers.humanize_pdf!.run(ctx, task, writer, mindOn(seed, t === null ? undefined : craftOf('polish', t, 'sonnet')));
-  return { product, output: out.output as { flagged: number; left?: number } };
+  return { product, output: out.output as { flagged: number; left?: number }, passes };
 }
 
 async function polished(t: number, seed: number): Promise<number> {
@@ -651,16 +653,12 @@ async function polished(t: number, seed: number): Promise<number> {
   return genericPhraseHits(norm(allText(product.content!.chapters.flatMap((c) => c.paragraphs)))).total;
 }
 
-describe('`polish`: the passes are real (talent §4.4)', () => {
-  it('8. on a guide with planted clichés, more stay after humanize_pdf at t=.3 than at t=.9', async () => {
-    let weak = 0;
-    let strong = 0;
+describe('`polish`: the passes run, and since D144 they print the same guide (talent §4.4)', () => {
+  // D144: `polish` is flawless, its `reach` is 1 at any t, so the first pass takes every flat sentence it sees.
+  it('8. on a guide with planted clichés, none stays after humanize_pdf, at t=.1 as at t=.9: a weak hand leaves nothing behind', async () => {
     for (const seed of [1, 2, 3]) {
-      weak += await polished(0.3, seed);
-      strong += await polished(0.9, seed);
+      for (const t of [0.1, 0.3, 0.5, 0.9]) expect(await polished(t, seed), `t=${t}, seed ${seed}`).toBe(0);
     }
-    expect(weak).toBeGreaterThan(strong);
-    expect(strong).toBeLessThanOrEqual(3);
   }, 60_000);
 
   it('without a reach, one pass fixes everything it sees: an editor without talent reads as today', () => {
@@ -700,21 +698,18 @@ describe('`polish`: the passes are real (talent §4.4)', () => {
     expect(Math.abs(dry.list - 0.5), `sans réserve : ${dry.list}`).toBeLessThan(0.06);
   }, 60_000);
 
-  it('what an editor leaves is on the task: `left` is the share of the flagged sentences still in the text', async () => {
-    const mean = async (t: number | null): Promise<number> => {
-      let sum = 0;
-      for (const seed of [1, 2, 3]) {
-        const { output } = await polish(t, seed);
-        expect(output.flagged).toBeGreaterThan(0);
-        sum += output.left ?? 0;
+  it('what an editor leaves is on the task: `left` reads 0 at any t, and talent only buys passes that print the same guide', async () => {
+    for (const seed of [1, 2, 3]) {
+      const none = await polish(null, seed);
+      expect(none.output.flagged).toBeGreaterThan(0);
+      expect(none.output.left).toBe(0);
+      for (const [t, passes] of [[0.1, 1], [0.3, 1], [0.5, 2], [0.8, 3], [0.9, 3]] as const) {
+        const at = await polish(t, seed);
+        expect(at.output, `t=${t}, seed ${seed}`).toMatchObject({ flagged: none.output.flagged, left: 0 });
+        expect(at.passes, `t=${t}, seed ${seed}`).toBe(passes);
+        expect(at.product.content, `t=${t}, seed ${seed}`).toEqual(none.product.content);
       }
-      return sum / 3;
-    };
-    const weak = await mean(0.3);
-    expect(weak).toBeGreaterThan(0.2);
-    expect(weak).toBeLessThanOrEqual(1);
-    expect(await mean(0.9)).toBeLessThan(weak);
-    expect(await mean(null)).toBe(0);
+    }
   }, 120_000);
 
   it('a pass that was dropped left everything, the task says so', async () => {

@@ -85,7 +85,7 @@ describe('one salary line per closed day (org test 6)', () => {
       expect(sim.financeSnapshot(world).cash).toBe(ledgerSum(world));
     }
     expect(salaries(world)).toHaveLength(5);
-    expect(-salaries(world)[0]!.amount).toBeGreaterThanOrEqual(7.6); // founders at level 1 are 7,60 €, whoever levels up costs more
+    expect(-salaries(world)[0]!.amount).toBeGreaterThanOrEqual(5.7); // founders at level 1 are 5,70 €, whoever levels up costs more
     for (const k of world.company.kpis) expect(k.cash, `J${k.day}`).toBe(ledgerSum(world, k.day));
     expect(summarizeLedger(world.ledger, world.day).payroll).toBe(round2(-salaries(world).reduce((s, e) => s + e.amount, 0)));
   }, 60_000);
@@ -96,7 +96,7 @@ describe('one salary line per closed day (org test 6)', () => {
     bookPayroll(ctx);
     bookPayroll(ctx);
     expect(salaries(world)).toHaveLength(1);
-    expect(ledgerSum(world)).toBe(round2(world.scenario.startingCash - 7.6));
+    expect(ledgerSum(world)).toBe(round2(world.scenario.startingCash - 5.7));
   });
 
   it('a reload between tick 10 and 11 books nothing twice and ends like the straight run', async () => {
@@ -126,10 +126,10 @@ describe('one salary line per closed day (org test 6)', () => {
     const world = worldOf();
     world.company.org!.load.push({ day: world.day, wait: {}, reviewWait: {}, work: {}, busy: {}, headcount: 8, payroll: 0 });
     bookPayroll(ctxOf(world));
-    expect(world.company.org!.load.at(-1)!.payroll).toBe(7.6);
+    expect(world.company.org!.load.at(-1)!.payroll).toBe(5.7);
   });
 
-  it('books nothing on an unpaid team or an older save, and the legacy 31 cost 23,70 € once paid', () => {
+  it('books nothing on an unpaid team or an older save, and the legacy 31 cost 17,82 € once paid', () => {
     const unpaid = worldOf({ ...LEGACY });
     bookPayroll(ctxOf(unpaid));
     expect(salaries(unpaid)).toEqual([]);
@@ -137,7 +137,7 @@ describe('one salary line per closed day (org test 6)', () => {
     const old = worldOf({ ...LEGACY });
     delete old.scenario.org;
     expect(payrollToday(old)).toBe(0);
-    expect(payrollToday(worldOf({ ...LEGACY, org: PAID_31 }))).toBe(23.7);
+    expect(payrollToday(worldOf({ ...LEGACY, org: PAID_31 }))).toBe(17.82); // 4 × 0,90 + 18 × 0,60 + 9 × 0,38 €
   });
 
   it('raises pay with the level', () => {
@@ -145,7 +145,7 @@ describe('one salary line per closed day (org test 6)', () => {
     world.company.agents[0]!.level = 3;
     const expected = round2(ORG.payPerDay[world.company.agents[0]!.tier] * 1.06);
     expect(payOf(world.company.agents[0]!)).toBe(expected);
-    expect(payrollToday(world)).toBe(round2(7.6 - ORG.payPerDay[world.company.agents[0]!.tier] + expected));
+    expect(payrollToday(world)).toBe(round2(5.7 - ORG.payPerDay[world.company.agents[0]!.tier] + expected));
   });
 });
 
@@ -153,13 +153,13 @@ describe('the founders give up their pay first', () => {
   it('founders take half under 30 % of the starting cash, a hire keeps the contract', () => {
     const world = worldOf();
     hire(world, 'recrue', 'sonnet');
-    expect(payrollToday(world)).toBe(8.4);
+    expect(payrollToday(world)).toBe(6.3);
     setCash(world, 150);
-    expect(payrollToday(world)).toBe(8.4); // the line itself is not under it
+    expect(payrollToday(world)).toBe(6.3); // the line itself is not under it
     setCash(world, 149.99);
-    expect(payrollToday(world)).toBe(round2(3.8 + 0.8));
+    expect(payrollToday(world)).toBe(round2(2.85 + ORG.payPerDay.sonnet));
     world.status = 'bankrupt';
-    expect(payrollToday(world)).toBe(0.8);
+    expect(payrollToday(world)).toBe(ORG.payPerDay.sonnet);
   });
 
   it('logs a pay cut on the transition only, and the way back', () => {
@@ -172,7 +172,7 @@ describe('the founders give up their pay first', () => {
     setCash(world, 100);
     bookPayroll(ctx);
     expect(payCuts(world)).toHaveLength(1);
-    expect(payCuts(world)[0]).toMatchObject({ day: world.day, numbers: { share: 0.5, cash: 100, floor: 150, payroll: 3.8 }, roleId: null });
+    expect(payCuts(world)[0]).toMatchObject({ day: world.day, numbers: { share: 0.5, cash: 100, floor: 150, payroll: 2.85 }, roleId: null });
     expect(world.activity.at(-1)).toMatchObject({ kind: 'org' });
     expect(world.activity.at(-1)!.text).toContain('les fondateurs passent à 50 % de leur salaire');
 
@@ -195,7 +195,7 @@ describe('the founders give up their pay first', () => {
     bookPayroll(ctx);
     expect(payCuts(world)).toHaveLength(3);
     expect(payCuts(world)[2]!.numbers.share).toBe(1);
-    expect(salaries(world).at(-1)!.amount).toBe(-7.6);
+    expect(salaries(world).at(-1)!.amount).toBe(-5.7);
   });
 
   it('a reload does not read the same transition twice', () => {
@@ -218,29 +218,30 @@ function closeEmptyDay(world: WorldState, ctx: RuntimeCtx): void {
 }
 
 describe('a market that never buys, 500 €, no ads (org test 9)', () => {
-  it('the lean team is still there on day 60, thanks to the founders', () => {
+  it('the lean team is still there on day 76, thanks to the founders', () => {
     const world = worldOf({ startingCash: 500 });
     const ctx = ctxOf(world);
-    for (let d = 1; d <= 60; d++) closeEmptyDay(world, ctx);
-    const { cash, revenue, adSpend, payroll } = summarizeLedger(world.ledger, 60);
+    for (let d = 1; d <= 76; d++) closeEmptyDay(world, ctx);
+    const { cash, revenue, adSpend, payroll } = summarizeLedger(world.ledger, 76);
     expect({ revenue, adSpend }).toEqual({ revenue: 0, adSpend: 0 });
     expect(cash).toBeGreaterThan(0);
-    expect(cash).toBeLessThan(10); // a thin margin: one more founder would not make it
-    expect(payCuts(world).map((d) => [d.day, d.numbers.share])).toEqual([[34, 0.5]]);
-    expect(payroll).toBeCloseTo(33 * 7.6 + 27 * 3.8, 2);
+    expect(cash).toBeLessThan(10); // a thin margin: one more founder would not make it, and full pay runs out on day 63
+    expect(payCuts(world).map((d) => [d.day, d.numbers.share])).toEqual([[42, 0.5]]);
+    expect(payroll).toBeCloseTo(41 * 5.7 + 35 * 2.85, 2);
     expect(cash).toBe(ledgerSum(world));
+    expect(ledgerSum(world, 60)).toBe(69.95); // the day org test 9 names: 440 - 60 × 1,37 - 41 × 5,70 - 19 × 2,85 €
   });
 
-  it('31 at the same pay are bankrupt before day 20', () => {
+  it('31 at the same pay are bankrupt before day 26', () => {
     const world = worldOf({ ...LEGACY, org: PAID_31, startingCash: 500 });
     const ctx = ctxOf(world);
     let firstNegative: number | null = null;
-    for (let d = 1; d <= 25 && firstNegative === null; d++) {
+    for (let d = 1; d <= 31 && firstNegative === null; d++) {
       closeEmptyDay(world, ctx);
       if (sim.financeSnapshot(world).cash < 0) firstNegative = d;
     }
     expect(firstNegative).not.toBeNull();
-    expect(firstNegative!).toBeLessThan(20);
+    expect(firstNegative!).toBeLessThan(26);
   });
 });
 
@@ -303,19 +304,19 @@ function emptyKpi(day: number): WorldState['company']['kpis'][number] {
 describe('the CFO keeps a week of pay out of the ads (D9)', () => {
   it('takes the rate on what is left', () => {
     const world = worldOf({ startingCash: 1000 });
-    expect(computeBudget(world).adCap).toBe(round2((1000 - 7 * 7.6) * 0.15));
+    expect(computeBudget(world).adCap).toBe(round2((1000 - 7 * 5.7) * 0.15));
   });
 
   it('gives nothing when a week of pay is more than the cash', () => {
     const world = worldOf({ startingCash: 100 });
-    setCash(world, 40);
-    expect(computeBudget(world)).toMatchObject({ adCap: 0, survival: false, cash: 40 });
+    setCash(world, 35); // 7 × 5,70 € = 39,90 €, and survival starts under 30 €
+    expect(computeBudget(world)).toMatchObject({ adCap: 0, survival: false, cash: 35 });
   });
 
   it('counts the pay the founders really take in survival', () => {
     const world = worldOf({ startingCash: 1000 });
     setCash(world, 200);
-    expect(computeBudget(world)).toMatchObject({ survival: true, rate: 0.08, adCap: round2((200 - 7 * 3.8) * 0.08) }); // setCash burned the rest: the runway is short
+    expect(computeBudget(world)).toMatchObject({ survival: true, rate: 0.08, adCap: round2((200 - 7 * 2.85) * 0.08) }); // setCash burned the rest: the runway is short
   });
 
   it('moves nothing on a team nobody pays', () => {
@@ -328,10 +329,10 @@ describe('the benchmark shows the team', () => {
   it('prints headcount, payroll, hires, departures and violations for each run and each difficulty', async () => {
     const r = await runOne({ difficulty: 'normal', seed: 7, days: 2, budget: 500, scenario: { ...LEGACY, org: PAID_31 } });
     expect(r).toMatchObject({ headcount: 31, hires: 0, departures: 0, violations: 0 });
-    expect(r.payroll).toBeGreaterThanOrEqual(47.4); // 2 × 23,70 €, a level gained on the way pays a little more
-    expect(r.payroll).toBeLessThan(48);
+    expect(r.payroll).toBeGreaterThanOrEqual(35.64); // 2 × 17,82 €, a level gained on the way pays a little more
+    expect(r.payroll).toBeLessThan(36);
     for (const title of ['Effectif', 'Masse salariale', 'Embauches', 'Départs', 'Violations']) expect(tableHeader()).toContain(title);
-    expect(resultRow(r)).toContain('47 €');
+    expect(resultRow(r)).toContain('36 €');
     const a = aggregate([{ ...r, payroll: 47.4 }, { ...r, seed: 8, headcount: 33, payroll: 52.6, hires: 2, departures: 1, violations: 1 }], 'normal')!;
     expect(a).toMatchObject({ medianHeadcount: 32, medianPayroll: 50, hires: 2, departures: 1, violations: 1 });
     expect(aggregateLines(a).join('\n')).toContain('effectif médian 32 · masse salariale médiane 50 € · embauches 2 · départs 1 · violations 1');

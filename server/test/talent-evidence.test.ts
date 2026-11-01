@@ -129,12 +129,12 @@ describe('the rating (§5.1)', () => {
 
   it('pars and spreads are the measured ones, the same keys as `league.parStats`', () => {
     expect(TALENT.par).toEqual({
-      'copy:qa': 89.38, 'video:cut': 77.55, 'longform:qa': 81.18, 'longform:market': 4.64, 'polish:qa': 3.86, 'polish:market': 4.64,
-      'page:qa': 85.96, 'page:market': -0.19, 'design:visual': 85.11, 'buying:focus': 0.45, 'buying:market': -0.29, 'support:reply': 81.55,
+      'copy:qa': 89.33, 'video:cut': 80.31, 'longform:qa': 81.4, 'longform:market': 4.71, 'polish:qa': 4.34, 'polish:market': 4.71,
+      'page:qa': 85.81, 'page:market': -0.27, 'design:visual': 85.58, 'buying:focus': 0.49, 'buying:market': -0.27, 'support:reply': 81.8,
     });
     expect(TALENT.sd).toEqual({
-      'copy:qa': 4.49, 'video:cut': 8.67, 'longform:qa': 3.48, 'longform:market': 0.33, 'polish:qa': 1.46, 'polish:market': 0.33,
-      'page:qa': 5.75, 'page:market': 0.68, 'design:visual': 3.93, 'buying:focus': 0.24, 'buying:market': 1.19, 'support:reply': 18.39,
+      'copy:qa': 4.17, 'video:cut': 8.55, 'longform:qa': 3.23, 'longform:market': 0.32, 'polish:qa': 1.29, 'polish:market': 0.32,
+      'page:qa': 5.67, 'page:market': 0.73, 'design:visual': 3.78, 'buying:focus': 0.22, 'buying:market': 1.35, 'support:reply': 18,
     });
   });
 

@@ -136,13 +136,13 @@ describe('hats', () => {
 });
 
 describe('founding team', () => {
-  it('is the eight founders, in the order of the 31, and costs 7,60 € a day', () => {
+  it('is the eight founders, in the order of the 31, and costs 5,70 € a day', () => {
     const team = buildTeam(LEAN_ORG);
     expect(team.map((a) => a.id)).toEqual(FOUNDERS);
     const pay = team.reduce((sum, a) => sum + payOf({ ...a, level: 1 } as AgentState), 0);
-    expect(Math.round(pay * 100) / 100).toBe(7.6);
+    expect(Math.round(pay * 100) / 100).toBe(5.7);
     const byRole = team.reduce((sum, a) => sum + ORG.payPerDay[ROLES[a.roleId].tier], 0);
-    expect(Math.round(byRole * 100) / 100).toBe(7.6);
+    expect(Math.round(byRole * 100) / 100).toBe(5.7);
   });
 
   it('gives founders the kinds of their role, V1 kinds included, each in the only seat of that role', () => {

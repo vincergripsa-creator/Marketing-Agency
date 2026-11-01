@@ -35,15 +35,16 @@ export function effectiveT(w: WorldState, a: AgentState, skill: Skill): number |
 export function craftOf(skill: Skill, t: number, tier: ModelTier, extraDraw = false): Craft {
   const x = clamp(t, 0, 1);
   const { claude } = TALENT;
+  const flawless = TALENT.flawless.includes(skill);
   const craft: Craft = {
     skill,
     t: x,
-    flaw: TALENT.flawBase * (1 - x) ** TALENT.flawPower,
+    flaw: flawless ? 0 : TALENT.flawBase * (1 - x) ** TALENT.flawPower,
     draws: 1 + Math.floor(x * 3) + (extraDraw ? TALENT.perkDraws : 0),
     eye: TALENT.eyeSd * (1 - x),
     sharp: 1 + Math.round(x * TALENT.sharpSpan),
     passes: x >= TALENT.passes.three ? 3 : x >= TALENT.passes.two ? 2 : 1,
-    reach: TALENT.reachBase + TALENT.reachSpan * x,
+    reach: flawless ? 1 : TALENT.reachBase + TALENT.reachSpan * x,
   };
   if (x < claude.lowBelow) return { ...craft, tier: TIER_BELOW[tier], effort: 'low' };
   return x >= claude.highFrom ? { ...craft, effort: 'high' } : craft;

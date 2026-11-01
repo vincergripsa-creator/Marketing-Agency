@@ -228,14 +228,27 @@ describe('one list of candidates', () => {
   });
 
   it('names the exact edits of a winner, file by file', () => {
-    expect(candidateEdits(CANDIDATES.find((c) => c.id === 'G')!, constantAt)).toEqual([
-      'server/src/runtime/org/constants.ts : ORG.payPerDay.haiku 0.5 → 0.375',
-      'server/src/runtime/org/constants.ts : ORG.payPerDay.sonnet 0.8 → 0.6',
-      'server/src/runtime/org/constants.ts : ORG.payPerDay.opus 1.2 → 0.9',
-      `server/src/runtime/talent/constants.ts : TALENT.marketMean ${TALENT.marketMean} → 0.6`,
-      'server/src/sim/balance.ts : CONVERSION.poolBase 120 → 240',
-      'server/src/sim/balance.ts : CONVERSION.poolDemand 450 → 900',
-    ]);
+    // On the constants as they stood before E was written: a value already in the code has no edit to name.
+    const was = applyOverrides({ 'CONVERSION.base': 0.018, 'ORG.payPerDay.haiku': 0.5, 'ORG.payPerDay.sonnet': 0.8, 'ORG.payPerDay.opus': 1.2, 'TALENT.founderMean': 0.56 });
+    try {
+      expect(candidateEdits(CANDIDATES.find((c) => c.id === 'G')!, constantAt)).toEqual([
+        'server/src/runtime/org/constants.ts : ORG.payPerDay.haiku 0.5 → 0.375',
+        'server/src/runtime/org/constants.ts : ORG.payPerDay.sonnet 0.8 → 0.6',
+        'server/src/runtime/org/constants.ts : ORG.payPerDay.opus 1.2 → 0.9',
+        `server/src/runtime/talent/constants.ts : TALENT.marketMean ${TALENT.marketMean} → 0.6`,
+        'server/src/sim/balance.ts : CONVERSION.poolBase 120 → 240',
+        'server/src/sim/balance.ts : CONVERSION.poolDemand 450 → 900',
+      ]);
+      expect(candidateEdits(CANDIDATES.find((c) => c.id === 'E')!, constantAt)).toEqual([
+        'server/src/sim/balance.ts : CONVERSION.base 0.018 → 0.0195',
+        'server/src/runtime/org/constants.ts : ORG.payPerDay.haiku 0.5 → 0.375',
+        'server/src/runtime/org/constants.ts : ORG.payPerDay.sonnet 0.8 → 0.6',
+        'server/src/runtime/org/constants.ts : ORG.payPerDay.opus 1.2 → 0.9',
+        'server/src/runtime/talent/constants.ts : TALENT.founderMean 0.56 → 0.62',
+      ]);
+    } finally {
+      applyOverrides(was);
+    }
   });
 });
 
@@ -632,7 +645,7 @@ tail
 
   it('holds the real file: the block it rewrites exists in constants.ts', async () => {
     const { readFile } = await import('node:fs/promises');
-    const real = await readFile(new URL('../src/runtime/talent/constants.ts', import.meta.url), 'utf8');
+    const real = (await readFile(new URL('../src/runtime/talent/constants.ts', import.meta.url), 'utf8')).replace(PAR_MARKER, ''); // written once, by S14
     const out = rewritePars(real, TALENT, { 'copy:qa': { n: 40, par: 88.5, sd: 4.2 } });
     expect(out).toContain(`'copy:qa': 88.5`);
     expect(out.length).toBeGreaterThan(real.length * 0.9);
@@ -714,6 +727,14 @@ describe('two calibrations never mix (D127)', () => {
     expect(() => assertWinnerWritten('D', { 'ORG.payPerDay.haiku': 0.375, 'TALENT.founderMean': 0.62 }, read)).toThrow(/D n'est pas dans le code \(ORG\.payPerDay\.haiku vaut 0\.5, pas 0\.375\)/);
   });
 
+  it('the code holds E, the winner of S14, and refuses a candidate that holds another value', () => {
+    const check = (id: string) => () => assertWinnerWritten(id, CANDIDATES.find((c) => c.id === id)!.overrides, constantAt);
+    expect(check('E')).not.toThrow();
+    expect(check('C')).toThrow(/C n'est pas dans le code \(CONVERSION\.base vaut 0\.0195, pas 0\.0165\)/);
+    expect(check('F')).toThrow(/TALENT\.marketMean vaut/);
+    expect(check('G')).toThrow(Refused);
+  });
+
   it('every arm runs with no end, and keeps its own scenario', () => {
     expect(armScenario()).toEqual({ openEnded: true });
     expect(armScenario({ talent: 'flat' })).toEqual({ openEnded: true, talent: 'flat' });
@@ -793,12 +814,15 @@ const master = { id: 'm', masterId: null } as unknown as AdCreative;
 const fatigueMarket = { creativeImpressions: { m: 44_000 }, channels: { impressions: { meta: { m: 10_000 } } } } as unknown as MarketState;
 const ctxOf = (w: WorldState) => ({ world: w }) as RuntimeCtx;
 
-/** One override per object, read where the company or the market reads it: a copy made at import would leave the reader where it was. */
+/**
+ * One override per object, read where the company or the market reads it: a copy made at import would leave the reader where it was.
+ * Each value sits off the written constant, or nothing moves: the pay and the founders, which E wrote, try the values E replaced.
+ */
 const REACHES: [string, number, () => unknown][] = [
   ['ADS.reachBase', 90_000, () => reachOf(niche(freshWorld()))],
   ['CONVERSION.poolBase', 240, () => nichePool(freshWorld(), niche(freshWorld()))],
-  ['ORG.payPerDay.sonnet', 0.6, () => { const a = freshWorld().company.agents.find((x) => x.tier === 'sonnet')!; return payOf(a); }],
-  ['TALENT.founderMean', 0.62, () => { const w = freshWorld(); const a = w.company.agents.find((x) => x.founder)!; return drawPerson(w, a).talent; }],
+  ['ORG.payPerDay.sonnet', 0.8, () => { const a = freshWorld().company.agents.find((x) => x.tier === 'sonnet')!; return payOf(a); }],
+  ['TALENT.founderMean', 0.56, () => { const w = freshWorld(); const a = w.company.agents.find((x) => x.founder)!; return drawPerson(w, a).talent; }],
   ['TALENT.marketMean', 0.6, () => { const w = freshWorld(); return drawPerson(w, { id: 'nouveau', roleId: w.company.agents[0]!.roleId, founder: false }).talent; }],
   ['TALENT.flawBase', 0.9, () => craftOf('copy', 0.5, 'sonnet').flaw],
   ['TALENT.passes.three', 0.9, () => craftOf('copy', 0.85, 'sonnet').passes],
@@ -875,6 +899,7 @@ describe('the tool, on a smoke of Step 1', () => {
     const out = await mkdtemp(join(tmpdir(), 'calibrate-smoke-'));
     const file = join(out, 'step1', 'perturbed', 'normal-1.json');
     try {
+      await writeFile(join(out, 'constants.ts'), (await readFile(join(server, 'src', 'runtime', 'talent', 'constants.ts'), 'utf8')).replace(PAR_MARKER, '')); // a smoke's own copy, as before S14 wrote the real one
       expect(tool(out, '--step', '3')).toMatchObject({ status: 1, stderr: expect.stringContaining('--step 2 --write') });
       expect(tool(out, '--step', '2', '--write')).toMatchObject({ status: 1, stderr: expect.stringContaining('step1.json') });
       expect(tool(out, '--step', '1').status).toBe(0);

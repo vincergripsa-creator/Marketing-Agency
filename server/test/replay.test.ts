@@ -102,7 +102,7 @@ describe('A4: same seed, same run', () => {
 /** These roads are the market's: when a change moves one past its assertion, move the seed or the length, never the assertion. */
 describe('A5: a reload is an uninterrupted run', () => {
   // `flat` has no consequence by design, so a layoff is the only firing it knows, and only failing companies lay off: no flat
-  // road holds both that and 3 channels with money on them (seeds 1-16 forced low, 75 days). So the row takes two roads.
+  // road holds both that and 3 channels with money on them (seeds 1-24 forced low, 85 days). So the row takes two roads.
   it('flat: through a hire, a compaction and 3 channels that spend', async () => {
     const ticks = 35 * TICKS_A_DAY;
     const straight = await play(12, ticks, 0, { ...FULL, talent: 'flat' }, true);
@@ -112,13 +112,13 @@ describe('A5: a reload is an uninterrupted run', () => {
     expect(firstGap(straight.dump, reloaded.dump)).toBeNull();
   }, LONG_TIMEOUT);
 
-  // Seed 11 hires, overreaches and lays off from D42, with money on 2 channels.
+  // Seed 9 hires, overreaches and lays off on D43, with money on 2 channels.
   it('flat: through a hire, a layoff and a compaction', async () => {
     const ticks = 50 * TICKS_A_DAY;
-    const straight = await play(11, ticks, 0, { ...FULL, talent: 'flat' }, true);
+    const straight = await play(9, ticks, 0, { ...FULL, talent: 'flat' }, true);
     expectFullCompany(straight.world, 'flat', 2);
     expect(straight.world.company.org!.alumni.map((a) => a.kind)).toContain('layoff');
-    const reloaded = await play(11, ticks, 7, { ...FULL, talent: 'flat' }, true);
+    const reloaded = await play(9, ticks, 7, { ...FULL, talent: 'flat' }, true);
     expect(reloaded.reloads).toBe(Math.floor(ticks / 7));
     expect(firstGap(straight.dump, reloaded.dump)).toBeNull();
   }, LONG_TIMEOUT);

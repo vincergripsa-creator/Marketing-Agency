@@ -6,7 +6,7 @@ tags: [politique, rh, recrutement, salaires]
 L'agence démarre à **8 fondateurs** et n'embauche que quand les chiffres le demandent. La décision ne se prend jamais au feeling : la DRH propose, le CFO vérifie l'argent, le CEO signe. Effectif maximum : **60 agents**.
 
 ## Ce que coûte un agent
-- **Salaire par jour** : haiku 0,50 €, sonnet 0,80 €, opus 1,20 €, plus **+3 % par niveau**. Une seule ligne de salaires par jour au grand livre, à la clôture du marché.
+- **Salaire par jour** : haiku 0,38 €, sonnet 0,60 €, opus 0,90 €, plus **+3 % par niveau**. Une seule ligne de salaires par jour au grand livre, à la clôture du marché.
 - **Recrutement** : 7 jours de salaire à l'embauche.
 - **Départ** : 7 jours de salaire, jamais plus.
 - **Mode survie** : les fondateurs prennent 50 % de leur salaire ; en faillite, rien.

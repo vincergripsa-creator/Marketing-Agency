@@ -20,7 +20,7 @@ import { computeBudget } from '../metrics.js';
 import { deliverables, sim } from '../modules.js';
 import { ROLES } from '../org/catalog.js';
 import { STREAM } from '../streams.js';
-import { ORG } from '../org/constants.js';
+import { ORG, payOfTier } from '../org/constants.js';
 import { agentFrom, drawCandidates, hireAgent, openPosition, rankCandidates } from '../org/hiring.js';
 import { officerId } from '../org/officers.js';
 import { payOf } from '../org/payroll.js';
@@ -36,10 +36,12 @@ import { drawPerson, leagueEntry, talentMode } from './truth.js';
 /** What a role without a skill scores, and a role with one while there is nothing to be tested on (D16). */
 const NO_TEST = 50;
 /**
- * The tests that cannot see talent: Spearman within a bench .17, 0, .38 and .49, against .83, .77 and .76 for page,
- * longform and copy. Hire tests still run on them, a challenge never does.
+ * The tests that cannot see talent: Spearman within a bench .17, 0, .38 and .49, against .83, .76 and .56 for page, copy
+ * and longform. `polish` joined them with D144: its test now reads the same at every t. Longform fell from .77 for the same
+ * reason and stays: its margin keeps the wrong person out, it only finds fewer of the right ones. Hire tests still run on
+ * them, a challenge never does.
  */
-const BLIND_TESTS: ReadonlySet<Skill> = new Set<Skill>(['design', 'support', 'buying', 'research']);
+const BLIND_TESTS: ReadonlySet<Skill> = new Set<Skill>(['design', 'support', 'buying', 'research', 'polish']);
 const REVENUE_DAYS = 14;
 /** The ad test: two formats, on hooks of two styles, the same for everyone. */
 const TEST_STYLES: readonly HookStyle[] = ['question', 'mistake'];
@@ -398,7 +400,7 @@ const testText = (score: number): string => `${String(round1(score)).replace('.'
 /** What a replacement costs on the day: the hire's week of pay, and the leaver's. */
 function swapCost(w: WorldState, leaver: AgentState): number {
   if (!w.scenario.org?.payroll) return 0;
-  return round2(ORG.recruitingDays * ORG.payPerDay[ROLES[leaver.roleId].tier] + ORG.severanceDays * payOf(leaver));
+  return round2(ORG.recruitingDays * payOfTier(ROLES[leaver.roleId].tier) + ORG.severanceDays * payOf(leaver));
 }
 
 /** The CFO's word (talent §7.5). `checkGates` lets a replacement through (D17): this is the league's own, and the plan waits for the next close. */

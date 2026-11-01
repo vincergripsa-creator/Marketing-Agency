@@ -649,8 +649,8 @@ describe('the challenge (talent 16)', () => {
     expect(report.candidates.map((c) => c.deliverable).every(Boolean)).toBe(true);
     for (const entry of report.candidates) {
       const sits = written.get(entry.id)!;
-      expect(sits).toHaveLength(8);
-      expect(entry.sits).toHaveLength(8);
+      expect(sits).toHaveLength(TALENT.challenge.sits);
+      expect(entry.sits).toHaveLength(TALENT.challenge.sits);
       sits.forEach((sit, k) => {
         const creatives = sit.work as AdCreative[];
         expect(creatives).toHaveLength(2);
@@ -665,16 +665,16 @@ describe('the challenge (talent 16)', () => {
     atClose(w, 28);
     const a = holder(w, 'shop_lead');
     const plan = failing(w, a);
-    const noise = [-4, -2, -1, 0, 0, 1, 2, 4];
+    const noise = Array.from({ length: 3 }, () => [-4, -2, -1, 0, 0, 1, 2, 4]).flat();
     const variance = mean(noise.map((x) => x ** 2)) * noise.length / (noise.length - 1);
-    expect(TALENT.challenge).toMatchObject({ candidates: 6, sits: 8, claudeSits: 3, marginSe: 2, marginMin: 1 });
-    const gap = 2 * Math.sqrt((2 * variance) / 8);
+    expect(TALENT.challenge).toMatchObject({ candidates: 6, sits: 24, claudeSits: 3, marginSe: 2, marginMin: 1 });
+    const gap = 2 * Math.sqrt((2 * variance) / noise.length);
     rows.set('page', TEST_BY_SKILL.page);
     TEST_BY_SKILL.page = { par: () => 80, sit: async (_b, sitter, _i, k) => ({ score: (sitter.id === a.id ? 80 : 80 + gap - 0.5) + noise[k ?? 0]!, deliverable: 'Un test', work: [] }) };
     const report = await runChallenge(ctx, plan);
     expect(report.margin).toBeCloseTo(gap, 2);
     expect(report.hired).toBeNull();
-    expect(report.reason).toContain('écart exigé 2,5 points sur 8 passages');
+    expect(report.reason).toContain('écart exigé 1,4 points sur 24 passages');
     expect(plan.outcome).toBe('kept_no_better');
   }, 30_000);
 
@@ -854,7 +854,7 @@ describe('who can be replaced at a close (talent 15)', () => {
   it('at most 2 a season, even with 5 forced failures, and the others wait for the next close', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
-    const seats = [holder(w, 'editor_in_chief'), holder(w, 'shop_lead'), await hireInto(ctx, 'hook_writer'), await hireInto(ctx, 'motion_designer'), await hireInto(ctx, 'humanizer')];
+    const seats = [holder(w, 'editor_in_chief'), holder(w, 'shop_lead'), await hireInto(ctx, 'hook_writer'), await hireInto(ctx, 'motion_designer'), await hireInto(ctx, 'ghostwriter')];
     wealthy(w, 0);
     for (const seat of seats) failing(w, seat);
     fixedRows(w, 60, 90);
@@ -1404,11 +1404,11 @@ describe('the bar, and a certain time under it (L4)', () => {
 });
 
 describe('a test that cannot see talent decides nothing (L5)', () => {
-  for (const [role, skill] of [['art_director', 'design'], ['growth_lead', 'buying'], ['research_lead', 'research'], ['support_lead', 'support']] as const) {
+  for (const [role, skill] of [['art_director', 'design'], ['growth_lead', 'buying'], ['research_lead', 'research'], ['support_lead', 'support'], ['humanizer', 'polish']] as const) {
     it(`a failed plan on ${skill} ends kept_no_test, nobody sits, and the seat is left alone for a season`, async () => {
       const { world: w, ctx } = await lab();
       atClose(w, 56);
-      const a = role === 'support_lead' ? await hireInto(ctx, role) : holder(w, role);
+      const a = role === 'support_lead' || role === 'humanizer' ? await hireInto(ctx, role) : holder(w, role);
       const plan = failing(w, a);
       expect(plan.skill).toBe(skill);
       let sat = 0;
@@ -1431,7 +1431,7 @@ describe('a test that cannot see talent decides nothing (L5)', () => {
     }, 30_000);
   }
 
-  it('video and polish keep their challenge: nothing says those tests are blind', async () => {
+  it('video keeps its challenge: nothing says that test is blind', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 28);
     const a = await hireInto(ctx, 'motion_designer');

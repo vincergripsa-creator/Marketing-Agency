@@ -10,7 +10,7 @@ import { accountBanned, accountOf } from '../sim/channels.js';
 import { buildDigest } from '../runtime/digest.js';
 import { unlockProgress } from '../runtime/channels.js';
 import { ROLES } from '../runtime/org/catalog.js';
-import { ORG } from '../runtime/org/constants.js';
+import { ORG, payOfTier } from '../runtime/org/constants.js';
 import { payOf } from '../runtime/org/payroll.js';
 import { STAGE_LABELS, STAGES } from '../runtime/stages.js';
 import { METRICS, ratingText, testSeesTalent } from '../runtime/talent/challenge.js';
@@ -259,7 +259,7 @@ function reqView(w: WorldState, p: Position, people: PeopleIndex): HiringReqView
   const role = ROLES[p.roleId];
   const refused = p.status === 'open' ? w.company.org?.decisions.findLast((d) => d.kind === 'refused' && d.roleId === p.roleId && d.day >= p.openedDay) : undefined;
   return {
-    id: p.id, dept: role.dept, role: role.title, why: p.detail, status: p.status, openedDay: p.openedDay, budget30d: round2(ORG.payPerDay[role.tier] * WINDOW_DAYS), blockedBy: refused?.text ?? null,
+    id: p.id, dept: role.dept, role: role.title, why: p.detail, status: p.status, openedDay: p.openedDay, budget30d: round2(payOfTier(role.tier) * WINDOW_DAYS), blockedBy: refused?.text ?? null,
     candidates: p.candidates.map((c) => ({ name: c.name, score: c.interview, source: c.lineage ? `élève de ${cardOf(people, c.lineage).name}` : 'marché' })),
   };
 }

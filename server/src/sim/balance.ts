@@ -65,7 +65,7 @@ export const ADS = {
 };
 
 export const CONVERSION = {
-  base: 0.018,                      // ≈ 2 % of paid visitors buy a well-priced, well-sold guide
+  base: 0.0195,                     // ≈ 2 % of paid visitors buy a well-priced, well-sold guide
   salesQualityRef: 85,
   salesQualityExp: 1.5,
   salesQualityMin: 0.4,

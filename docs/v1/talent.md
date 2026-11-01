@@ -820,7 +820,7 @@ Then `flat` median against the current 1 408 € tells the final calibration wha
 5. **Own streams**: two `flat` runs, same seed, t forced .25 and .8: identical `market.events`.
 6. **Copy lever**: mean `scoreCreative` over 40 draws, t=.8 at least 4 points above t=.2.
 7. **Page lever**: sd over draws above 0 at t=.5; mean t=.8 at least 6 above t=.2.
-8. **Passes are real**: on a guide with planted clichés, `genericPhraseHits` after `humanize_pdf` is higher at t=.3 than at t=.9. Without `reach`, this test fails.
+8. **Passes are real** (D144 changed this): on a guide with planted clichés, `genericPhraseHits` after `humanize_pdf` is 0 at any t. `polish` is flawless, the passes run and print the same guide.
 9. **`pruneRead`**: on rows with CTR 3 % and 1 %, 1 500 impressions each: t=.8 drops the second, t=.2 does not; the best creative is never dropped.
 10. **Guardrail**: `stopLossReason` gives the same result for every t; `launchBudget` with a perk never exceeds `remaining`.
 11. **`chooseArm` sharp**: over 2 000 draws on arms 30/10 and 10/30, the good arm wins more with `samples: 5` than with 1.

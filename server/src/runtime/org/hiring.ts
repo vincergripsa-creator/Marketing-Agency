@@ -18,7 +18,7 @@ import { scoreCandidates, seedHire } from '../talent/challenge.js';
 import { createTask, isOpen, KIND_META, taskById } from '../tasks.js';
 import { dec, errorText, eur, round2, short, slugify } from '../util.js';
 import { CANDIDATES, ROLES } from './catalog.js';
-import { isLegacyOrg, ORG } from './constants.js';
+import { isLegacyOrg, ORG, payOfTier } from './constants.js';
 import { completeDeparture } from './departure.js';
 import { pickRole, refreshPressure, whoIsWaiting } from './load.js';
 import { avatarFor, personaFor, pickName, skillsOf, takenNames, toolsOf } from './names.js';
@@ -77,7 +77,7 @@ function revenue30(w: WorldState): number {
 
 export function moneyRead(w: WorldState, role: RoleId): MoneyRead {
   const payroll = payrollToday(w);
-  const pay = w.scenario.org?.payroll ? ORG.payPerDay[ROLES[role].tier] : 0;
+  const pay = w.scenario.org?.payroll ? payOfTier(ROLES[role].tier) : 0;
   const fixed = round2(FEES.boutiqueDaily + FEES.toolsDaily);
   return { payroll, pay, fixed, cost: round2(payroll + pay + fixed), cash: sim.financeSnapshot(w).cash, margin: marginPerDay(w), revenue30: revenue30(w), headcount: w.company.agents.length };
 }

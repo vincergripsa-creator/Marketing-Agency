@@ -716,7 +716,7 @@ describe('what the views read (T8, T9)', () => {
     const { season } = leagueDetail(w, false);
     expect(season.cutBlind).toMatch(/un plan d'amélioration de 14 jours\. Ce métier n'a pas de test fiable : le poste est conservé\./);
     expect(season.cutBlind).not.toContain('marché');
-    expect(season.rules.join(' ')).toContain('8 fois (3 fois quand Claude écrit)');
+    expect(season.rules.join(' ')).toContain('24 fois (3 fois quand Claude écrit)');
   });
 
   it('someone rated on two skills stands once on a podium', () => {

@@ -106,13 +106,13 @@ describe('the default company (§2.8)', () => {
 });
 
 describe('the founding team (org test 4)', () => {
-  it('counts 8 agents, 8 open departments, 24 hats (D2) and costs 7,60 € a day', () => {
+  it('counts 8 agents, 8 open departments, 24 hats (D2) and costs 5,70 € a day', () => {
     const w = leanWorld();
     expect(w.company.agents.map((a) => a.id)).toEqual(FOUNDERS);
     expect(openIds(w)).toEqual(['direction', 'recherche', 'studio', 'creation', 'growth', 'boutique', 'finance', 'rh']);
     expect(w.company.agents.flatMap((a) => a.hatKinds)).toHaveLength(24);
     for (const a of w.company.agents) expect(a.hatKinds, a.id).toEqual(FOUNDING_HATS[a.id]);
-    expect(Math.round(w.company.agents.reduce((sum, a) => sum + payOf(a), 0) * 100) / 100).toBe(7.6);
+    expect(Math.round(w.company.agents.reduce((sum, a) => sum + payOf(a), 0) * 100) / 100).toBe(5.7);
     expect(w.company.org!.stats.lastResortHats).toBe(0);
   });
 

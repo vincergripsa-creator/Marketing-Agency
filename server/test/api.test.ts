@@ -393,28 +393,28 @@ describe('path traversal protection', () => {
   it('refuses a budget that cannot pay the launch and a month of fixed costs and founders, in French', () => {
     const fixed = 30 * (FEES.boutiqueDaily + FEES.toolsDaily);
     expect(minStartingCash()).toBeGreaterThanOrEqual(FEES.setupCost + fixed);
-    expect(minRunCash({ org: LEAN_ORG })).toBeGreaterThanOrEqual(FEES.setupCost + fixed + 30 * 7.6);
-    expect(minRunCash({ org: LEAN_ORG })).toBe(330);
-    for (const startingCash of [0, 50, 329.99, '40', -5]) {
+    expect(minRunCash({ org: LEAN_ORG })).toBeGreaterThanOrEqual(FEES.setupCost + fixed + 30 * 5.7);
+    expect(minRunCash({ org: LEAN_ORG })).toBe(280);
+    for (const startingCash of [0, 50, 279.99, '40', -5]) {
       expect(() => sanitizeScenario({ startingCash })).toThrow(HttpError);
-      expect(() => sanitizeScenario({ startingCash })).toThrow(/Budget de départ trop bas : il faut au moins 330 €/);
+      expect(() => sanitizeScenario({ startingCash })).toThrow(/Budget de départ trop bas : il faut au moins 280 €/);
     }
-    expect(() => sanitizeScenario({ startingCash: 40 })).toThrow(/60 € de frais de démarrage et 270 € de frais fixes et de salaires pour 30 jours/);
-    expect(() => parseCliArgs(['--budget', '40'])).toThrow(/Budget de départ trop bas : il faut au moins 330 €/);
-    expect(parseCliArgs(['--budget', '330']).budget).toBe(330);
+    expect(() => sanitizeScenario({ startingCash: 40 })).toThrow(/60 € de frais de démarrage et 220 € de frais fixes et de salaires pour 30 jours/);
+    expect(() => parseCliArgs(['--budget', '40'])).toThrow(/Budget de départ trop bas : il faut au moins 280 €/);
+    expect(parseCliArgs(['--budget', '280']).budget).toBe(280);
   });
 
   it('keeps the old floor of 110 € for a team nobody pays', () => {
     expect(minRunCash({ org: LEGACY_ORG })).toBe(110);
     expect(minRunCash({ org: { ...LEAN_ORG, payroll: false } })).toBe(110);
     expect(minRunCash({})).toBe(110); // an older save, which is the legacy team
-    expect(minRunCash({ org: { ...LEGACY_ORG, payroll: true } })).toBe(330); // the floor pays founders, and nobody else, on any team
+    expect(minRunCash({ org: { ...LEGACY_ORG, payroll: true } })).toBe(280); // the floor pays founders, and nobody else, on any team
     expect(sanitizeScenario({ startingCash: 110, org: { payroll: false } })).toEqual({ startingCash: 110, org: { ...LEAN_ORG, payroll: false } });
     expect(() => sanitizeScenario({ startingCash: 109, org: { payroll: false } })).toThrow(/il faut au moins 110 € \(60 € de frais de démarrage et 50 € de frais fixes pour 30 jours\)/);
-    expect(() => sanitizeScenario({ startingCash: 110, org: 'gratuit' })).toThrow(/il faut au moins 330 €/);
+    expect(() => sanitizeScenario({ startingCash: 110, org: 'gratuit' })).toThrow(/il faut au moins 280 €/);
     expect(parseCliArgs(['--budget', '110', '--no-payroll']).budget).toBe(110); // whichever comes first on the line
     expect(parseCliArgs(['--no-payroll', '--budget', '110']).budget).toBe(110);
-    expect(() => parseCliArgs(['--budget', '110'])).toThrow(/il faut au moins 330 €/);
+    expect(() => parseCliArgs(['--budget', '110'])).toThrow(/il faut au moins 280 €/);
   });
 
   it('takes the V1 switches of a new scenario and never a control arm', () => {
@@ -1011,7 +1011,7 @@ describe('HTTP server', () => {
     expect(JSON.parse(sc.body).runId).toBe(world.runId);
     const poor = await call(port, 'POST', '/api/scenario', JSON.stringify({ startingCash: 50 }));
     expect(poor.status).toBe(400);
-    expect(JSON.parse(poor.body).error).toMatch(/il faut au moins 330 €/);
+    expect(JSON.parse(poor.body).error).toMatch(/il faut au moins 280 €/);
     const created = JSON.parse(calls.find((c) => c.startsWith('newRun:'))!.slice(7));
     expect(created).toMatchObject({ startingCash: 800, difficulty: 'facile' });
     expect(typeof created.seed).toBe('number');
@@ -1370,7 +1370,7 @@ describe('live session', () => {
     const second = await s.newRun({ startingCash: 900, difficulty: 'cauchemar' }, false);
     expect(second.runId).not.toBe(first);
     expect(s.world.scenario).toMatchObject({ startingCash: 900, difficulty: 'cauchemar', maxComputeEur: 3, openEnded: true });
-    expect(s.info().minStartingCash).toBe(330);
+    expect(s.info().minStartingCash).toBe(280);
     const runs = await s.listRuns();
     expect(runs.find((r) => r.current)!.runId).toBe(second.runId);
     expect(runs.map((r) => r.runId)).toContain(first);

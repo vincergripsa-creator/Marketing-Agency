@@ -698,7 +698,7 @@ describe('the script and its cut are two works (D12)', () => {
 
 describe('the video test (D16)', () => {
   it('has its row, at the par of `cut`', () => {
-    expect(TEST_BY_SKILL.video?.par()).toBe(77.55);
+    expect(TEST_BY_SKILL.video?.par()).toBe(80.31);
   });
 
   it('is the real thing: writes nothing, the same day gives the same score, a stronger editor scores higher', async () => {

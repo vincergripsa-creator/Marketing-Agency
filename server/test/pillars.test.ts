@@ -384,7 +384,7 @@ describe('stubs answer like today (D47)', () => {
   it('numbers the specs give already hold', () => {
     expect(LEGACY).toMatchObject({ org: LEGACY_ORG });
     expect(LEAN_ORG).toEqual({ team: 'lean', autoHire: true, payroll: true });
-    expect(payOf({ ...agent, tier: 'sonnet', level: 1 })).toBe(0.8);
+    expect(payOf({ ...agent, tier: 'sonnet', level: 1 })).toBe(0.6);
     expect(effortFor(1)).toEqual({ covers: 8, layouts: 24, taste: 1, finish: 2 });
     const n = world.market.niches[0]!;
     expect(nichePool(world, n)).toBeGreaterThan(0);

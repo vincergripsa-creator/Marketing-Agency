@@ -563,9 +563,9 @@ describe('the studio', () => {
     const events = l.world.company.league!.events.filter((e) => e.source === 'visual');
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ agentId: l.designer.id, skill: 'design', w: 1 });
-    expect(events[0]!.s).toBeCloseTo(phi((overall - 85.11) / 3.93), 3);
-    expect(TALENT.par['design:visual']).toBe(85.11);
-    expect(TALENT.sd['design:visual']).toBe(3.93);
+    expect(events[0]!.s).toBeCloseTo(phi((overall - TALENT.par['design:visual']!) / TALENT.sd['design:visual']!), 3);
+    expect(TALENT.par['design:visual']).toBe(85.58);
+    expect(TALENT.sd['design:visual']).toBe(3.78);
     expect(l.world.company.league!.parStats['design:visual']).toMatchObject({ n: 1, sum: overall });
     onDone(l.ctx, { ...render, input: { ...render.input, reason: 'upsell_link' } });
     onDone(l.ctx, { ...render, output: { path: 'x' } });

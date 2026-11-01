@@ -73,7 +73,7 @@ At ×1, the first hire takes wait from 53 to 21, the second to 16, and the rest 
 | D1 | 8 founders: Camille, Nadia, Élise, Zoé, Léo, Clara, Gabriel, Nora. The 23 others become the named candidate pool of their role. |
 | D2 | 13 departments in the catalog, 2 new: `video` (Studio Vidéo) and `crm` (Communauté & Email). 8 open on day 1. |
 | D3 | 34 roles. Role = title, dept, tier, `core` kinds, `assist` kinds, `seats`, `lead`. |
-| D4 | Pay: haiku 0.50, sonnet 0.80, opus 1.20 €/day (15 / 24 / 36 €/month). +3 % per level. Booked daily at the market close. |
+| D4 | Pay: haiku 0.375, sonnet 0.60, opus 0.90 €/day (11,40 / 18 / 27 €/month), × .75 by S14 (PLAN D145). +3 % per level. Booked daily at the market close. |
 | D5 | Speed: core and assist 1.0, hat 0.67, first 3 days of a hire × 0.6. |
 | D6 | A hire lands 3 days after the first pressured evening at best: pressure must hold 3 evenings, the position opens on the third, the `recruit` task runs the next day, then the 3-day ramp. The 7-day window adds its own lag before that. |
 | D7 | Decision is deterministic code, never the content engine. Nora proposes, Gabriel checks the money, Camille signs. |
@@ -357,20 +357,20 @@ sim.recordLedger(w, { type: 'salary', amount: -payrollToday(w), memo: `Salaires 
 | `runtime/metrics.ts` `computeBudget` | `adCap = round2(max(0, cash - ORG.adReserveDays * payrollToday(w)) * rate)` |
 | `api/http.ts:210-214`, `api/session.ts:171`, `cli.ts:28` | use `minRunCash()` from `org/payroll.ts` |
 
-`minRunCash() = ceil((setupCost + 30 × (fixed + foundersPay)) / 10) × 10 = 330 €`. `api.test.ts:382-384` asserts 110 today and moves with it. With `payroll: false` the old floor of 110 € stays.
+`minRunCash() = ceil((setupCost + 30 × (fixed + foundersPay)) / 10) × 10 = 280 €` (S14, D145). `api.test.ts` asserts it. With `payroll: false` the old floor of 110 € stays.
 
 **Payroll by size**
 
 | Headcount | €/day | €/month | Over 60 days | Operating margin needed (×1.15, fixed costs included) |
 |---|---|---|---|---|
-| 8 founders | 7.60 | 228 | 456 € | 10.3 €/day |
-| 12 typical | 10.50 | 315 | 630 € | 13.7 €/day |
-| 31 legacy | 23.70 | 711 | **1 422 €** | 28.8 €/day |
-| 40 (5 opus, 23 sonnet, 12 haiku) | 30.40 | 912 | 1 824 € | **36.5 €/day** |
+| 8 founders | 5.70 | 171 | 342 € | 8.1 €/day |
+| 12 typical | 7.88 | 236 | 473 € | 10.6 €/day |
+| 31 legacy | 17.82 | 535 | **1 069 €** | 22.1 €/day |
+| 40 (5 opus, 23 sonnet, 12 haiku) | 22.86 | 686 | 1 372 € | **27.9 €/day** |
 
 **[measured]** Seed 7, days 1 to 25: operating margin 16.2 €/day (revenue 1 188, ads 636, fees 30, creators 30, refunds 87). So 8 survives comfortably, and 40 needs 2.25 times what the company earns today.
 
-**Zero-revenue proof at 500 €, no ads.** 440 € after setup, 8.97 €/day, survival threshold reached on day 33, then 5.17 €/day, 7 € left on day 60. A lean team outlives a market that never buys, by a thin margin. Unit test in section 12. 31 at the same pay would be bankrupt before day 20.
+**Zero-revenue proof at 500 €, no ads.** 440 € after setup, 7.07 €/day, survival threshold reached on day 42, then 4.22 €/day, 69,95 € left on day 60 and 2,43 € on day 76. A lean team outlives a market that never buys. Unit test in section 12. 31 at the same pay go negative on day 25.
 
 ## 6. Routing (`runtime/tasks.ts`, `runtime/org/officers.ts`)
 
@@ -498,7 +498,7 @@ The right column is a hand estimate for a first hire (haiku), from the seed 7 ru
 | Gate | Rule | Seed 7, day 18 |
 |---|---|---|
 | G0 frozen | not `survival`, not bankrupt, no `hiring` hold, `autoHire` true, no open position, `day - lastHireDay >= 3`, `agents < 60` | pass |
-| G1 reserve | `C >= 30 × (P + p + F)` | about 600 € with payroll ≥ 284 € |
+| G1 reserve | `C >= 30 × (P + p + F)` | about 600 € with payroll ≥ 224 € |
 | G2 margin **or** cash | `M >= 1.15 × (P + p + F)` **or** `C >= 120 × (P + p + F)` | M about 40 €/day ≥ 10.9 |
 | G3 revenue per head | margin route only: `R / (n + 1) >= 3 × monthly pay` | 127 €/month ≥ 45 |
 
@@ -642,12 +642,12 @@ Day-10 company of 12: the 8 founders plus Tom, Lucas, Raphaël, Adam. 11 open de
 | 1 | **Coverage, every day of every run**: `auditOrg === []` on every evening, 3 seeds × 3 difficulties, 30 days. The benchmark adds a Violations column that must be 0 on all seeds | hats, reconcile |
 | 2 | Chaos: a test driver requests a departure every 3 days from a seeded list, for 40 days, audit stays empty, no task stays unassigned over 2 days | departure, reconcile |
 | 3 | `reconcileOrg` is idempotent: twice gives a deep-equal world | derived state |
-| 4 | Founding team: 8 agents, 8 open depts, 17 hats, payroll 7.60 €/day, every review pair distinct | catalog |
+| 4 | Founding team: 8 agents, 8 open depts, 17 hats, payroll 5.70 €/day, every review pair distinct | catalog |
 | 5 | Golden: `legacy31`, no hire, no payroll, seed 7, 25 days gives the exact pre-change ledger hash and task list. Hash recorded once the parallel workflows land | the sweep |
 | 6 | One `salary` line per closed day, equal to the sum of `payOf`; cash = ledger sum; a reload between tick 10 and 11 books nothing twice | payroll |
 | 7 | Reload: a run with hires, reloaded at a random tick, ends byte-identical (extends the test in `runtime.test.ts`) | persisted org |
 | 8 | Same market: auto vs frozen on one seed give identical `market.events` kinds and days | stream isolation |
-| 9 | Zero revenue at 500 € with lean and no ads: cash positive on day 60. Same with 31 paid: negative before day 20 | pay scale, survival cut |
+| 9 | Zero revenue at 500 € with lean and no ads: cash positive on day 60, 69,95 €, and still 2,43 € on day 76. Same with 31 paid: negative on day 25 | pay scale, survival cut |
 | 10 | Gate table: bottleneck without margin, margin without bottleneck, hold, survival, cooldown, founder approval: no hire in each, a hire with all green | gates |
 | 11 | A hire removes the hat, opens the department, its first member is chief | reconcile |
 | 12 | Last hire of a department leaves: department closes, tasks re-homed, hat back on the founder | closing |

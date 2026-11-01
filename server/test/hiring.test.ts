@@ -17,7 +17,7 @@ import { addHold, hiringHold } from '../src/runtime/holds.js';
 import { HANDLERS } from '../src/runtime/handlers/index.js';
 import { sim } from '../src/runtime/modules.js';
 import { CANDIDATES, ROLES } from '../src/runtime/org/catalog.js';
-import { ORG } from '../src/runtime/org/constants.js';
+import { ORG, payOfTier } from '../src/runtime/org/constants.js';
 import { requestDeparture } from '../src/runtime/org/departure.js';
 import { checkGates, drawCandidates, headcountEvening, hireAgent, moneyRead, openPosition, recruitRefused, requestRole } from '../src/runtime/org/hiring.js';
 import { pickRole, recordLoad, refreshPressure } from '../src/runtime/org/load.js';
@@ -181,8 +181,8 @@ describe('the pressure of a role', () => {
   it('picks the most relief per euro: a haiku before a sonnet with more wait, the id on a tie', async () => {
     const { world: w } = await lab();
     org(w).pressure = [
-      { roleId: 'ghostwriter', relief: 20, ownerUtil: 0.9, days: 3 },        // 25 per euro
-      { roleId: 'community_manager', relief: 15, ownerUtil: 0.9, days: 3 },  // 30 per euro
+      { roleId: 'ghostwriter', relief: 20, ownerUtil: 0.9, days: 3 },        // 33 per euro
+      { roleId: 'community_manager', relief: 15, ownerUtil: 0.9, days: 3 },  // 40 per euro
       { roleId: 'voc_analyst', relief: 99, ownerUtil: 0.9, days: 2 },        // not three evenings
     ];
     expect(pickRole(w)?.roleId).toBe('community_manager');
@@ -227,10 +227,10 @@ describe('the gate table (org test 10)', () => {
     const [no] = decisions(w, 'refused');
     expect(no).toMatchObject({ day: 20, roleId: 'community_manager' });
     expect(no!.text).toMatch(/refuse : la marge couvre \d+ % des frais fixes après embauche, il faut 115 %\.$/);
-    expect(no!.numbers).toMatchObject({ margin: 5, pay: 0.5, relief: RELIEF + 1, ownerUtil: 0.78, days: 3, headcount: 8 });
+    expect(no!.numbers).toMatchObject({ margin: 5, pay: payOfTier('haiku'), relief: RELIEF + 1, ownerUtil: 0.78, days: 3, headcount: 8 });
     expect(no!.numbers.cash).toBeGreaterThan(0);
-    expect(no!.numbers.payroll).toBe(7.6);
-    expect(no!.numbers.cost).toBe(9.47); // 7,60 + 0,50 + 1,37
+    expect(no!.numbers.payroll).toBe(5.7);
+    expect(no!.numbers.cost).toBe(7.45); // 5,70 + 0,38 + 1,37
     expect(no!.numbers.revenue30).toBe(300);
   });
 
@@ -299,9 +299,9 @@ describe('the gate table (org test 10)', () => {
   });
 
   it('G1: the reserve holds 30 days of what the team will cost', async () => {
-    const { world: w } = await green({ startingCash: 284 }, {}); // 30 × 9,47 € = 284,10 €
-    expect(checkGates(w, 'community_manager', 'bottleneck').why).toMatch(/284 € en caisse, il en faut 284,10 € pour tenir 30 jours après embauche/);
-    const { world: enough } = await green({ startingCash: 285 }, {});
+    const { world: w } = await green({ startingCash: 223 }, {}); // 30 × 7,45 € = 223,50 €
+    expect(checkGates(w, 'community_manager', 'bottleneck').why).toMatch(/223 € en caisse, il en faut 223,50 € pour tenir 30 jours après embauche/);
+    const { world: enough } = await green({ startingCash: 224 }, {});
     expect(checkGates(enough, 'community_manager', 'bottleneck').why).toContain('la marge couvre'); // past G1, stopped by G2
   });
 
@@ -309,10 +309,10 @@ describe('the gate table (org test 10)', () => {
     // 15 € a day clears the margin bar without ads, and 450 € a month across nine heads pays a haiku, not a sonnet.
     const { world: w } = await green({ startingCash: 400 }, { revenue: 15 });
     const read = moneyRead(w, 'competitor_analyst');
-    expect(read.margin).toBeGreaterThanOrEqual(ORG.marginCover * (read.cost + 0.3));
+    expect(read.margin).toBeGreaterThanOrEqual(ORG.marginCover * (read.cost + payOfTier('sonnet') - payOfTier('haiku')));
     expect(read.revenue30 / 9).toBe(50);
     expect(checkGates(w, 'competitor_analyst', 'bottleneck').ok).toBe(true);
-    expect(checkGates(w, 'ghostwriter', 'bottleneck').why).toMatch(/de revenu par tête et par mois, il en faut 72 € pour ce poste/); // 3 × 24 €
+    expect(checkGates(w, 'ghostwriter', 'bottleneck').why).toMatch(/de revenu par tête et par mois, il en faut 54 € pour ce poste/); // 3 × 18 €
   });
 
   it('G2 by cash: 120 days in the bank carry a thin margin, and spare the revenue per head', async () => {
@@ -323,7 +323,7 @@ describe('the gate table (org test 10)', () => {
   });
 
   it('G2 by margin: covering the costs is not enough, it takes 115 % of them', async () => {
-    const { world: w } = await green({ startingCash: 700 }, { revenue: 10 });
+    const { world: w } = await green({ startingCash: 700 }, { revenue: 7.9 });
     const read = moneyRead(w, 'community_manager');
     expect(read.margin).toBeGreaterThan(read.cost);
     expect(checkGates(w, 'community_manager', 'bottleneck').why).toBe('la marge couvre 106 % des frais fixes après embauche, il faut 115 %');
@@ -439,7 +439,7 @@ describe('the recruit', () => {
     await untilTheClose(l);
     const ledger = w.ledger.filter((e) => e.ref === 'hire:tom');
     expect(ledger).toHaveLength(1);
-    expect(ledger[0]).toMatchObject({ type: 'recruiting', amount: -3.5, day: 21 });
+    expect(ledger[0]).toMatchObject({ type: 'recruiting', amount: -2.66, day: 21 }); // 7 × 0,38 €, what payOf books
     expect(sim.financeSnapshot(w).cash).toBeLessThan(cashBefore);
     expect(w.ledger.reduce((s, e) => s + e.amount, 0)).toBeCloseTo(sim.financeSnapshot(w).cash, 2);
     expect(agent(w, 'tom').taskKinds).toEqual([...ROLES.community_manager.core, ...ROLES.community_manager.assist]);
@@ -451,7 +451,7 @@ describe('the recruit', () => {
     expect((await l.ctx.brain.read('entreprise/Organigramme.md'))?.body).toContain('Tom');
     const [hire] = decisions(w, 'hire');
     expect(hire).toMatchObject({ roleId: 'community_manager', agentId: 'tom' });
-    expect(hire!.text).toBe('Camille signe : Tom rejoint l\'agence comme Community manager (15 €/mois).');
+    expect(hire!.text).toBe('Camille signe : Tom rejoint l\'agence comme Community manager (11,40 €/mois).');
     expect(auditOrg(w)).toEqual([]);
   });
 
@@ -496,7 +496,7 @@ describe('the recruit', () => {
     const { task, position } = await recruitTask(l);
     await untilTheClose(l);
     expect(task.status).toBe('awaiting_founder');
-    expect(task.input.founderAsk).toBe('Embaucher Tom (Community manager) à 15 €/mois');
+    expect(task.input.founderAsk).toBe('Embaucher Tom (Community manager) à 11,40 €/mois');
     expect(w.company.pendingApprovals).toContain(task.id);
     expect(position.status).toBe('open');
     expect(w.company.agents).toHaveLength(8);
@@ -518,7 +518,7 @@ describe('the recruit', () => {
     expect(position).toMatchObject({ status: 'cancelled', closedDay: 21 });
     expect(hiringHold(w)).toMatchObject({ kind: 'hiring', until: 28 });
     const no = decisions(w, 'refused').at(-1)!;
-    expect(no.numbers).toMatchObject({ until: 28, pay: 0.5 });
+    expect(no.numbers).toMatchObject({ until: 28, pay: payOfTier('haiku') });
     expect(no.numbers.cash).toBeTypeOf('number');
     expect(w.idCounter).toBeGreaterThan(counter); // the hold and the decision took their ids, no generator moved
     expect(liveStreams(l.ctx)).toEqual(before);
