@@ -11,7 +11,7 @@ import { countWords, norm } from '../sim/text.js';
 import type { VideoRatio } from './stage.js';
 
 /** Bump it when the same spec should draw another file: every cached video renders again. */
-export const RENDER_VERSION = 6;
+export const RENDER_VERSION = 7;
 
 /** A buyer's real words as the voice reads them. `name` and `rating` come from the shop's own orders: no order, no name. */
 export interface ReviewCard { quote: string; rating: number | null; name: string | null }

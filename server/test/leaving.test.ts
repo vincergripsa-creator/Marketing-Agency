@@ -15,17 +15,18 @@ import { agentsForLesson, addRule, deptRulesSection, TOPIC_DEPTS } from '../src/
 import { createContentEngine } from '../src/minds/index.js';
 import { Company, createWorld, defaultScenario } from '../src/runtime/index.js';
 import type { RuntimeCtx } from '../src/runtime/ctx.js';
-import { addHold } from '../src/runtime/holds.js';
+import { addHold, pinHold } from '../src/runtime/holds.js';
 import { sim } from '../src/runtime/modules.js';
 import { CANDIDATES, ROLES } from '../src/runtime/org/catalog.js';
 import { ORG } from '../src/runtime/org/constants.js';
-import { canLeave, completeDeparture, layoffsEvening, requestDeparture } from '../src/runtime/org/departure.js';
+import { canLeave, completeDeparture, decidedLayoff, layoffRefused, layoffsEvening, requestDeparture } from '../src/runtime/org/departure.js';
 import { drawCandidates, hireAgent } from '../src/runtime/org/hiring.js';
 import { writeWeekNote } from '../src/runtime/org/notes.js';
 import { officerId } from '../src/runtime/org/officers.js';
 import { payOf, payrollToday } from '../src/runtime/org/payroll.js';
 import { auditOrg, reconcileOrg } from '../src/runtime/org/reconcile.js';
-import { ALL_KINDS, depState, isOpen } from '../src/runtime/tasks.js';
+import { ALL_KINDS, createTask, depState, isOpen } from '../src/runtime/tasks.js';
+import { TALENT } from '../src/runtime/talent/constants.js';
 import { primaryOf } from '../src/runtime/talent/skills.js';
 import { leagueEntry } from '../src/runtime/talent/truth.js';
 import { dec } from '../src/runtime/util.js';
@@ -598,6 +599,194 @@ describe('layoffs', () => {
     await evening(w, ctx, {});
     expect(org(w).alumni).toEqual([]);
     expect(agent(w, 'tom')).toBeDefined();
+  });
+
+  describe('in approval mode a layoff is a normal ask (A22, D48)', () => {
+    const asks = (w: WorldState) => w.company.tasks.filter((t) => t.kind === 'league_review' && decidedLayoff(t));
+
+    /** The evening leaves the world before a morning: the gate is a work tick away. */
+    const until = async (company: Company, done: () => boolean): Promise<void> => {
+      for (let i = 0; i < 12 && !done(); i++) await company.step();
+      expect(done()).toBe(true);
+    };
+
+    /** Nobody left, nobody on notice, no line in the ledger, no count moved. */
+    function nothingMoved(w: WorldState, id: AgentId): void {
+      expect(agent(w, id)).toBeDefined();
+      expect(agent(w, id)!.notice).toBeNull();
+      expect(org(w).alumni).toEqual([]);
+      expect(org(w).positions).toEqual([]);
+      expect(leaveLines(w, id)).toEqual([]);
+      expect(org(w).stats).toMatchObject({ departures: 0, layoffs: 0 });
+      expect(org(w).lastLayoffDay).toBe(0);
+    }
+
+    /** L1: the fifth evening under water, Lucas the least busy. */
+    async function cashRoad() {
+      const w = leanWorld(7, { founderApproval: true });
+      const m = mount(w);
+      hired(w, 'tom');
+      hired(w, 'lucas');
+      setCash(w, 5);
+      w.day = 10;
+      for (let i = 0; i < ORG.layoff.lossDays; i++) await evening(w, m.ctx, { tom: 5, lucas: 1, nora: 0 });
+      return { ...m, w };
+    }
+
+    /** L2: Fatou idle for two weeks on a role Lucas carries, the till full. */
+    async function idleRoad() {
+      const w = leanWorld(7, { founderApproval: true });
+      const m = mount(w);
+      hired(w, 'lucas', 1);
+      hired(w, 'fatou', 1);
+      w.day = 15;
+      for (let d = 2; d <= 15; d++) org(w).load.push(loadDay(d, { lucas: 9, fatou: 1 }));
+      await layoffsEvening(m.ctx);
+      return { ...m, w };
+    }
+
+    it('L1: the fifth evening opens the ask, nothing moves before the yes, and the yes lays off once', async () => {
+      const { w, company } = await cashRoad();
+      nothingMoved(w, 'lucas');
+      expect(org(w).lossDays).toBe(0);
+      const [task] = asks(w);
+      expect(task).toMatchObject({ status: 'pending', reviewer: null, workLeft: 0, assignee: officerId(w, 'hr'), title: 'Licencier Lucas' });
+
+      await until(company, () => task!.status === 'awaiting_founder');
+      expect(w.company.pendingApprovals).toContain(task!.id);
+      expect(String(task!.input.founderAsk)).toMatch(/^Licencier Lucas \(.*\d € en caisse.*\) : \d.* € d'indemnité$/);
+      nothingMoved(w, 'lucas');
+
+      company.approve(task!.id, true);
+      await until(company, () => task!.status === 'done');
+      expect(agent(w, 'lucas')).toBeUndefined();
+      expect(agent(w, 'tom')).toBeDefined();
+      expect(org(w).alumni).toHaveLength(1);
+      expect(org(w).alumni[0]).toMatchObject({ id: 'lucas', kind: 'layoff', founder: false });
+      expect(org(w).alumni[0]!.reason).toMatch(/^licenciement, .*€ en caisse/);
+      expect(leaveLines(w, 'lucas')).toHaveLength(1);
+      expect(org(w).stats).toMatchObject({ layoffs: 1, departures: 1 });
+      expect(org(w).lastLayoffDay).toBe(w.day);
+      expect(w.company.pendingApprovals).not.toContain(task!.id);
+    }, 60_000);
+
+    it('L2: the idle duplicate waits for the founder the same way', async () => {
+      const { w, company } = await idleRoad();
+      nothingMoved(w, 'fatou');
+      const [task] = asks(w);
+      expect(task!.title).toBe('Licencier Fatou');
+
+      await until(company, () => task!.status === 'awaiting_founder');
+      expect(String(task!.input.founderAsk)).toMatch(/^Licencier Fatou \(.*d'occupation sur 14 jours sur un rôle tenu à plusieurs\) : \d.* € d'indemnité$/);
+      nothingMoved(w, 'fatou');
+
+      company.approve(task!.id, true);
+      await until(company, () => task!.status === 'done');
+      expect(agent(w, 'fatou')).toBeUndefined();
+      expect(agent(w, 'lucas')).toBeDefined();
+      expect(org(w).alumni[0]).toMatchObject({ id: 'fatou', kind: 'layoff' });
+      expect(org(w).alumni[0]!.reason).toContain('sur un rôle tenu à plusieurs');
+      expect(leaveLines(w, 'fatou')).toHaveLength(1);
+    }, 60_000);
+
+    it('one ask at a time: the evenings after it do not ask twice, on either road', async () => {
+      const cash = await cashRoad();
+      for (let i = 0; i < ORG.layoff.lossDays + 1; i++) await evening(cash.w, cash.ctx, { tom: 5, lucas: 1, nora: 0 });
+      expect(asks(cash.w)).toHaveLength(1);
+      nothingMoved(cash.w, 'lucas');
+
+      const idle = await idleRoad();
+      for (let i = 0; i < ORG.layoff.cooldownDays + 1; i++) await evening(idle.w, idle.ctx, { lucas: 9, fatou: 1 });
+      expect(asks(idle.w)).toHaveLength(1);
+      nothingMoved(idle.w, 'fatou');
+    }, 60_000);
+
+    it('L1: a no pins the person, books nothing and starts the count over, and the road passes to the next one', async () => {
+      const { w, company, ctx } = await cashRoad();
+      const [task] = asks(w);
+      await until(company, () => task!.status === 'awaiting_founder');
+      org(w).lossDays = 3;
+      company.approve(task!.id, false);
+
+      expect(task!.status).toBe('cancelled');
+      expect(org(w).lossDays).toBe(0);
+      expect(pinHold(w, 'lucas')).toMatchObject({ kind: 'pin', agentId: 'lucas', until: w.day + TALENT.challenge.refusalPinDays });
+      expect(pinHold(w, 'lucas')!.reason).toContain('licencier Lucas');
+      nothingMoved(w, 'lucas');
+
+      for (let i = 0; i < ORG.layoff.lossDays; i++) await evening(w, ctx, { tom: 5, lucas: 1, nora: 0 });
+      expect(asks(w).map((t) => decidedLayoff(t)!.agentId)).toEqual(['lucas', 'tom']);
+      nothingMoved(w, 'lucas');
+    }, 60_000);
+
+    it('L2: a no holds until the pin ends, and only then may the founder be asked again', async () => {
+      const { w, company, ctx } = await idleRoad();
+      const [task] = asks(w);
+      await until(company, () => task!.status === 'awaiting_founder');
+      company.approve(task!.id, false);
+      const pin = pinHold(w, 'fatou')!;
+      while (w.day < pin.until!) {
+        await evening(w, ctx, { lucas: 9, fatou: 1 });
+        expect(asks(w), `jour ${w.day}`).toHaveLength(1);
+      }
+      await evening(w, ctx, { lucas: 9, fatou: 1 });
+      expect(asks(w)).toHaveLength(2);
+      nothingMoved(w, 'fatou');
+    }, 60_000);
+
+    it('a yes comes too late when the person left meanwhile: nobody is paid out twice', async () => {
+      const { w, company, ctx } = await cashRoad();
+      const [task] = asks(w);
+      await until(company, () => task!.status === 'awaiting_founder');
+      await requestDeparture(ctx, 'lucas', 'test', 'founder', 'founder_order');
+      company.approve(task!.id, true);
+      await until(company, () => task!.status === 'done');
+      expect(task!.log.join(' ')).toContain('sans objet');
+      expect(task!.output?.left).toBeNull();
+      expect(leaveLines(w, 'lucas')).toHaveLength(1);
+      expect(org(w).stats).toMatchObject({ departures: 1, layoffs: 0 });
+    }, 60_000);
+
+    it('a yes moves nobody once the founder stopped the firing, or protected that person', async () => {
+      const firing = await cashRoad();
+      const [held] = asks(firing.w);
+      await until(firing.company, () => held!.status === 'awaiting_founder');
+      addHold(firing.w, { kind: 'firing', productId: null, until: null, reason: 'ne vire personne' });
+      firing.company.approve(held!.id, true);
+      await until(firing.company, () => held!.status === 'done');
+      expect(held!.output?.left).toBeNull();
+      nothingMoved(firing.w, 'lucas');
+
+      const pinned = await idleRoad();
+      const [kept] = asks(pinned.w);
+      await until(pinned.company, () => kept!.status === 'awaiting_founder');
+      addHold(pinned.w, { kind: 'pin', productId: null, until: null, reason: 'garde Fatou', agentId: 'fatou' });
+      pinned.company.approve(kept!.id, true);
+      await until(pinned.company, () => kept!.status === 'done');
+      nothingMoved(pinned.w, 'fatou');
+    }, 60_000);
+
+    it('layoffRefused ignores a ritual, which carries nothing', () => {
+      const w = leanWorld(7, { founderApproval: true });
+      const { ctx } = mount(w);
+      const ritual = createTask(w, { kind: 'league_review', title: 'Clôture' });
+      expect(decidedLayoff(ritual)).toBeNull();
+      expect(() => layoffRefused(ctx, ritual)).not.toThrow();
+      expect(w.company.holds ?? []).toEqual([]);
+    });
+
+    it('the ask outlives a reload, and the yes lands on the world that came back', async () => {
+      const { w, company, reload } = await cashRoad();
+      const id = asks(w)[0]!.id;
+      await until(company, () => asks(w)[0]!.status === 'awaiting_founder');
+      const back = JSON.parse(JSON.stringify(w)) as WorldState;
+      const next = reload(back);
+      nothingMoved(back, 'lucas');
+      next.approve(id, true);
+      await until(next, () => asks(back)[0]!.status === 'done');
+      expect(agent(back, 'lucas')).toBeUndefined();
+      expect(leaveLines(back, 'lucas')).toHaveLength(1);
+    }, 60_000);
   });
 });
 

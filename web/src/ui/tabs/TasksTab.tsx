@@ -124,7 +124,7 @@ function Approvals({ ids }: { ids: string[] }) {
               <strong>{ask ?? id}</strong>
               {t && t.title !== ask ? <span className="small">{t.title}</span> : null}
               <span className="muted small">
-                {t ? `${TASK_KIND_LABEL[t.kind] ?? t.kind} · ${deptName(lookups, t.dept)} · demandé par ${agentName(lookups, t.assignee ?? t.createdBy)}` : 'Tâche inconnue'}
+                {t ? `${t.input?.layoff || t.input?.swap ? 'Décision RH' : TASK_KIND_LABEL[t.kind] ?? t.kind} · ${deptName(lookups, t.dept)} · demandé par ${agentName(lookups, t.assignee ?? t.createdBy)}` : 'Tâche inconnue'}
               </span>
             </div>
             <div className="approval-actions">

@@ -7,7 +7,7 @@ import { clamp } from '../core/index.js';
  *
  *   0  below .2   column only, no rail, no drop cap, chapter visuals only
  *   1  up to .6   adds drop cap, rail notes, pull quotes, models, openers with « Dans ce chapitre »
- *   2  from .6    adds the second figures, the memo page, the « Si ça coince » annex
+ *   2  from .6    adds the second figures and the memo page, and can do without the table that says the errors again
  *
  * `interior` read once on the three written guides of `visual.test.ts`: 0 ≈ 79, 1 ≈ 95, 2 ≈ 96, against the 55, 72, 88
  * pdf §12.2 aimed at; `cover` on 24 designs: 75, 77, 78. `covers` are the candidates seen, `layouts` stays a label

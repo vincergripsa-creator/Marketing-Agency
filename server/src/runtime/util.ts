@@ -48,6 +48,14 @@ export function short(text: string, max = 48): string {
   return t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`;
 }
 
+/** `short` for a line the founder reads to its end: never inside a word, and a quote it leaves open is closed. */
+export function clip(text: string, max = 48): string {
+  const t = (text ?? '').trim();
+  if (t.length <= max) return t;
+  const head = t.slice(0, max - 3).replace(/\s+\S*$/, '').replace(/[\s,;:(«]+$/, '');
+  return `${head}…${head.lastIndexOf('«') > head.lastIndexOf('»') ? ' »' : ''}`;
+}
+
 export function capitalize(text: string): string {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }

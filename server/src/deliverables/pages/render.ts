@@ -4,12 +4,12 @@
  * the pages are finished (pdf §13).
  */
 import type { PdfAudit } from '../../contracts.js';
-import type { ChapterContent, DesignEffort, DesignSpec, VisualSpec } from '../../shared.js';
+import type { ChapterContent, DesignEffort, DesignSpec } from '../../shared.js';
 import { field, type HeroPlace } from '../art/field.js';
 import { closesOf, poseGround, posesOf, type Pose } from '../art/poses.js';
 import { readableOn } from '../color.js';
 import { advance, fitDisplay, sanitizeFor, type FaceName } from '../fonts.js';
-import { arr, calloutBlocks, chapterBlocks, CHECK_INDENT, CHECK_LINE, DROP_SIZE, labelBlock, lineOf, NOTE_TEXT, paraBlock, QUOTE_TEXT, quoteBlock, SHEET_BAND, sheetTop, STEP_BOX, STEP_GAP, STEP_INDENT, type Block, type ChecklistBlock, type ExampleBlock, type HeadingBlock, type NoteBlock, type ParaBlock, type QuoteBlock, type SheetBlock, type StepsBlock } from '../layout/blocks.js';
+import { arr, calloutBlocks, chapterBlocks, CHECK_INDENT, CHECK_LINE, DROP_SIZE, lineOf, NOTE_TEXT, paraBlock, QUOTE_TEXT, quoteBlock, SHEET_BAND, sheetTop, STEP_BOX, STEP_GAP, STEP_INDENT, type Block, type ChecklistBlock, type ExampleBlock, type HeadingBlock, type NoteBlock, type ParaBlock, type QuoteBlock, type SheetBlock, type StepsBlock } from '../layout/blocks.js';
 import { BODY_BOTTOM, GRID, RAIL_X, SHORT_PAGE, tabHeight } from '../layout/grid.js';
 import { layoutOf, type PagePlan } from '../layout/paginate.js';
 import { linesOf, setLines, tickBox, type PdfTheme } from '../pdfVisuals.js';
@@ -117,12 +117,11 @@ function drawPara(c: Ctx, s: Scene, b: ParaBlock, from: number, to: number, y: n
     const ly = base + (k - from) * lh;
     let x = L;
     if (b.drop && k < b.dropLines!) x += b.dropW!;
-    const bold = b.bold ?? 0;
-    if (b.head && k === bold) {
+    if (b.head && k === 0) {
       s.text(b.head, x, ly, v.textB, size, inks.ink);
       x += b.headW!;
     }
-    s.text(b.lines[k]!, x, ly, k < bold ? v.textB : face, size, inks.ink);
+    s.text(b.lines[k]!, x, ly, face, size, inks.ink);
   }
 }
 
@@ -183,9 +182,9 @@ function drawRail(c: Ctx, s: Scene, b: NoteBlock | QuoteBlock, y: number): void 
 }
 
 /** Ruled lines to write on, the last one on the foot of the page. On a sheet they sit on its tint and take a darker ink. */
-function drawNotes(c: Ctx, s: Scene, y: number, h: number, label = 'Vos notes', rule = c.t.hair): void {
-  const { v } = c.t;
-  s.text(sanitizeFor(v.labelB, label).toUpperCase(), L, y + 8, v.labelB, 7.8, c.t.muted, { track: 1.4 });
+export function drawNotes(t: PdfTheme, s: Scene, y: number, h: number, label = 'Vos notes', rule = t.hair): void {
+  const { v } = t;
+  s.text(sanitizeFor(v.labelB, label).toUpperCase(), L, y + 8, v.labelB, 7.8, t.muted, { track: 1.4 });
   const bottom = y + h;
   for (let ly = bottom; ly >= y + 8 + NOTE_LINE - 0.01; ly -= NOTE_LINE) s.line(L, ly, L + FULL, ly, rule, 0.4);
 }
@@ -208,7 +207,7 @@ function drawItems(c: Ctx, s: Scene, plan: PagePlan, close: Close): void {
       if (item.block.t === 'steps') drawSteps(c, s, item.block, item.from, item.to, item.y, item.air ?? 0);
       else drawChecklist(c, s, item.block, item.from, item.to, item.y, item.air ?? 0);
     } else if (item.t === 'rail') drawRail(c, s, item.block, item.y);
-    else if (item.t === 'notes') drawNotes(c, s, item.y, item.h, item.label);
+    else if (item.t === 'notes') drawNotes(c.t, s, item.y, item.h, item.label);
     else if (item.t === 'end') drawEnd(c, s, item.y, item.rows, item.cols, close);
     else if (item.t === 'block') {
       if (item.block.t === 'h2') drawHeading(c, s, item.block, item.y);
@@ -323,7 +322,7 @@ function sheetPage(b: SheetBlock, part: number, order: number) {
     const { from, to, grow } = b.parts[part]!;
     b.model.draw(s, L, sheetTop(b.title.length), from, to, grow);
     const notes = b.parts[part]!.notes;
-    if (notes) drawNotes(c, s, notes.y, notes.h, notes.label, c.t.muted);
+    if (notes) drawNotes(c.t, s, notes.y, notes.h, notes.label, c.t.muted);
     folio(c, s, no);
     return s;
   };
@@ -429,7 +428,6 @@ function contentsPage(c: Ctx, no: number): Scene {
 }
 
 const INTRO_TOP = TOP_BAND + 92;
-const ANNEX_TOP = GRID.top + 64.8;
 const MEMO_AIR = 39.6;         // the rows of a plan on one page spread down it, with room to tick and to write
 
 function introTop(title: string) {
@@ -446,7 +444,8 @@ function memoPage(c: Ctx, no: number): Scene {
   const s = pageOf(inks.paper);
   let y = pageTitle(c, s, 'À IMPRIMER', 'Votre plan sur une page', GRID.top) + 32.4;
   const rows = c.spec.chapters.filter((ch) => arr(ch.content.steps).length).map((ch) => {
-    const first = sanitizeFor(v.text, arr(ch.content.steps)[0]!).replace(/^\s*\d+\s*[.)]\s*/, '');
+    const steps = arr(ch.content.steps);
+    const first = sanitizeFor(v.text, steps.find((x) => !/^\s*(?:\d+\s*[.)]\s*)?Relire\b/.test(x)) ?? steps[0]!).replace(/^\s*\d+\s*[.)]\s*/, ''); // « Relire cette liste » points at nothing here
     const fit = (x: string) => linesOf(x, v.text, v.body, FULL - 62).length <= 3;
     return { title: linesOf(ch.title, v.deck, 11.5, FULL - 62), lines: linesOf(wholeClause(first, fit), v.text, v.body, FULL - 62) };
   });
@@ -536,19 +535,6 @@ function finalPage(c: Ctx, no: number): Scene {
 
 // ───────────────────────────── the guide ─────────────────────────────
 
-/** A sentence that follows a colon goes on in lower case, a name or an acronym as it is. */
-const onward = (s: string): string => (/^\p{Lu}\p{Ll}/u.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s);
-
-/** « Si ça coince »: every case the guide's decision trees hold, under the chapter it comes from, as a page to come back to. Each one opens on its case, whatever its length. */
-function annexBlocks(chapters: ChapterSpec[], t: PdfTheme): Block[] {
-  const { v } = t;
-  const fits = (s: string) => advance(v.labelB, s.toUpperCase(), 8, 1.6) <= FULL;
-  return chapters.flatMap((ch) => [ch.content.visual, ch.content.figure].filter((x): x is VisualSpec => x?.type === 'decision_tree' && !!x.tree?.cases?.length).flatMap((x) => [
-    labelBlock(wholeClause(sanitizeFor(v.labelB, ch.title), fits)),
-    ...x.tree!.cases.flatMap((k) => paraBlock(onward(k.then), t, { head: k.when }) ?? []),
-  ]));
-}
-
 function auditOf(slots: Slot[], chapters: number, overflow: number, pages: number): Guide['audit'] {
   const text = slots.map((s) => s.plan).filter((p) => p.kind === 'text' || p.kind === 'figure');
   const figures = text.flatMap((p) => p.items).filter((i) => i.t === 'block' && i.block.t === 'figure');
@@ -604,8 +590,8 @@ export function layoutGuide(spec: GuideSpec, t: PdfTheme, effort: DesignEffort):
   const front = (kind: PagePlan['kind'], section: Section, draw: Slot['draw']) => slots.push({ plan: { kind, chapter: null, items: [], fill: 1 }, section, first: true, draw });
   const plain: Section = { dest: '', label: '', title: '', head: '', tab: null };
   const poses = posesOf([...chapters, ...(bonus ? [bonus] : [])].map((ch) => ch.title), seed);
-  const closes = closesOf(poses, poses.length + 2, seed); // the chapters, then the introduction and the annex
-  const [introClose, annexClose] = closes.slice(poses.length) as [Pose, Pose];
+  const closes = closesOf(poses, poses.length + 1, seed); // the chapters, then the introduction
+  const introClose = closes.at(-1)!;
   let sheets = 0;
 
   /** The pages of a planned section: each knows how to draw itself once page numbers exist. */
@@ -663,12 +649,6 @@ export function layoutGuide(spec: GuideSpec, t: PdfTheme, effort: DesignEffort):
     front('memo', memo, memoPage);
   }
   if (bonus) addChapter(bonus, chapters.length, true);
-  const annex = finish >= 2 ? annexBlocks(chapters, t) : [];
-  if (annex.length) {
-    const section: Section = { dest: 'si-ca-coince', label: 'Annexe', title: 'Si ça coince', head: 'Si ça coince', tab: null };
-    entry(section, null);
-    addPlans(section, 0, null, layoutOf(annex, ANNEX_TOP), annexClose, (x, s) => { pageTitle(x, s, 'ANNEXE', 'Si ça coince', GRID.top); });
-  }
 
   const last: Section = { dest: 'la-suite', label: 'Et après ?', title: spec.final.heading, head: spec.final.heading, tab: null };
   entry(last, null);

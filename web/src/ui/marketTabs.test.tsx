@@ -31,48 +31,53 @@ function channelRow(id: ChannelRow['id'], o: Partial<ChannelRow> = {}): ChannelR
   const { label: name, glyph, color } = CHANNELS[id];
   return {
     id, name, glyph, color, state: 'open', share: 0.5, spend7d: 100, spend30d: 300, budget: 20, budgetCap: 30,
-    claimedRevenue7d: 240, shopRevenue7d: 130, reconciledRevenue7d: 160, claimedRoas7d: 2.4, shopRoas7d: 1.3, reconciledRoas7d: 1.6, marginalRoas: 1.2, inflation: 1.8,
+    claimedRevenue7d: 240, shopRevenue7d: 130, reconciledRevenue7d: 130, claimedRoas7d: 2.4, shopRoas7d: 1.3, reconciledRoas7d: 1.3, marginalRoas: 1.2, inflation: 1.8,
     cpm: 6, ctr: 0.02, cvr: 0.015, impressions7d: 16_000, creatives: 3, fatigue: 1.4, strikes: 0, unlock: [], why: '', daily: [],
     ...o,
   };
 }
 
 const detail = (rows: ChannelRow[], o: Partial<ChannelsDetail> = {}): ChannelsDetail => ({
-  rows, totals: { spend7d: 200, reconciledRevenue7d: 320, reconciledRoas7d: 1.6 }, plan: null, matrix: [], ...o,
+  rows, totals: { spend7d: 200, reconciledRevenue7d: 260, reconciledRoas7d: 1.3 }, plan: null, matrix: [], ...o,
 });
 
 const rowOf = (html: string, id: string) => html.slice(html.indexOf(`data-channel="${id}"`)).split('</tr>')[0]!;
 
-describe('Canaux: three readings of one ROAS', () => {
+describe('Canaux: two readings of one ROAS', () => {
   const html = render(null, <CanauxBody data={detail([channelRow('meta')])} />);
 
-  it('prints platform, shop and reconciled together, and marks what the platform inflates', () => {
+  it('prints platform and shop together, and marks what the platform inflates', () => {
     const row = rowOf(html, 'meta');
     expect(row).toContain('2,40×');
     expect(row).toContain('1,30×');
-    expect(row).toContain('1,60×');
     expect(row).toContain('1,20×'); // the next euro
     expect(row).toContain('gonflé ×1,8');
     expect(html).toMatch(/class="roas-inflated"/);
   });
-  it('the reconciled figure is the bold one, and every column says what it reads', () => {
-    expect(html).toMatch(/<th class="num roas-key"[^>]*>ROAS réconcilié/);
+  it('the shop\'s figure is the bold one, every column says what it reads, and the reconciled reading is gone', () => {
+    expect(html).toMatch(/<th class="num roas-key" title="[^"]*dernier clic[^"]*">ROAS boutique/);
     expect(html).toMatch(/<th class="num" title="[^"]*tableau de bord[^"]*">ROAS plateforme/);
-    expect(html).toMatch(/<th class="num" title="[^"]*dernier clic[^"]*">ROAS boutique/);
+    expect(html).toMatch(/Revenu boutique 7 j/);
+    expect(html).toMatch(/ROAS boutique 7 j/);
+    expect(html).not.toMatch(/r[ée]concili/i);
   });
-  it('a platform that looks great does not make a channel good: the tone follows the reconciled one', () => {
-    const row = rowOf(render(null, <CanauxBody data={detail([channelRow('meta', { claimedRoas7d: 4, reconciledRoas7d: 0.9 })])} />), 'meta');
+  it('the next euro stays a reading: its column says the budget follows the average', () => {
+    expect(html).toMatch(/<th class="num" title="[^"]*le budget suit le ROAS moyen[^"]*">ROAS marginal/);
+    expect(html).not.toContain('là où part l’argent');
+  });
+  it('a platform that looks great does not make a channel good: the tone follows the shop', () => {
+    const row = rowOf(render(null, <CanauxBody data={detail([channelRow('meta', { claimedRoas7d: 4, shopRoas7d: 0.9 })])} />), 'meta');
     expect(row).toContain('txt-bad');
     expect(row).not.toContain('txt-good');
     expect(row.slice(row.indexOf('roas-key'))).toContain('0,90×');
   });
-  it('a modest platform figure does not sink a channel the reconciliation finds good', () => {
-    const row = rowOf(render(null, <CanauxBody data={detail([channelRow('google', { claimedRoas7d: 0.9, shopRoas7d: 0.9, reconciledRoas7d: 1.5, inflation: 1 })])} />), 'google');
+  it('a modest platform figure does not sink a channel the shop finds good', () => {
+    const row = rowOf(render(null, <CanauxBody data={detail([channelRow('google', { claimedRoas7d: 0.9, shopRoas7d: 1.5, inflation: 1 })])} />), 'google');
     expect(row).toContain('txt-good');
     expect(row).not.toContain('txt-bad');
     expect(row).not.toContain('gonflé');
   });
-  it('roasTone reads the reconciled number alone, and nothing yet is no verdict', () => {
+  it('roasTone reads the shop\'s number alone, and nothing yet is no verdict', () => {
     expect(roasTone(1.15)).toBe('txt-good');
     expect(roasTone(1.14)).toBe('txt-bad');
     expect(roasTone(null)).toBe('muted');
@@ -108,10 +113,10 @@ describe('Canaux: the five cards', () => {
     expect(html).toContain('Facebook &amp; Instagram');
   });
   it('prints the budget of the day, the warnings and why', () => {
-    const html = render(null, <CanauxBody data={detail([channelRow('meta', { budget: 42, strikes: 2, why: 'Coupé 14 jours : ROAS réconcilié 0,62.' })])} />);
+    const html = render(null, <CanauxBody data={detail([channelRow('meta', { budget: 42, strikes: 2, why: 'Coupé 14 jours : ROAS boutique 0,62.' })])} />);
     expect(html).toMatch(/Budget du jour<\/span><strong>42\s€/);
     expect(html).toMatch(/Avertissements<\/span><strong[^>]*>2</);
-    expect(html).toContain('Coupé 14 jours : ROAS réconcilié 0,62.');
+    expect(html).toContain('Coupé 14 jours : ROAS boutique 0,62.');
   });
   it('each condition of a closed channel has its bar, met or not', () => {
     const html = render(null, <CanauxBody data={detail([channelRow('meta', closed)])} />);
@@ -132,7 +137,7 @@ describe('Canaux: channel × niche', () => {
   const html = render(s, <CanauxBody data={detail([channelRow('meta')], { matrix: [
     line('meta', { status: 'testing', since: 5 }),
     line('google', { status: 'proven', spend: 100, revenue: 160 }),
-    line('pinterest', { status: 'killed', reason: 'ROAS réconcilié 0,62 pour 90 €', retestDay: 22 }),
+    line('pinterest', { status: 'killed', reason: 'ROAS boutique 0,62 pour 90 €', retestDay: 22 }),
     line('youtube', { status: 'blocked', reason: 'Image du corps : refusée deux fois' }),
     line('tiktok', { status: 'untested' }),
   ] })} />);
@@ -145,7 +150,7 @@ describe('Canaux: channel × niche', () => {
   it('a cut line and a blocked one keep their reason in a cell that takes the focus', () => {
     const cut = html.slice(html.lastIndexOf('<td', html.indexOf('Coupé')));
     expect(cut.slice(0, cut.indexOf('</td>'))).toMatch(/tabindex="0"/);
-    expect(cut.slice(0, cut.indexOf('</td>'))).toContain('ROAS réconcilié 0,62 pour 90 € · nouveau test J22');
+    expect(cut.slice(0, cut.indexOf('</td>'))).toContain('ROAS boutique 0,62 pour 90 € · nouveau test J22');
     expect(html).toContain('Image du corps : refusée deux fois');
     expect(readFileSync(new URL('./tabs/market.css', import.meta.url), 'utf8')).toMatch(/\.matrix-cell:focus \.matrix-why/);
   });
@@ -156,22 +161,30 @@ describe('Canaux: channel × niche', () => {
 
 describe('Canaux: the CFO and the money', () => {
   const plan = (o: Partial<ChannelPlan> = {}): ChannelPlan => ({
-    day: 31, envelope: 150, testEnvelope: 30, lambda: 1.35, unspent: 0,
+    day: 31, envelope: 150, testEnvelope: 30, lambda: null, unspent: 0,
     lines: [{ channel: 'meta', productId: 'prd_1', campaignIds: ['cmp_1'], budget: 40, target: 52, average: 1.9, marginal: 1.62, elasticity: 0.8, days: 8, note: 'Meta sommeil : 40 € → 52 €/jour' }],
     ...o,
   });
 
-  it('prints the moves and λ', () => {
+  it('prints the moves and the rule the money follows, with no empty λ', () => {
     const html = render(mockSnapshot(), <CanauxBody data={detail([channelRow('meta')], { plan: plan() })} />);
     expect(html).toContain('Meta sommeil : 40 € → 52 €/jour');
-    expect(html).toContain('1,35×');
+    expect(html).toContain('chaque ligne reçoit sa part selon son ROAS moyen');
+    expect(html).not.toContain('λ');
+    expect(html).not.toContain('là où le suivant rapporte');
     expect(html).not.toContain('non dépensés');
     const bare = plan();
     bare.lines = bare.lines.map((l) => ({ ...l, note: '' }));
     expect(render(mockSnapshot(), <CanauxBody data={detail([channelRow('meta')], { plan: bare })} />)).toMatch(/Dodo serein : 40\s€ → 52\s€\/jour/);
   });
+  it('the `marginal_roas` control says its own rule and prints its λ', () => {
+    const html = render(mockSnapshot(), <CanauxBody data={detail([channelRow('meta')], { plan: plan({ lambda: 1.35 }) })} />);
+    expect(html).toContain('chaque euro va là où le suivant rapporte le plus');
+    expect(html).toContain('λ, euro suivant');
+    expect(html).toContain('1,35×');
+  });
   it('money nobody earned is said as such', () => {
-    const html = render(null, <CanauxBody data={detail([channelRow('meta')], { plan: plan({ unspent: 38 }) })} />);
+    const html = render(null, <CanauxBody data={detail([channelRow('meta')], { plan: plan({ lambda: 1.15, unspent: 38 }) })} />);
     expect(html).toMatch(/38\s€ non dépensés : aucun canal ne rapporte son euro suivant/);
   });
   it('budgetShares sums to 1 and survives a day with nothing spent', () => {
@@ -198,7 +211,7 @@ describe('Canaux: the CFO and the money', () => {
   it('one day of spend is no curve', () => {
     expect(render(null, <CanauxBody data={detail([channelRow('tiktok', { daily: [{ day: 1, spend: 30, claimed: 0, reconciled: 0 }] })])} />)).toContain('après deux jours de dépense');
   });
-  it('a demo has one TikTok row, its three readings the same number', () => {
+  it('a demo has one TikTok row, its readings the same number', () => {
     const d = tiktokDetail(mockSnapshot());
     expect(d.rows.map((r) => r.id)).toEqual(['tiktok']);
     const [r] = d.rows;
@@ -432,15 +445,15 @@ describe('Apprentissage: the channels bandits', () => {
     expect(html).toContain('<span class="arm-label">Facebook &amp; Instagram</span>');
     expect(html).toContain('<span class="arm-label">TikTok</span>');
   });
-  it('the video and e-mail bandits print no raw id either', () => {
-    const tempo = { key: 'fast', alpha: 2, beta: 2, pulls: 3, reward: 1 };
+  it('the e-mail bandit prints no raw id either', () => {
     const angle = { key: 'erreur', alpha: 2, beta: 2, pulls: 3, reward: 1 };
-    const html = render({ ...s, company: { ...s.company, bandits: { [`video_tempo:${niche.nicheId}`]: [tempo], [`email_angle:${niche.nicheId}`]: [angle] } } }, <LearningTab onClose={noop} />);
-    expect(html).toContain(`Rythme des vidéos · ${niche.name}`);
+    const html = render({ ...s, company: { ...s.company, bandits: { [`email_angle:${niche.nicheId}`]: [angle] } } }, <LearningTab onClose={noop} />);
     expect(html).toContain(`Angle des e-mails · ${niche.name}`);
-    expect(html).toContain('<span class="arm-label">Rapide</span>');
     expect(html).toContain('<span class="arm-label">Erreur</span>');
-    expect(html).not.toContain('video_tempo');
+    expect(html).not.toContain('email_angle');
+  });
+  it('the tempo of a film is no bandit any more: the tab has no word for it', () => {
+    expect(readFileSync(new URL('./tabs/LearningTab.tsx', import.meta.url), 'utf8')).not.toMatch(/video_tempo|Rythme des vidéos/);
   });
   it('god mode adds the hidden fit of each channel, a run without it prints a dash', () => {
     const truth = { id: 'n1', name: 'Niche', demand: 0.5, wtp: { min: 9, sweet: 19, max: 29 }, competition: 0.3, tiktokAffinity: 0.6, hookAffinity: {}, channels: { meta: { fit: 0.83, cpmMult: 1, intent: 1, poolShare: 0.5 } } };

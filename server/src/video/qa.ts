@@ -20,6 +20,7 @@ export const QA = {
   maxMb: 12,
   ssimFrames: 6, minSsim: 0.88,
   estGapWarn: 0.12,
+  ffmpegMs: 300_000, // each ffmpeg: a slow machine waits here, in the worker, and blocks nothing but its own job
 } as const;
 
 /** One decode pass carries every video filter, one pass every audio filter. */
@@ -82,11 +83,17 @@ export interface QaReport extends QaSummary {
   /** Real duration against the speech model, for the logs. Never reaches the world. */
   estGap: number | null;
   warnings: string[];
+  /** An ffmpeg was killed, or a file with audio gave no loudness: the file was not read to its end, so nothing here judges it. */
+  unfinished: boolean;
 }
 
-function ffmpegLog(ffmpeg: string, args: string[], input?: Uint8Array): { out: string; log: string } {
-  const r = spawnSync(ffmpeg, ['-hide_banner', '-nostats', ...args], { input, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 60_000, windowsHide: true });
-  return { out: r.stdout ?? '', log: r.stderr ?? '' };
+type Ffmpeg = (args: string[], input?: Uint8Array) => { out: string; log: string; killed: boolean };
+
+function ffmpegOf(bin: string): Ffmpeg {
+  return (args, input) => {
+    const r = spawnSync(bin, ['-hide_banner', '-nostats', ...args], { input, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: QA.ffmpegMs, windowsHide: true });
+    return { out: r.stdout ?? '', log: r.stderr ?? '', killed: r.signal !== null };
+  };
 }
 
 const numbers = (log: string, re: RegExp): number[] => [...log.matchAll(re)].map((m) => Number(m[1]));
@@ -114,10 +121,14 @@ export function parseProbe(log: string, bytes: number): FileProbe {
   };
 }
 
-export function probeFile(path: string, ffmpeg: string): FileProbe {
+function probeWith(path: string, ffmpeg: Ffmpeg): FileProbe {
   let bytes = 0;
   try { bytes = statSync(path).size; } catch { return parseProbe('', 0); }
-  return parseProbe(ffmpegLog(ffmpeg, ['-i', path]).log, bytes);
+  return parseProbe(ffmpeg(['-i', path]).log, bytes);
+}
+
+export function probeFile(path: string, ffmpeg: string): FileProbe {
+  return probeWith(path, ffmpegOf(ffmpeg));
 }
 
 /** `moov` before `mdat`, walked on box headers from the head of the file. */
@@ -161,8 +172,8 @@ function cutsOf(log: string): number[] {
   return times.filter((t, i) => i === 0 || t - (times[i - 1] ?? 0) > QA.minCutGapSec);
 }
 
-function firstFrameRange(path: string, ffmpeg: string): number | null {
-  const { log } = ffmpegLog(ffmpeg, ['-ss', String(QA.firstFrameSec), '-i', path, '-frames:v', '1', '-vf', 'signalstats,metadata=print', '-an', '-f', 'null', '-']);
+function firstFrameRange(path: string, ffmpeg: Ffmpeg): number | null {
+  const { log } = ffmpeg(['-ss', String(QA.firstFrameSec), '-i', path, '-frames:v', '1', '-vf', 'signalstats,metadata=print', '-an', '-f', 'null', '-']);
   const min = /YMIN=([\d.]+)/.exec(log)?.[1];
   const max = /YMAX=([\d.]+)/.exec(log)?.[1];
   return min === undefined || max === undefined ? null : Number(max) - Number(min);
@@ -176,7 +187,7 @@ function spread(frames: readonly number[], n: number): number[] {
 }
 
 /** Lowest SSIM between frames of the file and the same frames redrawn. One ffmpeg pass. */
-function ssimAgainst(path: string, ffmpeg: string, w: number, h: number, frames: readonly number[], redraw: QaText['redraw']): number | null {
+function ssimAgainst(path: string, ffmpeg: Ffmpeg, w: number, h: number, frames: readonly number[], redraw: QaText['redraw']): number | null {
   const bytes = w * h * 4;
   const raw = frames.map((f) => Buffer.from(redraw(f)));
   if (!frames.length || raw.some((r) => r.byteLength !== bytes)) return null;
@@ -186,25 +197,32 @@ function ssimAgainst(path: string, ffmpeg: string, w: number, h: number, frames:
   const graph = `[1:v]select='${pick}',setpts=N/${QA.fps}/TB[file];`
     + `[0:v]scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,setpts=N/${QA.fps}/TB[ref];`
     + '[file][ref]ssim=stats_file=-:eof_action=endall';
-  const { out } = ffmpegLog(ffmpeg, ['-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${w}x${h}`, '-r', String(QA.fps), '-i', 'pipe:0', '-i', path, '-lavfi', graph, '-an', '-f', 'null', '-'], Buffer.concat(raw));
+  const { out } = ffmpeg(['-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${w}x${h}`, '-r', String(QA.fps), '-i', 'pipe:0', '-i', path, '-lavfi', graph, '-an', '-f', 'null', '-'], Buffer.concat(raw));
   const scores = numbers(out, /All:([\d.]+)/g);
   return scores.length === frames.length ? Math.min(...scores) : null;
 }
 
 /** The ledger says every text is safe, and the SSIM proves the ledger describes this file. */
-function safeTextOf(path: string, e: QaExpect): { ok: boolean; ssim: number | null; outside: number } {
+function safeTextOf(path: string, e: QaExpect, ffmpeg: Ffmpeg): { ok: boolean; ssim: number | null; outside: number } {
   const text = e.text;
   if (!text) return { ok: false, ssim: null, outside: 0 };
   const boxes = text.frames.flatMap((f) => [...f.boxes]);
   const outside = boxes.filter((b) => !text.inside(b)).length;
-  const ssim = ssimAgainst(path, e.ffmpeg, e.w, e.h, spread(text.frames.map((f) => f.frame), QA.ssimFrames), text.redraw);
+  const ssim = ssimAgainst(path, ffmpeg, e.w, e.h, spread(text.frames.map((f) => f.frame), QA.ssimFrames), text.redraw);
   return { ok: boxes.length > 0 && outside === 0 && ssim !== null && ssim >= QA.minSsim, ssim, outside };
 }
 
 export function checkFile(path: string, e: QaExpect): QaReport {
-  const probe = probeFile(path, e.ffmpeg);
+  let killed = false;
+  const run = ffmpegOf(e.ffmpeg);
+  const ffmpeg: Ffmpeg = (args, input) => {
+    const r = run(args, input);
+    killed ||= r.killed;
+    return r;
+  };
+  const probe = probeWith(path, ffmpeg);
   const { video: v, audio: a, durationSec: dur } = probe;
-  const decoded = v ? ffmpegLog(e.ffmpeg, ['-i', path, '-vf', VIDEO_FILTERS, ...(a ? ['-af', AUDIO_FILTERS] : []), '-f', 'null', '-']).log : '';
+  const decoded = v ? ffmpeg(['-i', path, '-vf', VIDEO_FILTERS, ...(a ? ['-af', AUDIO_FILTERS] : []), '-f', 'null', '-']).log : '';
   const clip = dur ?? 0;
   const black = numbers(decoded, /black_start:([\d.]+)/g);
   const freezes = spansOf(decoded, 'freeze', clip);
@@ -212,8 +230,8 @@ export function checkFile(path: string, e: QaExpect): QaReport {
   const cuts = cutsOf(decoded).length;
   const parsedLufs = /\bI:\s+(-?[\d.]+) LUFS/.exec(decoded)?.[1];
   const lufs = parsedLufs === undefined ? null : Number(parsedLufs);
-  const firstRange = v ? firstFrameRange(path, e.ffmpeg) : null;
-  const text = safeTextOf(path, e);
+  const firstRange = v ? firstFrameRange(path, ffmpeg) : null;
+  const text = safeTextOf(path, e, ffmpeg);
   const mb = probe.bytes / 1e6;
   const checks: Record<QaCheck, boolean> = {
     size: v?.w === e.w && v.h === e.h,
@@ -251,6 +269,7 @@ export function checkFile(path: string, e: QaExpect): QaReport {
     outside: text.outside,
     estGap,
     warnings: estGap !== null && estGap > QA.estGapWarn ? [`estimated ${e.estSec} s, real ${dur} s`] : [],
+    unfinished: killed || (a !== null && lufs === null),
   };
 }
 

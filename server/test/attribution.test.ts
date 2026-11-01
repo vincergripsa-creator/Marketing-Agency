@@ -1,4 +1,4 @@
-/** Claims run above the shop, reconciliation never invents a euro, each platform answers for its own invoice. */
+/** Claims run above the shop, the shop's reading decides (D149), each platform answers for its own invoice. */
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/index.js';
 import type { Rng } from '../src/contracts.js';
@@ -154,8 +154,7 @@ describe('reconcile', () => {
       }
       const result = reconcile(w.market.adStats);
       expect(totalCents(result.map((a) => a.reconciledRevenue))).toBe(totalCents(w.market.adStats.map((r) => r.revenue)));
-      for (const a of result) expect(a.credit).toBeGreaterThanOrEqual(RECON.creditMin);
-      for (const a of result) expect(a.credit).toBeLessThanOrEqual(RECON.creditMax);
+      for (const a of result) expect(a.credit).toBe(1);
     }
   });
 
@@ -166,28 +165,28 @@ describe('reconcile', () => {
     expect(reconcile(w.market.adStats)).toEqual([{ channel: 'meta', spend: 20, shopRevenue: 57.33, claimedRevenue: 400, reconciledRevenue: 57.33, credit: 1, inflation: 6.9771 }]);
   });
 
-  it('half of what a platform claims above the shop moves the split, not the total', () => {
+  it('what a platform claims above the shop moves nothing: the split is the shop\'s, the inflation stays a reading', () => {
+    expect(RECON.claimWeight).toBe(0);
     const w = world();
     const p = addProduct(w, 'prd_a', 0);
     run(w, p.id, 'tiktok', 30, { revenue: 100 }).claimedRevenue = 120;
     run(w, p.id, 'meta', 20, { revenue: 100 }).claimedRevenue = 180;
-    // blended 110 and 140 of 250, so 88 and 112 of the shop's 200
     expect(reconcile(w.market.adStats)).toEqual([
-      { channel: 'tiktok', spend: 30, shopRevenue: 100, claimedRevenue: 120, reconciledRevenue: 88, credit: 0.8812, inflation: 1.2 },
-      { channel: 'meta', spend: 20, shopRevenue: 100, claimedRevenue: 180, reconciledRevenue: 112, credit: 1.1188, inflation: 1.8 },
+      { channel: 'tiktok', spend: 30, shopRevenue: 100, claimedRevenue: 120, reconciledRevenue: 100, credit: 1, inflation: 1.2 },
+      { channel: 'meta', spend: 20, shopRevenue: 100, claimedRevenue: 180, reconciledRevenue: 100, credit: 1, inflation: 1.8 },
     ]);
   });
 
-  it('a channel with no shop sale earns a share, the credit stays inside its bounds', () => {
+  it('a channel with no shop sale earns nothing, whatever it claims, and its credit stays 1', () => {
     const w = world();
     const p = addProduct(w, 'prd_a', 0);
     run(w, p.id, 'tiktok', 30, { revenue: 1000 });
     run(w, p.id, 'pinterest', 20).claimedRevenue = 20000;
     const [tiktok, pin] = reconcile(w.market.adStats);
-    expect(pin!.reconciledRevenue).toBeGreaterThan(0);
-    expect(cents(tiktok!.reconciledRevenue) + cents(pin!.reconciledRevenue)).toBe(100_000);
-    expect(tiktok!.credit).toBe(RECON.creditMin);
-    expect(pin!.credit).toBe(RECON.creditMax);
+    expect(pin!.reconciledRevenue).toBe(0);
+    expect(tiktok!.reconciledRevenue).toBe(1000);
+    expect(tiktok!.credit).toBe(1);
+    expect(pin!.credit).toBe(1);
     expect(Number.isFinite(pin!.inflation)).toBe(true);
   });
 
@@ -225,7 +224,7 @@ describe('computeDailyKpi', () => {
     expect(kpi.channels!.google!.spend).toBe(11.11);
   });
 
-  it('a day per channel: three readings, the same shop total, roas on reconciled revenue', () => {
+  it('a day per channel: two readings, the shop\'s total, roas on the shop\'s revenue', () => {
     const w = world();
     const p = addProduct(w, 'prd_a', 0);
     const tiktok = run(w, p.id, 'tiktok', 50, { purchases: 10, revenue: 190 });
@@ -236,8 +235,8 @@ describe('computeDailyKpi', () => {
     expect(m).toMatchObject({ shopSales: 3, shopRevenue: 57, claimedRevenue: meta.claimedRevenue, claimedSales: meta.claimedPurchases });
     expect(m!.claimedRevenue).toBeGreaterThan(m!.shopRevenue);
     expect(cents(t!.reconciledRevenue) + cents(m!.reconciledRevenue)).toBe(cents(247));
-    expect(m!.reconciledRevenue).toBeGreaterThan(57);
-    expect(m!.roas).toBeCloseTo(m!.reconciledRevenue / 40, 2);
+    expect(m!.reconciledRevenue).toBe(57);
+    expect(m!.roas).toBeCloseTo(57 / 40, 2);
   });
 
   it('a day on another channel alone is still written: absent would read as TikTok', () => {
@@ -394,7 +393,7 @@ describe('a real close, tickMarket on three channels', () => {
 });
 
 describe('channelPnls', () => {
-  it('a week per channel: ledger spend, reconciled revenue, Σ = the shop', () => {
+  it('a week per channel: ledger spend, revenue of the shop, Σ = the shop', () => {
     const w = world();
     const p = addProduct(w, 'prd_a', 0);
     run(w, p.id, 'tiktok', 30, { revenue: 100, day: 2 }).claimedRevenue = 120;
@@ -402,8 +401,8 @@ describe('channelPnls', () => {
     run(w, p.id, 'pinterest', 0, { revenue: 0, day: 3 });
     run(w, p.id, 'tiktok', 999, { revenue: 999, day: 9 });
     expect(channelPnls(w, 1, 7)).toEqual([
-      { channel: 'tiktok', spend: 30, reconciledRevenue: 88, roas: 2.93 },
-      { channel: 'meta', spend: 25, reconciledRevenue: 112, roas: 4.48 },
+      { channel: 'tiktok', spend: 30, reconciledRevenue: 100, roas: 3.33 },
+      { channel: 'meta', spend: 25, reconciledRevenue: 100, roas: 4 },
       { channel: 'pinterest', spend: 0, reconciledRevenue: 0, roas: null },
     ]);
   });

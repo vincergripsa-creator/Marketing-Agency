@@ -2,10 +2,10 @@
  * The founder's orders, executed on the spot: a stop is a standing hold the plan and the handlers respect until he lifts
  * it, not a task that may or may not reach its goal. An order that cannot be carried out is said so, never closed as done.
  */
-import type { AgentState, Campaign, ChannelId, Mission, Task } from '../shared.js';
+import type { AgentState, Campaign, ChannelId, Mission, Task, WorldState } from '../shared.js';
 import { CHANNELS, channelOf } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
-import { nicheName, productOf } from './ctx.js';
+import { nicheName, productOf, speak } from './ctx.js';
 import { addHold, adsHold, firingHold, liftHolds } from './holds.js';
 import { committedAdBudget, currentBudget } from './metrics.js';
 import type { FounderOrder, OrderAction, PersonOrder } from './missions.js';
@@ -18,6 +18,9 @@ import { redTeamGate } from './redteam.js';
 import { resumeCampaigns } from './strategy.js';
 import { createTask, KIND_META, openTasks, taskById } from './tasks.js';
 import { eur, short } from './util.js';
+
+/** How long a stop holds, in the founder's words. */
+const untilText = (w: WorldState, days: number | undefined, lift: string): string => (days ? `jusqu'au jour ${w.day + days - 1} inclus` : `tant que tu ne me dis pas « ${lift} »`);
 
 const ASKED_FR: Partial<Record<OrderAction, string>> = {
   stop_ads: 'Je n’ai coupé aucune pub',
@@ -51,18 +54,41 @@ const channelNames = (order: { channels?: readonly ChannelId[] }): string => (or
  */
 function stopAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'stop_ads' }, when: string): string {
   const { product, channels, spared = [] } = order;
+  const w = ctx.world;
   const names = channelNames(order);
+  const until = lastDay(w, order.days);
   let paused = 0, cancelled = 0;
   for (const channel of channels?.length ? channels : [null]) {
-    const stopped = stopPaidAds(ctx, product?.id ?? null, `ordre du fondateur du jour ${ctx.world.day}`, channel, spared);
+    const stoppedBefore = new Set(w.company.campaigns.filter((c) => c.pausedFor === 'founder').map((c) => c.id));
+    const stopped = stopPaidAds(ctx, product?.id ?? null, `ordre du fondateur du jour ${w.day}`, channel, spared);
     paused += stopped.paused;
     cancelled += stopped.cancelled;
-    addHold(ctx.world, { kind: 'ads', productId: product?.id ?? null, until: null, ...(channel ? { channel } : {}), reason: `les pubs${channel ? ` ${CHANNELS[channel].label}` : ''}${product ? ` de « ${short(product.title, 50)} »` : ''} sont coupées sur ordre du fondateur (jour ${ctx.world.day})` });
+    const resumes = until === null ? {} : { resumes: w.company.campaigns.filter((c) => c.pausedFor === 'founder' && !stoppedBefore.has(c.id)).map((c) => c.id) };
+    addHold(w, { kind: 'ads', productId: product?.id ?? null, until, ...(channel ? { channel } : {}), ...resumes, reason: `les pubs${channel ? ` ${CHANNELS[channel].label}` : ''}${product ? ` de « ${short(product.title, 50)} »` : ''} sont coupées sur ordre du fondateur (jour ${w.day})` });
   }
   const running = spared.filter((c) => c.status === 'active');
   for (const c of running) c.founderForced = true;
   const kept = running.length ? ` Restent en cours sur ton ordre : ${running.map((c) => campaignLabel(c, numberOf(ctx, c))).join(', ')}.` : '';
-  return `C'est fait${when} : ${paused} campagne(s) en pause, ${cancelled} tâche(s) de pub annulée(s).${kept} Aucune ${running.length ? 'autre ' : ''}pub ne repartira${names ? ` sur ${names}` : ''}${product ? ` sur « ${short(product.title, 50)} »` : ''} tant que tu ne me dis pas « reprends ${names || 'les pubs'} ».`;
+  const stopped = `C'est fait${when} : ${paused} campagne(s) en pause, ${cancelled} tâche(s) de pub annulée(s).${kept} Aucune ${running.length ? 'autre ' : ''}pub ne repartira${names ? ` sur ${names}` : ''}${product ? ` sur « ${short(product.title, 50)} »` : ''}`;
+  return until === null ? `${stopped} tant que tu ne me dis pas « reprends ${names || 'les pubs'} ».` : `${stopped} avant le jour ${until + 1} : ce matin-là, elles repartent seules, dans l'enveloppe du CFO. Dis « reprends ${names || 'les pubs'} » pour avancer ce retour.`;
+}
+
+/** The last day of an order given a length, today counted. Null: until it is lifted. */
+const lastDay = (w: WorldState, days: number | undefined): number | null => (days ? w.day + days - 1 : null);
+
+/** The morning after a stop with an end: what it paused starts again, unless another founder order still stands over it. */
+export function endTimedStops(ctx: RuntimeCtx): void {
+  const w = ctx.world;
+  for (const h of (w.company.holds ?? []).filter((x) => x.resumes && x.until === w.day - 1 && x.liftedDay === undefined)) {
+    const free = h.resumes!.filter((id) => {
+      const c = w.company.campaigns.find((x) => x.id === id);
+      return c?.pausedFor === 'founder' && !adsHold(w, c.productId, channelOf(c));
+    });
+    if (!free.length) continue;
+    let back = 0;
+    for (const campaignId of free) back += resumeCampaigns(ctx, 'founder', { campaignId }).resumed.length;
+    speak(ctx, 'growth', `fin de l'arrêt que tu as demandé le jour ${h.day} : ${back} campagne(s) repartent ce matin${back < free.length ? `, ${free.length - back} reste(nt) en pause (produit, budget ou règles de la pub)` : ''}.`, 'founder');
+  }
 }
 
 /** « Reprends Meta » lifts what he said about Meta: an order on every channel still stands, and he is told so. */
@@ -154,16 +180,16 @@ async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): P
       refuse(order.left ? `${order.left.name} a quitté l'agence le jour ${order.left.leftDay} : ${PERSON_FR[order.asked]}.` : `Personne ne s'appelle ${order.name} dans l'équipe : ${PERSON_FR[order.asked]}.`);
       return;
     case 'stop_firing':
-      if (!firingHold(w)) addHold(w, { kind: 'firing', productId: null, until: null, reason: `aucun départ ni remplacement sur ordre du fondateur (jour ${w.day})` });
-      done('C’est noté : personne ne part tant que tu ne me dis pas « tu peux virer ». Ni remplacement, ni licenciement, ni nouveau plan d’amélioration.');
+      if (!firingHold(w)) addHold(w, { kind: 'firing', productId: null, until: lastDay(w, order.days), reason: `aucun départ ni remplacement sur ordre du fondateur (jour ${w.day})` });
+      done(`C’est noté : personne ne part ${untilText(w, order.days, 'tu peux virer')}. Ni remplacement, ni licenciement, ni nouveau plan d’amélioration.`);
       return;
     case 'allow_firing':
       done(liftHolds(w, (h) => h.kind === 'firing').length ? 'C’est noté : la ligue reprend ses remplacements à la prochaine clôture de saison.' : 'Rien à lever : aucun gel des départs n’était en cours.');
       return;
     case 'stop_hiring':
       liftHolds(w, (h) => h.kind === 'hiring'); // a refusal's cooldown ends by itself, his order does not
-      addHold(w, { kind: 'hiring', productId: null, until: null, reason: `embauches gelées sur ordre du fondateur (jour ${w.day})` });
-      done('C’est noté : plus aucune embauche tant que tu ne me dis pas « reprends les embauches ». Seule la relève d’un départ reste possible.');
+      addHold(w, { kind: 'hiring', productId: null, until: lastDay(w, order.days), reason: `embauches gelées sur ordre du fondateur (jour ${w.day})` });
+      done(`C’est noté : plus aucune embauche ${untilText(w, order.days, 'reprends les embauches')}. Seule la relève d’un départ reste possible.`);
       return;
     case 'resume_hiring':
       liftHolds(w, (h) => h.kind === 'hiring');
@@ -192,23 +218,23 @@ async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): P
       done(stopAds(ctx, { ...order, action: 'stop_ads' }, ''));
       return;
     case 'stop_spending': {
-      const text = stopAds(ctx, { action: 'stop_ads', product: null }, ' pour la pub');
-      addHold(w, { kind: 'advances', productId: null, until: null, reason: `plus aucune avance aux créateurs sur ordre du fondateur (jour ${w.day})` });
+      const text = stopAds(ctx, { action: 'stop_ads', product: null, days: order.days }, ' pour la pub');
+      addHold(w, { kind: 'advances', productId: null, until: lastDay(w, order.days), reason: `plus aucune avance aux créateurs sur ordre du fondateur (jour ${w.day})` });
       done(`${text} Plus aucune avance aux créateurs non plus. Restent les frais fixes de la boutique et des outils : je ne peux pas les couper sans fermer la boutique.`);
       return;
     }
     case 'stop_launches': {
-      addHold(w, { kind: 'launches', productId: null, until: null, reason: `plus de nouveau guide sur ordre du fondateur (jour ${w.day})` });
+      addHold(w, { kind: 'launches', productId: null, until: lastDay(w, order.days), reason: `plus de nouveau guide sur ordre du fondateur (jour ${w.day})` });
       const open = openTasks(w, (t: Task) => (t.kind === 'pick_opportunity' && !t.input.nicheId) || t.kind === 'design_upsell');
       for (const t of open) dropTask(ctx, t, `ordre du fondateur du jour ${w.day}`);
       const inWork = w.company.products.filter((p) => !['live', 'killed', 'paused'].includes(p.status));
-      done(`C'est noté : aucun nouveau guide ne démarre tant que tu ne me dis pas « reprends les lancements ».${inWork.length ? ` Déjà en production, je le termine sauf contre-ordre : ${inWork.map((p) => `« ${short(p.title, 50)} »`).join(', ')}.` : ''}`);
+      done(`C'est noté : aucun nouveau guide ne démarre ${untilText(w, order.days, 'reprends les lancements')}.${inWork.length ? ` Déjà en production, je le termine sauf contre-ordre : ${inWork.map((p) => `« ${short(p.title, 50)} »`).join(', ')}.` : ''}`);
       return;
     }
     case 'pause_product': {
       const p = order.product!;
       const cancelled = shelveProduct(ctx, p, `le fondateur l'a retiré le jour ${w.day}`);
-      done(`C'est fait : « ${short(p.title, 60)} » n'est plus en vente ni en production (${cancelled} tâche(s) annulée(s)). Dis « remets le guide en ligne » pour le reprendre.`);
+      done(`C'est fait : « ${short(p.title, 60)} » n'est plus en vente ni en production (${cancelled} tâche(s) annulée(s)). ${order.days ? `Je ne sais pas le remettre seul dans ${order.days} jour(s) : le moment venu, dis` : 'Dis'} « remets le guide en ligne » pour le reprendre.`);
       return;
     }
     case 'kill_product': {

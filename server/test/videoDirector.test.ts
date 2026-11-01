@@ -9,12 +9,12 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AdCreative, Campaign, CreativeVideo, Task, VideoCut, VideoIndex, WorldState } from '../src/shared.js';
 import type { RunPaths } from '../src/contracts.js';
-import { createAgencyServer, type SessionLike } from '../src/api/server.js';
+import { createAgencyServer, devLandingPage, type SessionLike } from '../src/api/server.js';
 import { liveVideos } from '../src/api/session.js';
 import { findFfmpeg } from '../src/video/caps.js';
 import type { VideoCaps } from '../src/video/caps.js';
 import {
-  DEFAULT_MAX_DISK_MB, forkRender, OFF_CAPS, RESULT_FILE, selectWorthy, SPEC_FILE, VideoDirector, videoDiskCapOf, videoModeOf, WORTHY,
+  DEFAULT_MAX_DISK_MB, forkRender, JOB_TIMEOUT_MS, OFF_CAPS, RESULT_FILE, selectWorthy, SPEC_FILE, VideoDirector, videoDiskCapOf, videoModeOf, WORTHY,
   type DirectorOptions, type RenderRunner, type VideoMode,
 } from '../src/video/director.js';
 import type { RenderJob, RenderResult } from '../src/video/worker.js';
@@ -396,6 +396,25 @@ describe('a failed job', () => {
     expect(d.index().items.a!.reason).toBe("Le rendu s'est arrêté avant la fin");
   });
 
+  it('a QA cut on both attempts is no failed film: the master stays, the reason says so, and the next sync asks again', async () => {
+    const qa = { ok: false, failed: [], lufs: null, cuts: 0, avgShotSec: 0, mb: 0 };
+    let cut = true;
+    const r = renderer({ answer: () => (cut ? { ok: false, retry: true, reason: 'Contrôle coupé avant la fin : à relancer', video: null, poster: null, captions: null, qa } : undefined) });
+    const { d, statuses } = director(r.render);
+    const w = world([creative('a')], { a: 5000 });
+    d.sync(w);
+    await until(() => status(d, 'a') === 'evicted');
+    expect(statuses('a')).not.toContain('failed');
+    expect(r.jobs).toHaveLength(2);
+    expect(d.index().items.a!.reason).toBe('Contrôle coupé avant la fin : à relancer');
+    const dir = readdirSync(join(paths.root, 'video', 'a'))[0]!;
+    expect(existsSync(join(paths.root, 'video', 'a', dir, 'master.mp4'))).toBe(true);
+    cut = false;
+    d.sync(w);
+    await until(() => status(d, 'a') === 'ready');
+    expect(r.jobs).toHaveLength(3);
+  });
+
   it('a crash that passes on the retry is a plain success', async () => {
     const r = renderer({ answer: (_job, n) => (n === 1 ? { ok: false, retry: true, reason: 'x', video: null } : undefined) });
     const { d } = director(r.render);
@@ -666,10 +685,10 @@ describe('what a machine or a mode refuses', () => {
     const r = renderer();
     const { d } = director(r.render);
     const w = world([creative('a')], { a: 5000 });
-    (w.market as unknown as { niches: unknown }).niches = [{ id: 'n', demand: 0.91, videoTempo: 'fast' }];
+    (w.market as unknown as { niches: unknown }).niches = [{ id: 'n', demand: 0.91 }];
     d.sync(w);
     await until(() => status(d, 'a') === 'ready');
-    expect(readFileSync(join(r.jobs[0]!.dir, SPEC_FILE), 'utf8')).not.toMatch(/videoTempo|demand|talent/);
+    expect(readFileSync(join(r.jobs[0]!.dir, SPEC_FILE), 'utf8')).not.toMatch(/demand|talent/);
   });
 });
 
@@ -770,6 +789,20 @@ describe('the API', () => {
   });
 });
 
+describe('what a loaded machine and a machine without an interface get', () => {
+  const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
+
+  it('a job gets 600 s, and it still runs below normal: the film never competes with the tick loop', () => {
+    expect(JOB_TIMEOUT_MS).toBe(600_000);
+    expect(source('../src/video/director.ts')).toContain('timeoutMs = JOB_TIMEOUT_MS, priority: number = osConstants.priority.PRIORITY_BELOW_NORMAL');
+  });
+
+  it('the landing page and forever.mjs both say a full npm ci comes first: --omit=optional takes the bundler away', () => {
+    expect(devLandingPage(1234)).toContain('<code>npm ci</code>, sans <code>--omit=optional</code>');
+    expect(source('../../scripts/forever.mjs')).toContain('Il faut d\'abord un npm ci complet, sans --omit=optional, puis npm run build.');
+  });
+});
+
 describe('videos in the snapshots (D52)', () => {
   const VIDEO: CreativeVideo = { status: 'ready', reason: null, videos: [], poster: null, captions: null, cards: [], voice: null, qa: null };
 
@@ -835,6 +868,41 @@ describe.skipIf(!findFfmpeg() || !(await import('@napi-rs/canvas').then(() => tr
     const next = director(() => { throw new Error('no render expected'); }, { caps, probe: undefined });
     next.d.sync(w);
     expect(status(next.d, 'a')).toBe('ready');
+  });
+
+  it('renderAd --mp4 goes through the worker: the job\'s folder, its QA, its result', async () => {
+    const ad = creative('a', { cut: CUT });
+    const w = world([ad], { a: 5000 });
+    (w.company.products[0] as unknown as { design: unknown }).design = DESIGN;
+    const { renderMp4 } = await import('../scripts/renderAd.js');
+    const { renderKey } = await import('../src/video/spec.js');
+    const forced = process.env.VIDEO_FORCE_LEVEL;
+    process.env.VIDEO_FORCE_LEVEL = 'no_voice'; // the speech model: this test owes nothing to a Windows voice
+    try {
+      const { spec, result } = await renderMp4(paths.root, w, 'a', '9:16', 270);
+      expect(result.qa).toMatchObject({ ok: true, failed: [] });
+      expect(result).toMatchObject({ ok: true, voice: null, cards: [] });
+      const dir = `video/a/${renderKey(spec).slice(0, 8)}`;
+      expect(result.video!.path).toBe(`${dir}/master.mp4`);
+      expect(readFileSync(join(paths.root, result.video!.path)).length).toBe(result.video!.bytes);
+      expect(JSON.parse(readFileSync(join(paths.root, dir, SPEC_FILE), 'utf8'))).toEqual(spec);
+      expect(JSON.parse(readFileSync(join(paths.root, dir, RESULT_FILE), 'utf8'))).toEqual(result);
+    } finally {
+      if (forced === undefined) delete process.env.VIDEO_FORCE_LEVEL;
+      else process.env.VIDEO_FORCE_LEVEL = forced;
+    }
+  });
+
+  it('renderAd --mp4 refuses on a machine that cannot encode, and says why', async () => {
+    const { renderMp4 } = await import('../scripts/renderAd.js');
+    const forced = process.env.VIDEO_FORCE_LEVEL;
+    process.env.VIDEO_FORCE_LEVEL = 'storyboard_only';
+    try {
+      await expect(renderMp4(paths.root, world([creative('a')]), 'a', '9:16')).rejects.toThrow('Indisponible : ffmpeg introuvable');
+    } finally {
+      if (forced === undefined) delete process.env.VIDEO_FORCE_LEVEL;
+      else process.env.VIDEO_FORCE_LEVEL = forced;
+    }
   });
 
   it('deletes what fails QA: a real 3 s cut under the 9 s floor leaves nothing to serve', async () => {

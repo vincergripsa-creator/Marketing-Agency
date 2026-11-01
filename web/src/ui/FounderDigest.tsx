@@ -192,7 +192,7 @@ function money(title: string, profit: number): string {
 function productLines(p: Digest['products']): string[] {
   return [
     ...p.launched.map((t) => `Lancé : ${t}`),
-    ...p.stopped.map((s) => `Arrêté : ${s.title}. ${s.why}`),
+    ...p.stopped.map((s) => `${s.harvest ? 'En récolte' : 'Arrêté'} : ${s.title}. ${s.why}`),
     ...p.reworked.map((t) => `Retravaillé : ${t}`),
     ...(p.best ? [money(`Meilleur : ${p.best.title}`, p.best.profit)] : []),
     ...(p.worst ? [money(`Pire : ${p.worst.title}`, p.worst.profit)] : []),
@@ -203,7 +203,7 @@ function channelLines(c: Digest['channels']): string[] {
   return [
     ...c.opened.map((n) => `Ouvert : ${n}`),
     ...c.closed.map((n) => `Fermé : ${n}`),
-    ...(c.best ? [`Meilleur ROAS réconcilié : ${c.best.name}, ${fmtRoas(c.best.reconciledRoas)}`] : []),
+    ...(c.best ? [`Meilleur ROAS boutique : ${c.best.name}, ${fmtRoas(c.best.reconciledRoas)}`] : []),
   ];
 }
 

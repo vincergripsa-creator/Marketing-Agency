@@ -3,13 +3,19 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 import { cx } from '../common';
 import { Icon } from '../icons';
-import { PdfFrame, useLightboxKey } from './Lightbox';
+import { useLightboxKey } from './Lightbox';
 
 const FLIP_MS = 420;            // the leaf's turn, same number as `--pf-ms` in viewers.css
 const MAX_PAGE_CSS_PX = 520;
 const MAX_DPR = 2;
 const KEPT_PAGES = 8;
 const WIDTH_STEP_PX = 20;       // a resize re-renders pages, not at every pixel
+
+/** The file a download saves: the guide's title, every file ending as guide.pdf says nothing. Windows refuses these characters in a name. */
+export function pdfName(title: string): string {
+  const name = title.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').replace(/[. ]+$/, '').trim();
+  return `${name || 'guide'}.pdf`;
+}
 
 /** Cover alone on the right, then facing pages. Pure, unit-tested. */
 export function flipSpread(pages: number, spread: number): { left: number | null; right: number | null } {
@@ -96,6 +102,16 @@ function PageFace({ page, cache, stamp }: { page: number | null; cache: PageCach
   }, [page, cache, stamp]);
   if (page === null) return null;
   return <canvas ref={ref} className={cx('pf-canvas', !cache.has(page) && 'pf-pending')} aria-hidden="true" />;
+}
+
+/** Our words, not a frame with the server's JSON or the browser's error. The header keeps « Ouvrir dans un onglet ». */
+export function PdfFailed({ url, title }: { url: string; title: string }) {
+  return (
+    <div className="pf">
+      <div className="pf-stage"><div className="lightbox-wait">Ce guide ne s’ouvre pas ici : le fichier est introuvable ou abîmé.</div></div>
+      <div className="pf-bar" style={{ justifyContent: 'center' }}><a className="btn btn-sm lightbox-btn" href={url} download={pdfName(title)}><Icon name="file" size={13} />Télécharger</a></div>
+    </div>
+  );
 }
 
 interface Flip { id: number; from: number; to: number }
@@ -196,7 +212,7 @@ export function PdfFlip({ url, title }: { url: string; title: string }) {
     act();
   });
 
-  if (failed) return <PdfFrame url={url} title={title} />;
+  if (failed) return <PdfFailed url={url} title={title} />;
 
   const shown = flipSpread(pages, spread);
   const turn = flip ? flipFaces(pages, flip.from, flip.to) : null;
@@ -228,7 +244,7 @@ export function PdfFlip({ url, title }: { url: string; title: string }) {
         <input className="pf-slider" type="range" min={0} max={Math.max(0, count - 1)} value={spread} onChange={(e) => go(Number(e.target.value), false)} aria-label="Aller à la page" disabled={!doc} />
         <button type="button" className="vp-btn" onClick={() => go(spread + 1)} disabled={spread >= count - 1} title="Page suivante (→)" aria-label="Page suivante"><Icon name="chevronRight" size={15} /></button>
         <span className="vp-time">{doc ? spreadLabel(pages, spread) : '…'}</span>
-        <a className="btn btn-sm lightbox-btn" href={url} download><Icon name="file" size={13} />Télécharger</a>
+        <a className="btn btn-sm lightbox-btn" href={url} download={pdfName(title)}><Icon name="file" size={13} />Télécharger</a>
       </div>
     </div>
   );

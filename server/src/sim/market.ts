@@ -7,7 +7,6 @@ import { ensureChannelMarket } from './channels.js';
 import { FEMALE_NAMES, FIRST_NAMES, MALE_NAMES } from './customers.js';
 import { NICHE_CATALOG, cloneNiche } from './niches.js';
 import { lognormal, norm, uniform } from './text.js';
-import { nicheTempo } from './videoCraft.js';
 
 export function difficultyProfile(d: Difficulty): DifficultyProfile {
   return { ...(DIFFICULTY[d] ?? DIFFICULTY.normal) };
@@ -175,7 +174,6 @@ export function createMarketState(scenario: ScenarioConfig, rng: Rng): MarketSta
   const burn = 16 + Math.floor(rng.next() * 97);
   for (let i = 0; i < burn; i++) rng.next();
   const niches = NICHE_CATALOG.map((n) => varyNiche(cloneNiche(n), rng));
-  if (scenario?.videoModel === 'on') niches.forEach((n, i) => { n.videoTempo = nicheTempo(scenario.seed, i); }); // draws on the seed, never on `rng`
   const used = new Set<string>();
   const creators = niches.flatMap((n) => makeCreators(n, rng, scenario?.difficulty ?? 'normal', used));
   const market: MarketState = {

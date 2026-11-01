@@ -5,7 +5,7 @@
 ```
 ┌──────────────────────────── web/ (Vite + React + canvas) ───────────────────────────┐
 │  Monde isométrique pixel art · panneaux Agent/Département · résumé du fondateur     │
-│  Onglets Tâches, Produits, Acquisition, Canaux, Croissance, Effectif, Compétition,  │
+│  Onglets Tâches, Produits, Publicité, Canaux, Croissance, Effectif, Compétition,    │
 │  Finance, Galerie, Boîte mail, Calendrier, Cerveau, Apprentissage · barre de mission│
 └───────────────▲─────────────────────────────── SSE /api/stream, REST /api/* ────────┘
                 │ CompanySnapshot (jamais la vérité cachée du marché ni le vrai talent)
@@ -50,11 +50,11 @@ Le catalogue compte 13 départements, 35 rôles et 47 types de tâches, pour 60 
 
 - **`reconcileOrg`** dérive tout de qui est là : chapeaux, départements ouverts, chefs, bureaux (`offices`), où va le travail ouvert. Une embauche, un départ et un rechargement passent par le même code. Un département sans personne reste un terrain vide, un autre porte ses tâches.
 - **Embauches** : `headcount_review` lit l'attente par type de tâche. Un goulot qui dure ouvre un poste s'il passe les portes d'argent, tirées du grand livre, sinon le refus est consigné avec ses chiffres. Chaque candidat passe le vrai test de son métier (`Candidate.interview`). Une recrue prend 3 jours pour sa vitesse et 7 pour sa qualité.
-- **Départs** : remplacement, licenciement quand l'argent manque (`L1`) ou quand un rôle dort (`L2`), ordre du fondateur. Chaque personne garde son identifiant à vie, son nom n'est jamais réutilisé, ses salaires et son solde passent au grand livre.
+- **Départs** : remplacement, licenciement quand l'argent manque (`L1`) ou quand un rôle dort (`L2`), ordre du fondateur. En mode validation, les deux licenciements attendent son accord. Chaque personne garde son identifiant à vie, son nom n'est jamais réutilisé, ses salaires et son solde passent au grand livre.
 
 ## La compétition
 
-Chaque agent hors CEO a une note qui ne lit que des résultats observés (`recordEvidence`), notée contre un par, sur sa compétence principale : jamais sur un chapeau. Une saison dure 14 jours. Sous la barre avec assez de preuves : plan de 14 jours et coach. Plan raté : `runChallenge` fait passer au titulaire et à trois candidats le même test réel, et le poste ne change de main que si l'un bat le titulaire de la marge fixée. Le remplacement est atomique, dans `league_review`. Les fondateurs autres que la CEO peuvent être remplacés. Le talent réel reste caché : ni les agents, ni le snapshot, ni l'interface ne le lisent.
+Chaque agent hors CEO a une note qui ne lit que des résultats observés (`recordEvidence`), notée contre un par, sur sa compétence principale : jamais sur un chapeau. Une saison dure 14 jours. Sous la barre avec assez de preuves : plan de 14 jours et coach. Plan raté : `runChallenge` fait passer 24 fois au titulaire et à 6 candidats le même test réel, et le poste ne change de main que si l'un bat le titulaire de deux écarts-types. Le remplacement est atomique, dans `league_review`. Les fondateurs autres que la CEO peuvent être remplacés. Le talent réel reste caché : ni les agents, ni le snapshot, ni l'interface ne le lisent.
 
 ## Les canaux
 
@@ -114,7 +114,7 @@ Chacune de ces coupes est une décision, pas une tâche en attente (`docs/v1/PLA
 | Organique hors TikTok | Quatre créneaux par jour, chiffres minces, longue traîne à borner |
 | `channel_cpm_spike` | Le pic TikTok existant enseigne la même chose |
 | Témoins `platform_claims` et `no_bandit` | Prouvent peu au-delà de `last_click` et `tiktok_only` |
-| `buyerScore`, `talentEdge`, `thumbFactor` | Le ROAS réconcilié suffit ; la vignette reste un libellé tant qu'aucun fil ne la montre |
+| `buyerScore`, `talentEdge`, `thumbFactor` | Le ROAS boutique suffit ; la vignette reste un libellé tant qu'aucun fil ne la montre |
 | Marque (`market.brand`) | Les canaux ajoutent déjà de la capacité, deux mécaniques impossibles à distinguer |
 | Porte de palier sur les canaux et les embauches | Leurs propres portes d'argent décident : une règle par décision |
 | Beats `before_after`, `step_list`, vidéo 2:3 | Conçus, jamais rendus ; deux scènes de plus de la même grammaire |

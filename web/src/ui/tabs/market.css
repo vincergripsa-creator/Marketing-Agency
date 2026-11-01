@@ -13,7 +13,7 @@
 /* Publicité: which channel a row belongs to */
 .channel-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; white-space: nowrap; color: var(--ink-2); }
 
-/* Canaux: the three readings */
+/* Canaux: the two readings */
 .roas-table td.roas-key, .roas-table th.roas-key { font-weight: 700; }
 .roas-table td.roas-key { font-size: 13.5px; }
 .roas-inflated { display: block; font-size: 11px; font-weight: 600; color: var(--warn); }

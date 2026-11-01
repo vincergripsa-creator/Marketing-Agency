@@ -19,7 +19,7 @@ import { CompanyBadge, SimHud } from './Hud';
 import { agentName, buildLookups } from './labels';
 import { ScenarioModal } from './ScenarioModal';
 import { StageBadge, stageAria } from './StageBadge';
-import { calendarSpan, CalendarTab } from './tabs/CalendarTab';
+import { calendarSpan, CalendarTab, journalWritten } from './tabs/CalendarTab';
 import { mockDetail } from './useDetail';
 import { chronicleToasts, entryTarget, lastAnnounced, takeToasts, type ChronicleSeen } from './useEventToasts';
 
@@ -61,6 +61,12 @@ function digestOf(o: Partial<FounderDigest> = {}): FounderDigest {
   };
 }
 
+describe('the journal of a day', () => {
+  it('today has none yet', () => {
+    expect([journalWritten(46, 47), journalWritten(47, 47)]).toEqual([true, false]);
+  });
+});
+
 describe('founder digest', () => {
   const body = (d = digestOf()) => text(render(<FounderDigestBody data={d} onEntry={noop} onTasks={noop} />));
 
@@ -79,6 +85,13 @@ describe('founder digest', () => {
     expect(html).toMatch(/txt-bad">−88,50 €<\/strong>/);
   });
 
+  it('a guide in harvest stays on sale: it has its own word, not « Arrêté »', () => {
+    const d = digestOf();
+    const html = body({ ...d, products: { ...d.products, stopped: [{ title: 'Dodo serein', why: 'plus de pub', harvest: true }] } });
+    expect(html).toContain('En récolte : Dodo serein. plus de pub');
+    expect(html).not.toContain('Arrêté : Dodo serein');
+  });
+
   it('a gain is printed the same way', () => {
     const d = digestOf();
     const html = body({ ...d, money: { ...d.money, profit: 1980, cashEnd: 2980 } });
@@ -93,7 +106,7 @@ describe('founder digest', () => {
     for (const title of ['Ce qui a compté', 'Décisions', 'Erreurs', 'Incidents', 'Équipe', 'Produits', 'Canaux', 'À décider', 'La suite']) expect(html).toContain(`<h3>${title}</h3>`);
     expect(html).toContain('Jour 31 : machine éteinte 6 h');
     expect(html).toContain('Arrêté : Siestes faciles. ROAS 0,6 sur 40 € de test');
-    expect(html).toContain('Meilleur ROAS réconcilié : Facebook & Instagram, 2,31×');
+    expect(html).toContain('Meilleur ROAS boutique : Facebook & Instagram, 2,31×');
     expect(html).toContain('Départ : Tom (Rédacteur) : qualité 68/100');
     expect(html).toContain('Ouvrir les tâches');
   });

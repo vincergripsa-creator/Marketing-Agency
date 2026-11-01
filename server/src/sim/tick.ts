@@ -2,7 +2,7 @@
  * Market close for world.day: paid ads → organic → creators → e-mails → sales → list capture → order bumps → upsells →
  * refunds → reviews → inbox → escalations → random events → rivals → fixed costs. Every money move goes through the ledger.
  */
-import { clamp, emit, nextId, round2, streamRng } from '../core/index.js';
+import { BoundedMemo, clamp, emit, nextId, round2, streamRng } from '../core/index.js';
 import type { DifficultyProfile, MarketDayResult, Rng } from '../contracts.js';
 import { CHANNELS, CHANNEL_IDS, channelOf } from '../shared.js';
 import type {
@@ -30,7 +30,6 @@ import { chargebackOrder, creativeById, nicheOf, orderById, productById, pushEve
 import { genericPhraseHits, guideOverlap, scoreCreative, scorePdf, scoreSalesPage, vocPhraseHits } from './quality.js';
 import { rivalFactor, rollRivals } from './rivals.js';
 import { fmtEur, fmtInt, fmtNum, fmtPct, keyTokens, lognormal, norm, overlap, pickWeighted, plural, short, stemSet, uniform } from './text.js';
-import { tempoFit } from './videoCraft.js';
 import { visualCvr, visualRating, visualRefund, visualWtp } from './visual.js';
 
 interface Traffic {
@@ -56,6 +55,14 @@ const NEUTRAL_REPORT: QualityReport = {
   overall: 35, specificity: 30, structure: 30, actionability: 30, humanTone: 50, design: 20, promiseMatch: 100, compliance: 100,
   issues: [], evaluator: 'heuristic',
 };
+
+/** Above the guides on sale at any one time, or a full round would forget what the next one needs. */
+const GUIDE_READINGS = 256;
+/**
+ * What the market read of a guide, kept across days by everything the reading depends on: a live guide is read every day and
+ * its text hardly moves. It stays out of the world on purpose: its keys hold the niche's true voice, which no save may gain.
+ */
+const guideReadings = new BoundedMemo<QualityReport>(GUIDE_READINGS);
 
 /** Per-day caches + running totals. */
 class Day {
@@ -112,8 +119,9 @@ class Day {
   pdfQ(p: Product): QualityReport {
     let r = this.pdfCache.get(p.id);
     if (!r) {
-      const n = this.niche(p);
-      r = p.content ? scorePdf(p.content, { audience: p.audience, problem: p.problem, voc: n.voc, design: p.design, visual: p.visual }) : NEUTRAL_REPORT;
+      const { content, audience, problem, design, visual } = p;
+      const { voc } = this.niche(p);
+      r = content ? guideReadings.read(JSON.stringify([content, audience, problem, voc, design, visual]), () => scorePdf(content, { audience, problem, voc, design, visual })) : NEUTRAL_REPORT;
       if (p.quality && p.quality.evaluator !== 'heuristic') {
         r = { ...r, overall: Math.round(0.6 * r.overall + 0.4 * p.quality.overall), specificity: Math.round(0.6 * r.specificity + 0.4 * p.quality.specificity) };
       }
@@ -346,7 +354,7 @@ function runAds(d: Day): void {
       const fatigue = 1 / (1 + prior / spec.fatigue);
       const ctrRaw = ADS.baseCtr * Math.pow(Math.max(1, q.overall) / ADS.qualityRef, ADS.qualityExp)
         * Math.pow((n.hookAffinity[c.hookStyle] ?? 1) * spec.formatFit(c), spec.affinityExp) * (0.6 + 0.8 * spec.fit)
-        * spec.ctrScale * spec.ratioFit(c) * spec.learningCtr * fatigue * tempoFit(n, c) * d.noise(ADS.ctrNoiseSd);
+        * spec.ctrScale * spec.ratioFit(c) * spec.learningCtr * fatigue * d.noise(ADS.ctrNoiseSd);
       const ctr = clamp(ctrRaw, ADS.minCtr, ADS.maxCtr);
       const clicks = rng.binomial(impressions, ctr);
       const landingViews = rng.binomial(clicks, spec.landingRate);

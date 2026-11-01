@@ -570,6 +570,7 @@ export function completeDeparture(ctx, id): void;
 
 - **L1 cash.** `lossDays` counts evenings with `C < 21 × (P + F)` and `M < P + F`. At 5, lay off the non-founder with the lowest 14-day utilisation (ties: highest pay, id). Reset after a layoff.
 - **L2 idle.** A role with at least 2 holders, one of them under 20 % for 14 days and hired 14 days ago or more: lay that one off.
+- **Approval mode (D150).** Under `founderApproval` both roads open an ask instead of laying off: a `league_review` task with `input.layoff`, one at a time. Nothing is paid and nobody leaves before the yes, and a refusal pins that person for `TALENT.challenge.refusalPinDays`.
 
 At most one per 3 days. Founders are outside both rules. Nora signs, Gabriel gives the numbers.
 

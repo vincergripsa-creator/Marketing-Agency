@@ -6,15 +6,22 @@ import { fileUrl } from '../../api';
 import { cx } from '../common';
 import { useApp } from '../context';
 import { Icon } from '../icons';
+import { useDetail } from '../useDetail';
 import { Lightbox, useLightboxKey } from './Lightbox';
 
-export const NO_FILE_CAPTION = 'Aperçu animé : vidéo non générée sur cette machine';
+export const NO_FILE_CAPTION = 'Pas encore de vidéo pour cette pub';
+export const NO_RENDER_CAPTION = 'Aperçu animé : vidéo non générée sur cette machine';
+const READY_CHIP = 'Vidéo prête';
 const SIMULATED_CHIP = 'Pub simulée — jamais publiée';
 const SEEK_STEP_SEC = 5;
 const POLL_MS = 3000;
 const STATUS_LINE: Partial<Record<VideoStatus, string>> = { queued: 'En file', rendering: 'Rendu en cours…' };
 
 type Ratio = VideoFile['ratio'];
+type Machine = Pick<VideoIndex, 'level' | 'reason'>;
+
+/** The ladder's line under a film (video §7). At `storyboard_only` a kept file still plays: only the button stops. */
+const machineChip = ({ level, reason }: Machine): string | null => (level === 'no_voice' || level === 'no_pages' ? reason : READY_CHIP);
 
 /** One table per ratio: 9:16 reads TikTok, the strictest of the vertical apps on the right rail. */
 const SAFE_BY_RATIO: Record<Ratio, { w: number; h: number; insets: { top: number; right: number; bottom: number; left: number } }> = {
@@ -46,21 +53,21 @@ function Speaker({ muted }: { muted: boolean }) {
   );
 }
 
-function Fallback({ html, title, reason }: { html: string | null | undefined; title: string; reason?: string | null }) {
+function Fallback({ html, title, reason, machine }: { html: string | null | undefined; title: string; reason?: string | null; machine?: Machine | null }) {
   const { runId } = useApp();
   return (
     <div className="vp-fallback">
       <div className="vp-phone" style={{ '--vp-r': ratioValue('9:16') } as CSSProperties}>
         {html ? <iframe src={fileUrl(runId, html)} title={`Aperçu : ${title}`} sandbox="allow-scripts" /> : <div className="vp-blank">Aucun aperçu pour cette pub.</div>}
       </div>
-      <p className="vp-caption">{NO_FILE_CAPTION}</p>
+      <p className="vp-caption">{machine?.level === 'storyboard_only' ? NO_RENDER_CAPTION : NO_FILE_CAPTION}</p>
       {reason ? <p className="vp-caption vp-reason">{reason}</p> : null}
     </div>
   );
 }
 
-export function VideoPlayer({ videos, poster, captions, fallbackHtml, title, reason }: {
-  videos: VideoFile[]; poster?: string | null; captions?: string | null; fallbackHtml?: string | null; title: string; reason?: string | null;
+export function VideoPlayer({ videos, poster, captions, fallbackHtml, title, reason, machine }: {
+  videos: VideoFile[]; poster?: string | null; captions?: string | null; fallbackHtml?: string | null; title: string; reason?: string | null; machine?: Machine | null;
 }) {
   const { runId } = useApp();
   const ref = useRef<HTMLVideoElement>(null);
@@ -117,10 +124,11 @@ export function VideoPlayer({ videos, poster, captions, fallbackHtml, title, rea
     act();
   });
 
-  if (!file || failed) return <Fallback html={fallbackHtml} title={title} reason={reason} />;
+  if (!file || failed) return <Fallback html={fallbackHtml} title={title} reason={reason} machine={machine} />;
 
   const shown = file.ratio;
   const bands = safeBands(shown);
+  const chip = machine ? machineChip(machine) : null;
   return (
     <div className="vp">
       <div className="vp-phone" style={{ '--vp-r': ratioValue(shown) } as CSSProperties}>
@@ -174,6 +182,7 @@ export function VideoPlayer({ videos, poster, captions, fallbackHtml, title, rea
         <button type="button" className={cx('vp-btn', safe && 'vp-on')} onClick={() => setSafe((s) => !s)} title="Zone masquée par l’interface de la plateforme" aria-pressed={safe}>Zones</button>
         {[1, 1.5].map((r) => <button key={r} type="button" className={cx('vp-btn', rate === r && 'vp-on')} onClick={() => setRate(r)} aria-pressed={rate === r}>{r === 1 ? '1×' : '1,5×'}</button>)}
         {videos.length > 1 ? videos.map((v) => <button key={v.ratio} type="button" className={cx('vp-btn', v.ratio === shown && 'vp-on')} onClick={() => pickRatio(v.ratio)} aria-pressed={v.ratio === shown}>{v.ratio}</button>) : null}
+        {chip ? <span className="vp-chip">{chip}</span> : null}
         <span className="vp-chip">{SIMULATED_CHIP}</span>
       </div>
     </div>
@@ -201,29 +210,26 @@ function CardDeck({ cards, title }: { cards: string[]; title: string }) {
   );
 }
 
-/** Opens a creative. `snapshot.videos` first: the stream only holds the latest 30, so an older one comes from the server's index (D52). */
+/** Opens a creative. `snapshot.videos` first: the stream only holds the latest 30, so an older one comes from the server's index (D52). The index also says what this machine can do, and the stream never does. */
 export function VideoLightbox({ creativeId, title, fallbackHtml, onClose }: { creativeId: string; title: string; fallbackHtml?: string | null; onClose(): void }) {
   const { snapshot, runId } = useApp();
   const live = snapshot?.videos?.[creativeId];
+  const { data: index, loading, reload } = useDetail<VideoIndex>('/api/videos', 0);
+  const found = index?.items?.[creativeId];
   const [kept, setKept] = useState<CreativeVideo | null>(null);
-  const [answered, setAnswered] = useState(false);
   const video = live ?? kept;
   const waiting = video?.status === 'queued' || video?.status === 'rendering';
+  const answered = !loading;
 
-  useEffect(() => { if (live) setKept(live); }, [live]);
   useEffect(() => {
-    if (live) return undefined;
-    let stale = false;
-    const ask = () => fetch('/api/videos').then((r) => (r.ok ? r.json() as Promise<VideoIndex> : null)).then((index) => {
-      if (stale) return;
-      const found = index?.items?.[creativeId];
-      if (found) setKept(found);
-      setAnswered(true);
-    }).catch(() => { if (!stale) setAnswered(true); });
-    void ask();
-    const poll = waiting ? setInterval(() => void ask(), POLL_MS) : undefined;
-    return () => { stale = true; clearInterval(poll); };
-  }, [live, creativeId, waiting]);
+    const latest = live ?? found;
+    if (latest) setKept(latest);
+  }, [live, found]);
+  useEffect(() => {
+    if (live || !waiting) return undefined;
+    const poll = setInterval(reload, POLL_MS);
+    return () => clearInterval(poll);
+  }, [live, waiting, reload]);
 
   const render = () => {
     void fetch('/api/videos/render', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ creativeId }) })
@@ -233,13 +239,13 @@ export function VideoLightbox({ creativeId, title, fallbackHtml, onClose }: { cr
   const preview = fallbackHtml ?? snapshot?.company?.creatives?.find((c) => c.id === creativeId)?.files?.preview ?? null;
   const first = video?.videos[0];
   const cards = !first && video?.status === 'ready' ? video.cards : [];
-  const reason = video?.reason ?? (video ? STATUS_LINE[video.status] : null);
+  const reason = video?.reason ?? (video ? STATUS_LINE[video.status] : null) ?? index?.reason;
   return (
     <Lightbox title={title} href={first ? fileUrl(runId, first.path) : preview ? fileUrl(runId, preview) : null} onClose={onClose}>
       {cards.length ? <CardDeck cards={cards} title={title} /> : video || answered ? (
-        <VideoPlayer videos={video?.videos ?? []} poster={video?.poster} captions={video?.captions} fallbackHtml={preview} title={title} reason={reason} />
+        <VideoPlayer videos={video?.videos ?? []} poster={video?.poster} captions={video?.captions} fallbackHtml={preview} title={title} reason={reason} machine={index} />
       ) : <div className="lightbox-wait">Ouverture de la vidéo…</div>}
-      {!first && !cards.length && (video || answered) ? <button type="button" className="btn btn-sm lightbox-btn vp-render" disabled={waiting} onClick={render}>Générer la vidéo</button> : null}
+      {!first && !cards.length && (video || answered) ? <button type="button" className="btn btn-sm lightbox-btn vp-render" disabled={waiting || index?.level === 'storyboard_only'} onClick={render}>Générer la vidéo</button> : null}
     </Lightbox>
   );
 }

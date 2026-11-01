@@ -192,7 +192,7 @@ export interface DeliverablesModule {
   /** 3 to 5 pages, the same type and art. */
   renderLeadMagnet(input: { product: Product; content: PdfContent; design: DesignSpec; brand: string; outFile: string }): Promise<{ pages: number; bytes: number }>;
   /** The guide's sheets, checklists and grids, as a printable kit. */
-  renderKit(input: { product: Product; content: PdfContent; design: DesignSpec; brand: string; outFile: string }): Promise<{ pages: number; bytes: number }>;
+  renderKit(input: { product: Product; content: PdfContent; design: DesignSpec; brand: string; outFile: string }): Promise<{ pages: number; bytes: number; previews: { label: string; svg: string }[] }>;
   /** Still frames for a non-9:16 cut: 432×540, 540×540, 400×600. No canvas, no ffmpeg: works on every machine. */
   renderAdCut(input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string; ratio: Exclude<AdRatio, 'text'> }): { frames: string[] };
 }

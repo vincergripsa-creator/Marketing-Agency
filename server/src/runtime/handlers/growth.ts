@@ -51,11 +51,10 @@ export function reworkCraft(task: Task, mind: MindContext): MindContext {
   return task.attempts > 0 && mind.craft ? { ...mind, craft: { ...mind.craft, flaw: mind.craft.flaw / 2 } } : mind;
 }
 
-/** The tempo of a cut is an editorial choice the market answers: a bandit per niche, on a stream of its own (video §3.6). */
-function pickTempo(ctx: RuntimeCtx, agent: AgentState, mind: MindContext, nicheId: string, variant: number): VideoTempo {
+/** The tempo of a cut keeps films varied and moves no number (D149): a uniform draw on a stream of its own. */
+function pickTempo(ctx: RuntimeCtx, variant: number): VideoTempo {
   const w = ctx.world;
-  const rng = streamRng(w.scenario.seed, STREAM.videoTempo, w.day, w.tick, variant);
-  return learning.chooseArm(w, `video_tempo:${nicheId}`, TEMPOS, rng, armSharp(ctx, agent, mind, 'tempo')) as VideoTempo;
+  return TEMPOS[streamRng(w.scenario.seed, STREAM.videoTempo, w.day, w.tick, variant).int(0, TEMPOS.length - 1)]!;
 }
 
 /** Keyed on the text, never on a generated id: paired runs keep the same cut for the same script, and `draw` tells a draft from the next (video §3.1). */
@@ -92,7 +91,9 @@ export function hookPool(ctx: RuntimeCtx, productId: string): HookItem[] {
 
 function bannedFor(ctx: RuntimeCtx, product: Product, agentId: string): string[] {
   const voc = vocOf(ctx, product.nicheId);
-  return uniq([...voc.bannedClaims, ...directivesOf(ctx.world, agentId).banned, ...directivesOf(ctx.world, officerId(ctx.world, 'growth')).banned]);
+  const mine = directivesOf(ctx.world, agentId);
+  const lead = directivesOf(ctx.world, officerId(ctx.world, 'growth'));
+  return uniq([...voc.bannedClaims, ...mine.banned, ...mine.platformBanned, ...lead.banned, ...lead.platformBanned]);
 }
 
 export function creativeText(c: AdCreative): string {
@@ -372,7 +373,7 @@ export const growthHandlers: HandlerMap = {
         caption: ad.caption ?? '', hashtags: Array.isArray(ad.hashtags) ? ad.hashtags : [], cta: ad.cta ?? '',
       });
       const video = ctx.world.scenario.videoModel === 'on';
-      const tempo = video ? ctx.world.scenario.control?.videoTempo ?? pickTempo(ctx, agent, mind, product.nicheId, variant) : 'standard';
+      const tempo = video ? ctx.world.scenario.control?.videoTempo ?? pickTempo(ctx, variant) : 'standard';
       // Each draft is read as a creative with the company's own VoC, with its cut (D31): no id is spent on the ones left in the drawer.
       const { draft } = await bestDraft(ctx, agent, reworkCraft(task, mindWith(mind, notes)), 'ad',
         async (m) => {

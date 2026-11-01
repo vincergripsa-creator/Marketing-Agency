@@ -38,6 +38,13 @@ describe('focus stays visible on the text inputs that remove their own outline',
   }
 });
 
+describe('the top bar', () => {
+  it('compacts up to the width where every tab fits: at 1680 px Galerie sat under the clip, unreachable by mouse', () => {
+    const at = /@media \(max-width: (\d+)px\) \{\s*\.logo-text \{ display: none; \}/.exec(css);
+    expect(Number(at?.[1])).toBeGreaterThanOrEqual(1800);
+  });
+});
+
 describe('dead rules', () => {
   it('no rule for a badge nothing renders', () => {
     expect(css).not.toContain('.badge-red');

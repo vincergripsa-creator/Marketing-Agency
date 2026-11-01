@@ -1,4 +1,4 @@
-// Canaux: what each channel is, what it brought read three ways, what it proved per niche, and why the CFO moved the money.
+// Canaux: what each channel is, what it brought read two ways, what it proved per niche, and why the CFO moved the money.
 import { useMemo } from 'react';
 import { CHANNELS, CHANNEL_IDS, channelOf, type ChannelId } from '../../../../shared/channels';
 import type {
@@ -17,10 +17,10 @@ const FLOOR_ROAS = 1.15;
 /** Under this, what a platform claims is rounding, not inflation. */
 const INFLATED_FROM = 1.05;
 
-/** Tones read the reconciled ROAS and nothing else: a platform's own number never turns a line green (ui §6.5). */
-export function roasTone(reconciled: number | null): string {
-  if (reconciled === null) return 'muted';
-  return reconciled >= FLOOR_ROAS ? 'txt-good' : 'txt-bad';
+/** Tones read the shop's ROAS and nothing else: a platform's own number never turns a line green (ui §6.5). */
+export function roasTone(shop: number | null): string {
+  if (shop === null) return 'muted';
+  return shop >= FLOOR_ROAS ? 'txt-good' : 'txt-bad';
 }
 
 /** Shares of a day's budget, summing to 1. A day with nothing spent gives zeros, not NaN. */
@@ -101,7 +101,7 @@ export function CanauxTab({ onClose }: { onClose(): void }) {
   const detail = useDetail<ChannelsDetail>('/api/channels', snapshot?.day ?? 1);
   const shown = detail.data ?? (demo ? tiktokDetail(snapshot) : null);
   return (
-    <Overlay title="Canaux" subtitle="Où part chaque euro · trois lectures du ROAS, une seule décide" icon="globe" onClose={onClose}>
+    <Overlay title="Canaux" subtitle="Où part chaque euro · deux lectures du ROAS, la boutique décide" icon="globe" onClose={onClose}>
       {demo ? null : <DetailNotice detail={detail} empty="Aucune donnée de canal pour ce run." />}
       {shown ? <CanauxBody data={shown} /> : null}
     </Overlay>
@@ -118,8 +118,8 @@ export function CanauxBody({ data }: { data: ChannelsDetail }) {
     <>
       <div className="stats-row">
         <Stat label="Dépense 7 j" value={fmtEur(totals.spend7d)} icon="euro" />
-        <Stat label="Revenu réconcilié 7 j" value={fmtEur(totals.reconciledRevenue7d)} icon="target" />
-        <Stat label="ROAS réconcilié 7 j" value={fmtRoas(totals.reconciledRoas7d)} sub="celui qui décide" tone={totals.reconciledRoas7d === null ? null : totals.reconciledRoas7d >= FLOOR_ROAS ? 'good' : 'bad'} icon="trendUp" />
+        <Stat label="Revenu boutique 7 j" value={fmtEur(totals.reconciledRevenue7d)} icon="target" />
+        <Stat label="ROAS boutique 7 j" value={fmtRoas(totals.reconciledRoas7d)} sub="celui qui décide" tone={totals.reconciledRoas7d === null ? null : totals.reconciledRoas7d >= FLOOR_ROAS ? 'good' : 'bad'} icon="trendUp" />
         <Stat label="Canaux ouverts" value={`${fmtInt(rows.filter((r) => r.state === 'open').length)} / ${fmtInt(CHANNEL_IDS.length)}`} icon="globe" />
       </div>
 
@@ -189,9 +189,8 @@ function ChannelCard({ row, account }: { row: ChannelRow; account: ChannelAccoun
 
 const READINGS = {
   platform: 'Ce que le tableau de bord de la plateforme s’attribue : une vente qu’il a seulement vue passer compte pour lui.',
-  shop: 'Ce que la boutique attribue au dernier clic : le bon total, mais une répartition qui favorise le dernier canal touché.',
-  reconciled: 'La répartition recalculée, total calé sur la boutique. C’est la seule lecture sur laquelle l’agence décide.',
-  marginal: 'Ce que rapporterait le prochain euro : là où part l’argent, pas le ROAS moyen.',
+  shop: 'Ce que la boutique attribue au dernier clic : le bon total, une répartition qui favorise le dernier canal touché. C’est la lecture sur laquelle l’agence décide.',
+  marginal: 'Ce que rapporterait le prochain euro, d’après la courbe de la ligne : une lecture, le budget suit le ROAS moyen.',
 } as const;
 
 function RoasTable({ rows, totals }: { rows: ChannelRow[]; totals: ChannelsDetail['totals'] }) {
@@ -204,8 +203,7 @@ function RoasTable({ rows, totals }: { rows: ChannelRow[]; totals: ChannelsDetai
             <tr>
               <th>Canal</th><th className="num">Budget/j</th><th className="num">Dépense</th>
               <th className="num" title={READINGS.platform}>ROAS plateforme</th>
-              <th className="num" title={READINGS.shop}>ROAS boutique</th>
-              <th className="num roas-key" title={READINGS.reconciled}>ROAS réconcilié</th>
+              <th className="num roas-key" title={READINGS.shop}>ROAS boutique</th>
               <th className="num" title={READINGS.marginal}>ROAS marginal</th>
               <th className="num">Part du budget</th>
             </tr>
@@ -220,21 +218,20 @@ function RoasTable({ rows, totals }: { rows: ChannelRow[]; totals: ChannelsDetai
                   {fmtRoas(r.claimedRoas7d)}
                   {inflated(r) ? <span className="roas-inflated">gonflé ×{fmtDec(r.inflation, 1)}</span> : null}
                 </td>
-                <td className="num">{fmtRoas(r.shopRoas7d)}</td>
-                <td className={cx('num roas-key', roasTone(r.reconciledRoas7d))}>{fmtRoas(r.reconciledRoas7d)}</td>
+                <td className={cx('num roas-key', roasTone(r.shopRoas7d))}>{fmtRoas(r.shopRoas7d)}</td>
                 <td className="num">{fmtRoas(r.marginalRoas)}</td>
                 <td className="num">{fmtPct(r.share, 0)}</td>
               </tr>
             ))}
             <tr className="roas-total">
-              <td>Total</td><td /><td className="num">{fmtEur(totals.spend7d)}</td><td /><td />
+              <td>Total</td><td /><td className="num">{fmtEur(totals.spend7d)}</td><td />
               <td className={cx('num roas-key', roasTone(totals.reconciledRoas7d))}>{fmtRoas(totals.reconciledRoas7d)}</td>
               <td /><td />
             </tr>
           </tbody>
         </table>
       </div>
-      <div className="roas-help"><strong>Plateforme :</strong> {READINGS.platform} <strong>Boutique :</strong> {READINGS.shop} <strong>Réconcilié :</strong> {READINGS.reconciled}</div>
+      <div className="roas-help"><strong>Plateforme :</strong> {READINGS.platform} <strong>Boutique :</strong> {READINGS.shop}</div>
     </>
   );
 }
@@ -288,11 +285,11 @@ function PlanCard({ plan, lookups }: { plan: ChannelPlan | null; lookups: Lookup
   if (!plan) return <Empty compact icon="wallet">Pas encore de répartition : le CFO arbitre dès que deux canaux ont des campagnes actives.</Empty>;
   return (
     <>
-      <div className="muted small">Jour {plan.day} · chaque euro va là où le suivant rapporte le plus.</div>
+      <div className="muted small">Jour {plan.day} · {plan.lambda === null ? 'chaque ligne reçoit sa part selon son ROAS moyen' : 'chaque euro va là où le suivant rapporte le plus'}.</div>
       <div className="kpi-mini">
         <div><span>Enveloppe</span><strong>{fmtEur(plan.envelope, 0)}</strong></div>
         <div><span>Dont tests</span><strong>{fmtEur(plan.testEnvelope, 0)}</strong></div>
-        <div title="Le ROAS marginal auquel toutes les lignes optimisées sont amenées"><span>λ, euro suivant</span><strong>{fmtRoas(plan.lambda)}</strong></div>
+        {plan.lambda === null ? null : <div title="Le ROAS marginal auquel toutes les lignes optimisées sont amenées"><span>λ, euro suivant</span><strong>{fmtRoas(plan.lambda)}</strong></div>}
       </div>
       {plan.unspent > 0 ? <div className="banner-inline banner-warn">{fmtEur(plan.unspent, 0)} non dépensés : aucun canal ne rapporte son euro suivant</div> : null}
       {plan.lines.length === 0 ? <div className="muted small">Aucune ligne à arbitrer aujourd’hui.</div> : (

@@ -1,7 +1,7 @@
 /**
- * Who really sold what (channels §5.2). Three readings of the same sales: what each platform claims (too high), the
- * shop's last click (right total, wrong split) and the reconciled split, its total forced to the shop. Pure: rows and
- * the ledger in, numbers out. Money stays in the ledger, this only says how to read it.
+ * Who really sold what (channels §5.2). Two readings of the same sales: what each platform claims (too high) and the shop's
+ * last click. Step 4 switched the third off (D149): with `claimWeight` 0 the reconciled split is the shop's and every credit
+ * is exactly 1. Pure: rows and the ledger in, numbers out. Money stays in the ledger, this only says how to read it.
  */
 import { CHANNEL_IDS, channelOf } from '../shared.js';
 import type { AttributionRow, ChannelDayKpi, ChannelId, DailyAdStats, WorldState } from '../shared.js';
@@ -9,7 +9,7 @@ import { REVERSAL_REF } from '../core/index.js';
 import { amountOf } from './data.js';
 import { finite, round, safeDiv } from './text.js';
 
-export const RECON = { claimWeight: 0.5, windowDays: 14, minNicheRevenue: 30, staleDays: 4, creditMin: 0.4, creditMax: 2.5 };
+export const RECON = { claimWeight: 0, windowDays: 14, minNicheRevenue: 30, staleDays: 4, creditMin: 0.4, creditMax: 2.5 };
 
 const cents = (eur: number | undefined): number => Math.round(Math.max(0, finite(eur)) * 100);
 const eur = (c: number): number => round(c / 100);
@@ -27,9 +27,8 @@ function splitCents(total: number, weights: readonly number[]): number[] {
 }
 
 /**
- * One row per channel present, in CHANNEL_IDS order. A platform's claims above the shop's own count for half: they are
- * biased, not empty, since an ad can touch a buyer who clicks elsewhere. Σ reconciled = Σ shop, always, and one channel
- * alone has credit 1, exactly.
+ * One row per channel present, in CHANNEL_IDS order. A platform's claims above the shop's own count for `claimWeight`, 0 since
+ * D149. Σ reconciled = Σ shop, always, and one channel alone has credit 1, exactly.
  */
 export function reconcile(rows: readonly Pick<DailyAdStats, 'channel' | 'spend' | 'revenue' | 'claimedRevenue'>[]): AttributionRow[] {
   const totals = new Map<ChannelId, { spend: number; shop: number; claimed: number }>();

@@ -22,7 +22,7 @@ export interface PlanModel {
   rows: PlanRow[];      // phases, each listing its method steps in reading order
   sheet: SheetSpec;     // the table to tick
   dayByDay: boolean;    // the table has one line per day (or night, or week) of the plan
-  span: { days: number; unit: string }; // the axis of the plan figure: its real calendar, else the ranks of its phases
+  span: { days: number; unit: string }; // the axis of the plan figure: its real calendar, else the ranks of its phases and no unit: an order is no time
 }
 
 /** Inline action for a table cell or a phase line. */
@@ -33,8 +33,8 @@ const act = (s: MethodStep): string => {
 
 const FROM: Record<string, string> = { jour: 'du jour', nuit: 'de la nuit', semaine: 'de la semaine', soir: 'du soir', mois: 'du mois' };
 
-/** A bar's label: the column beside the bars holds two lines at most. */
-const TRACK_LABEL = 46;
+/** A bar's label, or the first column of a sheet: its column wraps as long as it needs, so a step stays whole. */
+export const TRACK_LABEL = 90;
 /** What fits behind an action in a table cell. */
 const CHECK_MAX = 60;
 
@@ -70,7 +70,7 @@ function parallelPlan(c: NicheCtx): PlanModel {
     const fresh = steps.filter((x) => x.from === d);
     const active = steps.filter((x) => x.from <= d && x.to >= d);
     let text: string;
-    if (fresh.length) text = `Démarrer : ${fresh.map((x) => act(x.s)).join(' ; ')}`;
+    if (fresh.length) text = `${d === n ? 'Terminer' : 'Démarrer'} : ${fresh.map((x) => act(x.s)).join(' ; ')}`;
     else if (d === n) text = 'Bilan final : comparer avec vos premières notes';
     else if (unitOne !== 'semaine' && d % 7 === 0) text = 'Bilan de la semaine : relire vos notes, ajuster un seul point';
     else {
@@ -109,12 +109,15 @@ function phasedPlan(c: NicheCtx, def: ArchetypeDef): PlanModel {
   });
   const unitOne = counted ? unitOfMoment(c.method[0]!.when) : '';
   const days = Math.max(1, ...c.method.map((s) => s.to ?? 0), unitOne === c.dur.unitOne ? c.dur.n : 0);
-  if (!counted) rows.forEach((r, i) => { r.tracks = [{ from: i + 1, to: i + 1, label: `${r.label} : ${labelOf(r.actions[0]!, TRACK_LABEL)}` }]; });
+  if (!counted) rows.forEach((r, i) => {
+    const step = labelOf(r.actions[0]!, TRACK_LABEL);
+    r.tracks = [{ from: i + 1, to: i + 1, label: norm(step).includes(norm(r.label)) ? cap(step) : `${r.label} : ${step}` }]; // a step that names its moment needs no head
+  });
   return {
     rows,
     sheet: { title: `Votre plan de ${c.dur.n} ${c.dur.unit}, à cocher`, columns: [def.planColumn, 'À faire', 'Fait'], rows: rows.map((r) => r.label), cells: rows.map((r) => [r.actions.join(' ; '), null]) },
     dayByDay: false,
-    span: counted ? { days, unit: cap(unitOne) } : { days: rows.length, unit: 'Étape' },
+    span: counted ? { days, unit: cap(unitOne) } : { days: rows.length, unit: '' },
   };
 }
 

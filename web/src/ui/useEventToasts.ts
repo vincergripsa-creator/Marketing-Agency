@@ -1,6 +1,7 @@
 // Turns snapshot changes into toasts: world events, sale bursts, run status changes, and what the chronicle records.
 import { useEffect, useRef } from 'react';
-import type { ChronicleEntry, ChronicleKind, CompanySnapshot, DeptId, SceneView, WorldEvent, WorldEventKind } from '../../../shared/types';
+import { DROPPED_REASON, droppedBeforeSubmission } from '../../../shared/channels';
+import type { AdCreative, ChronicleEntry, ChronicleKind, CompanySnapshot, DeptId, SceneView, WorldEvent, WorldEventKind } from '../../../shared/types';
 import { endedBankrupt, goalLate, goalTitle } from './derive';
 import { fmtEur } from './format';
 import type { IconName } from './icons';
@@ -45,8 +46,8 @@ export function useEventToasts(snapshot: CompanySnapshot | null, push: (t: Toast
     // Ad rejections also surface through the creative's review (in case no world event was raised).
     const newlyRejected = rejected.filter((c) => !s.rejected.has(c.id));
     if (newlyRejected.length && !fresh.some((e) => e.kind === 'ad_rejected')) {
-      const c = newlyRejected[newlyRejected.length - 1]!;
-      push({ tone: 'bad', icon: 'ban', title: 'Pub refusée par la plateforme', text: `« ${c.hook} »${c.review?.reason ? ` — ${c.review.reason}` : ''}`, ttl: 7000, action: productAction(c.productId) });
+      const c = newlyRejected.findLast((x) => !dropped(x)) ?? newlyRejected[newlyRejected.length - 1]!;
+      push(rejectedToast(c, productAction(c.productId)));
     }
     for (const c of rejected) s.rejected.add(c.id);
 
@@ -68,6 +69,18 @@ export function useEventToasts(snapshot: CompanySnapshot | null, push: (t: Toast
       s.status = snapshot.status;
     }
   }, [snapshot, push, enabled, onOpenProduct]);
+}
+
+const dropped = (c: AdCreative): boolean => !!c.review && droppedBeforeSubmission(c.review);
+
+/** A rejected ad. Most never left the agency: our own review dropped them, no platform saw them, and that is no alarm. */
+export function rejectedToast(c: AdCreative, action?: ToastInput['action']): ToastInput {
+  const reason = c.review?.reason ?? '';
+  const why = dropped(c) ? reason.slice(DROPPED_REASON.length).replace(/^\s*:\s*/, '') : reason;
+  const text = `« ${c.hook} »${why ? ` — ${why}` : ''}`;
+  return dropped(c)
+    ? { tone: 'info', icon: 'shield', title: 'Pub retirée avant soumission', text, ttl: 5500, action }
+    : { tone: 'bad', icon: 'ban', title: 'Pub refusée par la plateforme', text, ttl: 7000, action };
 }
 
 /** Toast of a world event; action = link to the product the event is about (refs.productId). */

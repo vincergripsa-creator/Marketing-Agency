@@ -7,7 +7,7 @@ L'agence travaille **seule, sans demander**. En échange, elle respecte ces règ
 
 1. **Zéro dépense hors budget** : aucune dépense ne peut faire passer la trésorerie sous 0.
 2. **Plafond pub** : budget pub quotidien total ≤ 15 % de la trésorerie disponible (≤ 8 % si runway < 14 jours).
-3. **Stop-loss** : une campagne avec ROAS < 0,8 après 25 € dépensés sur au moins 2 jours est mise en pause ; sous ROAS 0,4, sans attendre le 2e jour. Sous cette règle on coupe, on ne réduit pas le budget. Le seuil de dépense dépend du canal : 25 € sur TikTok et Google Search, 30 € sur YouTube Shorts et Pinterest, 45 € sur Facebook & Instagram, à lire sur le ROAS réconcilié.
+3. **Stop-loss** : une campagne avec ROAS < 0,8 après 25 € dépensés sur au moins 2 jours est mise en pause ; sous ROAS 0,4, sans attendre le 2e jour. Sous cette règle on coupe, on ne réduit pas le budget. Le seuil de dépense dépend du canal : 25 € sur TikTok et Google Search, 30 € sur YouTube Shorts et Pinterest, 45 € sur Facebook & Instagram, à lire sur le ROAS boutique.
 4. **Scale progressif** : +30 % de budget par jour maximum sur une campagne gagnante.
 5. **Paiements d'avance aux créateurs** : jamais plus de 10 % de la trésorerie, jamais à un profil avec des signaux d'alerte, et seulement si les ventes attendues (d'après les résultats réels des créateurs précédents) couvrent l'avance. Une fois que des avances n'ont pas été remboursées par les ventes : commission seule.
 6. **Ne rien publier dans le réel** tant que le fondateur n'a pas activé le mode réel.

@@ -675,7 +675,7 @@ describe('what light views keep (scale §7.1, ui §3.1)', () => {
   const report = { overall: 82, specificity: 80, structure: 80, actionability: 80, humanTone: 80, design: 80, promiseMatch: 80, compliance: 90, issues: ['Une remarque.'], evaluator: 'heuristic' as const };
   const design = { palette: { bg: '#fff', primary: '#333', secondary: '#666', accent: '#f90', ink: '#111', soft: '#eee' }, motif: 'moon' as const, coverLayout: 'centered' as const, titleFont: 'Helvetica-Bold' as const, bodyFont: 'Helvetica' as const, seed: 1 };
 
-  it('a guide on sale keeps what its card reads: the next step, the palette, the overall score and its remarks', () => {
+  it('a guide on sale keeps what its card reads: the next step, the palette, the scores and its remarks', () => {
     const w = makeWorld();
     const p = w.company.products[0]!;
     Object.assign(p, { status: 'live', design, quality: report, salesQuality: report, brief: { angle: 'Le brief' }, pagePrint: 'empreinte' });
@@ -683,7 +683,8 @@ describe('what light views keep (scale §7.1, ui §3.1)', () => {
       const card = buildSnapshot(w, FINANCE, false, limits).company.products[0]!;
       expect(card.content!.nextStep).toEqual(p.content!.nextStep);
       expect(card.design).toEqual({ palette: design.palette });
-      expect(card.quality).toEqual({ overall: 82, issues: ['Une remarque.'] });
+      expect(card.quality).toMatchObject({ overall: 82, issues: ['Une remarque.'] });
+      expect(card.quality).not.toHaveProperty('promiseMatch');
       expect(card.salesQuality).toBeNull();
       expect(card).not.toHaveProperty('brief');
       expect(card).not.toHaveProperty('pagePrint');
@@ -696,7 +697,15 @@ describe('what light views keep (scale §7.1, ui §3.1)', () => {
     const w = makeWorld();
     const blocking = [{ dimension: 'compliance' as const, text: 'Promesse de santé.' }];
     Object.assign(w.company.products[0]!, { status: 'live', quality: { ...report, blocking } });
-    expect(buildSnapshot(w, FINANCE, false, TIGHT_LIMITS).company.products[0]!.quality).toEqual({ overall: 82, issues: ['Une remarque.'], blocking });
+    expect(buildSnapshot(w, FINANCE, false, TIGHT_LIMITS).company.products[0]!.quality).toMatchObject({ overall: 82, issues: ['Une remarque.'], blocking });
+  });
+
+  it('a card keeps the six scores its bars draw, and nothing else of the report', () => {
+    const w = makeWorld();
+    const full = { ...report, specificity: 81, structure: 72, actionability: 63, humanTone: 54, design: 45, compliance: 36, promiseMatch: 90, evaluator: 'heuristic' as const };
+    Object.assign(w.company.products[0]!, { status: 'live', quality: full });
+    expect(buildSnapshot(w, FINANCE, false, TIGHT_LIMITS).company.products[0]!.quality).toEqual({ overall: full.overall, specificity: 81, structure: 72, actionability: 63, humanTone: 54, design: 45, compliance: 36, issues: full.issues });
+    expect(buildSnapshot(w, FINANCE, false, LIVE_LIMITS).company.products[0]!.quality).toMatchObject({ specificity: 81, compliance: 36 });
   });
 
   it('the stream leaves the playbooks to the panel, GET /api/state keeps them', () => {
@@ -730,6 +739,41 @@ describe('what light views keep (scale §7.1, ui §3.1)', () => {
     expect(shown.filter((d) => d.kind === 'ad_preview')).toHaveLength(TIGHT_LIMITS.deliverables);
     expect(buildSnapshot(w, FINANCE, false, LIVE_LIMITS).company.deliverables).toHaveLength(120);
     expect(buildSnapshot(w, FINANCE, false, DEFAULT_LIMITS).company.deliverables.filter((d) => d.kind === 'pdf')).toHaveLength(300);
+  });
+
+  const feed = (rows: number, chars: number): WorldState['activity'] => Array.from({ length: rows }, (_, i) => ({ id: `act_${i}`, day: 1, tick: 0, at: i, agentId: null, kind: 'thought' as const, text: 'x'.repeat(chars) }));
+
+  it('a company of a year fits the tight limits: it keeps its playbooks and is never served the live view (scale §7.1)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const w = makeWorld('run-tight-fits');
+    w.company.playbooks = { clara: ['Une règle apprise.'] };
+    w.activity = feed(120, 9_000);
+    expect((JSON.parse(serializeSnapshot(w, FINANCE)) as CompanySnapshot).company.playbooks).toEqual(w.company.playbooks);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('the budget is in bytes: French text over it in bytes goes to the next limits, even under it in characters', () => {
+    const w = makeWorld('run-bytes');
+    w.company.playbooks = { clara: ['Une règle apprise.'] };
+    const budget = serializeSnapshot(w, FINANCE).length + 6000;
+    const heavy = serializeSnapshot(w, FINANCE, false, { note: 'é'.repeat(4000) }, budget);
+    expect(Buffer.byteLength(heavy)).toBeLessThanOrEqual(budget);
+  });
+
+  it('a world that still falls to the live view says so in the log, once a run', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const w = makeWorld('run-too-big');
+    w.activity = feed(60, 14_000);
+    for (let i = 0; i < 3; i++) serializeSnapshot(w, FINANCE);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toContain('GET /api/state');
+    expect(warn.mock.calls[0]![0]).toContain('octets');
+    const next = makeWorld('run-too-big-too');
+    next.activity = w.activity;
+    serializeSnapshot(next, FINANCE);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
   });
 });
 
@@ -1031,6 +1075,8 @@ describe('HTTP server', () => {
     expect(JSON.parse((await call(port, 'GET', '/api/brain')).body)).toHaveLength(1);
     expect(JSON.parse((await call(port, 'GET', '/api/brain/note?path=lecons%2Fa.md')).body).body).toBe('# A');
     expect((await call(port, 'GET', '/api/brain/note?path=nope.md')).status).toBe(404);
+    const noJournal = await call(port, 'GET', '/api/brain/note?path=journal%2Fjour-999.md');
+    expect([noJournal.status, noJournal.body]).toEqual([200, 'null']);
     expect((await call(port, 'GET', '/api/brain/note?path=..%2F..%2Fsecret.txt')).status).toBe(400);
     expect(JSON.parse((await call(port, 'GET', '/api/brain/graph')).body)).toEqual({ nodes: [], edges: [] });
     expect(JSON.parse((await call(port, 'GET', '/api/runs')).body)[0].current).toBe(true);
@@ -1340,7 +1386,7 @@ describe('live session', () => {
     expect(await s.chat('Margaux', 'Coucou')).toBe('Bien reçu : Coucou'); // a first name works too
     expect(await s.mission('Écris des hooks', 'noam')).toBe('mis_42');
     // the live session info carries every SessionInfo field the UI reads
-    expect(Object.keys(s.info()).sort()).toEqual(['backoffMs', 'busy', 'day', 'intervalMs', 'lastError', 'minStartingCash', 'mindMode', 'pace', 'playing', 'runId', 'speed', 'status', 'tick', 'watchers']);
+    expect(Object.keys(s.info()).sort()).toEqual(['backoffMs', 'busy', 'claudeReady', 'day', 'intervalMs', 'lastError', 'minStartingCash', 'mindMode', 'pace', 'playing', 'runId', 'speed', 'status', 'tick', 'watchers']);
     await s.approve('tsk_1', true);
     expect(fake.approvals).toContain('tsk_1:true');
     await expect(s.approve('tsk_absent', true)).rejects.toMatchObject({ status: 404 });

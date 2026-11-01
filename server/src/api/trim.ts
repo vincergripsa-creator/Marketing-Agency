@@ -57,12 +57,15 @@ export const DEFAULT_LIMITS: SnapshotLimits = {
 /** Every « 7 j » of Publicité. The same closed days as Canaux, so one figure reads the same on both tabs. */
 const AD_WEEK_DAYS = 7;
 
-/** Fallback when the default snapshot would exceed the size budget. */
+/**
+ * Fallback when the default snapshot would exceed the size budget. Measured on years of real companies, not chosen: scale §7.1
+ * wants GET /api/state under its budget here, and what these lists cost is the playbooks and the payloads LIVE_LIMITS drops.
+ */
 export const TIGHT_LIMITS: SnapshotLimits = {
-  doneTasks: 60, openTasks: 150, taskLog: 4, deliverables: 120, lessons: 60, chatsPerAgent: 12, missions: 30,
-  creatives: 40, campaigns: 40, pnl: 2, experiments: 25, kpis: 120, reviewsPerProduct: 8, inbox: 40, threadPerMessage: 6, adStatsDays: 5,
-  commentsPerStat: 2, adComments: Number.POSITIVE_INFINITY, organicPosts: 20, creators: 40, partnerships: 50, events: 25, orders: 60, ledger: 100, activity: 120,
-  stringMax: 200, growthWeeks: 52, growthDecisions: 30, light: true, live: false,
+  doneTasks: 40, openTasks: 150, taskLog: 4, deliverables: 60, lessons: 30, chatsPerAgent: 12, missions: 30,
+  creatives: 30, campaigns: 40, pnl: 2, experiments: 25, kpis: 60, reviewsPerProduct: 8, inbox: 30, threadPerMessage: 6, adStatsDays: 5,
+  commentsPerStat: 2, adComments: Number.POSITIVE_INFINITY, organicPosts: 20, creators: 40, partnerships: 50, events: 25, orders: 60, ledger: 100, activity: 60,
+  stringMax: 160, growthWeeks: 52, growthDecisions: 30, light: true, live: false,
 };
 
 /**
@@ -193,8 +196,13 @@ function cardProduct({ brief: _brief, pagePrint: _pagePrint, ...p }: Product): P
   return {
     ...p, salesQuality: null, files: cardFiles(p),
     design: p.design && ({ palette: p.design.palette } as DesignSpec),
-    quality: p.quality && ({ overall: p.quality.overall, issues: p.quality.issues, ...(p.quality.blocking ? { blocking: p.quality.blocking } : {}) } as QualityReport),
+    quality: p.quality && ({ ...cardScores(p.quality), issues: p.quality.issues, ...(p.quality.blocking ? { blocking: p.quality.blocking } : {}) } as QualityReport),
   };
+}
+
+/** The numbers a card draws (Produits): without them its six bars read 0 beside the overall score. */
+function cardScores({ overall, specificity, structure, actionability, humanTone, design, compliance }: QualityReport): Partial<QualityReport> {
+  return { overall, specificity, structure, actionability, humanTone, design, compliance };
 }
 
 /** A review as the public reads it: what the simulation reads stays in the world. */
@@ -531,17 +539,24 @@ export function buildSnapshot(world: WorldState, finance: FinanceSnapshot, god =
   return snap;
 }
 
+/** The run the log last warned about: a snapshot is served all day, the warning once. */
+let fellBack: string | null = null;
+
 /**
  * Serialises the snapshot (+ optional extra top-level fields), retrying with tighter limits
- * when it would exceed the size budget.
+ * when it would exceed the size budget. Scale §7.1 says never LIVE_LIMITS, whose view has no playbooks: if it comes to that, the log says so.
  */
 export function serializeSnapshot(
   world: WorldState, finance: FinanceSnapshot, god = false, extra: Record<string, unknown> = {}, budget = SNAPSHOT_BUDGET_BYTES,
 ): string {
   let json = '';
   for (const limits of [DEFAULT_LIMITS, TIGHT_LIMITS, LIVE_LIMITS]) {
+    if (limits === LIVE_LIMITS && fellBack !== world.runId) {
+      fellBack = world.runId;
+      console.warn(`[api] GET /api/state : ${Buffer.byteLength(json)} octets aux limites serrées pour un budget de ${budget}, repli sur les limites du direct (jour ${world.day}).`);
+    }
     json = JSON.stringify({ ...buildSnapshot(world, finance, god, limits), ...extra });
-    if (json.length <= budget) break;
+    if (Buffer.byteLength(json) <= budget) break;
   }
   return json;
 }

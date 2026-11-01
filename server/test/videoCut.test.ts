@@ -546,24 +546,39 @@ describe('produce_ad', () => {
     expect(kept?.draft.cut).toEqual(c.cut);
   }, 30_000);
 
-  it('`videoModel: off` plans nothing and opens no bandit', async () => {
+  it('`videoModel: off` plans nothing', async () => {
     const l = await lab({ videoModel: 'off' });
-    const product = liveProduct(l.world);
-    const c = await produce(l, product);
+    const c = await produce(l, liveProduct(l.world));
     expect('cut' in c).toBe(false);
-    expect(Object.keys(l.world.company.bandits).filter((k) => k.startsWith('video_tempo'))).toEqual([]);
   }, 30_000);
 
-  it('the tempo comes from the niche\'s bandit, the control forces it past the bandit', async () => {
+  it('the tempo is a uniform draw on its own stream: films vary, no arm opens, the same tick draws the same', async () => {
+    const drawn = async () => {
+      const l = await lab();
+      const product = liveProduct(l.world);
+      const tempos: string[] = [];
+      for (let tick = 0; tick < 12; tick++) {
+        l.world.tick = tick;
+        tempos.push((await produce(l, product)).cut!.tempo);
+      }
+      expect(Object.keys(l.world.company.bandits).filter((k) => k.startsWith('video_tempo'))).toEqual([]);
+      return tempos;
+    };
+    const tempos = await drawn();
+    expect(new Set(tempos).size).toBe(TEMPOS.length);
+    expect(await drawn()).toEqual(tempos);
+  }, 60_000);
+
+  it('a tempo bandit left in an old save moves nothing, the control forces a tempo', async () => {
     const l = await lab();
     const product = liveProduct(l.world);
-    const dim = `video_tempo:${product.nicheId}`;
-    l.world.company.bandits[dim] = TEMPOS.map((key) => (key === 'fast' ? { key, alpha: 300, beta: 3, pulls: 90, reward: 88 } : { key, alpha: 3, beta: 300, pulls: 90, reward: 2 }));
-    expect((await produce(l, product)).cut!.tempo).toBe('fast');
+    const free = await lab();
+    const tempo = (await produce(free, liveProduct(free.world))).cut!.tempo;
+    const beaten = TEMPOS.find((key) => key !== tempo)!;
+    l.world.company.bandits[`video_tempo:${product.nicheId}`] = TEMPOS.map((key) => (key === beaten ? { key, alpha: 300, beta: 3, pulls: 90, reward: 88 } : { key, alpha: 3, beta: 300, pulls: 90, reward: 2 }));
+    expect((await produce(l, product)).cut!.tempo).toBe(tempo);
     const forced = await lab({ control: { videoTempo: 'calm' } });
-    const other = liveProduct(forced.world);
-    expect((await produce(forced, other)).cut!.tempo).toBe('calm');
-    expect(forced.world.company.bandits[`video_tempo:${other.nicheId}`]).toBeUndefined();
+    expect((await produce(forced, liveProduct(forced.world))).cut!.tempo).toBe('calm');
   }, 30_000);
 
   it('`control.videoSkill` makes the editor, with talent on or off, and the agent\'s talent otherwise', async () => {

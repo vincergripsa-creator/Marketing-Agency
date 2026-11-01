@@ -29,6 +29,8 @@ const CAPTIONS: Record<string, string> = {
   'page-du-guide': 'Une lecture posée, l’essentiel mis en avant',
   schema: 'Le schéma qui résume ce qu’il faut retenir',
   'fiche-a-imprimer': 'Les fiches à imprimer et à remplir',
+  'le-contenu-du-kit': 'Tout ce que contient le kit',
+  'le-plan-a-cocher': 'Le plan à cocher, étape par étape',
   'votre-plan': 'Votre plan, sur une seule page',
 };
 
@@ -281,6 +283,7 @@ const figureOf = (k: number, one: string, many: string): string => (k > 0 ? `<li
 /** Self-contained HTML store page for one product. `figureSvg` left out: the guide's own plan or loop, `null`: none. */
 export function renderSalesPageHtml(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string; previews?: { label: string; svg: string }[]; figureSvg?: string | null }): string {
   const { product } = input;
+  const noun = product.kind === 'kit' ? 'kit' : 'guide';
   const sp = atPriceOfTheDay(input.salesPage ?? (product.salesPage as SalesPage), product.price);
   const d = normalizeDesign(input.design ?? product.design);
   const { voice } = loadVoice(d.voice!);
@@ -305,8 +308,8 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
   const reviewTotal = Math.max(product.stats?.ratingCount ?? 0, reviews.length); // the list keeps the latest ones, the stars and this line read them all
   const objections = (sp?.objections ?? []).filter((o) => o && o.q);
   const practical = [
-    { q: 'Comment je reçois le guide ?', a: 'Tout de suite après le paiement : un lien de téléchargement s’affiche et vous est aussi envoyé par e-mail. Le PDF se lit sur téléphone, tablette et ordinateur.' },
-    { q: 'Est-ce un abonnement ?', a: `Non. Vous payez ${price} une seule fois et le guide est à vous, y compris ses mises à jour.` },
+    { q: `Comment je reçois le ${noun} ?`, a: 'Tout de suite après le paiement : un lien de téléchargement s’affiche et vous est aussi envoyé par e-mail. Le PDF se lit sur téléphone, tablette et ordinateur.' },
+    { q: 'Est-ce un abonnement ?', a: `Non. Vous payez ${price} une seule fois et le ${noun} est à vous, y compris ses mises à jour.` },
   ].filter((f) => !objections.some((o) => o.q.toLowerCase().includes(f.q.slice(0, 12).toLowerCase())));
   const faq = [...objections, ...practical];
   const audience = product.audience || content?.audience || '';
@@ -347,14 +350,14 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
   <div class="wrap top-in">
     <a class="brand" href="#top">${h(brand)}</a>
     <nav aria-label="Sections">${leaves.length ? '<a href="#apercu">Aperçu</a>' : ''}<a href="#dedans">Le contenu</a>${reviews.length ? '<a href="#avis">Avis</a>' : ''}<a href="#faq">Questions</a></nav>
-    <button type="button" class="buy small" data-buy>Obtenir le guide · ${esc(price)}</button>
+    <button type="button" class="buy small" data-buy>Obtenir le ${noun} · ${esc(price)}</button>
   </div>
 </header>
 <main id="top">
 <section class="hero">
   <div class="wrap hero-grid">
     <div class="hero-copy">
-      <span class="eyebrow">${audience ? `Pour : ${h(wholeClause(audience.replace(/\s*\([^)]*\)/g, ''), (s) => s.length <= 56))}` : 'Guide pratique'}</span>
+      <span class="eyebrow">${audience ? `Pour : ${h(wholeClause(audience.replace(/\s*\([^)]*\)/g, ''), (s) => s.length <= 56))}` : product.kind === 'kit' ? 'Kit à imprimer' : 'Guide pratique'}</span>
       <h1>${h(head)}</h1>
       ${tail ? `<p class="deck">${h(tail)}</p>` : ''}
       ${hook ? `<p class="hook">${h(hook)}</p>` : ''}
@@ -389,7 +392,7 @@ ${leaves.length ? `<section class="band" id="apercu">
   <div class="wrap">
     <span class="kicker">Avant d’acheter</span>
     <h2>Feuilletez-le avant de décider</h2>
-    <p class="lead">Ces pages viennent du guide, pas d’une maquette : ce que vous voyez est ce que vous téléchargez. Seul le texte courant est masqué dans l’aperçu.</p>
+    <p class="lead">Ces pages viennent ${product.kind === 'kit' ? 'du kit' : 'du guide'}, pas d’une maquette : ce que vous voyez est ce que vous téléchargez. Seul le texte courant est masqué dans l’aperçu.</p>
     <div class="leaves">${leaves.map((l) => `<figure class="leaf"><div class="p">${l.svg}</div><figcaption>${h(l.caption)}</figcaption></figure>`).join('')}</div>
   </div>
 </section>` : ''}
@@ -418,7 +421,7 @@ ${sp?.bonusBlurb || bonusTitle ? `<section class="bonus">
     <h2>${reviews.length ? 'Ce qu’en disent les lecteurs' : 'Les premiers avis arrivent'}</h2>
     ${reviews.length
       ? `<div class="rating-big"><strong>${h(avg.toFixed(1).replace('.', ','))}</strong>${starsHtml(avg, 22)}<span>${h(reviewTotal)} avis vérifiés</span></div><div class="review-grid">${reviews.slice(0, 6).map(reviewCard).join('')}</div>`
-      : '<p class="no-review">Ce guide vient de sortir : aucun avis pour l’instant. Nous n’affichons jamais de faux témoignages.</p>'}
+      : `<p class="no-review">Ce ${noun} vient de sortir : aucun avis pour l’instant. Nous n’affichons jamais de faux témoignages.</p>`}
   </div>
 </section>
 ${faq.length ? `<section class="faq" id="faq">
@@ -449,7 +452,7 @@ ${sp?.guarantee ? `<section class="guarantee">
     <p>Boutique virtuelle — environnement de test Pixel Agency. Aucune donnée bancaire n’est collectée.</p>
   </div>
 </footer>
-<div class="sticky-buy"><div class="mini"><span>${h(truncate(product.title || headline, 40))}</span><strong>${esc(price)}</strong></div><button type="button" class="buy" data-buy>Obtenir le guide</button></div>
+<div class="sticky-buy"><div class="mini"><span>${h(truncate(product.title || headline, 40))}</span><strong>${esc(price)}</strong></div><button type="button" class="buy" data-buy>Obtenir le ${noun}</button></div>
 <script>
 (function () {
   var msg = ${JSON.stringify(CHECKOUT_ALERT)};

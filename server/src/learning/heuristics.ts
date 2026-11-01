@@ -839,7 +839,7 @@ function finance(inp: RetroInput): HeuristicDraft[] {
 export const CHANNEL_LESSON = { minSpend: 30, lead: 1.25, minRoas: 1.1, minInflation: 1.3 };
 
 /**
- * Reconciled credit of a (channel, niche): the niche's, else the channel's, else 1. A report that went stale counts as 1,
+ * Credit of a (channel, niche): the niche's, else the channel's, else 1. A report that went stale counts as 1,
  * like `creditOf` in the runtime, which this module must not import.
  */
 function reportCredit(world: WorldState, channel: ChannelId, nicheId: string): number {
@@ -876,8 +876,8 @@ function channelLessons(inp: RetroInput): HeuristicDraft[] {
       key: LESSON_KEYS.channel(nicheId),
       topic: 'ads',
       title: `Canal « ${best.channel} » sur ${name}`,
-      insight: `Privilégier le canal « ${best.channel} » sur « ${name} » : ROAS réconcilié ${fmtRatio(best.roas)} contre ${fmtRatio(next.roas)} sur ${CHANNELS[next.channel].label}.`,
-      evidence: `${list.map((l) => `${CHANNELS[l.channel].label} : ${fmtEur(l.spend)} dépensés, ROAS réconcilié ${fmtRatio(l.roas)}`).join(' · ')} — ${windowLabel(world, from, day)}.`,
+      insight: `Privilégier le canal « ${best.channel} » sur « ${name} » : ROAS boutique ${fmtRatio(best.roas)} contre ${fmtRatio(next.roas)} sur ${CHANNELS[next.channel].label}.`,
+      evidence: `${list.map((l) => `${CHANNELS[l.channel].label} : ${fmtEur(l.spend)} dépensés, ROAS boutique ${fmtRatio(l.roas)}`).join(' · ')} — ${windowLabel(world, from, day)}.`,
       confidence: sampleConfidence(Math.min(best.spend, next.spend), 150, safeDiv(best.roas, Math.max(next.roas, 0.01)) - 1),
       links: ["Canaux d'acquisition", ...nicheLink(inp, nicheId)],
       tags: ['canal', best.channel],
@@ -887,7 +887,7 @@ function channelLessons(inp: RetroInput): HeuristicDraft[] {
     if (l.status !== 'killed') continue;
     const name = nicheName(world, l.nicheId);
     // The verdict as it was given: a line's spend and revenue keep moving with the credit once it is cut. Plain spaces: a rule reads as its lesson.
-    const verdict = (l.reason ?? `ROAS réconcilié ${fmtRatio(safeDiv(l.revenue, l.spend))}`).replace(/\s+/g, ' ');
+    const verdict = (l.reason ?? `ROAS boutique ${fmtRatio(safeDiv(l.revenue, l.spend))}`).replace(/\s+/g, ' ');
     // A cut on the channel a lesson put forward takes its place: the two cannot stand side by side in a playbook.
     const favoured = (world.company.lessons ?? []).find((x) => x.key === LESSON_KEYS.channel(l.nicheId));
     out.push(draft({
@@ -909,8 +909,8 @@ function channelLessons(inp: RetroInput): HeuristicDraft[] {
       key: LESSON_KEYS.channelClaim(r.channel),
       topic: 'ads',
       title: `${label} surévalue ses ventes`,
-      insight: `${label} s'attribue ${fmtRatio(r.inflation)} fois ce que la boutique lui donne : lire le réconcilié, jamais son tableau de bord.`,
-      evidence: `${fmtEur(r.claimedRevenue)} déclarés par la plateforme, ${fmtEur(r.shopRevenue)} vus par la boutique, ${fmtEur(r.reconciledRevenue)} après réconciliation (jours ${report!.fromDay} à ${report!.toDay}).`,
+      insight: `${label} s'attribue ${fmtRatio(r.inflation)} fois ce que la boutique lui donne : lire la boutique, jamais son tableau de bord.`,
+      evidence: `${fmtEur(r.claimedRevenue)} déclarés par la plateforme, ${fmtEur(r.shopRevenue)} vus par la boutique (jours ${report!.fromDay} à ${report!.toDay}).`,
       confidence: sampleConfidence(r.shopRevenue, 150, r.inflation - 1),
       links: ["Canaux d'acquisition"],
       tags: ['attribution', r.channel],

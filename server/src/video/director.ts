@@ -33,7 +33,7 @@ export const SPEC_FILE = 'spec.json';
 export const RESULT_FILE = 'result.json';
 const MANIFEST_FILE = 'manifest.json';
 
-const JOB_TIMEOUT_MS = 180_000;
+export const JOB_TIMEOUT_MS = 600_000;
 const MAX_ATTEMPTS = 2;
 const STOP_WAIT_MS = 4000;
 const WORKER = fileURLToPath(new URL('./worker.ts', import.meta.url));
@@ -155,6 +155,8 @@ export interface RenderRecord {
   cards: string[];
   voice: string | null;
   qa: QaSummary | null;
+  /** QA was cut on both attempts: nobody judged this file, so it stays on disk and the next sync asks again. */
+  unjudged?: boolean;
 }
 
 interface Manifest { v: 1; renders: RenderRecord[] }
@@ -307,7 +309,7 @@ export class VideoDirector {
     const row = this.renders.get(slotOf(creativeId, ratio));
     if (!row) return false;
     const plan = this.planOf(world, creativeId, ratio);
-    return !plan || row.key === plan.key;
+    return !plan || (row.key === plan.key && !row.unjudged);
   }
 
   // ── the queue ──
@@ -391,6 +393,9 @@ export class VideoDirector {
     if (r.ok) {
       this.fill(row, r);
       await this.enforceDisk(row);
+    } else if (r.retry && r.qa) {
+      // Only a verdict deletes a master: a QA cut twice says nothing of the film, and the button brings it back as an evicted one does.
+      Object.assign(row, { status: 'evicted', reason: r.reason, file: null, bytes: 0, captions: null, cards: [], qa: null, unjudged: true });
     } else {
       // A failed job leaves nothing to serve.
       await this.remove(row.dir);

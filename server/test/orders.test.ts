@@ -10,7 +10,8 @@ import { seededRng } from '../src/minds/util.js';
 import { companyPaidBlock, productPaidBlock } from '../src/runtime/acquisition.js';
 import { HANDLERS } from '../src/runtime/handlers/index.js';
 import { activeHolds, adsHold, launchHold, productHold, REFUSAL_COOLDOWN_DAYS } from '../src/runtime/holds.js';
-import { asksForProduct, orderAction } from '../src/runtime/missions.js';
+import { asksForProduct, daysIn, orderAction } from '../src/runtime/missions.js';
+import { endTimedStops } from '../src/runtime/orders.js';
 import { guideGaps, MAX_REWORK_CYCLES, settleRedTeam } from '../src/runtime/redteam.js';
 import { closeLoop, reviewTask } from '../src/runtime/review.js';
 import { situationFor } from '../src/runtime/situation.js';
@@ -327,6 +328,75 @@ describe('founder orders', () => {
     const id = await company.giveMission('coupe les pubs non rentables');
     expect(tasksOf(world, id).map((t) => t.kind)).toEqual(['optimize_ads']);
     expect(activeHolds(world)).toEqual([]);
+  }));
+});
+
+describe('« vire X » and « pendant 3 jours »', () => {
+  it('reads a firing however the founder wishes it, and fires nobody on a doubt', () => {
+    for (const text of ['Je veux que tu vires Clara', 'il faut que tu vires Clara', "il faut qu'on vire Clara", "j'aimerais que tu vires Clara", 'vire Clara', 'je veux virer Clara']) expect(orderAction(text), text).toBe('fire_agent');
+    for (const text of ['je ne veux pas que tu vires Clara', 'faut-il que tu vires Clara ?', 'si tu vires Clara, on perd le support', 'tu as viré Clara']) expect(orderAction(text), text).not.toBe('fire_agent');
+  });
+
+  it('« Je veux que tu vires Zoé » gets the same answer as « vire Zoé »: the fixed team says it cannot', withCompany({}, async ({ world, company }) => {
+    world.day = 15;
+    const id = await company.giveMission('Je veux que tu vires Zoé');
+    expect(missionOf(world, id).status).toBe('failed');
+    expect(missionOf(world, id).outcome).toMatch(/équipe de cette partie est fixe, Zoé reste/);
+  }));
+
+  it('reads how long a stop lasts', () => {
+    expect(daysIn('coupe toutes les pubs pendant 3 jours')).toBe(3);
+    expect(daysIn('Coupe les pubs pendant une semaine')).toBe(7);
+    expect(daysIn('arrête les pubs pour deux semaines')).toBe(14);
+    expect(daysIn('coupe toutes les pubs')).toBeUndefined();
+    expect(daysIn('un guide pour les 3 jours de vacances')).toBeUndefined();
+    expect(daysIn('coupe les pubs pendant 0 jour')).toBeUndefined();
+  });
+
+  it('« coupe toutes les pubs pendant 3 jours » stops them for 3 days, then what it paused starts again by itself', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 15;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const running = addCampaign(world, 'cmp_a', p.id);
+    const stoppedForGood = addCampaign(world, 'cmp_b', p.id, 20, { status: 'paused', pausedFor: 'founder' });
+    const id = await company.giveMission('Coupe toutes les pubs pendant 3 jours');
+    expect(missionOf(world, id).status).toBe('done');
+    expect(missionOf(world, id).outcome).toMatch(/avant le jour 18 : ce matin-là, elles repartent seules/);
+    expect(running).toMatchObject({ status: 'paused', pausedFor: 'founder' });
+    expect(activeHolds(world).find((h) => h.kind === 'ads')).toMatchObject({ until: 17, resumes: ['cmp_a'] });
+    world.day = 17;
+    endTimedStops(ctx);
+    expect(companyPaidBlock(world)).toMatch(/ordre du fondateur/);
+    expect(running.status).toBe('paused');
+    world.day = 18;
+    expect(adsHold(world, p.id)).toBeNull();
+    endTimedStops(ctx);
+    expect(running.status).toBe('active');
+    expect(running.pausedFor).toBeUndefined();
+    expect(stoppedForGood).toMatchObject({ status: 'paused', pausedFor: 'founder' });
+  }));
+
+  it('an order that still stands, or a stop lifted early, holds its campaigns', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 15;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const running = addCampaign(world, 'cmp_a', p.id);
+    await company.giveMission('Coupe toutes les pubs pendant 3 jours');
+    await company.giveMission('Coupe toutes les pubs');
+    world.day = 18;
+    endTimedStops(ctx);
+    expect(running.status).toBe('paused');
+  }));
+
+  it('other stops hold for their days, and a guide off sale says it will not come back alone', withCompany({}, async ({ world, company }) => {
+    world.day = 15;
+    const launches = await company.giveMission('Arrête de lancer de nouveaux guides pendant 2 jours');
+    expect(missionOf(world, launches).outcome).toMatch(/jusqu'au jour 16 inclus/);
+    expect(launchHold(world)).not.toBeNull();
+    world.day = 17;
+    expect(launchHold(world)).toBeNull();
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const off = await company.giveMission('Retire le guide sur le sommeil de la boutique pendant 3 jours');
+    expect(missionOf(world, off).outcome).toMatch(/Je ne sais pas le remettre seul dans 3 jour\(s\)/);
+    expect(p.status).toBe('paused');
   }));
 });
 

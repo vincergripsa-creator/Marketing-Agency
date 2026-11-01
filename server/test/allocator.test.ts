@@ -1,6 +1,6 @@
 /**
- * The CFO's split between channels (channels §7.4, D9, D26): the curve, the fill, the guardrails, what the buyer does with the
- * plan, and a run reloaded at every tick with 3 channels open. Worlds are real, rows and campaigns are written by hand unless
+ * The CFO's split between channels (channels §7.4, D9, D26, D149): the curve, the average rule, the fill of the `marginal_roas`
+ * control, the guardrails, what the buyer does with the plan, and a run reloaded at every tick with 3 channels open. Worlds are real, rows and campaigns are written by hand unless
  * a test says the market runs.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -209,7 +209,7 @@ describe('the curve of a line', () => {
   });
 });
 
-describe('water-filling', () => {
+describe('water-filling, the `marginal_roas` control', () => {
   const worked = [{ a: 3.7, b: 0.75 }, { a: 4.4, b: 0.8 }, { a: 3.4, b: 0.7 }, { a: 9.9, b: 0.4 }]; // TikTok, Meta, Pinterest, Search
   const revenue = (spend: readonly number[]) => spend.reduce((s, x, i) => s + worked[i]!.a * x ** worked[i]!.b, 0);
 
@@ -274,13 +274,33 @@ describe('the plan of the day', () => {
     return { ...l, p, a: campaign(l.world, 'cmp_a', p, 'tiktok', 40), b: campaign(l.world, 'cmp_b', p, 'meta', 40) };
   }
 
-  it('allocator is marginal, not average: line A avg 2,0 b .3 against line B avg 1,4 b .9, the budget flows to B', async () => {
+  it('the rule is the average: line A avg 2,0 b .3 against line B avg 1,4 b .9, each gets its share and the next euro stays a reading', async () => {
     const { world, ctx, a, b } = await twoLines();
     history(world, a, 0.3, 2);
     history(world, b, 0.9, 1.4);
     setCap(world, 100);
     const plan = allocateChannels(ctx);
     const [la, lb] = [lineOf(plan, a), lineOf(plan, b)];
+    expect(la.average!).toBeCloseTo(2, 6);
+    expect(lb.average!).toBeCloseTo(1.4, 6);
+    expect(lb.marginal!).toBeGreaterThan(la.marginal!); // the next euro says the reverse, and the money does not listen
+    expect(la.target).toBe(52); // a share of 58,82 €, +30 % a day
+    expect(lb.target).toBeCloseTo((100 * 1.4) / 3.4, 1);
+    expect(plan.lambda).toBeNull();
+    expect(plan.unspent).toBe(0);
+    expect(la.note).toContain(`ROAS moyen 2,00 contre 1,40 sur ${CHANNELS.meta.label}`);
+    expect(lb.note).toContain(CHANNELS.meta.label);
+    for (const l of plan.lines) expect(l.note).not.toContain('marginal');
+  });
+
+  it('the `marginal_roas` control follows the next euro, and its note says so: the same lines, the budget flows to B', async () => {
+    const { world, ctx, a, b } = await twoLines({ channelControl: 'marginal_roas' });
+    history(world, a, 0.3, 2);
+    history(world, b, 0.9, 1.4);
+    setCap(world, 100);
+    const plan = allocateChannels(ctx);
+    const [la, lb] = [lineOf(plan, a), lineOf(plan, b)];
+    expect(plan.lambda).not.toBeNull();
     expect(la.average!).toBeCloseTo(2, 6);
     expect(lb.average!).toBeCloseTo(1.4, 6);
     expect(la.average!).toBeGreaterThan(lb.average!);
@@ -292,8 +312,8 @@ describe('the plan of the day', () => {
     expect(lb.note).toContain(`sur ${CHANNELS.tiktok.label}`);
   });
 
-  it('allocator keeps money unspent when no line earns 1,15', async () => {
-    const { world, ctx, a, b } = await twoLines();
+  it('the `marginal_roas` control keeps money unspent when no line earns 1,15', async () => {
+    const { world, ctx, a, b } = await twoLines({ channelControl: 'marginal_roas' });
     history(world, a, 0.75, 1.05);
     history(world, b, 0.75, 1.1);
     setCap(world, 300);
@@ -396,7 +416,7 @@ describe('the plan of the day', () => {
     expect(lineOf(allocateChannels(ctx), a).days).toBe(3);
   });
 
-  it('the tail of a pin counts as revenue of the day, and the reconciled credit weighs on every point', async () => {
+  it('the tail of a pin counts as revenue of the day, and a credit weighs on every point', async () => {
     const { world, ctx, p, a } = await twoLines();
     const pin = campaign(world, 'cmp_p', p, 'pinterest', 30);
     history(world, a, 0.75, 2);
@@ -421,13 +441,13 @@ describe('the plan of the day', () => {
     history(world, b, 0.75, 1, Array.from({ length: 10 }, () => 12));
     for (const [i, underMin] of [1, 2].entries()) {
       world.day = 20 + i;
-      setCap(world, 200);
+      setCap(world, 40);
       const line = lineOf(allocateChannels(ctx), b);
       expect(line.target).toBe(12);
       expect(line.underMin).toBe(underMin);
     }
     world.day = 22;
-    setCap(world, 200);
+    setCap(world, 40);
     const plan = allocateChannels(ctx);
     expect(lineOf(plan, b).target).toBe(0);
     expect(planTarget(world, b)).toBe(0);
@@ -444,9 +464,9 @@ describe('the plan of the day', () => {
     world.company.channels!.lines.push({ channel: 'meta', nicheId: p.nicheId, status: 'proven', since: 1, spend: 0, revenue: 0, reason: null, retestDay: null });
     b.dailyBudget = 12;
     history(world, a, 0.75, 3);
-    history(world, b, 0.75, 1.2, Array.from({ length: 10 }, () => 12)); // the average still pays: the next euro does not
+    history(world, b, 0.75, 1.2, Array.from({ length: 10 }, () => 12)); // the average still pays: its share does not reach Meta's minimum
     world.day = 22;
-    setCap(world, 200);
+    setCap(world, 30);
     world.company.channels!.plan = { day: 21, envelope: 200, testEnvelope: 40, lambda: 1.15, unspent: 0, lines: [{ channel: 'meta', productId: p.id, campaignIds: [b.id], budget: 12, target: 12, average: 1.2, marginal: 0.9, elasticity: 0.75, days: 10, note: '', underMin: 2 }] };
     expect(lineOf(allocateChannels(ctx), b).target).toBe(0);
     await run(ctx, 'optimize_ads');
@@ -489,10 +509,10 @@ describe('the plan of the day', () => {
     b.dailyBudget = 12;
     history(world, a, 0.75, 3);
     history(world, b, 0.75, 1, Array.from({ length: 10 }, () => 12));
-    setCap(world, 200);
+    setCap(world, 40);
     allocateChannels(ctx);
     world.day = 22; // no plan yesterday
-    setCap(world, 200);
+    setCap(world, 40);
     expect(lineOf(allocateChannels(ctx), b).underMin).toBe(1);
   });
 
@@ -515,7 +535,7 @@ describe('the plan of the day', () => {
     expect(planTarget(world, second)).toBeGreaterThanOrEqual(CHANNELS.meta.minDailyBudget);
   });
 
-  it('the control arm splits on the average, keeps spending and ignores the floor', async () => {
+  it('the rule splits on the average, keeps spending and ignores the floor, where the control holds back', async () => {
     const run = async (channelControl: ScenarioConfig['channelControl']) => {
       const { world, ctx, a, b } = await twoLines({ channelControl });
       history(world, a, 0.3, 2);
@@ -524,12 +544,13 @@ describe('the plan of the day', () => {
       const plan = allocateChannels(ctx);
       return { plan, ta: lineOf(plan, a).target, tb: lineOf(plan, b).target };
     };
-    const average = await run('average_roas');
+    const average = await run('none');
     expect(average.plan.lambda).toBeNull();
     expect(average.plan.unspent).toBe(0);
     expect(average.ta).toBeGreaterThan(40);
     expect(average.ta).toBeGreaterThan(average.tb);
-    const marginal = await run('none');
+    const marginal = await run('marginal_roas');
+    expect(marginal.plan.lambda).not.toBeNull();
     expect(marginal.ta).toBeLessThan(40);
   });
 
@@ -621,9 +642,9 @@ describe('optimize_ads reads the plan (D26)', () => {
     const { out } = await run(ctx, 'optimize_ads');
     expect(a.dailyBudget).toBe(lineOf(plan, a).target);
     expect(b.dailyBudget).toBe(lineOf(plan, b).target);
-    expect(b.dailyBudget).toBeGreaterThan(40);
+    expect(a.dailyBudget).toBeGreaterThan(40);
     expect(a.dailyBudget + b.dailyBudget).toBeLessThanOrEqual(80);
-    expect(JSON.stringify(out.output)).toContain('ROAS marginal');
+    expect(JSON.stringify(out.output)).toContain('ROAS moyen');
   });
 
   it('a task that names a channel moves that channel alone', async () => {
@@ -632,25 +653,25 @@ describe('optimize_ads reads the plan (D26)', () => {
     history(world, b, 0.9, 1.4);
     setCap(world, 80);
     allocateChannels(ctx);
-    await run(ctx, 'optimize_ads', { channel: 'meta' });
-    expect(b.dailyBudget).toBeGreaterThan(40);
-    expect(a.dailyBudget).toBe(40);
+    await run(ctx, 'optimize_ads', { channel: 'tiktok' });
+    expect(a.dailyBudget).toBeGreaterThan(40);
+    expect(b.dailyBudget).toBe(40);
   });
 
-  it('approval mode: above what he agreed to is his to say, and the rest of the plan runs', async () => {
+  it('approval mode: above what the founder agreed to is theirs to say, and the rest of the plan runs', async () => {
     const { world, ctx, a, b } = await line();
     world.scenario.founderApproval = true;
-    b.founderCap = 40;
+    a.founderCap = 40;
     history(world, a, 0.3, 2);
     history(world, b, 0.9, 1.4);
     setCap(world, 80);
     const plan = allocateChannels(ctx);
-    expect(lineOf(plan, b).target).toBeGreaterThan(40);
+    expect(lineOf(plan, a).target).toBeGreaterThan(40);
     await run(ctx, 'optimize_ads');
-    expect(b.dailyBudget).toBe(40);
-    expect(a.dailyBudget).toBe(lineOf(plan, a).target);
+    expect(a.dailyBudget).toBe(40);
+    expect(b.dailyBudget).toBe(lineOf(plan, b).target);
     const raise = world.company.tasks.find((t) => t.kind === 'optimize_ads' && t.input.raiseTo !== undefined);
-    expect(raise?.input).toMatchObject({ campaignId: b.id, raiseTo: lineOf(plan, b).target });
+    expect(raise?.input).toMatchObject({ campaignId: a.id, raiseTo: lineOf(plan, a).target });
   });
 
   it('the stop-loss goes first: a raise in the plan does not save a line that loses money', async () => {
@@ -880,7 +901,7 @@ describe('what stays TikTok, what reads the reference channel (channels §5.3)',
     expect(task?.input.attachTo).not.toBe(meta.id);
   });
 
-  it('the daily report gives the three readings per channel, only on a day with 2 channels', async () => {
+  it('the daily report gives the two readings per channel, only on a day with 2 channels', async () => {
     const { world, ctx } = await lab();
     world.day = 5;
     const read = async () => {
@@ -893,7 +914,8 @@ describe('what stays TikTok, what reads the reference channel (channels §5.3)',
     Object.assign(kpi, { channels: { meta: { spend: 10, impressions: 1, clicks: 1, landingViews: 1, shopSales: 1, shopRevenue: 13, claimedSales: 2, claimedRevenue: 24, reconciledRevenue: 16, roas: 1.6 } } });
     const body = await read();
     expect(body).toContain('Par canal');
-    expect(body).toContain(`| ${CHANNELS.meta.label} | 10 € | 2,40 | 1,30 | 1,60 |`);
+    expect(body).toContain(`| ${CHANNELS.meta.label} | 10 € | 2,40 | 1,30 |\n`);
+    expect(body).not.toContain('réconcilié');
   });
 });
 

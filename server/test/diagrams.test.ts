@@ -339,6 +339,14 @@ describe('never invent a number', () => {
     expect(invented(diagramFor(v, 487, THE_FIXTURE)!, v, guide)).toEqual(['97']);
   });
 
+  it('a plan that has no calendar prints no axis: « 1 2 3 4 5 6 » over a plan of 3 days counts nothing', () => {
+    const tracks = [{ from: 1, to: 1, label: 'Le premier temps' }, { from: 2, to: 2, label: 'Le deuxième temps' }, { from: 3, to: 3, label: 'Le dernier temps' }];
+    const words = (unit: string) => textsOf(diagramFor({ type: 'plan_path', title: 'Votre plan', labels: [], values: [], plan: { days: 3, unit, tracks } }, 487, THE_FIXTURE)!.scene).map((t) => t.s);
+    expect(words('Jour')).toEqual(expect.arrayContaining(['JOUR', '1', '2', '3']));
+    expect(words('').filter((s) => /^\d+$/.test(s))).toEqual([]);
+    expect(words('')).toEqual(expect.arrayContaining(['Le premier temps', 'Le dernier temps']));
+  });
+
   it('a gauge is blank: its only figures are the eleven marks of each ruler, and nothing is filled in', () => {
     const v = figuresOf().find((f) => f.type === 'gauge')!;
     const d = diagramFor(v, 487, THE_FIXTURE)!;

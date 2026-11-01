@@ -271,6 +271,90 @@ describe('the files', () => {
     expect(page.compliance).toBe(100);
   });
 
+  /** The kit of a guide of the fixture, with `edit` on its content, page by page as printed. */
+  async function kitPages(edit: (c: PdfContent) => PdfContent = (c) => c): Promise<{ pages: string[]; previews: { label: string; svg: string }[] }> {
+    const { p, dir } = await fixture();
+    const content = edit(kitContent(p)!);
+    const kit = { ...p, id: 'prd_kit', kind: 'kit' as const, title: content.title, content };
+    const outFile = join(dir, 'kit.pdf');
+    const res = await deliverables.renderKit({ product: kit, content, design: p.design!, brand: 'Pixel Agency', outFile });
+    return { pages: pdfPagesText(outFile).map((s) => s.replace(/\s+/g, ' ')), previews: res.previews };
+  }
+
+  it('its sales page counts what it prints, sells the buyer\'s worries and says kit', async () => {
+    const { p } = await fixture();
+    const steps = ['Caler les siestes sur les fenêtres d’éveil.', 'Garder la même pièce.'];
+    const edited: Product = { ...p, content: { ...p.content!, chapters: [{ ...p.content!.chapters[0]!, steps, checklist: ['Fait : caler les siestes sur les fenêtres d’éveil', 'Le carnet est ouvert'] }], bonus: { ...p.content!.bonus, steps: [], checklist: [] } } as PdfContent };
+    const content = kitContent(edited)!;
+    expect(content.subtitle).toContain('3 cases à cocher');
+    const kit: Product = { ...p, kind: 'kit', title: content.title, content };
+    const pains = ['Il se réveille toutes les deux heures'];
+    const offer = kitOffer(kit, { title: 'Dormir enfin : pour en finir avec « il ne dort plus »', salesPage: { painBullets: pains } as Product['salesPage'] });
+    expect(offer.painBullets).toEqual(pains);
+    expect(offer.solution).not.toMatch(/«[^»]*«/);
+    expect(new Set(kitOffer(kit, p).chapterBlurbs.map((b) => b.blurb)).size).toBe(kitOffer(kit, p).chapterBlurbs.length);
+    expect(offer.chapterBlurbs[0]!.blurb).toContain('caler les siestes');
+    const html = deliverables.renderSalesPageHtml({ product: { ...kit, salesPage: offer }, salesPage: offer, coverSvg: '<svg></svg>', design: p.design!, brand: 'Pixel Agency' });
+    expect(html).not.toMatch(/le guide · |Obtenir le guide|Comment je reçois le guide|Ce guide vient de sortir/);
+    expect(html).toContain('Obtenir le kit');
+  });
+
+  it('the chapter that only dates the other steps stays on its sheet: a page later it would be read twice', async () => {
+    const plan = { type: 'grid' as const, title: 'Votre plan, à cocher', labels: [], values: [], grid: { columns: ['Quand', 'À faire', 'Fait'], rows: ['Mars', 'Avril'], cells: [['Vérifier la charge admissible', null], ['Semer les aromatiques', null]] } };
+    const edit = (c: PdfContent): PdfContent => ({ ...c, chapters: [{ ...c.chapters[0]!, visual: plan, figure: null, steps: ['Mars : vérifier la charge admissible.', 'Avril : semer les aromatiques.'], checklist: [] }, { ...c.chapters[1]!, steps: ['Une étape à part.'], checklist: [] }], bonus: { ...c.bonus, steps: [], checklist: [] } });
+    const { pages } = await kitPages(edit);
+    const all = pages.join(' ');
+    expect(all).not.toContain('Mars : vérifier');
+    expect(all).toContain('Une étape à part');
+    expect(all).toContain('ÉTAPE 1');
+    const { p } = await fixture();
+    expect(kitContent({ ...p, content: edit(p.content!) })!.subtitle).toContain('1 case à cocher');
+  });
+
+  it('a kit has steps, not chapters', async () => {
+    const { pages } = await kitPages((c) => ({ ...c, chapters: [{ ...c.chapters[0]!, steps: ['Trouver la cause dans ce chapitre.'], checklist: ['Relisez ce chapitre une fois.'] }] }));
+    const all = pages.join(' ');
+    expect(all).toContain('Trouver la cause dans cette étape');
+    expect(all).toContain('Relisez cette étape');
+    expect(all).not.toContain('ce chapitre');
+  });
+
+  it('a kit prints a list once: the checklist that says the steps again goes, whatever its end punctuation', async () => {
+    const { pages } = await kitPages((c) => ({ ...c, chapters: [{ ...c.chapters[0]!, steps: ['Caler les siestes sur les fenêtres d’éveil.', 'Garder la même pièce.'], checklist: ['Fait : caler les siestes sur les fenêtres d’éveil', 'Fait : garder la même pièce', 'Le carnet est ouvert'], example: null }], bonus: { ...c.bonus, steps: [], checklist: [] } }));
+    const all = pages.join(' ');
+    expect(all.match(/Caler les siestes sur les fenêtres d’éveil/g)).toHaveLength(1);
+    expect(all.match(/Garder la même pièce/g)).toHaveLength(1);
+    expect(all).toContain('Le carnet est ouvert');
+  });
+
+  it('a sheet that ends high leaves room to write, as it does in the guide', async () => {
+    const short = { type: 'grid' as const, title: 'Une fiche courte', labels: [], values: [], grid: { columns: ['Question', 'Votre réponse'], rows: ['Une', 'Deux', 'Trois'] } };
+    const { pages } = await kitPages((c) => ({ ...c, chapters: [{ ...c.chapters[0]!, visual: short, figure: null }], bonus: { ...c.bonus, visual: null } }));
+    expect(pages.find((s) => s.includes('Une fiche courte') && s.includes('À IMPRIMER'))).toContain('VOS NOTES');
+  });
+
+  it('a kit never ends on one box alone, and its last page is ruled down to its foot', async () => {
+    let boxes = 0;
+    for (let n = 30; n <= 70; n += 1) {
+      const lines = Array.from({ length: n }, (_, k) => `Ligne à cocher numéro ${k + 1}`);
+      const { pages } = await kitPages((c) => ({ ...c, chapters: [{ ...c.chapters[0]!, steps: lines, checklist: [], example: null }], bonus: { ...c.bonus, steps: [], checklist: [] } }));
+      const last = pages.at(-1)!;
+      boxes = (last.match(/Ligne à cocher/g) ?? []).length;
+      expect(boxes, `${n} lignes`).toBeGreaterThanOrEqual(2);
+      if (boxes < 30) expect(last, `${n} lignes`).toContain('VOS NOTES');
+    }
+  });
+
+  it('a kit shows its real pages in the shop window: each kind once, greeked, none of them mocked', async () => {
+    const { previews } = await kitPages();
+    expect(previews.map((v) => v.label)).toEqual(['Couverture', 'Le contenu du kit', 'Fiche à imprimer', 'Le plan à cocher']);
+    for (const { svg } of previews) {
+      expect(svg).toMatch(/^<svg/);
+      expect(svg).not.toMatch(/<text\b/);
+      expect(svg.length).toBeLessThanOrEqual(700_000);
+    }
+  });
+
   it('the sequence reads as a page, its text escaped', () => {
     const html = renderSequenceHtml({ title: 'Séquence <test>', brand: 'Pixel', steps: [{ day: 0, kind: 'value', subject: 'Objet & cie', body: 'Bonjour,\n\nPremier <b>texte</b>.' }] });
     expect(html).toContain('Objet &amp; cie');
@@ -371,7 +455,12 @@ describe('each task leaves its file or its state', () => {
     expect(kit).toMatchObject({ nicheId: p.nicheId, audience: p.audience, price: kitPrice(29), upsellProductId: null });
     expect(kit.design).toEqual(p.design);
     expect(existsSync(absPath(l.ctx, kit.files.pdf!))).toBe(true);
-    expect(readFileSync(absPath(l.ctx, kit.files.salesPage!), 'utf8')).toContain('Ajouter le kit');
+    const shop = readFileSync(absPath(l.ctx, kit.files.salesPage!), 'utf8');
+    expect(shop).toContain('Ajouter le kit');
+    expect(kit.files.previews!.length).toBeGreaterThanOrEqual(4);
+    for (const rel of kit.files.previews!) expect(existsSync(absPath(l.ctx, rel)), rel).toBe(true);
+    expect(shop.match(/<figure class="leaf">/g)?.length).toBeGreaterThanOrEqual(4);
+    expect(shop).toContain('Ces pages viennent du kit');
     expect(kit.pdfFacts!.sheets).toBe(kitSheets(p.content!).length);
     await stepUntil(l.company, () => kit.status === 'live');
     expect(kit.launchedDay).toBe(l.world.day);

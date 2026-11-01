@@ -14,10 +14,13 @@ import { budgetError, budgetTooLow, deadlineNote, defaultForm, minCashOf, scenar
 const randomSeed = () => Math.floor(Math.random() * 100_000);
 
 const TALENT_MODES: { id: TalentMode; label: string; help: string }[] = [
-  { id: 'league', label: 'Ligue', help: 'Saisons, classements, duels. Un agent qui plafonne passe un test contre trois candidats et peut être remplacé.' },
+  { id: 'league', label: 'Ligue', help: 'Saisons, classements, duels. Un agent qui plafonne repasse 24 fois le même test que 6 candidats et peut être remplacé.' },
   { id: 'flat', label: 'Sans conséquence', help: 'Chacun a son talent et sa note, personne n’est classé ni remplacé.' },
   { id: 'off', label: 'Désactivée', help: 'Tous les agents se valent : ni talent, ni note.' },
 ];
+
+/** Everything that opens an ask under « Validation fondateur », and what silence costs. */
+const APPROVAL_NOTE = 'Lancements, pubs, hausses de budget, canaux, embauches, remplacements, licenciements, e-mails à la liste, avances aux créateurs et remboursements > 50 € attendent ton feu vert. Sans réponse, rien de tout cela ne part et les frais fixes continuent de courir.';
 
 export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded(s: CompanySnapshot): void }) {
   const { snapshot, demo, toast } = useApp();
@@ -153,6 +156,7 @@ export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded
             <div className="muted small field-help">
               {form.mindMode === 'auto' ? 'Claude si une clé ANTHROPIC_API_KEY est configurée côté serveur, sinon heuristique.' : form.mindMode === 'claude' ? 'Chaque agent pense avec Claude (Opus, Sonnet, Haiku selon le rôle), dans la limite du plafond.' : 'Générateurs procéduraux hors-ligne : gratuit et déterministe.'}
             </div>
+            {form.mindMode === 'claude' && snapshot?.session?.claudeReady === false ? <div className="banner-inline banner-warn"><Icon name="alert" size={13} /> Aucune clé ANTHROPIC_API_KEY sur ce serveur : ce scénario tournera en heuristique.</div> : null}
 
             <label className="field">
               <span>Compétition</span>
@@ -171,7 +175,7 @@ export function ScenarioModal({ onClose, onLoaded }: { onClose(): void; onLoaded
               <label className="toggle">
                 <input type="checkbox" checked={form.founderApproval} onChange={(e) => set('founderApproval', e.target.checked)} />
                 <span className="toggle-ui" />
-                <span><strong>Validation fondateur</strong><span className="muted small">Lancements, pubs et remboursements &gt; 50 € attendent ton feu vert.</span></span>
+                <span><strong>Validation fondateur</strong><span className="muted small">{APPROVAL_NOTE}</span></span>
               </label>
               <label className="toggle">
                 <input type="checkbox" checked={form.chargeCompute} onChange={(e) => set('chargeCompute', e.target.checked)} />

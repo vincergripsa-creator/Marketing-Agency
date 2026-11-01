@@ -135,7 +135,7 @@ export const cycleDiagram: Draw = (v, width, style) => {
   return finish(p, bottom);
 };
 
-/** Tracks as bars under a calendar: day numbers on top, a bar per track, dashed week rules behind the bars. Labels keep their own column, so a short bar loses nothing. */
+/** Tracks as bars under a calendar: day numbers on top, a bar per track, dashed week rules behind the bars. Labels keep their own column, so a short bar loses nothing. A plan with no unit has no calendar: its bars only say the order, with no number over them. */
 export const planPath: Draw = (v, width, style) => {
   const { voice, inks } = style;
   const days = Math.floor(v.plan?.days ?? 0);
@@ -150,13 +150,15 @@ export const planPath: Draw = (v, width, style) => {
   let every = cell < need ? (daily ? 7 : 5) : 1;
   while (cell * every < need) every *= 2; // a long plan keeps its axis readable: 1, 7, 14…
   const axis = top + 9;
-  if (unit) p.s.text(unit.toUpperCase(), 0, axis, voice.labelB, 7.8, inks.ink, { track: 1.6 });
-  for (let d = 1; d <= days; d++) {
-    if (d !== 1 && d % every) continue;
-    const x = left + (d - 0.5) * cell;
-    if (x + advance(voice.labelB, String(d), 8.4) / 2 <= width) p.s.text(String(d), x, axis, voice.labelB, 8.4, inks.ink, { anchor: 'middle' });
+  if (unit) {
+    p.s.text(unit.toUpperCase(), 0, axis, voice.labelB, 7.8, inks.ink, { track: 1.6 });
+    for (let d = 1; d <= days; d++) {
+      if (d !== 1 && d % every) continue;
+      const x = left + (d - 0.5) * cell;
+      if (x + advance(voice.labelB, String(d), 8.4) / 2 <= width) p.s.text(String(d), x, axis, voice.labelB, 8.4, inks.ink, { anchor: 'middle' });
+    }
   }
-  const first = axis + 8;
+  const first = unit ? axis + 8 : top;
   const rows = tracks.map((t) => ({ ...t, h: Math.max(t.lines.length * BODY.leading, 14) + 8 }));
   const bottom = first + rows.reduce((sum, r) => sum + r.h, 0);
   if (daily) for (let d = 7; d < days; d += 7) p.s.line(left + d * cell, first - 4, left + d * cell, bottom, inks.ink, 0.5, { dash: [2, 3] });

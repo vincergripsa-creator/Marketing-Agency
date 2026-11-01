@@ -102,7 +102,8 @@ export function frenchNbsp(value: string): string {
     .replace(/(\d) (?=\d{3}\b)/g, '$1\u00a0') // "4 000 €" stays on one line
     .replace(/(\d\u00a0h) (?=\d)/g, '$1\u00a0') // "19 h 30" stays on one line
     .replace(/ ([:;!?»])/g, '\u00a0$1')
-    .replace(/« /g, '«\u00a0');
+    .replace(/« /g, '«\u00a0')
+    .replace(/([nN]°)[ \u00a0]?(?=\d)/g, '$1\u00a0'); // "n° 3" stays on one line
 }
 
 // ───────────────────────────── measuring & wrapping ─────────────────────────────

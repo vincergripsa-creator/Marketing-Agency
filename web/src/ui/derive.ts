@@ -56,14 +56,16 @@ const NEXT_PREFIX = /^\s*la\s+suite\s+est\s+ici\s*(?:[:：\-–—·|»«"“”
 
 /**
  * Title of the "La suite est ici" upsell without the leading « La suite est ici : » that the minds
- * already put in it (the card prints that prefix itself). Empty string when nothing is left.
+ * already put in it (the card prints that prefix itself). Empty string when nothing is left, or when the title is
+ * the one a guide with no follow-up closes on: that is no follow-up.
  */
 export function nextStepTitle(title: string | null | undefined): string {
   if (typeof title !== 'string') return '';
   let t = title.trim();
   // strip repeatedly: « La suite est ici : La suite est ici : x » → « x »
   for (let i = 0; i < 3 && NEXT_PREFIX.test(t); i++) t = t.replace(NEXT_PREFIX, '').trim();
-  return t.replace(/^[«"“]\s*/, '').replace(/\s*[»"”]$/, '').trim();
+  t = t.replace(/^[«"“]\s*/, '').replace(/\s*[»"”]$/, '').trim();
+  return /^votre prochaine étape$/i.test(t) ? '' : t;
 }
 
 /**
@@ -249,6 +251,16 @@ export function hasWaiver(t: Task): boolean {
 /** Payment reserve ('hold:<id>', 'hold:release:<day>'): the provider freezes cash, then gives it back. Neither a cost nor an income. */
 export function isReserve(e: Pick<LedgerEntry, 'ref'>): boolean {
   return typeof e.ref === 'string' && e.ref.startsWith('hold:');
+}
+
+/** The CFO's point mort, the one Croissance and the digest print. Null before the first Monday, and in a company without growth: nothing judges a ROAS then. */
+export function breakEvenRoas(s: CompanySnapshot | null | undefined): number | null {
+  return s?.company?.growth?.allocation?.beRoas ?? null;
+}
+
+/** A ROAS read against that point mort: there is no other break-even on screen. */
+export function roasTone(roas: number, breakEven: number | null): 'good' | 'bad' | null {
+  return breakEven === null ? null : roas >= breakEven ? 'good' : 'bad';
 }
 
 export interface LedgerView {

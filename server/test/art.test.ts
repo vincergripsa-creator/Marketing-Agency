@@ -275,7 +275,7 @@ describe('the heroes', () => {
 
 describe('the poses of a chapter (D66)', () => {
   const BOX = { x: 100, y: 50, size: 300 };
-  const OPENERS = ['Pourquoi ça recommence malgré vos efforts', '3 jours d’observation avant de changer quoi que ce soit', 'Les 6 gestes qui changent la donne', 'Les 5 erreurs qui entretiennent le problème', 'Les 6 situations qui font tout dérailler', 'Le plan de 14 jours, jour après jour', 'Garder les acquis quand la vie reprend le dessus'];
+  const OPENERS = ['Pourquoi ça recommence malgré vos efforts', '3 jours d’observation avant de changer quoi que ce soit', 'Les 6 gestes à installer', 'Les 5 erreurs qui entretiennent le problème', 'Les 6 situations qui font tout dérailler', 'Le plan de 14 jours, jour après jour', 'Garder les acquis quand la vie reprend le dessus'];
 
   it('five inks only and flat, at both sizes, on every drawing and every ink set', () => {
     for (const inks of INKS) {

@@ -210,7 +210,7 @@ export type OrderAction = 'stop_ads' | 'trim_ads' | 'stop_spending' | 'stop_laun
   | 'stop_firing' | 'allow_firing' | 'stop_hiring' | 'resume_hiring' | PersonOrder | 'negated';
 
 export type FounderOrder =
-  | { action: Exclude<OrderAction, 'trim_ads' | 'negated' | PersonOrder>; product: Product | null; channels?: ChannelId[]; spared?: Campaign[] } // channels: the ones he named, absent = all of them. spared: what « sauf » leaves alone
+  | { action: Exclude<OrderAction, 'trim_ads' | 'negated' | PersonOrder>; product: Product | null; channels?: ChannelId[]; spared?: Campaign[]; days?: number } // channels: the ones the founder named, absent = all of them. spared: what « sauf » leaves alone. days: « pendant 3 jours »
   | { action: PersonOrder; agent: AgentState }
   | { action: 'no_target'; asked: OrderAction; topic: string }
   | { action: 'no_agent'; asked: PersonOrder; name: string; left: Alumnus | null }
@@ -288,7 +288,7 @@ const OFF_SALE = anyOf(
 const RESUME_PRODUCT = new RegExp(`\\b${BACK_VERB}\\b${NEAR}${PRODUCT_NOUN}\\b`);
 const RAISE_BUDGET = /\b(?:double[rz]?|triple[rz]?|multiplie[rz]?|augmente[rz]?|monte[rz]?|booste[rz]?)\b.*\b(?:budget|depenses?)\b/;
 
-const FIRE_VERB = '(?:vire[rz]?|virons|licencie[rz]?|licencions)'; // not « renvoie »: « renvoie Marie vers le support » fires nobody
+const FIRE_VERB = '(?:vire[rsz]?|virons|licencie[rsz]?|licencions)'; // not « renvoie »: « renvoie Marie vers le support » fires nobody
 const STAFF_WORD = "(?:d')?(?:embauches?|embaucher|recrutements?|recruter)";
 const CAN = '(?:tu\\s+peux|vous\\s+pouvez|on\\s+peut)\\s+(?:de\\s+nouveau\\s+|a\\s+nouveau\\s+)?';
 /** What follows a verb and is no person: « vire les pubs », « garde le prix », « garde TikTok », « tu peux virer si besoin ». */
@@ -304,8 +304,10 @@ const STOP_FIRING = anyOf(
 const REFUSAL = "(?:\\b(?:pas|plus)\\s+(?:besoin|question|la\\s+peine|utile|necessaire)|\\b(?:evite[rz]?|refuse[rz]?|hors\\s+de\\s+question|interdit|inutile))\\s+(?:de\\s+|d')";
 /** « il ne faut pas couper », « faut pas virer », « jamais virer »: the negation stands right before an infinitive, or « en plus coupe les pubs » would refuse its own order. */
 const NOT_BEFORE = (verb: string): string => `\\b(?:pas|jamais|(?<!\\b(?:en|de|au)\\s)plus)\\s+(?:surtout\\s+|du\\s+tout\\s+|\\S+ment\\s+)?${verb}\\b`;
+/** « que tu », the way a wish opens an order: « je veux que tu vires Tom », « il faut qu'on vire Tom ». */
+const THAT_YOU = "(?:que\\s+(?:tu|vous|l'on)|qu'on)\\s+";
 /** « ne vire pas Sarah » protects her: the same order as « garde Sarah ». */
-const SPARE_PERSON = anyOf(`\\b(?:ne\\s+)?${FIRE_VERB}\\s+(?:pas|plus|jamais|ni)${PERSON}`, `${REFUSAL}${FIRE_VERB}\\b${PERSON}`, `${NOT_BEFORE(FIRE_INFINITIVE)}${PERSON}`);
+const SPARE_PERSON = anyOf(`\\bpas\\s+${THAT_YOU}${FIRE_VERB}\\b${PERSON}`, `\\b(?:ne\\s+)?${FIRE_VERB}\\s+(?:pas|plus|jamais|ni)${PERSON}`, `${REFUSAL}${FIRE_VERB}\\b${PERSON}`, `${NOT_BEFORE(FIRE_INFINITIVE)}${PERSON}`);
 /** Every verb of an order, « touche » and « bouge », which are how he says to leave things alone. Not « publie »: « ne publie plus de pubs » is a stop. Not the firing verbs: their refusal is a pin. */
 const UNDONE_VERB = `(?:${STOP_VERB}|eteindre|tue[rz]?|kill|supprime[rz]?|abandonne[rz]?|enterre[rz]?|retire[rz]?|enleve[rz]?|reprends?|reprenez|reprendre|relance[rz]?|reactive[rz]?|remets?|remettez|remettre|redemarre[rz]?|rallume[rz]?|degele[rz]?|debloque[rz]?|leve[rz]?|annule[rz]?|double[rz]?|triple[rz]?|multiplie[rz]?|augmente[rz]?|monte[rz]?|booste[rz]?|touche[rz]?|bouge[rz]?|change[rz]?|modifie[rz]?|baisse[rz]?|reduis|reduisez|reduire)`;
 /** « ne coupe pas les pubs », « ne coupe absolument pas », « ne coupe ni… », « n'arrête rien », « pas besoin de couper », « arrête de couper », « je ne veux pas que tu coupes »: what he refuses is the verb of the order itself. */
@@ -319,7 +321,7 @@ const UNPIN_PERSON = anyOf(
   `\\b(?:leve[rz]?|retire[rz]?|enleve[rz]?)\\s+(?:la\\s+protection|l'epingle)[\\s,]+(?:de\\s+|d')([a-z0-9][a-z0-9'-]*)`,
 );
 /** What may open a firing. It cannot be undone and « viré » folds to « vire »: a doubt, a « si » or a past tense before the verb is no order. */
-const FIRE_LEAD = `(?:(?:bon|ok|allez|alors|donc|oui|et|puis|stp|svp)\\s+)*(?:${CAN}|(?:tu\\s+dois|vous\\s+devez|on\\s+doit|il\\s+faut|faut|je\\s+veux|on(?:\\s+va)?)\\s+)?`;
+const FIRE_LEAD = `(?:(?:bon|ok|allez|alors|donc|oui|et|puis|stp|svp)\\s+)*(?:${CAN}|(?:tu\\s+dois|vous\\s+devez|on\\s+doit|il\\s+faut|faut|je\\s+veux|je\\s+voudrais|j'aimerais|on(?:\\s+va)?)\\s+(?:${THAT_YOU})?)?`;
 const FIRE_PERSON = new RegExp(`^${FIRE_LEAD}${FIRE_VERB}\\b${PERSON}`);
 const ALLOW_FIRING = anyOf(`(?<!\\bsi\\s)\\b${CAN}(?:virer|licencier)\\b`, `\\b(?:licenciements?|renvois?)\\s+(?:sont\\s+)?(?:autorises?|permis)\\b`, `\\b(?:${BACK_VERB}|degele[rz]?|debloque[rz]?)\\b${NEAR}(?:licenciements?|renvois?|departs)\\b`, `\\b(?:leve[rz]?|annule[rz]?)\\b.*\\b(?:licenci|vire|renvo)`, `\\b(?:leve[rz]?|annule[rz]?)\\b.*\\b(?:ordres?|gel|pause|stop|blocages?|interdictions?)\\b.*\\bdeparts?\\b`);
 const STOP_HIRING = anyOf(
@@ -327,6 +329,17 @@ const STOP_HIRING = anyOf(
   `^(?:plus|pas|aucune?)\\s+(?:de\\s+|d'|aucune?\\s+)?(?:nouvelles?\\s+)?${STAFF_WORD}\\b`,
 );
 const RESUME_HIRING = anyOf(`\\b(?:${BACK_VERB}|degele[rz]?|debloque[rz]?)\\b${NEAR}${STAFF_WORD}\\b`, `(?<!\\bsi\\s)\\b${CAN}(?:embaucher|recruter)\\b`, `\\b(?:leve[rz]?|annule[rz]?)\\b.*\\b${STAFF_WORD}\\b`);
+
+const COUNT_WORDS: Readonly<Record<string, number>> = { un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10, quinze: 15 };
+const LASTS = new RegExp(`\\b(?:pendant|durant|pour)\\s+(\\d{1,3}|${Object.keys(COUNT_WORDS).join('|')})\\s+(jours?|semaines?)\\b`);
+
+/** How long a stop lasts, in days, when the founder says it: « pendant 3 jours », « pour une semaine ». */
+export function daysIn(text: string): number | undefined {
+  const m = LASTS.exec(fold(text));
+  if (!m) return undefined;
+  const days = (COUNT_WORDS[m[1]!] ?? Number(m[1])) * (m[2]!.startsWith('semaine') ? 7 : 1);
+  return days > 0 ? days : undefined;
+}
 
 /** Who works here. A question fires nobody and protects nobody: « faut-il virer Tom ? », « pourquoi ne pas virer Tom ? ». */
 function teamOrder(full: string, asking: boolean): OrderAction | null {
@@ -596,10 +609,13 @@ function readOrder(ctx: RuntimeCtx, { action, text: full, person }: SaidOrder, t
   const w = ctx.world;
   const holds = activeHolds(w);
   const text = headOf(full);
+  const days = daysIn(full);
+  const lasting = days ? { days } : {};
   switch (action) {
     case 'trim_ads': return 'trim_ads';
     case 'negated': return { action, text: full };
-    case 'stop_spending': case 'stop_launches': case 'raise_budget': case 'stop_firing': case 'allow_firing': case 'stop_hiring': return { action, product: null };
+    case 'raise_budget': case 'allow_firing': return { action, product: null };
+    case 'stop_spending': case 'stop_launches': case 'stop_firing': case 'stop_hiring': return { action, product: null, ...lasting };
     case 'pin_agent': case 'unpin_agent': case 'fire_agent': return orderPerson(ctx, text, action, person, target);
     case 'resume_hiring': return hiringHold(w) ? { action, product: null } : null;
     case 'resume_launches': return launchHold(w) ? { action, product: null } : null;
@@ -612,7 +628,7 @@ function readOrder(ctx: RuntimeCtx, { action, text: full, person }: SaidOrder, t
       const { product, topic } = orderTarget(ctx, text);
       if (action === 'resume_ads' && !holds.some((h) => h.kind === 'ads')) return null;
       const channels = channelsIn(full);
-      return topic ? { action: 'no_target', asked: action, topic } : { action, product, ...(channels.length ? { channels } : {}), ...(spared.length ? { spared } : {}) };
+      return topic ? { action: 'no_target', asked: action, topic } : { action, product, ...(channels.length ? { channels } : {}), ...(spared.length ? { spared } : {}), ...lasting };
     }
     case 'pause_product': case 'kill_product': case 'resume_product': {
       const { product, topic } = orderTarget(ctx, text);
@@ -623,9 +639,9 @@ function readOrder(ctx: RuntimeCtx, { action, text: full, person }: SaidOrder, t
         const target = product ?? w.company.products.find((p) => p.id === shelved[0]?.productId);
         return target && held(target) ? { action, product: target } : null;
       }
-      if (product) return { action, product };
+      if (product) return { action, product, ...lasting };
       const current = w.company.products.filter((p) => p.status !== 'killed' && p.status !== 'paused');
-      return !topic && current.length === 1 ? { action, product: current[0]! } : { action: 'no_target', asked: action, topic };
+      return !topic && current.length === 1 ? { action, product: current[0]!, ...lasting } : { action: 'no_target', asked: action, topic };
     }
   }
 }

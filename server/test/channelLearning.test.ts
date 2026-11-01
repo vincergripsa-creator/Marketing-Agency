@@ -383,10 +383,10 @@ describe('where a number can be read', () => {
 describe('lessons of the channels', () => {
   const canal = (world: WorldState) => lessonsOf(world).find((d) => d.key === LESSON_KEYS.channel('sommeil'));
 
-  it('a lesson « Privilégier le canal » on the reconciled numbers', () => {
+  it('a lesson « Privilégier le canal » on the shop\'s numbers', () => {
     const world = lessonsWorld();
     metaAhead(world);
-    expect(canal(world)?.insight).toBe(`Privilégier le canal « meta » sur « ${NICHE} » : ROAS réconcilié 2,40 contre 1,20 sur TikTok.`);
+    expect(canal(world)?.insight).toBe(`Privilégier le canal « meta » sur « ${NICHE} » : ROAS boutique 2,40 contre 1,20 sur TikTok.`);
     expect(canal(world)?.topic).toBe('ads');
     expect(canal(world)?.tags).toEqual(['canal', 'meta']);
     expect(canal(world)?.evidence).toMatch(/60,00\s€ dépensés/);
@@ -464,13 +464,13 @@ describe('lessons of the channels', () => {
   });
 
   it('a line kill says « Couper », and takes the place of the lesson that put that channel forward', async () => {
-    const killed: ChannelNicheState = { channel: 'pinterest', nicheId: 'sommeil', status: 'killed', since: 1, spend: 90, revenue: 200, reason: 'ROAS réconcilié 0,50\u00a0pour 90\u00a0€', retestDay: 24 };
+    const killed: ChannelNicheState = { channel: 'pinterest', nicheId: 'sommeil', status: 'killed', since: 1, spend: 90, revenue: 200, reason: 'ROAS boutique 0,50\u00a0pour 90\u00a0€', retestDay: 24 };
     const world = lessonsWorld({ open: ['tiktok', 'pinterest'], lines: [killed] });
     const cut = lessonsOf(world).find((d) => d.key === LESSON_KEYS.channelCut('pinterest', 'sommeil'));
-    expect(cut?.insight).toBe(`Couper « pinterest » sur « ${NICHE} » : ROAS réconcilié 0,50 pour 90 €.`); // the verdict as given, whatever the credit did to the line since
+    expect(cut?.insight).toBe(`Couper « pinterest » sur « ${NICHE} » : ROAS boutique 0,50 pour 90 €.`); // the verdict as given, whatever the credit did to the line since
     expect(cut?.tags).toContain('pinterest');
     expect(cut?.evidence).toMatch(/jour 24/);
-    world.company.lessons.push({ key: LESSON_KEYS.channel('sommeil'), id: 'les_1', day: 5, topic: 'ads', insight: `Privilégier le canal « pinterest » sur « ${NICHE} » : ROAS réconcilié 2,00 contre 1,00 sur TikTok.`, evidence: 'e', confidence: 0.6, source: 'nora', appliesTo: ['leo'], notePath: 'lecons/x.md' });
+    world.company.lessons.push({ key: LESSON_KEYS.channel('sommeil'), id: 'les_1', day: 5, topic: 'ads', insight: `Privilégier le canal « pinterest » sur « ${NICHE} » : ROAS boutique 2,00 contre 1,00 sur TikTok.`, evidence: 'e', confidence: 0.6, source: 'nora', appliesTo: ['leo'], notePath: 'lecons/x.md' });
     world.company.playbooks.leo = [world.company.lessons[0]!.insight];
     await retro(world, async (brain) => {
       await runRetro(world, engineEcho, brain, []);
@@ -509,7 +509,7 @@ describe('lessons of the channels', () => {
     expect(lessonsOf(world).filter((d) => d.tags.includes('refus'))).toHaveLength(1);
     await retro(world, async (brain) => {
       await runRetro(world, engineEcho, brain, []);
-      expect(directivesOf(world, 'sarah').banned).toContain('ventre');
+      expect(directivesOf(world, 'sarah')).toMatchObject({ banned: [], platformBanned: ['ventre'] });
       expect(world.company.playbooks.sarah!.filter((r) => r.includes('ventre')).every(hasMachineRule)).toBe(true);
     });
   });

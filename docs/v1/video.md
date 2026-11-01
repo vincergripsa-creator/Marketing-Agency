@@ -143,7 +143,7 @@ Pictures and mock-ups may bleed outside. Only text and the CTA must stay in. Onl
 
 ## 3. The cut (pure, in the world)
 
-Files: `server/src/deliverables/videoCut.ts` (`planCut`, `tightenSpoken`, `roleOf`), `server/src/deliverables/speech.ts` (`estimateSpeechSec`), `server/src/sim/videoCraft.ts` (`scoreCut`, `tempoFit`).
+Files: `server/src/deliverables/videoCut.ts` (`planCut`, `tightenSpoken`, `roleOf`), `server/src/deliverables/speech.ts` (`estimateSpeechSec`), `server/src/sim/videoCraft.ts` (`scoreCut`).
 
 ### 3.1 Where it runs
 
@@ -161,7 +161,7 @@ if (ctx.world.scenario.videoModel === 'on') {
 ```
 
 - Key on hook text, never on the generated id: paired runs keep the same cut for the same text.
-- `planCut` draws exactly one number. `pickTempo` calls `learning.chooseArm(world, 'video_tempo:<nicheId>', TEMPOS, streamRng(seed, STREAM.videoTempo, day, tick, variant))`, with `armSharp` when talent is on. New streams, nothing shifted.
+- `planCut` draws exactly one number. `pickTempo` draws one of `TEMPOS` uniformly on `streamRng(seed, STREAM.videoTempo, day, tick, variant)` (D149): films keep their variety, no other stream moves.
 - The talent pillar's `bestDraft` scores a scratch creative: it must run the same block, or drafts are ranked without their cut.
 - `skill` is never stored. `VideoCut` holds decisions only, so the talent secrecy test stays green.
 
@@ -277,7 +277,9 @@ The market's `adQ` already calls `scoreCreative`, so CTR follows through `ADS.qu
 
 So best against weak is +19 % CTR, best against a mean hire +7 %. The curve is flat from about x = 0,85: past that, more talent changes nothing in the file. The baseline lowers CTR by about 3 %: left to the single final calibration, no constant moved before it.
 
-### 3.6 Tempo, the learnable part
+### 3.6 Tempo, cosmetic since D149
+
+Step 4 read learned CTR over days 31-60 above fixed on 14 of 28 seeds for 18 asked, so by its rule tempo left the market and the bandit: no `tempoFit`, no `VIDEO_MARKET`, no `NicheTruth.videoTempo`, no `video_tempo` arm, and an old save drops those arms on load. It stays in the file: shot length, BPM (88, 112, 128), caption speed. What follows is what was tried.
 
 ```ts
 // sim/videoCraft.ts: market only, own constants
@@ -331,7 +333,7 @@ ffmpeg -f rawvideo -pix_fmt rgba -s WxH -r 30 -i pipe:0 -i mix.wav
   -vf scale=out_color_matrix=bt709:out_range=tv,format=yuv420p
   -c:v libx264 -preset veryfast -crf 26 -profile:v high -level 4.1 -threads 2
   -colorspace bt709 -color_primaries bt709 -color_trc bt709
-  -c:a aac -b:a 160k -ar 44100 -af loudnorm=I=-14:TP=-1.5:LRA=11
+  -c:a aac -b:a 160k -ar 44100 -af loudnorm=I=-14:TP=-2.5:LRA=11
   -metadata comment=… -movflags +faststart -shortest out.mp4
 ```
 
@@ -487,14 +489,14 @@ On-demand requests from the UI go first. Everything else stays a storyboard.
 
 **Modes.**
 - `VIDEO_MODE` env: API server default `auto`.
-- `npm run sim`: `off`. `--video N` renders the top N at the end of a run.
+- `npm run sim`: `off`.
 - `scripts/balance.ts` never imports `video/`.
 
 **Flow.** `AgencySession` calls `director.sync(world)` after `saveWorld`, line 420 of `session.ts`. It reads only and never awaits the render. `buildRenderSpec` copies what the worker needs into `runs/<id>/video/<creativeId>/<key8>/spec.json`, so the worker never sees the world.
 
 **Key.** `sha1(JSON(cut) + ratio + RENDER_VERSION + voiceId + design)`. A rework gets a new key. Same key, ready file: no render.
 
-**Worker.** `fork(worker, { execArgv: process.execArgv })`, `os.setPriority(pid, PRIORITY_BELOW_NORMAL)`, `-threads 2`, kill after 180 s, one retry, then `failed` with a French reason. A failed QA is a failed job: its file is deleted, never served.
+**Worker.** `fork(worker, { execArgv: process.execArgv })`, `os.setPriority(pid, PRIORITY_BELOW_NORMAL)`, `-threads 2`, kill after 600 s, one retry, then `failed` with a French reason. A failed QA is a failed job: its file is deleted, never served. A QA that never finished is no verdict: each of its ffmpeg gets 300 s, and one that was killed, or a file with audio that gives no loudness, keeps the master and goes to the retry. Cut on both attempts, the row goes `evicted` with its reason, the folder stays, and the next sync or the button asks again (D156).
 
 **Disk.** `manifest.json` in `runs/<id>/video/`, written after each job. `maxVideoDiskMb` default 1 200, about 130 to 240 masters at 5 to 9 MB (a page held long costs more than a hook: 8,7 MB seen, QA's cap is 12). Over the cap, the lowest-impression `ready` video is evicted, its poster stays, status `evicted`, re-render on demand. `retireCreativeFiles` is the hook for scale's `dropFiles`.
 
@@ -508,7 +510,7 @@ On-demand requests from the UI go first. Everything else stays a storyboard.
 - Files through the existing `/runs/<id>/…` route.
 - `/api/gallery` adds `ad_video` tiles from the manifest, not from `company.deliverables`.
 
-**CLI.** `npm run video -- --run <id> --creative <id> --ratio 9:16` in `server/scripts/renderAd.ts`.
+**CLI.** `npm run video -- --run <id> --creative <id> --ratio 9:16` in `server/scripts/renderAd.ts` draws PNG frames. `--mp4` makes the real file through `buildRenderSpec` and `renderJob`, and prints QA.
 
 ## 10. QA on the real file
 
@@ -519,7 +521,7 @@ On-demand requests from the UI go first. Everything else stays a storyboard.
 | Size | exactly the stage | 1080×1920 |
 | Codec | h264, yuv420p, 30 fps | ok |
 | Faststart | `moov` before `mdat`, read from the head of the file | ok |
-| Duration | within 0,5 s of the timeline, 9 to 34 s | 26,13 |
+| Duration | within 0,5 s of the timeline, 9 to 60 s (D63) | 26,13 |
 | Audio | aac present when the cut has audio | ok |
 | Loudness | −14 ± 2,5 LUFS | −15,0 |
 | Silence | none over 1,5 s at −45 dB | none |
@@ -575,7 +577,7 @@ Each fails without the feature.
 | `server/test/videoWorld.test.ts` | 12-day run with a fake director on `auto` vs `off`: `world.json` byte-identical | rendering touches the sim |
 | | Reload mid-run ends identical with `cut` in the world (extends the test in `runtime.test.ts`) | reload guarantee broken |
 | | `videoModel: 'off'`: every draw of the market equals today's | a stream shifted |
-| | `tempoFit` draws nothing, and `toSnapshot` has no `videoTempo` | hidden truth leaks |
+| | No plain snapshot holds a niche's `demand` or its affinities | hidden truth leaks |
 | `server/test/videoAudio.test.ts` | `makeMusic` deterministic, no NaN, peak ≤ 1 | |
 | | `mixDown`: music RMS under speech ≥ 8 dB lower than in the gaps | ducking gone |
 | `server/test/videoRender.test.ts` (`skipIf(!ffmpeg)`) | 3 s mini-cut at 270×480 through the real pipeline: file exists, QA passes | pipeline broken |
@@ -590,7 +592,7 @@ Each fails without the feature.
 **Market proof**, at the final bench, 30 seeds, paired per seed, not run here:
 
 - A: `videoControl.skill` 0,2 vs 0,9. Pass: CTR ratio ≥ 1,12 on at least 24 of 30 seeds, and the median paired profit gain is positive.
-- B: `videoControl.tempo: 'standard'` vs the bandit. Pass: learned CTR over days 31-60 above fixed on at least 18 of 30 seeds. Below that, cut the tempo mechanic: it would be a label.
+- B: `videoControl.tempo: 'standard'` vs the bandit. Pass: learned CTR over days 31-60 above fixed on at least 18 of 30 seeds. Below that, cut the tempo mechanic: it would be a label. Step 4 read 14 of 28: cut, D149.
 
 ## 13. How it reaches the UI
 

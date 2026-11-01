@@ -32,7 +32,7 @@ export function encodeArgs(wav: string | null, out: string, o: EncodeOpts): stri
     '-vf', 'scale=out_color_matrix=bt709:out_range=tv,format=yuv420p',
     '-c:v', 'libx264', '-preset', o.preset ?? 'veryfast', '-crf', String(o.crf ?? 26), '-profile:v', 'high', '-level', '4.1', '-threads', String(o.threads ?? 2),
     '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',
-    ...(wav ? ['-c:a', 'aac', '-b:a', '160k', '-ar', '44100', '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11', '-shortest'] : []),
+    ...(wav ? ['-c:a', 'aac', '-b:a', '160k', '-ar', '44100', '-af', 'loudnorm=I=-14:TP=-2.5:LRA=11', '-shortest'] : []),
     '-metadata', `comment=${VIDEO_COMMENT}`,
     '-movflags', '+faststart', '-f', 'mp4', out,
   ];

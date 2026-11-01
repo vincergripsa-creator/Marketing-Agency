@@ -7,7 +7,7 @@ import type { SessionRecord } from '../api/persist.js';
 import { isHold, nextId, summarizeLedger } from '../core/index.js';
 import { CHANNELS, channelOf } from '../shared.js';
 import { listSize } from '../sim/audience.js';
-import type { DecisionRecord, FounderDigest, LedgerEntry, Order, ProductPnl, RoleId, WeekRollup, WorldEvent, WorldState } from '../shared.js';
+import type { DecisionRecord, FounderDigest, LedgerEntry, Order, ProductPnl, RoleId, Task, WeekRollup, WorldEvent, WorldState } from '../shared.js';
 import { channelPnls, productPnls } from './accounting.js';
 import { STOP_LOSS_ROAS, versionSince } from './acquisition.js';
 import { COMPACT } from './compaction.js';
@@ -18,7 +18,7 @@ import { closedWindow, isUpsellProduct } from './metrics.js';
 import { ROLES } from './org/catalog.js';
 import { officerId } from './org/officers.js';
 import { growthOn, STAGE_LABELS, STAGES } from './stages.js';
-import { dec, eur, idNum, pad3, round2, short, sum, uniq } from './util.js';
+import { clip, dec, eur, idNum, pad3, round2, short, sum, uniq } from './util.js';
 
 const MAX_DECISIONS = 500;
 const TOP_DECISIONS = 12;
@@ -160,11 +160,11 @@ function stoppedOf(w: WorldState, from: number, to: number, logged: readonly Dec
   const out = new Map<string, Stopped>();
   for (const p of w.company.products) {
     const d = p.decision;
-    if (d && d.day >= from && d.day <= to && p.status === d.status) out.set(p.id, { id: p.id, title: p.title, why: short(d.reason, MAX_WHY) });
+    if (d && d.day >= from && d.day <= to && p.status === d.status) out.set(p.id, { id: p.id, title: p.title, why: clip(d.reason, MAX_WHY) });
   }
   for (const d of logged) {
     const p = w.company.products.find((x) => x.id === d.productId);
-    if (p && (d.kind === 'kill' || d.kind === 'harvest')) out.set(p.id, { id: p.id, title: p.title, why: short(d.why, MAX_WHY) });
+    if (p && (d.kind === 'kill' || d.kind === 'harvest')) out.set(p.id, { id: p.id, title: p.title, why: clip(d.why, MAX_WHY), ...(d.kind === 'harvest' ? { harvest: true } : {}) });
   }
   return [...out.values()];
 }
@@ -176,7 +176,7 @@ function productsOf(w: WorldState, from: number, to: number, logged: readonly De
   const money = (r: ProductPnl | undefined) => (r ? { title: r.title, profit: r.profit } : null);
   return {
     launched: w.company.products.filter((p) => inWindow(p.launchedDay)).map((p) => p.title),
-    stopped: stopped.map(({ title, why }) => ({ title, why })),
+    stopped: stopped.map(({ id: _id, ...s }) => s),
     reworked: w.company.products.filter((p) => reworked.has(p.id) || (p.version > 1 && inWindow(versionSince(w, p)))).map((p) => p.title),
     best: money(moved[0]), worst: moved.length > 1 ? money(moved.at(-1)) : null,
   };
@@ -241,7 +241,7 @@ function mistakesOf(w: WorldState, span: Span, from: number, to: number, money: 
   const rows = new Map(pnl.map((r) => [r.productId, r]));
   for (const s of stopped) {
     const lost = rows.get(s.id)?.profit ?? 0;
-    if (lost < 0) out.push(`« ${short(s.title, 60)} » arrêté sans gagnant : perte de ${eur(-lost)}`);
+    if (lost < 0) out.push(`« ${short(s.title, 60)} » ${s.harvest ? 'en récolte' : 'arrêté'} sans gagnant : perte de ${eur(-lost)}`);
   }
   const raw = Math.max(from, keptFrom(w, COMPACT.ledgerDays));
   const chargebacks = w.ledger.filter((e) => e.type === 'chargeback' && e.amount < 0 && e.day >= raw && e.day <= to);
@@ -249,7 +249,8 @@ function mistakesOf(w: WorldState, span: Span, from: number, to: number, money: 
   out.push(...lateStops(w, from, to));
   const allocation = w.company.growth?.allocation;
   const idle = allocation ? allocation.free - IDLE_ADS_DAYS * (money.adSpend / (to - from + 1)) : 0;
-  if (idle > 0 && idle >= IDLE_SHARE * money.cashEnd) out.push(`Trésorerie qui dort : ${eur(idle)} au-delà de la réserve et de ${IDLE_ADS_DAYS} jours de pub`);
+  const selling = w.company.products.some((p) => p.status === 'live'); // before the first guide, nothing could have spent it
+  if (selling && idle > 0 && idle >= IDLE_SHARE * money.cashEnd) out.push(`Trésorerie qui dort : ${eur(idle)} au-delà de la réserve et de ${IDLE_ADS_DAYS} jours de pub`);
   return out;
 }
 
@@ -267,7 +268,7 @@ function stayIncidents(session: readonly SessionRecord[], from: number, to: numb
     if (next.day < from || next.day > to) return [];
     const off = Date.parse(next.startAt) - Date.parse(stay.stopAt ?? next.startAt);
     if (!stay.clean) return [`Jour ${next.day} : arrêt brutal de l'agence${off >= OFF_MIN_MS ? `, ${lasted(off)} à l'arrêt` : ''}`];
-    return off >= OFF_MIN_MS ? [`Jour ${next.day} : machine éteinte ${lasted(off)}, le temps de l'agence s'est arrêté avec elle`] : [];
+    return off >= OFF_MIN_MS ? [`Jour ${next.day} : agence à l'arrêt ${lasted(off)}, son temps s'est arrêté avec elle`] : []; // the machine off, or the same machine on another run: the log does not tell them apart
   });
 }
 
@@ -281,9 +282,19 @@ function incidentsOf(w: WorldState, from: number, to: number, logged: readonly D
 
 // ───────────────────────────── what comes next ─────────────────────────────
 
+/** What the founder's silence costs in approval mode: nothing goes out while an ask waits, the fixed costs do. */
+function waitCost(w: WorldState, asks: readonly Task[]): string[] {
+  if (!asks.length) return [];
+  const since = Math.min(...asks.map((t) => t.dayCreated));
+  const lost = round2(cashAt(w, Math.max(1, since - 1)) - ledgerCash(w, w.day)); // day 1 holds the capital: nothing before it to read
+  return lost > 0 ? [`${asks.length} demande(s) t'attendent depuis le jour ${since} : la trésorerie a perdu ${eur(lost)} depuis, et rien ne repart sans ta réponse.`] : [];
+}
+
 function waitingOf(w: WorldState): string[] {
+  const asks = w.company.tasks.filter((t) => t.status === 'awaiting_founder');
   return [
-    ...w.company.tasks.filter((t) => t.status === 'awaiting_founder').sort((a, b) => a.priority - b.priority).map((t) => `À valider : ${t.title}`),
+    ...waitCost(w, asks),
+    ...[...asks].sort((a, b) => a.priority - b.priority).map((t) => `À valider : ${t.title}`),
     ...w.company.missions.filter((m) => m.from === 'founder' && m.status === 'open').map((m) => `Ta demande du jour ${m.day} : ${short(m.text, 100)}`),
     ...activeHolds(w).filter((h) => h.until === null).map((h) => `Ton ordre du jour ${h.day} tient toujours : ${h.reason}`),
   ];
@@ -315,6 +326,15 @@ function headlineOf(days: number, m: FounderDigest['money']): string {
   return `${result} en ${days} jour${days > 1 ? 's' : ''}${versus} : ${eur(m.revenue)} de ventes, ${eur(m.refunds)} remboursés, ${eur(m.adSpend)} de pub, ${eur(m.costs)} de frais.`;
 }
 
+/** A budget line moves money and earns none: it outranks nothing, and no amount beside it reads as a gain. */
+const weightOf = (d: DecisionRecord): number => (d.kind === 'budget' ? 0 : Math.abs(d.impactEur ?? 0));
+
+function withoutMoved(d: DecisionRecord): DecisionRecord {
+  if (d.kind !== 'budget') return d;
+  const { impactEur: _moved, ...line } = d;
+  return line;
+}
+
 /**
  * `highlights` stays empty here: the chronicle is an api read, and the routes of P12.1 fill it with `digestPeopleOf`.
  * @param session runs/<id>/session.log.json, for what only the outside of the world knows
@@ -338,7 +358,7 @@ export function buildDigest(w: WorldState, fromDay: number, toDay: number, sessi
     channels: channelsOf(w, from, to, logged),
     highlights: [],
     decisions: logged.filter((d) => d.kind !== 'incident')
-      .sort((a, b) => Math.abs(b.impactEur ?? 0) - Math.abs(a.impactEur ?? 0) || b.day - a.day || idNum(b.id) - idNum(a.id)).slice(0, TOP_DECISIONS),
+      .sort((a, b) => weightOf(b) - weightOf(a) || b.day - a.day || idNum(b.id) - idNum(a.id)).slice(0, TOP_DECISIONS).map(withoutMoved),
     mistakes: mistakesOf(w, span, from, to, money, stopped, pnl),
     incidents: incidentsOf(w, from, to, logged, session),
     waiting: waitingOf(w),
@@ -359,7 +379,7 @@ function noteBody(title: string, week: WeekRollup, d: FounderDigest): string {
     ...section('Erreurs', d.mistakes),
     ...section('Incidents', d.incidents),
     ...section('Produits', [
-      ...p.launched.map((t) => `Lancé : ${t}`), ...p.stopped.map((s) => `Arrêté : ${s.title}, ${s.why}`), ...p.reworked.map((t) => `Repris : ${t}`),
+      ...p.launched.map((t) => `Lancé : ${t}`), ...p.stopped.map((s) => `${s.harvest ? 'En récolte' : 'Arrêté'} : ${s.title}, ${s.why}`), ...p.reworked.map((t) => `Repris : ${t}`),
       ...(p.best ? [`Meilleur : ${p.best.title}, ${eur(p.best.profit)}`] : []), ...(p.worst ? [`Pire : ${p.worst.title}, ${eur(p.worst.profit)}`] : []),
     ]),
     ...section('Équipe', [...people.hired.map((s) => `Arrivée : ${s}`), ...people.left.map((s) => `Départ : ${s}`)]),

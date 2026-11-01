@@ -3,6 +3,7 @@
 import { StrictMode, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Activity, ActivityKind, AgentState, AgentStatus, CompanySnapshot, DayPhase, DeptId, Place } from '../../../shared/types';
+import '../fonts';
 import { Minimap } from './Minimap';
 import { WorldCanvas, type WorldCanvasProps } from './WorldCanvas';
 import { SCENE_ACTIONS, mockSnapshot } from './mockSnapshot';

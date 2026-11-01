@@ -25,7 +25,9 @@ const NOTHING = { skipReview: true, output: { skipped: true, dropped: true } };
 /** What the channel's writers may not say, the growth lead's own list included. */
 function bannedFor(ctx: RuntimeCtx, nicheId: string, agentId: string): string[] {
   const w = ctx.world;
-  return uniq([...vocOf(ctx, nicheId).bannedClaims, ...directivesOf(w, agentId).banned, ...directivesOf(w, officerId(w, 'growth')).banned, ...COMPLIANCE_WORDS]);
+  const mine = directivesOf(w, agentId);
+  const lead = directivesOf(w, officerId(w, 'growth'));
+  return uniq([...vocOf(ctx, nicheId).bannedClaims, ...mine.banned, ...mine.platformBanned, ...lead.banned, ...lead.platformBanned, ...COMPLIANCE_WORDS]);
 }
 
 /** Notes of the review, read by the writer on a rework. */
@@ -95,7 +97,7 @@ function nicheCredits(ctx: RuntimeCtx, rows: readonly Row[]): Record<string, Par
   return niches;
 }
 
-const attributionLine = (r: AttributionRow): string => `- ${CHANNELS[r.channel].label} : ${eur(r.spend)} dépensés, ${eur(r.claimedRevenue)} annoncés, ${eur(r.shopRevenue)} vus par la boutique, ${eur(r.reconciledRevenue)} réconciliés.`;
+const attributionLine = (r: AttributionRow): string => `- ${CHANNELS[r.channel].label} : ${eur(r.spend)} dépensés, ${eur(r.claimedRevenue)} annoncés, ${eur(r.shopRevenue)} vus par la boutique.`;
 
 export const channelHandlers: HandlerMap = {
   open_channel: {

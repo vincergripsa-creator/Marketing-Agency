@@ -38,7 +38,12 @@ export function ProductsTab({ onClose, focusId = null, focusSeq = 0 }: { onClose
     prod: products.filter((p) => ['idea', 'research', 'writing', 'design', 'qa', 'ready'].includes(p.status)),
     stopped: products.filter((p) => p.status === 'paused' || p.status === 'killed'),
   }), [products]);
-  const list = filter === 'all' ? [...products].sort((a, b) => rank(a) - rank(b) || b.createdDay - a.createdDay) : groups[filter];
+  const sorted = filter === 'all' ? [...products].sort((a, b) => rank(a) - rank(b) || b.createdDay - a.createdDay) : groups[filter];
+  // at ×8 a guide changes status every few seconds: under the pointer the cards keep their places, or a click lands on the next one
+  const placed = useRef<string[]>([]);
+  const [pointing, setPointing] = useState(false);
+  const list = pointing ? heldOrder(sorted, placed.current) : sorted;
+  placed.current = list.map((p) => p.id);
 
   // a light snapshot stops listing stopped guides past the latest ones: the tiles read the whole catalogue
   const whole = snapshot?.counts?.catalogue;
@@ -58,7 +63,7 @@ export function ProductsTab({ onClose, focusId = null, focusSeq = 0 }: { onClose
         <Stat label="Note moyenne" value={avgRating ? `${avgRating.toFixed(1).replace('.', ',')} / 5` : '—'} sub={avgRating ? stars(avgRating) : 'pas encore d’avis'} icon="star" tone={avgRating && avgRating < 4.2 ? 'warn' : null} />
       </div>
       <div className="filters-row">
-        <Segmented<Filter> size="sm" value={filter} onChange={setFilter} options={[
+        <Segmented<Filter> size="sm" value={filter} onChange={(f) => { setFilter(f); setPointing(false); }} options={[
           { id: 'all', label: 'Tous', count: snapshot?.counts?.products ?? products.length },
           { id: 'live', label: 'En vente', count: groups.live.length },
           { id: 'prod', label: 'En production', count: groups.prod.length },
@@ -69,12 +74,18 @@ export function ProductsTab({ onClose, focusId = null, focusSeq = 0 }: { onClose
       {list.length === 0 ? (
         <Empty icon="package">{products.length === 0 ? 'Aucun guide pour l’instant : la Recherche cherche encore la bonne niche (règle du un : un problème, une personne).' : 'Aucun produit dans cette catégorie.'}</Empty>
       ) : (
-        <div className="product-grid" ref={gridRef}>
+        <div className="product-grid" ref={gridRef} onPointerEnter={() => setPointing(true)} onPointerLeave={() => setPointing(false)}>
           {list.map((p) => <ProductCard key={p.id} p={p} focused={highlight === p.id} />)}
         </div>
       )}
     </Overlay>
   );
+}
+
+/** The cards in the order they were last drawn, a new guide after them. Pure, unit-tested. */
+export function heldOrder<T extends { id: string }>(list: readonly T[], placed: readonly string[]): T[] {
+  const at = new Map(placed.map((id, i) => [id, i]));
+  return [...list].sort((a, b) => (at.get(a.id) ?? placed.length) - (at.get(b.id) ?? placed.length));
 }
 
 function rank(p: Product): number {
@@ -109,6 +120,7 @@ function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) 
   const history = (p.priceHistory ?? []).slice(-6);
   const cvr = safeDiv(st.sales, st.views);
   const q = p.quality;
+  const stopped = p.status === 'paused' || p.status === 'killed';
   const nextTitle = nextStepTitle(p.content?.nextStep?.title);
   const nextText = (p.content?.nextStep?.text ?? '').trim();
 
@@ -158,10 +170,14 @@ function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) 
           <div><strong>{st.rating ? st.rating.toFixed(1).replace('.', ',') : '—'}</strong><span>{st.rating ? stars(st.rating) : 'note'}</span></div>
         </div>
 
-        <SectionTitle right={q?.issues?.length ? <button type="button" className="link-btn small" onClick={() => setShowIssues((v) => !v)}>{showIssues ? 'Masquer' : `${q.issues.length} remarque${q.issues.length > 1 ? 's' : ''}`}</button> : null}>
-          Qualité du guide
-        </SectionTitle>
-        <QualityBars q={q} />
+        {q || !stopped ? (
+          <>
+            <SectionTitle right={q?.issues?.length ? <button type="button" className="link-btn small" onClick={() => setShowIssues((v) => !v)}>{showIssues ? 'Masquer' : `${q.issues.length} remarque${q.issues.length > 1 ? 's' : ''}`}</button> : null}>
+              Qualité du guide
+            </SectionTitle>
+            <QualityBars q={q} />
+          </>
+        ) : null}
         {q?.blocking?.length ? (
           <div className="blocking">
             <strong className="small">Points bloquants</strong>
@@ -189,12 +205,12 @@ function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) 
           {p.files?.pdf && !demo ? <button type="button" className="btn btn-sm btn-ghost" data-viewer="pdf" onClick={() => setFlipping(true)} title="Feuilleter le guide"><Icon name="layers" size={13} />Feuilleter</button> : null}
           <FileLink runId={runId} path={p.files?.pdf} demo={demo} icon="file">Ouvrir le PDF</FileLink>
           <FileLink runId={runId} path={p.files?.salesPage} demo={demo} icon="store">Page de vente</FileLink>
-          {!p.files?.pdf && !p.files?.salesPage ? <span className="muted small">Fichiers en cours de fabrication…</span> : null}
+          {!p.files?.pdf && !p.files?.salesPage && !stopped ? <span className="muted small">Fichiers en cours de fabrication…</span> : null}
         </div>
-        {upsell || nextTitle || nextText ? (
+        {upsell || nextTitle ? (
           <div className="upsell small" title={!upsell && nextText ? nextText : undefined}>
             <Icon name="arrowRight" size={12} /> <strong>La suite est ici :</strong>{' '}
-            {upsell ? <>{upsell.title} <span className="muted">({PRODUCT_STATUS_LABEL[upsell.status].toLowerCase()}, {fmtEur(upsell.price, 0)})</span></> : nextTitle || <span className="muted">guide suivant en préparation</span>}
+            {upsell ? <>{upsell.title} <span className="muted">({PRODUCT_STATUS_LABEL[upsell.status].toLowerCase()}, {fmtEur(upsell.price, 0)})</span></> : nextTitle}
             {st.upsellSales ? <span className="txt-good"> · {fmtInt(st.upsellSales)} upsells</span> : null}
             {upsell?.files?.salesPage ? <> <FileLink runId={runId} path={upsell.files.salesPage} demo={demo} icon="external" className="upsell-link">Voir la page</FileLink></> : null}
           </div>

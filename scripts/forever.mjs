@@ -45,7 +45,7 @@ function buildWeb() {
   if (existsSync(join(ROOT, 'web', 'dist', 'index.html'))) return;
   say("Interface absente : construction de web/dist…");
   const res = spawnSync('npm run build', { cwd: ROOT, stdio: 'inherit', shell: true });
-  if (res.status !== 0) say("La construction de l'interface a échoué : le serveur tourne sans elle.");
+  if (res.status !== 0) say("La construction de l'interface a échoué : le serveur tourne sans elle. Il faut d'abord un npm ci complet, sans --omit=optional, puis npm run build.");
 }
 
 let child = null;

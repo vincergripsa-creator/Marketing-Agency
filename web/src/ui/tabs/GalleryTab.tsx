@@ -1,5 +1,6 @@
 // Galerie: every deliverable the agency produced, page by page from /api/deliverables. A guide opens in the flip book, an ad in the player.
 import { useMemo, useRef, useState } from 'react';
+import { filmOf } from '../../../../shared/channels';
 import type { CompanySnapshot, Deliverable } from '../../../../shared/types';
 import { brainNotePath, fileUrl } from '../../api';
 import { cx, Empty, NEW_TAB, Overlay, Segmented } from '../common';
@@ -39,7 +40,11 @@ export function pageOf(data: unknown): GalleryPage | null {
 
 /** Tiles of the videos the snapshot knows: the same rows the server merges, for a server that cannot page yet. */
 export function videoTiles(s: CompanySnapshot | null): GalleryItem[] {
-  return Object.entries(s?.videos ?? {}).filter(([, v]) => v.videos.length > 0 || v.poster).map(([creativeId, v]) => {
+  const films = new Set<string>();
+  return Object.entries(s?.videos ?? {}).filter(([, v]) => v.videos.length > 0 || v.poster).filter(([, v]) => {
+    const film = filmOf(v.videos[0]?.path ?? v.poster ?? '');
+    return !films.has(film) && films.add(film);
+  }).map(([creativeId, v]) => {
     const c = s?.company?.creatives?.find((x) => x.id === creativeId);
     return {
       id: `vid_${creativeId}`, kind: 'ad_video', title: c?.hook ?? VIDEO_LABEL, productId: c?.productId ?? null, creativeId,

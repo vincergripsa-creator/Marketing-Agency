@@ -288,6 +288,24 @@ describe('saves that survive', () => {
   });
 });
 
+describe('what GET /api/state carries', () => {
+  it('the films of what it shows (D155): the whole index stays on GET /api/videos, a year of films would push it past its budget', async () => {
+    const saved = await savedRun('run-films');
+    await writeCurrentRun(saved.runId);
+    const old = Array.from({ length: 40 }, (_, i) => ({ ...saved.company.creatives[0], id: `cre_film${i}` }));
+    const film = { status: 'ready', reason: null, videos: [], poster: null, captions: null, cards: [], voice: null, qa: null };
+    const items = Object.fromEntries(old.map((c) => [c.id, film]));
+    const s = new AgencySession({ director: () => ({ ...director, index: () => ({ level: 'full', reason: null, items }) } as typeof director) });
+    await s.start();
+    s.pause();
+    s.world.company.creatives = old as typeof s.world.company.creatives;
+    const videos = (JSON.parse(s.snapshotJson()) as { videos: Record<string, unknown> }).videos;
+    expect(Object.keys(videos)).toHaveLength(30);
+    expect(Object.keys(s.videoIndex().items)).toHaveLength(40);
+    await s.shutdown();
+  });
+});
+
 describe('compaction reaches the disk', () => {
   it('a batch goes from the company to runs/<id>/archive, and the videos of what it archived leave with it', async () => {
     const retired: string[] = [];
@@ -796,6 +814,13 @@ describe('the goal of a run that does not end', () => {
     world.status = 'bankrupt';
     await run.company.runDays(1);
     expect(world.status).toBe('goal_reached');
+  });
+
+  it('a save of before D149 loses its tempo arms: nothing reads them, and the Learning tab would print the raw key', () => {
+    const world = createWorld(scenario(), 'run-tempo-old');
+    const arm = { key: 'calm', alpha: 2, beta: 1, pulls: 1, reward: 1 };
+    world.company.bandits = { 'hook:sommeil': [arm], 'video_tempo:sommeil': [arm] };
+    expect(Object.keys(migrateWorld(world).company.bandits)).toEqual(['hook:sommeil']);
   });
 
   it('a save older than the field gets it from its event, even at version 2', () => {

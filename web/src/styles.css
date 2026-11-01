@@ -960,7 +960,8 @@ button.tile { padding: 0; width: 100%; font: inherit; text-align: left; cursor: 
 .budget-note { display: flex; gap: 6px; align-items: baseline; background: var(--surface-2); border-radius: 8px; padding: 7px 10px; color: var(--ink-2); line-height: 1.45; }
 
 /* ───────────── Responsive ───────────── */
-@media (max-width: 1600px) {
+/* the full bar needs about 1740 px with two badges, a third wide badge takes more */
+@media (max-width: 1800px) {
   .logo-text { display: none; }
   .search { width: 205px; }
   .tab { padding: 6px 8px; }

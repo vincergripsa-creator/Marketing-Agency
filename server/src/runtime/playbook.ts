@@ -16,6 +16,8 @@ export const SUPPORT_TONES: readonly string[] = ['chaleureux', 'concis', 'formel
 
 export interface PlaybookDirectives {
   banned: string[];
+  /** A platform's refusal (« Sur TikTok, ne jamais écrire « X » »): it binds the ads, not the guides. */
+  platformBanned: string[];
   hook: HookStyle | null;
   format: AdFormat | null;
   channel: ChannelId | null;
@@ -33,6 +35,8 @@ const RX = {
   hype: /Niveau de promesse max\s*«\s*([^»]+?)\s*»/i,
   tone: /Ton support\s*«\s*([^»]+?)\s*»/i,
 };
+
+const PLATFORM_RULE = /^\s*Sur\s+[^«»,]+,\s*ne jamais écrire/i;
 
 const SINGLETONS = [RX.hook, RX.format, RX.channel, RX.price, RX.hype, RX.tone];
 
@@ -56,7 +60,7 @@ function scopeOf(rule: string, m: RegExpExecArray): string | null {
  * With `niche`, rules scoped to another niche (« … sur « Autre niche » ») are ignored; banned words stay global.
  */
 export function parsePlaybook(rules: readonly string[], niche?: string): PlaybookDirectives {
-  const d: PlaybookDirectives = { banned: [], hook: null, format: null, channel: null, targetPrice: null, maxHype: null, tone: null };
+  const d: PlaybookDirectives = { banned: [], platformBanned: [], hook: null, format: null, channel: null, targetPrice: null, maxHype: null, tone: null };
   const inScope = (rule: string, m: RegExpExecArray): boolean => {
     const scope = scopeOf(rule, m);
     if (!scope || !niche) return true;
@@ -64,7 +68,7 @@ export function parsePlaybook(rules: readonly string[], niche?: string): Playboo
   };
   for (const rule of rules) {
     let m = RX.banned.exec(rule);
-    if (m) { d.banned.push(m[1]!.trim()); continue; }
+    if (m) { (PLATFORM_RULE.test(rule) ? d.platformBanned : d.banned).push(m[1]!.trim()); continue; }
     if (SINGLETONS.some((rx) => { const hit = rx.exec(rule); return hit && !inScope(rule, hit); })) continue;
     m = RX.hook.exec(rule);
     if (m && (HOOK_STYLES as readonly string[]).includes(m[1]!.trim())) { d.hook = m[1]!.trim() as HookStyle; continue; }

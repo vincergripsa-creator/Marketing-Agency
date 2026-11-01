@@ -1,17 +1,10 @@
 /**
- * What the market reads of an edit (video §3.5, §3.6). `scoreCut` is pure: the score recomputes pace and look from the
- * metrics, never from a file, so rendering cannot move the simulation. `tempoFit` is the one market fact: what a niche
- * likes to watch, hidden, and learnable because it shows in the numbers.
+ * What the market reads of an edit (video §3.5). `scoreCut` is pure: the score recomputes pace and look from the metrics,
+ * never from a file, so rendering cannot move the simulation.
  */
-import { streamRng } from '../core/index.js';
 import { wrapText } from '../deliverables/text.js';
-import { TEMPOS } from '../deliverables/videoCut.js';
-import type { AdCreative, NicheTruth, VideoCut, VideoTempo } from '../shared.js';
+import type { VideoCut } from '../shared.js';
 import { fmtNum } from './text.js';
-
-export const VIDEO_MARKET = { tempoMatch: 1.08, tempoOpposite: 0.92 };
-/** Market truth at creation (§2.6), next to `CHANNEL_STREAM.truth`. */
-const VIDEO_TASTE_STREAM = 0xc4a702;
 
 /** The narrowest box of the master (zone B of video §2), at the smallest size a phone reads there. Montserrat stands behind Helvetica's metrics. */
 const SCREEN_BOX = { width: 815, lines: 3, minSize: 56 } as const;
@@ -70,18 +63,4 @@ export function scoreCut(cut: VideoCut): { pace: number; look: number; craft: nu
   if (endP < 0.7) notes.push(`L’appel à l’action reste trop peu à l’écran (${fmtNum(m.endHoldSec)} s).`);
   if (textP < 1) notes.push('Textes à l’écran trop longs pour tenir dans la zone sûre.');
   return { pace, look, craft: Math.round(50 * pace + 50 * look), notes };
-}
-
-/** A niche's hidden taste: its own stream, so the market's own draws do not move. */
-export function nicheTempo(seed: number, nicheIndex: number): VideoTempo {
-  return TEMPOS[streamRng(seed, VIDEO_TASTE_STREAM, nicheIndex).int(0, 2)]!;
-}
-
-/** CTR factor of a cut's tempo in its niche: 1 without a cut or a truth, and it draws nothing. */
-export function tempoFit(n: NicheTruth, c: AdCreative): number {
-  const taste = n.videoTempo;
-  const tempo = c.cut?.tempo;
-  if (!taste || !tempo) return 1;
-  if (taste === tempo) return VIDEO_MARKET.tempoMatch;
-  return taste !== 'standard' && tempo !== 'standard' ? VIDEO_MARKET.tempoOpposite : 1;
 }

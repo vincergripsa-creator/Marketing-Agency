@@ -103,6 +103,19 @@ Le run de référence (entreprise d'avant la V1, 25 jours, graine 7) ne se réen
 | P10.2 | Les rivaux remplacent la pénalité permanente des clones ; liste e-mail et kit côté marché | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` (identique) | Rien : en 25 jours, la graine 7 ne voit ni clone ni rival (0 événement `competitor_clone`, `market.rivals` vide) et l'entreprise n'a ni liste ni kit. `--record` réécrit le même fichier, sur `HEAD` plus les seuls fichiers de P10.2 |
 | P14.1 (S14, D145) | Le gagnant E écrit `CONVERSION.base` 0,0195, que le run de référence lit | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `bf66359a8b97fe09b4a55e417d303d0608f69ac7` | `ledger`, `kpis` et `tasks` ; `events` inchangés |
 | Dernière liste (D135 à D143) | Texte des guides (D1, D2, N1, `bare`) et couvertures (D3, D138) | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` (identique) | Rien : l'empreinte est restée la même, aucun réenregistrement. Elle couvre l'entreprise d'avant la V1 sur 25 jours, pas le marché ci-dessous |
+| S15 (D152, D156) | Texte des guides : titres de chapitres, jauges, plans, notes de marge, audiences avec leur âge, têtes de paragraphe, phrases cassées | `bf66359a8b97fe09b4a55e417d303d0608f69ac7` | `b6b0ec5a8530dea8a2cf7985c93eeac7253e6b2f` | `ledger`, `kpis` et `tasks` ; `events` inchangés. Vérifié : l'arbre sans le paquet pdf lit `bf66359a…` ; le monde diffère d'abord le soir du J1 par un seul titre de chapitre du plan, jusqu'au J12 par le texte du guide et ce qui le cite, le J13 par les titres, le J14 par une note qui lit ce texte, et ce que l'empreinte couvre bouge le J15 |
+
+### S15 : ce qui a bougé après l'étape 4
+
+Ces nombres comparent 9513e97 à l'arbre final, 60 jours, 500 €, `normal`. Ils mêlent les bascules de l'étape 4 (D149) et le texte des guides (D152, D156). Aucune constante de `balance.ts` n'a changé, et une graine ne prouve rien : la dernière course de l'étape 5 donne la vraie médiane.
+
+| Graine | Trésorerie J60, 9513e97 → final | Première écriture différente |
+|---|---:|---|
+| 4 | 3 549,79 € → 4 559,56 € | J7 |
+| 7 | 8 684,29 € → 6 313,85 € | J5 |
+| 42 | 1 411,67 € → 447,17 € | J16 |
+
+Sur un an, graines 1 à 10 : médiane de la trésorerie à J360 environ 36 440 €, contre environ 21 500 € avant les dernières corrections du texte et environ 38 000 € à la lecture d'acceptation. Aucun plantage, aucun écart de grand livre.
 
 ### Dernière liste : à lire à S14
 

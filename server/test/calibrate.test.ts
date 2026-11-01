@@ -17,7 +17,7 @@ import { allocationOf, CFO } from '../src/runtime/cfo.js';
 import type { RuntimeCtx } from '../src/runtime/ctx.js';
 import { compactWorld, COMPACT } from '../src/runtime/compaction.js';
 import { payOf } from '../src/runtime/org/payroll.js';
-import { PORTFOLIO, retestDue } from '../src/runtime/portfolio.js';
+import { retestDue } from '../src/runtime/portfolio.js';
 import { evaluateStage, policyOf } from '../src/runtime/stages.js';
 import { TALENT } from '../src/runtime/talent/constants.js';
 import { craftOf } from '../src/runtime/talent/craft.js';
@@ -30,7 +30,6 @@ import {
 } from '../src/sim/channels.js';
 import { runClaims } from '../src/sim/claims.js';
 import { kitPrice } from '../src/sim/growth.js';
-import { tempoFit } from '../src/sim/videoCraft.js';
 import { visualCvr } from '../src/sim/visual.js';
 import type { AdCreative, Campaign, DailyAdStats, MarketState, NicheTruth, Product, Skill, Task, VisualReport, WeekRollup, WorldState } from '../src/shared.js';
 import { adWindow, applyOverrides, bankruptBy, closeOn, constantAt, deadAtEnd, survivalOn, type DayRow, type RatedPair, type RunResult, type RunSpec } from '../scripts/balanceLib.js';
@@ -805,7 +804,7 @@ function retestOf(): boolean {
   const w = withProduct(freshWorld());
   w.day = 100;
   const p = w.company.products[0]!;
-  p.harvest = { day: 10, price: p.price, version: p.version, retest: null };
+  p.harvest = { day: 10, price: p.price - 1, version: p.version, retest: null };
   return retestDue(w, p);
 }
 
@@ -835,8 +834,7 @@ const REACHES: [string, number, () => unknown][] = [
   ['CLAIMS.greed.meta', 0.95, claimed],
   ['CHANNEL_EVENTS.drift.chance', 1, driftedFit],
   ['CHANNEL_POLICY.alloc.kappa', 1000, () => elasticity([{ s: 10, r: 30 }, { s: 20, r: 40 }, { s: 40, r: 50 }], 0.75).b],
-  ['RECON.claimWeight', 0, () => reconcile([{ channel: 'meta', spend: 10, revenue: 100, claimedRevenue: 300 }, { channel: 'tiktok', spend: 10, revenue: 100, claimedRevenue: 100 }])[0]!.credit],
-  ['VIDEO_MARKET.tempoMatch', 1.5, () => tempoFit({ videoTempo: 'fast' } as NicheTruth, { cut: { tempo: 'fast' } } as AdCreative)],
+  ['RECON.claimWeight', 0.5, () => reconcile([{ channel: 'meta', spend: 10, revenue: 100, claimedRevenue: 300 }, { channel: 'tiktok', spend: 10, revenue: 100, claimedRevenue: 100 }])[0]!.credit],
   ['VISUAL.cvr.slope', 0.25, () => visualCvr(report)],
   ['GROWTH.bump.maxPrice', 25, () => kitPrice(100)],
   ['STAGE_POLICY.survie.maxMains', 5, () => policyOf({ ...freshWorld(), scenario: { ...freshWorld().scenario, scaling: true } }).maxMains],
@@ -846,7 +844,7 @@ const REACHES: [string, number, () => unknown][] = [
   ['LEARNING.raise', 0.1, afterRaise],
   ['PAID_TAIL.shares.0', 0.5, tailClicks],
   ['COST_HINT.cpm.0', 1e6, () => channelSignals(freshWorld(), niche(freshWorld()).id).filter((s) => s.costHint === 'bas').length],
-  ['PORTFOLIO.retestAny', 1, retestOf],
+  ['PORTFOLIO.retestDays', 200, retestOf],
 ];
 
 describe('an override reaches its reader', () => {
@@ -864,26 +862,25 @@ describe('an override reaches its reader', () => {
 
   it('the object of every path of §2.9 is in the table', () => {
     const named = new Set(REACHES.map(([path]) => path.split('.')[0]));
-    for (const name of ['ORG', 'TALENT', 'CHANNEL_SIM', 'SEARCH', 'ASSIST', 'CLAIMS', 'CHANNEL_EVENTS', 'CHANNEL_POLICY', 'RECON', 'VIDEO_MARKET', 'VISUAL', 'GROWTH', 'STAGE_POLICY', 'COMPACT', 'CFO', 'STAGE_GATES', 'LEARNING', 'PAID_TAIL', 'TIKTOK_OVERLAP', 'FAMILY_FATIGUE', 'COST_HINT', 'PORTFOLIO']) expect(named, name).toContain(name);
+    for (const name of ['ORG', 'TALENT', 'CHANNEL_SIM', 'SEARCH', 'ASSIST', 'CLAIMS', 'CHANNEL_EVENTS', 'CHANNEL_POLICY', 'RECON', 'VISUAL', 'GROWTH', 'STAGE_POLICY', 'COMPACT', 'CFO', 'STAGE_GATES', 'LEARNING', 'PAID_TAIL', 'TIKTOK_OVERLAP', 'FAMILY_FATIGUE', 'COST_HINT', 'PORTFOLIO']) expect(named, name).toContain(name);
   });
 
   it('an unknown path throws, and so does a path that is not a number', () => {
-    for (const path of ['NOPE.x', 'ORG.nope', 'ORG.layoff', 'TALENT.challenge.nope', 'STAGE_GATES.adequation.nope', 'TALENT.constructor.name', 'CFO', 'NICHE_VARIATION', 'PAID_TAIL.channel']) {
+    for (const path of ['NOPE.x', 'ORG.nope', 'ORG.layoff', 'TALENT.challenge.nope', 'STAGE_GATES.adequation.nope', 'TALENT.constructor.name', 'CFO', 'NICHE_VARIATION', 'PAID_TAIL.channel', 'PORTFOLIO.retestAny', 'VIDEO_MARKET.tempoMatch']) {
       expect(() => applyOverrides({ [path]: 1 }), path).toThrow(/Constante inconnue/);
     }
     expect(() => applyOverrides({ 'ADS.baseCtr': Number.NaN })).toThrow(/non numérique/);
   });
 
-  it('every candidate path exists, and the default of the retest flag is off', () => {
+  it('every candidate path exists', () => {
     for (const c of CANDIDATES) for (const path of Object.keys(c.overrides)) expect(constantAt(path), path).toBeTypeOf('number');
-    expect(PORTFOLIO.retestAny).toBe(0);
   });
 
   it('names what the two bare numbers are today', () => {
     expect(constantAt('TIKTOK_OVERLAP')).toBe(TIKTOK_OVERLAP);
     expect(constantAt('FAMILY_FATIGUE')).toBe(FAMILY_FATIGUE);
     expect(constantAt('ADS.baseCtr')).toBe(ADS.baseCtr);
-    expect(RECON.claimWeight).toBe(0.5);
+    expect(RECON.claimWeight).toBe(0);
     expect(CFO.scaleFloor).toBe(1.25);
     expect(COMPACT.taskDays).toBe(21);
   });
@@ -915,4 +912,30 @@ describe('the tool, on a smoke of Step 1', () => {
       await rm(out, { recursive: true, force: true, maxRetries: 3 });
     }
   }, 120_000);
+
+  it('Step 4 is closed and says why, Step 5 still assembles what it left', async () => {
+    const out = await mkdtemp(join(tmpdir(), 'calibrate-step5-'));
+    const status = { complete: true, planned: 1, finished: 1, failed: [], code: 'c' };
+    const check = { id: 'K1', pass: true, value: 'lu', target: 'cible' };
+    const reports = [
+      { step: 1, ...status, N: 1176.49, threshold: 1176.49, identical: [], pairs: [] },
+      { step: 2, ...status, pars: [], levers: [], written: true },
+      { step: 3, ...status, N: 1176.49, candidates: [{ id: 'E', label: 'E', overrides: {}, median: 3053, failed: 1, checks: [check] }], winner: { id: 'E', label: 'E', overrides: {}, reason: 'la règle', edits: [], insurance: false, insured: false } },
+      {
+        step: 4, ...status, N: 1176.49, threshold: 1176.49, winner: { id: 'E', overrides: {}, written: true },
+        rows: [{ id: 'tempo', label: 'Tempo', pass: false, value: '14/28', target: '≥ 18/30', fired: 'le tempo quitte le bandit' }],
+        scale: { checks: [check], noise: { floor: 6340.73 } }, league: { checks: [check], replacements: { early: 2, late: 5, medianLate: 0 } }, retest: { adopted: false },
+      },
+    ];
+    try {
+      expect(tool(out, '--step', '4')).toMatchObject({ status: 1, stderr: expect.stringContaining('D149') });
+      for (const r of reports) await writeFile(join(out, `step${r.step}.json`), JSON.stringify(r));
+      expect(tool(out, '--step', '5').status).toBe(0);
+      const block = await readFile(join(out, 'step5.md'), 'utf8');
+      expect(block).toContain('Tempo : le tempo quitte le bandit.');
+      expect(block).toContain('Règle du nouveau test (D122) : refusée pour de bon.');
+    } finally {
+      await rm(out, { recursive: true, force: true, maxRetries: 3 });
+    }
+  }, 60_000);
 });

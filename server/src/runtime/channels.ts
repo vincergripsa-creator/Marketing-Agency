@@ -50,8 +50,8 @@ export function multiChannel(w: WorldState): boolean {
 }
 
 /**
- * Reconciled credit of a (channel, niche): the niche's where the sample was enough, else the channel's. A report older than
- * RECON.staleDays counts as 1: with no analyst the company reads last click, and pays for it.
+ * Credit of a (channel, niche): the niche's where the sample was enough, else the channel's. A report older than
+ * RECON.staleDays counts as 1. Since D149 every report reads 1 too: the company decides on the shop's last click.
  */
 export function creditOf(w: WorldState, ch: ChannelId, nicheId: string): number {
   const report = w.company.channels?.attribution;
@@ -347,7 +347,7 @@ export function planChannels(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
   planTests(ctx, items, notes);
   planProven(ctx, items);
   planRefresh(ctx, items);
-  if (reconcileDue(ctx.world)) items.push(planItem('reconcile_channels', {}, 'Chaque plateforme s’attribue plus que ce que la boutique voit : on recale avant de décider.', 'Rapprocher les canaux'));
+  if (reconcileDue(ctx.world)) items.push(planItem('reconcile_channels', {}, 'Chaque plateforme s’attribue plus que ce que la boutique voit : on note l’écart, la boutique décide.', 'Rapprocher les canaux'));
 }
 
 /** A channel's verdict on a creative, and what the company does with it. After 2 rule rejections the line stops submitting. */
@@ -428,7 +428,7 @@ function killLine(ctx: RuntimeCtx, line: ChannelNicheState, reason: string): voi
 function proveLine(ctx: RuntimeCtx, line: ChannelNicheState, roas: number): void {
   Object.assign(line, { status: 'proven', reason: null, retestDay: null });
   for (const c of campaignsOn(ctx.world, line.channel, line.nicheId)) delete c.test;
-  speak(ctx, 'growth', `${CHANNELS[line.channel].label} fait ses preuves sur ${nicheBriefOf(ctx, line.nicheId).name} : ROAS réconcilié ${dec(roas)} pour ${eur(line.spend)}.`, 'ad');
+  speak(ctx, 'growth', `${CHANNELS[line.channel].label} fait ses preuves sur ${nicheBriefOf(ctx, line.nicheId).name} : ROAS boutique ${dec(roas)} pour ${eur(line.spend)}.`, 'ad');
 }
 
 function judgeTest(ctx: RuntimeCtx, line: ChannelNicheState): void {
@@ -438,7 +438,7 @@ function judgeTest(ctx: RuntimeCtx, line: ChannelNicheState): void {
   const sample = prove.spendTimes * stopLossSpend;
   if (days < testDays || line.spend < sample) return;
   const roas = line.revenue / line.spend;
-  const read = `ROAS réconcilié ${dec(roas)} pour ${eur(line.spend)}`;
+  const read = `ROAS boutique ${dec(roas)} pour ${eur(line.spend)}`;
   if (roas >= prove.roas) proveLine(ctx, line, roas);
   else if (roas < prove.kill) killLine(ctx, line, read);
   else if (!prove.extendOnce || (days >= 2 * testDays && line.spend >= 2 * sample)) { // the one extension is over
@@ -459,7 +459,7 @@ function judgeStopped(ctx: RuntimeCtx, line: ChannelNicheState): void {
   if (losers.length < lineKill.losers) return;
   const spend = sum(losers.map((m) => m.spend));
   const roas = sum(losers.map((m) => m.revenue)) / Math.max(spend, 1e-9);
-  if (spend >= lineKill.spendTimes * CHANNELS[line.channel].stopLossSpend && roas < lineKill.roas) killLine(ctx, line, `${losers.length} campagnes arrêtées, ROAS réconcilié ${dec(roas)} pour ${eur(spend)}`);
+  if (spend >= lineKill.spendTimes * CHANNELS[line.channel].stopLossSpend && roas < lineKill.roas) killLine(ctx, line, `${losers.length} campagnes arrêtées, ROAS boutique ${dec(roas)} pour ${eur(spend)}`);
 }
 
 /** Each morning, on credit-adjusted numbers: tests get their verdict, lines that keep losing are cut. */
@@ -493,7 +493,7 @@ function settleKills(ctx: RuntimeCtx): void {
     const paused = pauseAll(ctx, w.company.campaigns.filter((c) => channelOf(c) === ch));
     book.open = book.open.filter((c) => c !== ch);
     book.requested[ch] = w.day + reopenDays;
-    const why = `ROAS réconcilié ${dec(roas)} pour ${eur(spend)} en ${days} jours`;
+    const why = `ROAS boutique ${dec(roas)} pour ${eur(spend)} en ${days} jours`;
     speak(ctx, 'growth', `${label} en pause, ${paused} campagne(s) arrêtée(s) : ${why}. Pas de test avant le jour ${book.requested[ch]}.`, 'ad');
     incident(ctx, `${label} mis en pause : ${why}`);
     logDecision(w, { kind: 'channel', who: officerId(w, 'growth'), text: `${label} mis en pause`, why });

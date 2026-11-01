@@ -61,7 +61,7 @@ export function FinanceTab({ onClose }: { onClose(): void }) {
         <Stat label="Profit 7 j" value={fmtEurSigned(f.profit7d)} tone={f.profit7d >= 0 ? 'good' : 'bad'} icon="calendar" />
         <Stat label="Burn moyen / j" value={f.burn7d > 0 ? fmtEur(f.burn7d) : 'aucun'} sub={f.burn7d > 0 ? 'sortie nette moyenne' : 'l’agence encaisse plus qu’elle ne dépense'} tone={f.burn7d > 0 ? 'warn' : 'good'} icon="trendDown" />
         <Stat label="Runway" value={f.runwayDays === null ? 'illimitée' : `${fmtInt(f.runwayDays)} j`} sub={f.runwayDays === null ? 'dernière semaine sans perte' : f.runwayDays < 14 ? 'sous le seuil de 14 jours' : undefined} tone={f.runwayDays === null ? 'good' : f.runwayDays < 14 ? 'bad' : null} icon="clock" />
-        <Stat label="ROAS 7 j" value={fmtRoas(f.roas7d)} sub="seuil de rentabilité ≈ 1,5×" tone={f.roas7d >= 1.5 ? 'good' : f.roas7d > 0 ? 'bad' : null} icon="target" />
+        <Stat label="CA / pub 7 j" value={fmtRoas(f.roas7d)} sub="tout le CA, ventes sans pub comprises" icon="target" />
       </div>
 
       {budget ? <BudgetCard b={budget} cfo={cfoId ? agentName(lookups, cfoId) : null} spend={budgetSpend} /> : null}
@@ -249,7 +249,7 @@ function BudgetCard({ b, cfo, spend }: { b: BudgetView; cfo: string | null; spen
       </div>
       <div className="budget-row">
         <div className="budget-cap">
-          <span className="hud-label">Plafond pub du jour</span>
+          <span className="hud-label">Enveloppe pub du jour</span>
           <strong>{fmtEur(b.adCap)}</strong>
         </div>
         <div className="budget-use">

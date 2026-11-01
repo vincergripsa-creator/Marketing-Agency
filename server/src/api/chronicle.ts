@@ -52,7 +52,8 @@ function orgEntries(w: WorldState, people: PeopleIndex): ChronicleEntry[] {
     if (!kind) return [];
     const why = whyOf(d);
     const person = d.agentId ? people.get(d.agentId) : undefined;
-    return [{ key: `org:${d.id}`, day: d.day, kind, text: d.text, ...(why ? { why } : {}), agentId: d.agentId, ...(person ? { person, dept: person.dept } : {}), numbers: d.numbers }];
+    // a departure's line already ends on its reason: the reason does not print twice
+    return [{ key: `org:${d.id}`, day: d.day, kind, text: d.text, ...(why && !d.text.includes(why) ? { why } : {}), agentId: d.agentId, ...(person ? { person, dept: person.dept } : {}), numbers: d.numbers }];
   });
 }
 

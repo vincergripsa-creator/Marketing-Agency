@@ -76,8 +76,8 @@ export function CalendarTab({ onClose }: { onClose(): void }) {
                   {!future && !beyond ? (
                     <span className="cal-stats">
                       <span><Icon name="check" size={10} /> {fmtInt(done)}</span>
-                      <span><Icon name="cart" size={10} /> {fmtInt(k?.sales ?? 0)}</span>
-                      {k ? <span className={k.profit >= 0 ? 'txt-good' : 'txt-bad'}>{fmtEurSigned(k.profit, 0)}</span> : <span className="muted">en cours</span>}
+                      <span><Icon name="cart" size={10} /> {k ? fmtInt(k.sales) : '—'}</span>
+                      {k ? <span className={k.profit >= 0 ? 'txt-good' : 'txt-bad'}>{fmtEurSigned(k.profit, 0)}</span> : <span className="muted">{d === today ? 'en cours' : '—'}</span>}
                       {ev ? <span className="cal-ev" title={`${ev} événement(s)`}>{ev}</span> : null}
                     </span>
                   ) : null}
@@ -92,7 +92,7 @@ export function CalendarTab({ onClose }: { onClose(): void }) {
             <span><Icon name="cart" size={10} /> ventes</span>
           </div>
         </div>
-        <DayDetail day={selected} kpi={kpiByDay.get(selected)} doneCount={doneByDay.get(selected) ?? 0} />
+        <DayDetail day={selected} today={today} kpi={kpiByDay.get(selected)} doneCount={doneByDay.get(selected) ?? 0} />
       </div>
     </Overlay>
   );
@@ -100,7 +100,10 @@ export function CalendarTab({ onClose }: { onClose(): void }) {
 
 const DAY_TASKS_SHOWN = 30;
 
-function DayDetail({ day, kpi, doneCount }: { day: number; kpi: DailyKpi | undefined; doneCount: number }) {
+/** Today's journal is written tonight: asking for it would only log a 404. */
+export const journalWritten = (day: number, today: number): boolean => day < today;
+
+function DayDetail({ day, today, kpi, doneCount }: { day: number; today: number; kpi: DailyKpi | undefined; doneCount: number }) {
   const { snapshot, lookups, activity, demo, openAgent, openBrainNote, openProduct } = useApp();
   const [note, setNote] = useState<BrainNote | null>(null);
   const [noteState, setNoteState] = useState<'idle' | 'loading' | 'missing'>('idle');
@@ -116,13 +119,13 @@ function DayDetail({ day, kpi, doneCount }: { day: number; kpi: DailyKpi | undef
   useEffect(() => {
     let cancelled = false;
     setNote(null);
-    if (demo) { setNoteState('missing'); return; }
+    if (demo || !journalWritten(day, today)) { setNoteState('missing'); return; }
     setNoteState('loading');
     api.brainNote(journalPath)
       .then((n) => { if (!cancelled) { setNote(n); setNoteState('idle'); } })
       .catch(() => { if (!cancelled) setNoteState('missing'); });
     return () => { cancelled = true; };
-  }, [journalPath, demo, snapshot?.runId]);
+  }, [journalPath, day, today, demo, snapshot?.runId]);
 
   return (
     <div className="day-detail">
@@ -138,7 +141,7 @@ function DayDetail({ day, kpi, doneCount }: { day: number; kpi: DailyKpi | undef
           <div><span>Conversion</span><strong>{fmtPct(kpi.cvr, 1)}</strong></div>
           <div><span>ROAS</span><strong>{fmtRoas(kpi.roas)}</strong></div>
         </div>
-      ) : <div className="muted small">Les chiffres de la journée tombent à la clôture du marché.</div>}
+      ) : <div className="muted small">{day === today ? 'Les chiffres de la journée tombent à la clôture du marché.' : 'Journée close : le détail de ses chiffres n’est plus gardé, seuls les derniers jours le sont.'}</div>}
 
       {events.length ? (
         <>

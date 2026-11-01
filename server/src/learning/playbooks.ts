@@ -1,5 +1,6 @@
 /** Playbooks: learned rules per agent (bounded), routed by lesson topic, mirrored as brain notes. */
 import type { BrainVault } from '../contracts.js';
+import { BoundedMemo } from '../core/index.js';
 import type { AgentState, DeptId, Lesson, WorldState } from '../shared.js';
 import { basenameOf } from './markdown.js';
 import { DEPT_PLAYBOOK_LABELS, fmtPct, fold, safeFileName, shorten, unique } from './text.js';
@@ -41,8 +42,12 @@ export function quotedTerms(text: string): string[] {
   return [...String(text ?? '').matchAll(/«\s*([^»]+?)\s*»/g)].map((m) => fold(m[1]!));
 }
 
+/** Above the rules and lessons a company holds: an overflow folds every lesson for each rule it ranks, and the same texts come back all run. */
+const RULE_KEYS = 4096;
+const ruleKeys = new BoundedMemo<string>(RULE_KEYS);
+
 function ruleKey(rule: string): string {
-  return fold(rule).replace(/\s+/g, ' ').trim();
+  return ruleKeys.read(rule, () => fold(rule).replace(/\s+/g, ' ').trim());
 }
 
 /** Benchmark arm: playbooks stay what they are, nothing the company measures reaches them. */

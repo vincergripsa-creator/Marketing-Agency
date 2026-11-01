@@ -83,10 +83,6 @@ export function applyDailyRewards(world: WorldState, day: number): number {
     rewardArm(world, `hook_style:${nicheId}`, creative.hookStyle, reward, weight);
     rewardArm(world, `ad_format:${nicheId}`, creative.format, reward, weight);
     rewards += 2;
-    if (creative.cut) {
-      rewardArm(world, `video_tempo:${nicheId}`, creative.cut.tempo, reward, weight);
-      rewards += 1;
-    }
   }
   const refunds = refundsOnDay(world, ix, day, (o) => onReference(refs, o.productId, o));
   const ordersToday = new Map<string, number>();

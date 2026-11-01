@@ -16,7 +16,7 @@ import { productNote } from './notes.js';
 import { officerId } from './org/officers.js';
 import { killProduct, productTitleFor, reworkRedTeam, shelveProduct } from './pipeline.js';
 import { isOpen, logTask, refreshAgentScore } from './tasks.js';
-import { median, mean, numOf, short, str, strArr, uniq } from './util.js';
+import { clip, median, mean, numOf, short, str, strArr, uniq } from './util.js';
 
 /** Rework cycles allowed on a guide before the CEO has to decide. */
 export const MAX_REWORK_CYCLES = 2;
@@ -102,7 +102,7 @@ function blameAuthor(ctx: RuntimeCtx, product: Product, notes: string[]): void {
 
 /** The end of the loop: a guide the Red Team still wants dead dies; a guide it only wants corrected ships on a logged waiver. */
 async function decide(ctx: RuntimeCtx, task: Task, product: Product, verdict: string, reasons: string[]): Promise<void> {
-  const why = short(reasons[0] ?? 'risque trop élevé', 120);
+  const why = clip(reasons[0] ?? 'risque trop élevé', 120);
   const ceo = officerId(ctx.world, 'ceo');
   if (verdict === 'kill' || (product.quality?.compliance ?? 100) < WAIVER_MIN_COMPLIANCE) {
     await killProduct(ctx, product, `la Red Team le refuse encore après ${MAX_REWORK_CYCLES} reprises (${why})`);
@@ -135,7 +135,7 @@ export async function settleRedTeam(ctx: RuntimeCtx, task: Task, product: Produc
   const unchanged = out.unchanged === true;
   if (cycle >= MAX_REWORK_CYCLES && !unchanged) { await decide(ctx, task, product, verdict, reasons); return; }
   if (cycle > MAX_REWORK_CYCLES) {
-    const why = `la Red Team le bloque et même la reprise depuis le plan n'a rien changé (${short(reasons[1] ?? reasons[0] ?? 'à corriger', 100)})`;
+    const why = `la Red Team le bloque et même la reprise depuis le plan n'a rien changé (${clip(reasons[1] ?? reasons[0] ?? 'à corriger', 100)})`;
     shelveProduct(ctx, product, why);
     say(ctx, ceo, `${nameOf(ctx, ceo)} au fondateur : je ne signe pas de dérogation pour « ${short(product.title, 50)} », ${why}. Il reste hors ligne : dis « remets le guide en ligne » si tu prends le risque.`, 'founder', { productId: product.id, taskId: task.id });
     return;

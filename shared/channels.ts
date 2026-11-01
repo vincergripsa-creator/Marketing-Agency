@@ -66,6 +66,9 @@ export const DROPPED_REASON = 'Retirée avant soumission';
 /** No platform saw this ad: its reason is our reviewer's note, and it says nothing of a platform's rules. */
 export const droppedBeforeSubmission = (review: { reason: string | null }): boolean => !!review.reason?.startsWith(DROPPED_REASON);
 
+/** Which film a rendered file is: `video/<creative>/<key>/master.mp4`. Two ads with the same spec render the same key, and that is one film. */
+export const filmOf = (path: string): string => path.split('/').at(-2) ?? path;
+
 /** The ratio factor of a creative on a channel, null when the channel refuses it. An absent ratio is 9:16. */
 export function acceptance(ch: ChannelId, c: { format: AdFormat; ratio?: AdRatio }): number | null {
   const ratio = c.ratio ?? '9:16';

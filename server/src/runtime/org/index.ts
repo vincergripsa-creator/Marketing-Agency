@@ -3,7 +3,7 @@ import type { RuntimeCtx } from '../ctx.js';
 import { incident, nameOf, say } from '../ctx.js';
 import type { Pillar } from '../pillars.js';
 import { KIND_META } from '../tasks.js';
-import { layoffsEvening } from './departure.js';
+import { layoffRefused, layoffsEvening } from './departure.js';
 import { headcountEvening, recruitRefused } from './hiring.js';
 import { recordLoad } from './load.js';
 import { officerId } from './officers.js';
@@ -41,5 +41,6 @@ export const orgPillar: Pillar = {
   },
   refused(ctx, task) {
     if (task.kind === 'recruit') recruitRefused(ctx, task);
+    if (task.kind === 'league_review') layoffRefused(ctx, task);
   },
 };

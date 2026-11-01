@@ -253,7 +253,7 @@ function Decisions({ decisions, weeks }: { decisions: DecisionRecord[]; weeks: W
                 <div className="tl-top">
                   <Pill tone={DECISION[d.kind].tone}>{DECISION[d.kind].label}</Pill>
                   <span className="muted small">par {d.who === 'system' ? 'l’agence' : agentName(lookups, d.who)}</span>
-                  {typeof d.impactEur === 'number' ? <span className={cx('small', d.impactEur >= 0 ? 'txt-good' : 'txt-bad')}>{fmtEurSigned(d.impactEur, 0)}</span> : null}
+                  {typeof d.impactEur === 'number' && d.kind !== 'budget' ? <span className={cx('small', d.impactEur >= 0 ? 'txt-good' : 'txt-bad')}>{fmtEurSigned(d.impactEur, 0)}</span> : null}
                 </div>
                 <div className="tl-insight growth-decision">
                   {d.productId ? <button type="button" className="link-btn" onClick={() => openProduct(d.productId!)}>{d.text}</button> : d.text}

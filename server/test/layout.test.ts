@@ -732,6 +732,40 @@ describe('blocks', () => {
     expect(box.cols).toBe(2);
   });
 
+  it('a list that opens a chapter keeps its head in bold: a drop cap would split « E / rreur n°1 : » from « Erreur n°2 : »', () => {
+    const text = 'Erreur n°1 : tout changer d’un coup. On ne sait plus ce qui a marché, et la semaine s’achève sans repère. À la place : commencer par un seul point, et le tenir une semaine entière avant de juger.';
+    const head = paraBlock(text, theme, { drop: true })!;
+    expect(head.drop).toBeUndefined();
+    expect(head.head).toBe('Erreur n° 1 :');
+    expect(paraBlock('Tout changer d’un coup laisse sans repère, et la semaine s’achève sans qu’on sache ce qui a marché. Mieux vaut commencer par un seul point, et le tenir une semaine entière avant de juger.', theme, { drop: true })!.drop).toBe('T');
+  });
+
+  it('a table that repeats the chapter above it is not printed: the same six errors in columns are read twice', () => {
+    const pairs = [{ before: 'Tout changer d’un coup', after: 'Commencer par un seul point' }, { before: 'Juger sur une seule semaine', after: 'Attendre trois semaines' }];
+    const table: VisualSpec = { type: 'before_after', title: 'À éviter, à faire à la place', labels: [], values: [], pairs };
+    const kinds = (paragraphs: string[], finish: 1 | 2) => chapterBlocks(chapter({ paragraphs, visual: table }), theme, { finish, lead: null, example: null }).filter((b): b is FigureBlock => b.t === 'figure').map((b) => b.kind);
+    const errors = ['Erreur n°1 : tout changer d’un coup. Une raison.', 'Erreur n°2 : juger sur une seule semaine. Une autre.'];
+    expect(kinds(errors, 2)).toEqual([]);
+    expect(kinds(['Un texte qui ne dit qu’une des deux erreurs : tout changer d’un coup.'], 2)).toEqual(['before_after']);
+    expect(kinds(errors, 1)).toEqual(['before_after']); // without the second figures it is the drawing of its chapter
+  });
+
+  it('at the top finish a box « À arrêter » says only what the chapter has not said', () => {
+    const paragraphs = ['Erreur n°1 : tout changer d’un coup. Une raison.'];
+    const checklist = ['Je ne fais plus : tout changer d’un coup', 'Je ne fais plus : juger sur une seule semaine'];
+    const boxOf = (finish: 1 | 2) => chapterBlocks(chapter({ paragraphs, checklist }), theme, { finish, lead: null, example: null }).find((b) => b.t === 'checklist') as ChecklistBlock | undefined;
+    expect(boxOf(2)!.items).toEqual(['Juger sur une seule semaine']);
+    expect(boxOf(1)!.items).toHaveLength(2);
+    expect(chapterBlocks(chapter({ paragraphs, checklist: [checklist[0]!] }), theme, { finish: 2, lead: null, example: null }).some((b) => b.t === 'checklist')).toBe(false);
+  });
+
+  it('the plan on one page skips a line that points at a list it does not hold: this step points at nothing here', () => {
+    const content = { ...written[0]!.content, chapters: written[0]!.content.chapters.map((c, k) => (k === 0 ? { ...c, steps: ['Relire cette liste avant de commencer', 'Repérer celle qui vous guette le plus'] } : c)) };
+    const guide = layoutPdf({ product: productOf('x', content), content, design, brand: 'Pixel Agency', effort: LEVELS[2]! });
+    const memo = guide.pages.map((p) => p.scene.ops.flatMap((o) => (o.k === 'text' ? [o.s] : [])).join(' ')).find((t) => t.includes('Votre plan sur une page') && t.includes('Repérer'))!;
+    expect(memo).not.toContain('Relire cette liste');
+  });
+
   it('prints no « : fait » beside a box either, on any page of any guide', () => {
     const blocks = chapterBlocks(chapter({ checklist: ['Votre feuille de cadrage : fait', 'Le carnet est ouvert', 'L’endroit est choisi : fait.'] }), theme, { finish: 1, lead: null, example: null });
     expect((blocks.find((b) => b.t === 'checklist') as ChecklistBlock).items).toEqual(['Votre feuille de cadrage', 'Le carnet est ouvert', 'L’endroit est choisi']);
@@ -793,26 +827,6 @@ describe('blocks', () => {
       }
     }
     expect(steps).toBeGreaterThan(3);
-  });
-
-  it('the annex opens each case on the case itself, in bold, whatever its length, and goes on in lower case', () => {
-    const { content } = written[0]!;
-    const guide = layoutPdf({ product: productOf('x', content), content, design, brand: 'Pixel Agency', effort: LEVELS[2]! });
-    const from = guide.plans.findLastIndex((p) => p.kind === 'opener');
-    const cases = guide.plans.slice(from + 1).filter((p) => p.kind === 'text' && p.chapter === null).flatMap((p) => p.items).filter((i) => i.t === 'para' && i.from === 0);
-    const tree = content.chapters.flatMap((ch) => [ch.visual, ch.figure]).find((v) => v?.type === 'decision_tree')!.tree!;
-    expect(cases).toHaveLength(tree.cases.length);
-    for (const item of cases) {
-      if (item.t !== 'para') continue;
-      const { block } = item;
-      expect(!!block.head || !!block.bold, block.lines[0]).toBe(true);
-      const body = block.lines[block.bold ?? 0]!;
-      expect(body, block.lines[0]).toMatch(/^[\p{Ll}\d]|^\p{Lu}{2}/u);
-    }
-    // a long head wraps in bold, and the text takes the end of its last line
-    const long = paraBlock('préparez la réponse.', theme, { head: 'Si le chiot refuse de sortir quand il pleut, qu’il fait froid et que le voisin promène son chien juste devant la porte' })!;
-    expect(long.bold).toBeGreaterThan(0);
-    expect(long.lines.length).toBeGreaterThan(long.bold!);
   });
 
   it('a mistake goes under « À arrêter », never under « À faire », and a list of mistakes has one label', () => {
@@ -1017,8 +1031,7 @@ describe('guides as the writers write them', () => {
     expect(top.pages.length).toBeGreaterThan(mid.pages.length);
     const printed = (g: ReturnType<typeof at>) => g.pages.flatMap((p) => p.scene.ops).flatMap((o) => (o.k === 'text' ? [o.s] : []));
     expect(printed(top)).toContain('Votre plan sur une page');
-    expect(printed(top)).toContain('Si ça coince');
-    expect(printed(mid)).not.toContain('Si ça coince');
+    for (const g of [mid, top]) expect(printed(g), 'the answers of the ladder are not printed a third time').not.toContain('Si ça coince');
     expect(top.audit.railShare).toBeGreaterThan(0);
   });
 

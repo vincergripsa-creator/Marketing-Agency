@@ -6,6 +6,7 @@ import { fileUrl } from '../../api';
 import { LineChart, SERIES } from '../charts';
 import { cx, Empty, FileLink, Overlay, Pill, SectionTitle, Segmented, Stat } from '../common';
 import { useApp } from '../context';
+import { breakEvenRoas, roasTone } from '../derive';
 import { fmtCompact, fmtEur, fmtEurShort, fmtInt, fmtPct, fmtRoas, safeDiv, sum } from '../format';
 import { Icon } from '../icons';
 import { agentName, FORMAT_LABEL, HOOK_LABEL } from '../labels';
@@ -65,6 +66,11 @@ export function accountRows(market: Pick<CompanySnapshot['market'], 'adAccount' 
   return [{ id: 'tiktok', account: market?.adAccount ?? { strikes: 0, banned: false, bannedUntilDay: 0 } }, ...others];
 }
 
+const roasClass = (roas: number, breakEven: number | null): string | undefined => {
+  const tone = roasTone(roas, breakEven);
+  return tone ? `txt-${tone}` : undefined;
+};
+
 /** « 30 sur 126 »: a trimmed list never reads as the real total (ui §3.1). */
 function ofTotal(shown: number, total: number | undefined): string {
   return total !== undefined && total > shown ? `${fmtInt(shown)} sur ${fmtInt(total)}` : fmtInt(shown);
@@ -85,6 +91,7 @@ export function AdsTab({ onClose }: { onClose(): void }) {
   const allCreatives = snapshot?.company?.creatives ?? [];
   const organic = snapshot?.market?.organicPosts ?? [];
   const adTotals = snapshot?.adTotals;
+  const breakEven = breakEvenRoas(snapshot);
   // adStats keeps two or three days, fewer on the stream than in GET /api/state: every « 7 j » reads the server's week, whatever the snapshot kept
   const allWeek = useMemo<readonly AdRow[]>(() => adTotals?.week ?? allStats.filter((s) => s.day > day - 7), [adTotals, allStats, day]);
 
@@ -141,7 +148,7 @@ export function AdsTab({ onClose }: { onClose(): void }) {
         <Stat label="Impressions 7 j" value={fmtCompact(last7.impressions)} sub={`${fmtInt(last7.clicks)} clics`} icon="eye" />
         <Stat label="CTR" value={last7.impressions ? fmtPct(safeDiv(last7.clicks, last7.impressions), 2) : '—'} sub="objectif ≥ 1,5 %" icon="target" tone={last7.impressions ? (safeDiv(last7.clicks, last7.impressions) >= 0.015 ? 'good' : 'warn') : null} />
         <Stat label="CPC" value={last7.clicks ? fmtEur(safeDiv(last7.spend, last7.clicks)) : '—'} sub={`${fmtInt(last7.purchases)} achats`} icon="cart" />
-        <Stat label="ROAS 7 j" value={last7.spend ? fmtRoas(safeDiv(last7.revenue, last7.spend)) : '—'} sub="rentable ≥ 1,5×" icon="trendUp" tone={last7.spend ? (safeDiv(last7.revenue, last7.spend) >= 1.5 ? 'good' : 'bad') : null} />
+        <Stat label="ROAS 7 j" value={last7.spend ? fmtRoas(safeDiv(last7.revenue, last7.spend)) : '—'} sub={breakEven === null ? 'point mort calculé chaque lundi' : `point mort ${fmtRoas(breakEven)}`} icon="trendUp" tone={last7.spend ? roasTone(safeDiv(last7.revenue, last7.spend), breakEven) : null} />
       </div>
 
       <div className="health-list">
@@ -203,7 +210,7 @@ export function AdsTab({ onClose }: { onClose(): void }) {
                     <td className="num">{fmtEur(c.dailyBudget, 0)}</td>
                     <td className="num">{c.creativeIds.length}</td>
                     <td className="num">{fmtEur(a.spend)}</td>
-                    <td className={cx('num', a.spend ? (roas >= 1.5 ? 'txt-good' : 'txt-bad') : 'muted')}>{a.spend ? fmtRoas(roas) : '—'}</td>
+                    <td className={cx('num', a.spend ? roasClass(roas, breakEven) : 'muted')}>{a.spend ? fmtRoas(roas) : '—'}</td>
                     <td className="small">J{c.startDay}</td>
                   </tr>
                 );
@@ -315,7 +322,7 @@ function CreativeCard({ c, agg, fatigue }: { c: AdCreative; agg: CreativeFigures
               <span><strong>{fmtCompact(agg.impressions)}</strong> impr.</span>
               <span><strong>{fmtPct(ctr, 2)}</strong> CTR</span>
               <span><strong>{fmtInt(agg.purchases)}</strong> achats</span>
-              <span className={roas >= 1.5 ? 'txt-good' : 'txt-bad'}><strong>{fmtRoas(roas)}</strong> ROAS</span>
+              <span className={roasClass(roas, breakEvenRoas(snapshot))}><strong>{fmtRoas(roas)}</strong> ROAS</span>
               {fatigue > 2.5 ? <span className="txt-warn" title="Fréquence élevée : l’audience se lasse">fatigue ×{fatigue.toFixed(1).replace('.', ',')}</span> : null}
             </div>
             {agg.lastDay ? <div className="muted small">Bilan depuis le lancement · dernière diffusion J{agg.lastDay}</div> : null}

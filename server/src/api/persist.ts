@@ -250,6 +250,9 @@ function backfillProduct(w: WorldState, p: Product): void {
   p.feedback ??= feedback.slice(-30);
 }
 
+/** Tempo left the bandit (D149). A save of before that still holds its arms. */
+const RETIRED_BANDIT = 'video_tempo:';
+
 /**
  * Brings a save from before V1 up to version 2, once (§2.8). Every scenario field gets the value its absence meant, so the
  * run goes on as it was. What a pillar owns (`company.org`, `company.growth`…) is filled by its `mount`.
@@ -257,6 +260,7 @@ function backfillProduct(w: WorldState, p: Product): void {
 export function migrateWorld(w: WorldState): WorldState {
   const goal = w.market.events.find((e) => e.kind === 'goal_reached');
   if (goal) w.company.goalReachedDay ??= goal.day; // version 2 saves too: the field came after them
+  for (const key of Object.keys(w.company.bandits ?? {})) if (key.startsWith(RETIRED_BANDIT)) delete w.company.bandits[key]; // D149: nothing reads them, the Learning tab would print the raw key
   if (w.version >= 2) return w;
   const s = w.scenario;
   s.org ??= { ...LEGACY_ORG };

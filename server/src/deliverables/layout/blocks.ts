@@ -11,8 +11,7 @@ export type FigureDraw = (s: Scene, x: number, y: number) => void;
 /** One page of a printed sheet: rows [from, to[, each writable row `grow` taller, the y it ends at, and room to write under it when it ends high. */
 export interface SheetPart { from: number; to: number; grow: number; end: number; notes: { y: number; h: number; label: string } | null }
 
-/** `head` sits at the start of the line that follows `bold` lines of it: a long head takes the lines it needs. */
-export type ParaBlock = { t: 'para'; lines: string[]; style: 'lead' | 'body'; head?: string; headW?: number; bold?: number; drop?: string; dropW?: number; dropLines?: number; italic?: boolean };
+export type ParaBlock = { t: 'para'; lines: string[]; style: 'lead' | 'body'; head?: string; headW?: number; drop?: string; dropW?: number; dropLines?: number; italic?: boolean };
 export type HeadingBlock = { t: 'h2'; text: string; h: number; label?: boolean };
 export type StepsBlock = { t: 'steps'; items: { lines: string[]; h: number }[]; ticks?: true };
 export type ExampleBlock = { t: 'example'; label: string; lines: string[]; h: number; titled?: boolean };
@@ -52,29 +51,15 @@ const READ_TARGET = 34;
 const PLAN_REACH = 0.45;
 /** A table that ends higher than this share of the page leaves room to write under it. */
 const SHEET_FULL = 0.85;
-const SHEET_NOTES_GAP = 18;
-const MIN_SHEET_NOTES = 57.6;
+export const SHEET_NOTES_GAP = 18;
+export const MIN_SHEET_NOTES = 57.6;
 
 export const arr = <T>(v: T[] | null | undefined): T[] => (Array.isArray(v) ? v.filter((x) => x !== null && x !== undefined) : []);
 
 /** A paragraph that opens on its own subject (« Premier geste : … ») lends the eye an entry point. */
 const RUN_IN = /^([^:.!?]{4,34})[ \u00a0]:\s+(.+)$/su;
-/** A long head leaves less than this on its last line: the text starts under it. */
-const MIN_RUN = 72;
 
-/** A paragraph that opens on a head of any length, in bold up to its colon. */
-function headed(head: string, rest: string, t: PdfTheme): ParaBlock {
-  const { v } = t;
-  const lines = wrapWords(`${sanitizeFor(v.textB, head)}\u00a0:`, v.textB, v.body, GRID.column);
-  const last = lines.at(-1)!;
-  const headW = advance(v.textB, last, v.body) + 3;
-  const text = (first: number) => wrapWords(sanitizeFor(v.text, rest), v.text, v.body, (k) => (k === 0 ? first : GRID.column));
-  if (GRID.column - headW < MIN_RUN) return { t: 'para', style: 'body', lines: [...lines, ...text(GRID.column)], bold: lines.length };
-  return { t: 'para', style: 'body', lines: [...lines.slice(0, -1), ...text(GRID.column - headW)], bold: lines.length - 1, head: last, headW };
-}
-
-export function paraBlock(text: string, t: PdfTheme, o: { style?: 'lead' | 'body'; drop?: boolean; italic?: boolean; head?: string } = {}): ParaBlock | null {
-  if (o.head) return headed(o.head, text, t);
+export function paraBlock(text: string, t: PdfTheme, o: { style?: 'lead' | 'body'; drop?: boolean; italic?: boolean } = {}): ParaBlock | null {
   const { v } = t;
   const style = o.style ?? 'body';
   const face = style === 'lead' || o.italic ? v.textIt : v.text;
@@ -82,7 +67,8 @@ export function paraBlock(text: string, t: PdfTheme, o: { style?: 'lead' | 'body
   const clean = sanitizeFor(face, text);
   if (!clean) return null;
   const base = { t: 'para', style, ...(o.italic ? { italic: true } : {}) } as const;
-  if (o.drop && /^\p{Lu}/u.test(clean)) {
+  // a drop cap would split the head of a list from its bold: « E / rreur n°1 : » above « Erreur n°2 : »
+  if (o.drop && /^\p{Lu}/u.test(clean) && !RUN_IN.test(clean)) {
     const drop = [...clean][0]!;
     const dropW = advance(v.display, drop, DROP_SIZE) + 5;
     const dropLines = /[QJ]/.test(drop) ? 4 : 3; // their tail goes under the third line
@@ -140,7 +126,8 @@ function checkLines(items: string[], t: PdfTheme): { dos: string[]; stops: strin
   return { dos: clean.filter((s) => !stop.test(s)).map((s) => upper(done(s))), stops: clean.filter((s) => stop.test(s)).map((s) => upper(s.replace(stop, ''))) };
 }
 
-const textKey = (s: string): string => normalizeKey(s).replace(/[^a-z0-9]+/g, ' ').trim();
+/** What two texts are compared on: their letters and figures, whatever the capitals, the accents and the end punctuation. */
+export const textKey = (s: string): string => normalizeKey(s).replace(/[^a-z0-9]+/g, ' ').trim();
 
 /** Every line of the list is a step the reader has in front of him, whole or cut short: the box goes on the step, a list would say it twice. */
 function restates(checklist: string[], steps: string[], t: PdfTheme): boolean {
@@ -155,9 +142,17 @@ function pathTells(path: VisualSpec, steps: string[], t: PdfTheme): boolean {
   return stepTexts(steps, t).every((step) => stations.includes(textKey(step)));
 }
 
-function checklistBlocks(items: string[], t: PdfTheme): Block[] {
+/** Every line of the table stands in the text of its chapter: the mistakes of « Erreur n°1 : … », then the same six in columns, are read twice. */
+function tableTells(table: VisualSpec, paragraphs: string[], t: PdfTheme): boolean {
+  const said = textKey(paragraphs.map((p) => sanitizeFor(t.v.text, p)).join(' '));
+  return arr(table.pairs).every((p) => said.includes(textKey(sanitizeFor(t.v.text, p.before))));
+}
+
+/** `said`: the chapter's text at the top finish, whose mistakes a box « À arrêter » would only print a second time. */
+function checklistBlocks(items: string[], t: PdfTheme, said = ''): Block[] {
   const { v } = t;
-  const { dos, stops } = checkLines(items, t);
+  const { dos, stops: all } = checkLines(items, t);
+  const stops = said ? all.filter((line) => !said.includes(textKey(line))) : all;
   if (dos.length + stops.length === 0) return [];
   const both = dos.length > 0 && stops.length > 0;
   const list = dos.length ? dos : stops;
@@ -237,6 +232,7 @@ export function chapterBlocks(ch: ChapterContent, t: PdfTheme, o: { finish: 0 | 
   // a path of the steps says them with their moment and their length: the same words again as a list would be padding
   let told = false;
   const figures = visuals.flatMap((v) => {
+    if (v?.type === 'before_after' && o.finish >= 2 && tableTells(v, paragraphs, t)) return [];
     const tells = v?.type === 'step_path' && pathTells(v, arr(ch.steps), t);
     const figure = v && v.type !== 'grid' ? figureBlock(v, t, ticks && tells) : null;
     told ||= tells && !!figure;
@@ -244,7 +240,8 @@ export function chapterBlocks(ch: ChapterContent, t: PdfTheme, o: { finish: 0 | 
   });
   const steps = told ? [] : stepsBlocks(arr(ch.steps), t, ticks);
   const ticked = ticks && (told || steps.some((b) => b.t === 'steps'));
-  out.push(...figures, ...steps, ...calloutBlocks(o.example, t), ...(ticked ? [] : checklistBlocks(arr(ch.checklist), t)));
+  const said = o.finish >= 2 ? textKey(paragraphs.map((p) => sanitizeFor(t.v.text, p)).join(' ')) : '';
+  out.push(...figures, ...steps, ...calloutBlocks(o.example, t), ...(ticked ? [] : checklistBlocks(arr(ch.checklist), t, said)));
   for (const v of visuals) if (v?.type === 'grid') push(sheetBlock(v, t));
   return out;
 }

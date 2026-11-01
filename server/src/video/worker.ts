@@ -1,7 +1,7 @@
 /**
  * The render worker: a child process, one job in, one result out (video §9, D11). The native draw calls are synchronous and
  * would stall the tick loop in the server. It reads the job's `spec.json` and never sees the world. A file lands here only
- * if QA passed: a failed QA is a failed job, its file is deleted and never served.
+ * if QA passed: a failed QA is a failed job, its file is deleted and never served. A QA that never finished is no verdict.
  */
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -24,6 +24,7 @@ import { buildTimeline, captionGroups, plannedCuts, quickTitle, settledFrames, T
 const SPEC_FILE = 'spec.json';
 const RESULT_FILE = 'result.json';
 const POSTER_QUALITY = 86;
+const QA_CUT = 'Contrôle coupé avant la fin : à relancer';
 
 export interface RenderJob {
   dir: string;                 // the job's folder: spec.json in, everything else out
@@ -85,6 +86,7 @@ async function renderMaster(job: RenderJob, spec: RenderSpec, tl: Timeline, stag
   const shots = plannedCuts(tl);
   const report = checkFile(out, { ffmpeg: job.ffmpeg, w: stage.w, h: stage.h, durationSec: tl.total, audio: true, shots, text: textProof(comp), estSec: spec.cut.metrics.estSec });
   const qa = qaSummary(report);
+  if (report.unfinished) return { ...base, reason: QA_CUT, qa }; // the master stays: only a verdict deletes it, and the retry replaces it
   if (!report.ok) {
     await rm(out, { force: true });
     return { ...base, retry: false, reason: `Échec du contrôle : ${report.failed.join(', ')}`, qa };

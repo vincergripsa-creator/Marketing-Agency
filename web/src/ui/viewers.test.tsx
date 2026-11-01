@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { CompanySnapshot, CreativeVideo, Deliverable } from '../../../shared/types';
+import type { CompanySnapshot, CreativeVideo, Deliverable, VideoLevel } from '../../../shared/types';
 import { openStream } from '../api';
 import { withVideo } from '../store';
 import { mockSnapshot } from '../world/mockSnapshot';
@@ -14,7 +14,7 @@ import { GalleryTab, pageOf, videoTiles } from './tabs/GalleryTab';
 import { ProductsTab } from './tabs/ProductsTab';
 import { Lightbox, routeKey } from './viewers/Lightbox';
 import { flipFaces, flipSpread, PageCache, spreadCount, spreadLabel } from './viewers/PdfFlip';
-import { fmtClock, NO_FILE_CAPTION, ratioValue, safeBands, VideoLightbox, VideoPlayer } from './viewers/VideoPlayer';
+import { fmtClock, NO_FILE_CAPTION, NO_RENDER_CAPTION, ratioValue, safeBands, VideoLightbox, VideoPlayer } from './viewers/VideoPlayer';
 
 const detail = vi.hoisted(() => ({ data: null as unknown, paths: [] as (string | null)[] }));
 vi.mock('./useDetail', () => ({
@@ -217,6 +217,70 @@ describe('VideoPlayer', () => {
     expect(fmtClock(0)).toBe('0:00');
     expect(fmtClock(65.9)).toBe('1:05');
     expect(fmtClock(Number.NaN)).toBe('0:00');
+  });
+});
+
+describe('what the machine says (video §7)', () => {
+  const BUTTON = /<button [^>]*vp-render[^>]*>Générer la vidéo<\/button>/;
+  /** The lightbox as the server's index answers it: only `/api/videos` tells the level, the stream never does. */
+  const open = (level: VideoLevel | null, reason: string | null, video?: CreativeVideo) => {
+    detail.data = level ? { level, reason, items: {} } : null;
+    const html = render({ ...mockSnapshot(), videos: video ? { cre_1: video } : {} }, <VideoLightbox creativeId="cre_1" title="Pub" onClose={noop} />);
+    detail.data = null;
+    return html;
+  };
+  const chips = (html: string) => [...html.matchAll(/<span class="vp-chip">([^<]*)<\/span>/g)].map((m) => m[1]);
+
+  it('asks the server\'s index, even when the stream holds the film', () => {
+    detail.paths.length = 0;
+    open('full', null, ready());
+    expect(detail.paths).toContain('/api/videos');
+  });
+  it('full: a film reads « Vidéo prête »', () => {
+    expect(chips(open('full', null, ready()))).toEqual(['Vidéo prête', 'Pub simulée — jamais publiée']);
+  });
+  it('no_voice: the film says why it has no voice', () => {
+    expect(chips(open('no_voice', 'Sans voix sur cette machine', ready({ voice: null })))).toEqual(['Sans voix sur cette machine', 'Pub simulée — jamais publiée']);
+  });
+  it('no_pages: the film says it shows no real page', () => {
+    expect(chips(open('no_pages', 'Sans pages du guide', ready()))).toEqual(['Sans pages du guide', 'Pub simulée — jamais publiée']);
+  });
+  it('a server that has not answered: no chip of the machine, and nothing against it', () => {
+    expect(chips(open(null, null, ready()))).toEqual(['Pub simulée — jamais publiée']);
+    expect(open(null, null)).toContain(NO_FILE_CAPTION);
+  });
+  it('full, no film yet: one click away, and no word against the machine', () => {
+    const html = open('full', null);
+    expect(html).toContain(NO_FILE_CAPTION);
+    expect(html).not.toContain(NO_RENDER_CAPTION);
+    expect(html).toMatch(BUTTON);
+    expect(html.match(BUTTON)![0]).not.toContain('disabled');
+  });
+  it('no_voice, no film yet: the same caption, the machine\'s line under it, the button works', () => {
+    const html = open('no_voice', 'Sans voix sur cette machine');
+    expect(html).toContain(NO_FILE_CAPTION);
+    expect(html).toContain('Sans voix sur cette machine');
+    expect(html.match(BUTTON)![0]).not.toContain('disabled');
+  });
+  it('storyboard_only: the reason shows on opening, with no click, and the button is disabled', () => {
+    const html = open('storyboard_only', 'Indisponible : ffmpeg introuvable');
+    expect(html).toContain(NO_RENDER_CAPTION);
+    expect(html).not.toContain(NO_FILE_CAPTION);
+    expect(html).toContain('Indisponible : ffmpeg introuvable');
+    expect(html.match(BUTTON)![0]).toContain('disabled');
+  });
+  it('storyboard_only with a kept file: the film still plays, it is not « Indisponible »', () => {
+    const html = open('storyboard_only', 'Indisponible : ffmpeg introuvable', ready());
+    expect(html).toContain('<video');
+    expect(chips(html)).toEqual(['Vidéo prête', 'Pub simulée — jamais publiée']);
+  });
+  it('while it renders the button waits, and a failed render keeps its own reason over the machine\'s', () => {
+    const rendering: CreativeVideo = { status: 'rendering', reason: null, videos: [], poster: null, captions: null, cards: [], voice: null, qa: null };
+    expect(open('full', null, rendering).match(BUTTON)![0]).toContain('disabled');
+    const failed = open('no_voice', 'Sans voix sur cette machine', { ...rendering, status: 'failed', reason: 'Échec du contrôle : cadence' });
+    expect(failed).toContain('Échec du contrôle : cadence');
+    expect(failed).not.toContain('Sans voix sur cette machine');
+    expect(failed.match(BUTTON)![0]).not.toContain('disabled');
   });
 });
 

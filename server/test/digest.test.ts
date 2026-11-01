@@ -20,7 +20,7 @@ import { Company, createWorld, defaultScenario } from '../src/runtime/index.js';
 import { killProduct } from '../src/runtime/pipeline.js';
 import { advanceStage } from '../src/runtime/stages.js';
 import { createTask } from '../src/runtime/tasks.js';
-import { eur, round2 } from '../src/runtime/util.js';
+import { clip, eur, round2 } from '../src/runtime/util.js';
 import { recordLedger } from '../src/sim/index.js';
 import { LEGACY } from './legacy.js';
 
@@ -317,7 +317,7 @@ describe('what a digest tells', () => {
     logDecision(w, { kind: 'harvest', who: 'system', text: 'x', why: 'perd sur la pub, acheteurs contents', productId: harvested.id });
     const d = buildDigest(w, 8, 14).products;
     expect(d.launched).toEqual([]);
-    expect(d.stopped).toEqual([{ title: bad.title, why: 'perd 12 € sur 14 jours' }, { title: harvested.title, why: 'perd sur la pub, acheteurs contents' }]);
+    expect(d.stopped).toEqual([{ title: bad.title, why: 'perd 12 € sur 14 jours' }, { title: harvested.title, why: 'perd sur la pub, acheteurs contents', harvest: true }]);
     expect(d.reworked).toEqual([reworked.title]);
     expect(d.best).toEqual({ title: good.title, profit: 19 });
     expect(d.worst).toEqual({ title: bad.title, profit: -12 });
@@ -444,12 +444,14 @@ describe('what went wrong', () => {
     expect(buildDigest(w, 8, 14).mistakes.some((m) => m.startsWith('Stop-loss tardif'))).toBe(false);
   });
 
-  it('sees cash asleep past the reserve, once the CFO has one to read', () => {
+  it('sees cash asleep past the reserve, once the CFO has one to read and a guide could use it', () => {
     const w = world();
     book(w, 3, 'revenue', 2000);
     w.day = 7;
     expect(buildDigest(w, 1, 7).mistakes.join(' ')).not.toContain('dort');
     growth(w).allocation = { free: 1800 } as NonNullable<WorldState['company']['growth']>['allocation'];
+    expect(buildDigest(w, 1, 7).mistakes.join(' ')).not.toContain('dort');
+    addProduct(w, 'prd_a');
     expect(buildDigest(w, 1, 7).mistakes).toContain(`Trésorerie qui dort : ${eur(1800)} au-delà de la réserve et de 14 jours de pub`);
   });
 });
@@ -477,11 +479,11 @@ describe('incidents', () => {
     { startAt: '2026-10-03T17:00:10.000Z', clean: false, day: 9 },
   ];
 
-  it('tells how long the machine was off and when the agency crashed, from the session log it is handed', () => {
+  it('tells how long the agency stood still and when it crashed, from the session log it is handed', () => {
     const w = world();
     w.day = 7;
     expect(buildDigest(w, 1, 7, session).incidents).toEqual([
-      'Jour 4 : machine éteinte 3 h 20 min, le temps de l\'agence s\'est arrêté avec elle',
+      'Jour 4 : agence à l\'arrêt 3 h 20 min, son temps s\'est arrêté avec elle',
       'Jour 5 : arrêt brutal de l\'agence, 2 j 2 h à l\'arrêt',
     ]);
   });
@@ -509,6 +511,39 @@ describe('what comes next', () => {
     expect(buildDigest(w, 1, 7).waiting).toEqual([
       'À valider : Lancer la campagne', 'À valider : Publier le guide', 'Ta demande du jour 2 : Lancer un guide sur le sommeil', 'Ton ordre du jour 3 tient toujours : plus de pub',
     ]);
+  });
+
+  it('a budget line prints no amount and outranks nothing: it moved money, it earned none', () => {
+    const w = world();
+    logDecision(w, { kind: 'budget', who: 'system', text: 'Semaine 6 : plafond 210 €/jour', why: 'x', impactEur: 802 });
+    logDecision(w, { kind: 'double_down', who: 'system', text: 'On double', why: 'x', impactEur: 90 });
+    const { decisions } = buildDigest(w, 1, 7);
+    expect(decisions.map((d) => d.text)).toEqual(['On double', 'Semaine 6 : plafond 210 €/jour']);
+    expect(decisions[1]).not.toHaveProperty('impactEur');
+    expect(growth(w).decisions.find((d) => d.kind === 'budget')?.impactEur).toBe(802);
+  });
+
+  it('says what the founder\'s silence costs: the cash gone since the oldest ask, and nothing while the cash holds', () => {
+    const w = world();
+    book(w, 2, 'revenue', 400);
+    w.day = 3;
+    const ask = Object.assign(createTask(w, { kind: 'publish_product', title: 'Publier le guide' }), { status: 'awaiting_founder' });
+    book(w, 5, 'platform_fee', -30);
+    book(w, 9, 'platform_fee', -20);
+    w.day = 10;
+    expect(buildDigest(w, 1, 10).waiting).toEqual([`1 demande(s) t'attendent depuis le jour 3 : la trésorerie a perdu ${eur(50)} depuis, et rien ne repart sans ta réponse.`, 'À valider : Publier le guide']);
+    book(w, 10, 'revenue', 100);
+    expect(buildDigest(w, 1, 10).waiting).toEqual(['À valider : Publier le guide']);
+    ask.status = 'done';
+    expect(buildDigest(w, 1, 10).waiting).toEqual([]);
+  });
+
+  it('a Red Team reason stops on a whole word and closes its quote', () => {
+    const w = world();
+    const title = 'Revendre sur Vinted sans y passer ses soirées : la méthode pas à pas pour les débutants pressés';
+    const p = addProduct(w, 'prd_a', { status: 'killed', decision: { day: 1, status: 'killed', reason: clip(`Marché trop bon marché pour « ${title} » : les clients citent 9 €.`, 60) } as Product['decision'] });
+    const { why } = buildDigest(w, 1, 7).products.stopped.find((s) => s.title === p.title)!;
+    expect(why).toBe('Marché trop bon marché pour « Revendre sur Vinted sans y… »');
   });
 
   it('next: the allocation of the week first, then the open bets', () => {

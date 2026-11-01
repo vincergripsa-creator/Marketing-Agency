@@ -7,6 +7,8 @@ import { findCliches } from '../src/minds/heuristic/editing.js';
 import { isCliche } from '../src/minds/lexicon.js';
 import { allText, bare, clauseLabel, endsDangling, labelOf, lf, norm, seededRng, splitSentences } from '../src/minds/util.js';
 import { parsePlaybook, scrubText } from '../src/minds/playbook.js';
+import { HeuristicEngine } from '../src/minds/heuristic/index.js';
+import { parsePlaybook as runtimeDirectives } from '../src/runtime/playbook.js';
 import { createRng } from '../src/core/index.js';
 import { createWorld, defaultScenario } from '../src/runtime/index.js';
 import { createMarketTools, scorePdf } from '../src/sim/index.js';
@@ -723,6 +725,38 @@ function count(hay: string, needle: string): number {
   for (let i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + 1)) n++;
   return n;
 }
+
+describe('the Red Team\'s verdict', () => {
+  it('quotes a reason once: the head of a kill carries it, the list does not print it again', async () => {
+    const eng = createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed: 7 });
+    const facts = { title: 'Un guide', audience: 'parents', problem: 'sommeil', price: 9, competitors: { count: 3, medianPrice: 6, avgRating: 4, reviews: 20 }, voc: { pains: 5, medianAnchor: 6, sensitiveClaims: 0 } };
+    const v = await eng.redTeam({ subject: 'idea', summary: 'Guide sommeil pour parents de bébés de 6 à 12 mois', quality: null, facts }, {} as MindContext);
+    expect(v.verdict).toBe('kill');
+    expect(v.reasons.filter((r) => r.includes('Marché trop bon marché'))).toHaveLength(1);
+    expect(v.reasons.join(' ')).not.toContain('….');
+  });
+});
+
+describe('a platform\'s rule stays with the ads', () => {
+  const RULE = 'Sur Facebook & Instagram, ne jamais écrire « ventre »';
+
+  it('reads apart from a rule for every text, in both parsers', () => {
+    expect(parsePlaybook([RULE])).toMatchObject({ banned: [], platformBanned: ['ventre'] });
+    expect(parsePlaybook(['Ne jamais écrire « garanti » dans une pub'])).toMatchObject({ banned: ['garanti'], platformBanned: [] });
+    expect(parsePlaybook(['Sur Facebook & Instagram, ne jamais écrire « ventre » : la plateforme refuse la pub, et sa règle n\'est pas celle de TikTok.']).platformBanned).toEqual(['ventre']);
+    expect(runtimeDirectives([RULE])).toMatchObject({ banned: [], platformBanned: ['ventre'] });
+  });
+
+  it('a guide and its lead magnet keep the word, an ad loses it', async () => {
+    const engine = new HeuristicEngine({ seed: 7 });
+    const ctx = { playbook: [RULE] } as MindContext;
+    const content = { title: 'SOS Ventre', subtitle: '', audience: 'Femmes de 40 ans', promise: 'Le ventre s’installe malgré les efforts', introduction: ['Le ventre s’installe.'], chapters: [] } as unknown as PdfContent;
+    const checked = await engine.factCheck({ content, voc: { nicheId: 'n', pains: [], desires: [], objections: [], phrases: [], priceAnchors: [], bannedClaims: [], reviewsSampled: 0 } as unknown as VoiceOfCustomer }, ctx);
+    expect(checked.content.promise).toContain('ventre');
+    expect(scrubText('Le ventre s’installe', parsePlaybook([RULE]).banned)).toBe('Le ventre s’installe');
+    expect(scrubText('Le ventre s’installe', parsePlaybook([RULE]).platformBanned)).not.toContain('ventre');
+  });
+});
 
 describe('content regressions: negations, fragments, repetitions', () => {
   it('a banned phrase with an apostrophe is parsed whole, never as the word « n »', () => {

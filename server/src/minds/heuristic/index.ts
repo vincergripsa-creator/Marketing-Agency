@@ -122,13 +122,14 @@ export class HeuristicEngine implements ContentEngine {
 
   async writeAdHooks(input: { product: Product; voc: VoiceOfCustomer; styles: HookStyle[]; upsellOf?: UpsellContext | null; usedHooks?: string[] }, ctx: MindContext): Promise<{ hookStyle: HookStyle; hook: string }[]> {
     const { rng, rules } = this.begin('writeAdHooks', ctx, productSubjects(input.product), input.product?.title, (input.styles ?? []).join(','));
-    return scrubDeep(heuristicHooks(input, rng, rules.preferredHooks, ctx?.craft?.t), rules.banned);
+    return scrubDeep(heuristicHooks(input, rng, rules.preferredHooks, ctx?.craft?.t), [...rules.banned, ...rules.platformBanned]);
   }
 
   async writeAd(input: { product: Product; voc: VoiceOfCustomer; hook: string; hookStyle: HookStyle; format: AdFormat; bannedClaims: string[]; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<AdDraft> {
     const { rng, flawRng, rules } = this.begin('writeAd', ctx, productSubjects(input.product), input.product?.title, input.hook, input.hookStyle, input.format);
-    const draft = heuristicAd(input, rng, { banned: rules.banned, preferredFormats: rules.preferredFormats, ...craftRules(ctx, flawRng) });
-    return scrubDeep(draft, [...rules.banned, ...(input.bannedClaims ?? [])]);
+    const banned = [...rules.banned, ...rules.platformBanned];
+    const draft = heuristicAd(input, rng, { banned, preferredFormats: rules.preferredFormats, ...craftRules(ctx, flawRng) });
+    return scrubDeep(draft, [...banned, ...(input.bannedClaims ?? [])]);
   }
 
   async writeSupportReply(input: { message: InboxMessage; product: Product | null; order: Order | null; policy: string[]; customer?: { name: string; archetype: string } | null }, ctx: MindContext): Promise<SupportReplyInput> {
@@ -175,8 +176,9 @@ export class HeuristicEngine implements ContentEngine {
 
   async writeSearchAd(input: { product: Product; voc: VoiceOfCustomer; bannedClaims: string[] }, ctx: MindContext): Promise<SearchAdDraft> {
     const { rng, flawRng, rules } = this.begin('writeSearchAd', ctx, productSubjects(input.product), input.product?.title);
-    const { keywords, ...text } = heuristicSearchAd(input, rng, { banned: rules.banned, ...craftRules(ctx, flawRng) });
-    return { ...scrubDeep(text, [...rules.banned, ...(input.bannedClaims ?? [])]), keywords }; // keywords bid, they never show
+    const banned = [...rules.banned, ...rules.platformBanned];
+    const { keywords, ...text } = heuristicSearchAd(input, rng, { banned, ...craftRules(ctx, flawRng) });
+    return { ...scrubDeep(text, [...banned, ...(input.bannedClaims ?? [])]), keywords }; // keywords bid, they never show
   }
 
   private signing(ctx: MindContext | undefined): LifecycleRules {

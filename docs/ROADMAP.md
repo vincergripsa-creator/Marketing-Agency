@@ -8,7 +8,7 @@ L'agence a **le même fonctionnement qu'en réel** dès aujourd'hui : mêmes dé
 - [x] Organisation : une équipe fondatrice de 8 agents qui recrute quand les chiffres le demandent, délégation, revues, Red Team, cerveau partagé
 - [x] Apprentissage : bandits, expériences A/B, leçons chiffrées, playbooks, revues RH
 - [x] Compétition : notes sur résultats observés, saisons, plans de progrès, duels, remplacement sur test réel
-- [x] Cinq canaux publicitaires, réconciliation des ventes, répartition par le CFO
+- [x] Cinq canaux publicitaires, ventes lues à la boutique, répartition par le CFO
 - [x] Vraies vidéos de pub en MP4, PDF refaits, aperçus de pages sur la page de vente
 - [x] Partie sans fin : paliers, portefeuille, liste e-mail, concurrents, résumé du fondateur, compaction
 - [ ] **Critère de sortie** : sur 5 seeds différents en difficulté `normal`, l'agence est rentable avant J40 ; sur `cauchemar`, elle survit (pas de faillite) sur au moins 3 seeds sur 5.

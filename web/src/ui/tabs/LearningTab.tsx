@@ -2,7 +2,7 @@
 import { useMemo, useState } from 'react';
 import { CHANNELS, CHANNEL_IDS, type ChannelId } from '../../../../shared/channels';
 import { firstValue, lastValue, trendValue } from '../../../../shared/trends';
-import type { BanditArm, Experiment, KpiBaseline, Lesson, TrendId } from '../../../../shared/types';
+import type { BanditArm, DailyKpi, Experiment, KpiBaseline, Lesson, TrendId } from '../../../../shared/types';
 import { Sparkline, SERIES } from '../charts';
 import { Avatar, Bar, cx, Empty, Overlay, Pill, SectionTitle, Segmented } from '../common';
 import { useApp } from '../context';
@@ -14,8 +14,7 @@ import {
 } from '../labels';
 
 /** Bandits keyed `<dim>:<nicheId>` that labels.ts does not know: without them a raw id reaches the screen. */
-const NICHE_DIMS: Record<string, string> = { channel: 'Canal', video_tempo: 'Rythme des vidéos', email_angle: 'Angle des e-mails' };
-const TEMPO_LABEL: Record<string, string> = { calm: 'Posé', standard: 'Standard', fast: 'Rapide' };
+const NICHE_DIMS: Record<string, string> = { channel: 'Canal', email_angle: 'Angle des e-mails' };
 
 function dimensionLabel(l: Lookups, key: string): string {
   const [dim = '', rest = ''] = key.split(':');
@@ -26,8 +25,7 @@ function dimensionLabel(l: Lookups, key: string): string {
 
 /** `channel:` and `channel_cat:` have channels for arms. */
 function armLabel(l: Lookups, key: string, arm: string): string {
-  if (key.startsWith('channel')) return CHANNELS[arm as ChannelId]?.label ?? arm;
-  return key.startsWith('video_tempo') ? TEMPO_LABEL[arm] ?? arm : banditArmLabel(l, key, arm);
+  return key.startsWith('channel') ? CHANNELS[arm as ChannelId]?.label ?? arm : banditArmLabel(l, key, arm);
 }
 
 interface Trend { id: TrendId; label: string; values: (number | null)[]; fmt(n: number): string; higherIsBetter: boolean; color: string }
@@ -35,6 +33,17 @@ interface Trend { id: TrendId; label: string; values: (number | null)[]; fmt(n: 
 /** The last days are in the snapshot. The first are not, past its window: the server keeps them, and they are the start of the run. */
 function firstLast(t: Trend, baseline: KpiBaseline | undefined): { first: number | null; last: number | null } {
   return { first: baseline ? baseline[t.id] ?? null : firstValue(t.values), last: lastValue(t.values) };
+}
+
+/** Spend grows by half before it explains the trends: past that, a wider public clicks and buys less per euro. Read on the days the snapshot holds. */
+const SPEND_GROWTH = 1.5;
+
+function spendGrew(kpis: readonly DailyKpi[]): string | null {
+  const paid = kpis.filter((k) => k.adSpend > 0).map((k) => k.adSpend);
+  const first = firstValue(paid);
+  const last = lastValue(paid);
+  if (first === null || last === null || last < SPEND_GROWTH * first) return null;
+  return `La pub est passée de ${fmtEur(first, 0)} à ${fmtEur(last, 0)} par jour : en touchant plus large, le CTR, la conversion et le ROAS peuvent baisser d’eux-mêmes. C’est le profit qui dit si ça valait le coup.`;
 }
 
 export function LearningTab({ onClose }: { onClose(): void }) {
@@ -66,8 +75,8 @@ export function LearningTab({ onClose }: { onClose(): void }) {
         <div className="trend-grid">
           {trends.map((t) => {
             const { first, last } = firstLast(t, snapshot?.kpiBaseline);
-            const delta = first !== null && last !== null && first !== 0 ? (last - first) / Math.abs(first) : null;
-            // zero baseline: compare directions instead of a meaningless percentage
+            // a base at or under 0 has no percentage worth reading: +7 711 % on -3 € says nothing, the gap in its own unit does
+            const delta = first !== null && last !== null && first > 0 ? (last - first) / first : null;
             const diff = first !== null && last !== null ? last - first : null;
             const better = diff === null || Math.abs(diff) < 1e-9 ? null : t.higherIsBetter ? diff > 0 && (delta === null || delta > 0.02) : diff < 0 && (delta === null || delta < -0.02);
             const worse = diff === null || Math.abs(diff) < 1e-9 ? null : t.higherIsBetter ? diff < 0 && (delta === null || delta < -0.02) : diff > 0 && (delta === null || delta > 0.02);
@@ -80,7 +89,7 @@ export function LearningTab({ onClose }: { onClose(): void }) {
                 </div>
                 <div className={cx('trend-delta', better && 'txt-good', worse && 'txt-bad')}>
                   {first === null || last === null ? 'pas assez de données' : delta === null ? (
-                    <>{t.fmt(first)} → {t.fmt(last)} depuis le début</>
+                    <>{last >= first ? '+' : '−'}{t.fmt(Math.abs(last - first))} vs début ({t.fmt(first)})</>
                   ) : (
                     <><Icon name={delta >= 0 ? 'trendUp' : 'trendDown'} size={12} /> {delta >= 0 ? '+' : '−'}{fmtPct(Math.abs(delta), 0)} vs début ({first !== null ? t.fmt(first) : '—'})</>
                   )}
@@ -90,6 +99,7 @@ export function LearningTab({ onClose }: { onClose(): void }) {
           })}
         </div>
       )}
+      {spendGrew(kpis) ? <div className="budget-note small"><Icon name="chat" size={12} /> {spendGrew(kpis)}</div> : null}
 
       <div className="two-col two-col-wide">
         <div>

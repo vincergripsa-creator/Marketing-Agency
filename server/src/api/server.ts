@@ -157,6 +157,7 @@ export function devLandingPage(port: number): string {
 <body><main>
   <h1>Pixel Agency tourne</h1>
   <p>Le serveur de l'agence est en ligne sur le port <code>${port}</code>, mais l'interface n'est pas encore construite.</p>
+  <p>Il faut d'abord une installation complète : <code>npm ci</code>, sans <code>--omit=optional</code>, qui retire aussi le moteur de construction.</p>
   <p>En développement, lance <code>npm run dev</code> à la racine du dépôt puis ouvre
   <a href="http://localhost:5173">http://localhost:5173</a>.</p>
   <p>Pour servir l'interface depuis ce serveur : <code>npm run build</code>, puis recharge cette page.</p>
@@ -258,6 +259,7 @@ export function createAgencyServer(opts: AgencyServerOptions): AgencyServer {
           const p = url.searchParams.get('path');
           if (!isSafeRelativePath(p)) throw new HttpError(400, 'Chemin de note invalide.');
           const note = await session.brainNote(p);
+          if (!note && p.startsWith('journal/')) return sendJson(res, 200, null); // a day compaction let go is a plain answer, not an error
           if (!note) throw new HttpError(404, `Note introuvable : ${p}`);
           return sendJson(res, 200, note);
         }

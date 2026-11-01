@@ -701,7 +701,6 @@ export interface NicheTruth {
   competitors: CompetitorProduct[];
   scamCreatorIds?: string[];  // creators of this niche who take an advance and vanish, explicit red flag or not
   channels?: Partial<Record<Exclude<ChannelId, 'tiktok'>, ChannelCell>>; // TikTok keeps tiktokAffinity and cpmBase
-  videoTempo?: VideoTempo;     // hidden, learnable
 }
 
 export interface MarketState {
@@ -772,6 +771,7 @@ export interface FounderHold {
   liftedDay?: number;
   channel?: ChannelId | null;  // « coupe Meta »
   agentId?: AgentId;           // kind 'pin'
+  resumes?: string[];          // an order with a length: the campaigns it paused, which start again the morning after `until`
 }
 
 /** What an agent read in the brain before starting a task. Lessons by id: the retro keeps rewriting them. */
@@ -902,6 +902,7 @@ export interface SessionInfo {
   tick?: number;
   lastError?: string | null;
   minStartingCash?: number;         // lowest budget POST /api/scenario accepts (EUR)
+  claudeReady?: boolean;            // this server holds an API key: never the key itself
   pace?: 'live' | 'away';
   watchers?: number;
   backoffMs?: number | null;   // set while the loop waits after incidents
@@ -929,7 +930,7 @@ export type StreamEvent =
 // ───────────────────────────── Scenario: the V1 switches ─────────────────────────────
 
 export type TalentMode = 'off' | 'flat' | 'league';
-export type ChannelControl = 'none' | 'tiktok_only' | 'average_roas' | 'last_click';
+export type ChannelControl = 'none' | 'tiktok_only' | 'marginal_roas' | 'last_click';
 export interface OrgConfig {
   team: 'lean' | 'legacy31';
   autoHire: boolean;           // false: the team stays as it is (paired control)
@@ -1164,7 +1165,7 @@ export interface ChannelPlanLine {
 }
 export interface ChannelPlan {
   day: number; envelope: number; testEnvelope: number;
-  lambda: number | null;       // the marginal ROAS every optimised line is brought to
+  lambda: number | null;       // null under the average rule; `marginal_roas`: the marginal ROAS every optimised line is brought to
   unspent: number;             // envelope nobody earned
   lines: ChannelPlanLine[];
 }
@@ -1262,7 +1263,7 @@ export interface FounderDigest {
   headline: string;            // French, states a loss as a loss
   money: { revenue: number; refunds: number; adSpend: number; costs: number; profit: number; cashStart: number; cashEnd: number; previousProfit: number | null };
   stage: { from: StageId; to: StageId; changes: { day: number; to: StageId }[] };
-  products: { launched: string[]; stopped: { title: string; why: string }[]; reworked: string[]; best: { title: string; profit: number } | null; worst: { title: string; profit: number } | null };
+  products: { launched: string[]; stopped: { title: string; why: string; harvest?: boolean }[]; reworked: string[]; best: { title: string; profit: number } | null; worst: { title: string; profit: number } | null };
   audience: { size: number; added: number; unsubscribed: number; revenue: number };
   people: { hired: string[]; left: string[]; headFrom: number; headTo: number };
   channels: { opened: string[]; closed: string[]; best: { id: string; name: string; reconciledRoas: number } | null };

@@ -131,14 +131,14 @@ export function orderVariantCreatives(ctx: RuntimeCtx, e: Experiment): number {
   return missing.length;
 }
 
-/** The three readings of a day, channel by channel: what the platform says, what the shop saw, what reconciliation keeps. */
+/** The two readings of a day, channel by channel: what the platform says, what the shop saw. */
 function channelTable(channels: NonNullable<DailyKpi['channels']>): string[] {
   const roas = (revenue: number, spend: number) => (spend > 0 ? dec(revenue / spend) : '—');
   const rows = CHANNEL_IDS.flatMap((ch) => {
     const k = channels[ch];
-    return k ? [`| ${CHANNELS[ch].label} | ${eur(k.spend)} | ${roas(k.claimedRevenue, k.spend)} | ${roas(k.shopRevenue, k.spend)} | ${roas(k.reconciledRevenue, k.spend)} |`] : [];
+    return k ? [`| ${CHANNELS[ch].label} | ${eur(k.spend)} | ${roas(k.claimedRevenue, k.spend)} | ${roas(k.shopRevenue, k.spend)} |`] : [];
   });
-  return ['### Par canal', '| Canal | Dépense | ROAS annoncé | ROAS boutique | ROAS réconcilié |', '|---|---|---|---|---|', ...rows, ''];
+  return ['### Par canal', '| Canal | Dépense | ROAS annoncé | ROAS boutique |', '|---|---|---|---|', ...rows, ''];
 }
 
 export const opsHandlers: HandlerMap = {
@@ -248,8 +248,8 @@ export const opsHandlers: HandlerMap = {
       const text = `${eur(placed)}/jour sur ${plan.lines.length} ligne(s)${plan.lambda === null ? '' : `, ROAS marginal ${dec(plan.lambda)}`}${idle}`;
       say(ctx, agent.id, `${agent.name} répartit ${text}`, 'finance');
       if (moved.length) {
-        const impactEur = round2(sum(moved.map((l) => Math.abs(l.target - l.budget))));
-        logDecision(ctx.world, { kind: 'budget', who: agent.id, text: `${moved.length} ligne(s) déplacée(s) : ${eur(impactEur)}/jour changent de place`, why: text, impactEur });
+        const shifted = round2(sum(moved.map((l) => Math.abs(l.target - l.budget)))); // money that moves, not money earned: no impactEur, the digest would print it as a gain
+        logDecision(ctx.world, { kind: 'budget', who: agent.id, text: `${moved.length} ligne(s) déplacée(s) : ${eur(shifted)}/jour changent de place`, why: text });
       }
       return { summary: `Répartition : ${text}.`, output: { lambda: plan.lambda, unspent: plan.unspent, lines: plan.lines.length, moved: moved.length } };
     },

@@ -717,6 +717,14 @@ const asCreative = (ad: SearchAdDraft): AdCreative => ({
 describe('writers of the new formats', () => {
   const engine = () => new HeuristicEngine({ seed: 7 });
 
+  it('a pin never carries a sentence cut in two: its line gives way to the problem, whole', async () => {
+    for (const n of NICHE_CATALOG) {
+      const hook = `5 choses à arrêter si ${n.voc.pains[0]!.toLowerCase()} et que rien de tout ce que vous avez essayé ne change quoi que ce soit à la situation`;
+      const ad = await engine().writeAd({ product: guide(n), voc: n.voc, hook, hookStyle: 'listicle', format: 'static_image', bannedClaims: [] }, context());
+      expect(hook.startsWith(ad.hook), n.id).toBe(false);
+    }
+  });
+
   it('AD_FORMATS stays the four bandit arms, and a static_image comes back a static_image of one scene', async () => {
     expect([...AD_FORMATS]).toEqual(['faceless_voiceover', 'text_slideshow', 'ugc_avatar', 'carousel']);
     for (const n of NICHE_CATALOG) {

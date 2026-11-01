@@ -22,7 +22,7 @@ import type {
   CreativeVideo, DailyAdStats, DailyKpi, Deliverable, Duel, DuelChip, DuelSide, DuelView, FounderDigest, HeadRow, HiringReqView, LeagueDetail, LeagueEntry, LeagueRow,
   OrgDept, OrgDetail, PersonChip, Position, PodiumView, SceneView, SeasonReport, SeasonRow, Skill, SkillRating, StageView, TalentTruthView, WorldState,
 } from '../shared.js';
-import { CHANNEL_IDS, CHANNELS, channelOf } from '../shared.js';
+import { CHANNEL_IDS, CHANNELS, channelOf, filmOf } from '../shared.js';
 import { cardOf, chronicleOf, duelWinner, peopleIndex, type PeopleIndex } from './chronicle.js';
 
 /** Under 7 days a hire is on trial, and the board shows them as new. */
@@ -540,10 +540,12 @@ function highlightsOf(entries: readonly ChronicleEntry[]): ChronicleEntry[] {
   return out;
 }
 
-/** The digest's people and channels are scale's own (P10.3), read from the people themselves. The chronicle adds what stood out. */
-export function digestPeopleOf(world: WorldState, fromDay: number, toDay: number): Pick<FounderDigest, 'people' | 'channels' | 'highlights'> {
-  const { people, channels } = buildDigest(world, fromDay, toDay);
-  return { people, channels, highlights: highlightsOf(chronicleOf(world, fromDay).filter((e) => e.day <= toDay)) };
+/** The digest's people and channels are scale's own (P10.3), read from the people themselves. The chronicle adds what stood out, and what it says is not said twice. */
+export function digestPeopleOf(world: WorldState, fromDay: number, toDay: number): Pick<FounderDigest, 'people' | 'channels' | 'highlights' | 'decisions'> {
+  const { people, channels, decisions } = buildDigest(world, fromDay, toDay);
+  const highlights = highlightsOf(chronicleOf(world, fromDay).filter((e) => e.day <= toDay));
+  const told = new Set(highlights.map((e) => e.text));
+  return { people, channels, highlights, decisions: decisions.filter((d) => !told.has(d.text)) };
 }
 
 // ───────────────────────────── the gallery ─────────────────────────────
@@ -568,7 +570,8 @@ export function deliverablesPage(world: WorldState, query: { page?: number; kind
   const covers = new Map((world.company.products ?? []).map((p) => [p.id, p.files?.cover ?? null]));
   const held = new Set((world.company.deliverables ?? []).map((d) => d.id));
   const works: DeliverableTile[] = [...archived.filter((d) => !held.has(d.id)), ...(world.company.deliverables ?? [])].map((d) => (d.kind === 'pdf' && d.productId ? { ...d, poster: covers.get(d.productId) ?? null } : d));
-  const tiles = [...works, ...Object.entries(videos).flatMap(([id, v]) => videoTile(id, v, creatives.get(id)))];
+  const films = new Set<string>(); // two ads with the same spec are one film: it shows once
+  const tiles = [...works, ...Object.entries(videos).flatMap(([id, v]) => videoTile(id, v, creatives.get(id)).filter((t) => !films.has(filmOf(t.path)) && films.add(filmOf(t.path))))];
   const wanted = query.kinds?.length ? new Set<string>(query.kinds) : null;
   const shown = tiles.map((tile, i) => ({ tile, i })).filter(({ tile }) => !wanted || wanted.has(tile.kind)).sort((a, b) => b.tile.day - a.tile.day || b.i - a.i).map(({ tile }) => tile);
   const pages = Math.max(1, Math.ceil(shown.length / GALLERY_PAGE));

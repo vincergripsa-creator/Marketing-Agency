@@ -527,7 +527,9 @@ function heuristicStaticAd(
   const written = clean(input.hook) || makeHook(style, c, rng, bonusOf(input.product), undefined, rules.t);
   // no voice to catch up: a line that names neither the problem nor the reader gives way to the problem itself
   const line = relevance(written, c) > 0 ? written : cap(c.pbShort ?? c.pbClause);
-  const hook = line.length <= STATIC_HOOK_MAX ? line : screenText(line);
+  const cut = screenText(line);
+  // a pin has nothing but its line: a sentence cut in two gives way to the problem, whole
+  const hook = line.length <= STATIC_HOOK_MAX ? line : line.startsWith(cut) ? cap(c.pbShort ?? c.pbClause) : cut;
   const title = plainTitle(clean(input.product?.title)) || 'le guide';
   const scene: AdScene = { visual: VISUALS.static_image[0]!, onScreenText: screenText(hook), voiceover: '', durationSec: 5 };
   const draft: AdDraft = {

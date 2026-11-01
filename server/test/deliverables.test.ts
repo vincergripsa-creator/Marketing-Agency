@@ -169,6 +169,11 @@ describe('sanitizePdfText', () => {
     expect(s).not.toMatch(/[\u{1F000}-\u{1FAFF}]/u);
     expect(s).toMatch(/Noël\s*ça va/);
   });
+
+  it('sets « n° 3 » with its no-break space, whatever the writer typed', () => {
+    expect(sanitizePdfText('Erreur n°3 et situation n° 12')).toBe('Erreur n° 3 et situation n° 12');
+    expect(sanitizePdfText('Erreur n° 3')).toBe('Erreur n° 3');
+  });
 });
 
 describe('renderCoverSvg', () => {

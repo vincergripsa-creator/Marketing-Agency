@@ -3,18 +3,30 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Writable } from 'node:stream';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import type { DesignSpec, VideoCut } from '../src/shared.js';
 import { findFfmpeg } from '../src/video/caps.js';
 import { encodeArgs, encodeMp4, pumpFrames, VIDEO_COMMENT } from '../src/video/encode.js';
 import { mixDown, writeWav } from '../src/video/mix.js';
 import { makeMusic, musicFor } from '../src/video/music.js';
-import { checkFile, moovFirst, parseProbe, probeFile, QA_CHECKS, qaSummary, spansOf, type QaExpect, type QaText } from '../src/video/qa.js';
+import { checkFile, moovFirst, parseProbe, probeFile, QA, QA_CHECKS, qaSummary, spansOf, type QaExpect, type QaText } from '../src/video/qa.js';
 import { sfxCues } from '../src/video/sfx.js';
-import type { RenderSpec } from '../src/video/spec.js';
+import { RENDER_VERSION, type RenderSpec } from '../src/video/spec.js';
 import { estimatedWords, type SpokenLine } from '../src/video/speech.js';
 import { stageFor } from '../src/video/stage.js';
 import { buildTimeline, TEMPO_BPM } from '../src/video/timeline.js';
+
+/** A loaded machine on demand: the real spawnSync, with a timeout that really kills the ffmpeg whose arguments hold `match`. */
+const cut = vi.hoisted(() => ({ match: '', ms: 0, noLoudness: false }));
+vi.mock('node:child_process', async (actual) => {
+  const real = await actual<typeof import('node:child_process')>();
+  const spawnSync = (bin: string, args: string[], opts: object) => {
+    const r = real.spawnSync(bin, args, cut.ms && args.join(' ').includes(cut.match) ? { ...opts, timeout: cut.ms } : opts);
+    return cut.noLoudness ? { ...r, stderr: String(r.stderr ?? '').replace(/\bI:\s+-?[\d.]+ LUFS/g, '') } : r;
+  };
+  return { ...real, spawnSync };
+});
+afterEach(() => { Object.assign(cut, { ms: 0, noLoudness: false }); });
 
 const ffmpeg = findFfmpeg() ?? '';
 const hasCanvas = await import('@napi-rs/canvas').then(() => true, () => false);
@@ -140,9 +152,13 @@ describe('the frame pipe', () => {
     expect(args).toContain('-f rawvideo -pix_fmt rgba -s 1080x1920 -r 30 -i pipe:0 -i mix.wav');
     expect(args).toContain('-c:v libx264 -preset veryfast -crf 26 -profile:v high -level 4.1 -threads 2');
     expect(args).toContain('-colorspace bt709 -color_primaries bt709 -color_trc bt709');
-    expect(args).toContain('-c:a aac -b:a 160k -ar 44100 -af loudnorm=I=-14:TP=-1.5:LRA=11');
+    expect(args).toContain('-c:a aac -b:a 160k -ar 44100 -af loudnorm=I=-14:TP=-2.5:LRA=11');
     expect(args).toContain('-movflags +faststart');
     expect(encodeArgs(null, 'out.mp4', { ffmpeg, w: 8, h: 8 })).not.toContain('-c:a');
+  });
+
+  it('a new sound is a new file: the masters of TP -1.5 render again', () => {
+    expect(RENDER_VERSION).toBe(7);
   });
 });
 
@@ -329,6 +345,56 @@ describe.skipIf(!ffmpeg)('encode and QA on real files', { timeout: 60_000 }, () 
     expect(checkFile(file('garbage.mp4'), expectMini({ ffmpeg: file('no-such-ffmpeg') })).ok).toBe(false);
   });
 
+  it('gives each ffmpeg 300 s: a slow machine waits, it does not lose the film', () => {
+    expect(QA.ffmpegMs).toBe(300_000);
+  });
+
+  it('a decode cut short is no verdict: loudness and text read as failed, and the report says nothing judged them', async () => {
+    const path = await good();
+    Object.assign(cut, { match: 'ebur128', ms: 30 });
+    const killed = checkFile(path, expectMini());
+    cut.ms = 0;
+    expect(killed.ok).toBe(false);
+    expect(killed.lufs).toBeNull();
+    expect(killed.failed).toContain('loudness');
+    expect(killed.unfinished).toBe(true);
+    expect(checkFile(path, expectMini()).unfinished).toBe(false);
+  });
+
+  it('a file with audio that gives no loudness was not read to its end, even with nothing killed', async () => {
+    const path = await good();
+    cut.noLoudness = true;
+    const report = checkFile(path, expectMini());
+    cut.noLoudness = false;
+    expect(report.lufs).toBeNull();
+    expect(report.failed).toEqual(['loudness']);
+    expect(report.unfinished).toBe(true);
+  });
+
+  it('so is any other ffmpeg of QA: the probe, the first frame, the SSIM pass', async () => {
+    const path = await good();
+    for (const match of ['-frames:v', 'ssim=']) {
+      Object.assign(cut, { match, ms: 1 });
+      const killed = checkFile(path, expectMini());
+      expect(killed.lufs, match).not.toBeNull();
+      expect(killed.ok, match).toBe(false);
+      expect(killed.unfinished, match).toBe(true);
+    }
+    Object.assign(cut, { match: '-hide_banner', ms: 1 });
+    expect(checkFile(path, expectMini())).toMatchObject({ ok: false, durationSec: null, unfinished: true });
+  });
+
+  it('a verdict stays a verdict: a mute file, a silent one, a black one, a file ffmpeg cannot read', async () => {
+    const { path: noStream } = await encoded('verdict-mute.mp4', clip(90), null);
+    expect(checkFile(noStream, expectMini()).unfinished).toBe(false);
+    const silent = lavfi('verdict-silent.mp4', '-i', noStream, '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo', '-shortest', '-c:v', 'copy', '-c:a', 'aac', '-movflags', '+faststart');
+    expect(checkFile(silent, expectMini()).unfinished).toBe(false);
+    const { path: black } = await encoded('verdict-black.mp4', clip(90, () => blackFrame()), tone('verdict-black.wav', 3));
+    expect(checkFile(black, expectMini()).unfinished).toBe(false);
+    writeFileSync(file('verdict.mp4'), 'not a video');
+    expect(checkFile(file('verdict.mp4'), expectMini()).unfinished).toBe(false);
+  });
+
   it('leaves nothing under the final name when a render dies', async () => {
     const out = file('dead.mp4');
     const opts = { ffmpeg, w: W, h: H };
@@ -403,5 +469,26 @@ describe.skipIf(!ffmpeg || !compose)('the real pipeline', { timeout: 120_000 }, 
     const safeText = checkFile(path, { ffmpeg, w: stage.w, h: stage.h, durationSec: timeline.total, audio: true, shots, text: planted, minSec: 1 });
     expect(safeText.failed).toEqual(['safeText']);
     expect(safeText.outside).toBe(1);
+  });
+
+  it('a QA that was killed keeps the master and asks for the retry, and only a verdict deletes it', async () => {
+    const { renderJob } = await import('../src/video/worker.js');
+    const dir = file('killed');
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'spec.json'), JSON.stringify(SPEC));
+    const job = { dir, root: tmp, ffmpeg, pages: false, width: 270 };
+
+    Object.assign(cut, { match: 'ebur128', ms: 30 });
+    const killed = await renderJob(job);
+    cut.ms = 0;
+    expect(killed).toMatchObject({ ok: false, retry: true, reason: 'Contrôle coupé avant la fin : à relancer', video: null });
+    expect(killed.qa?.lufs).toBeNull();
+    expect(existsSync(join(dir, 'master.mp4'))).toBe(true);
+    expect(existsSync(join(dir, 'result.json'))).toBe(false);
+
+    const judged = await renderJob(job); // the same 3 s cut, read to its end: under the 9 s floor
+    expect(judged).toMatchObject({ ok: false, retry: false });
+    expect(judged.reason).toBe('Échec du contrôle : duration');
+    expect(existsSync(join(dir, 'master.mp4'))).toBe(false);
   });
 });

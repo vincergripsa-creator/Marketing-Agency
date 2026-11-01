@@ -1,6 +1,6 @@
 /**
- * What the market reads of a cut (video §3.5, §3.6). Craft reaches CTR through `scoreCreative` and `adQ`, with no term of
- * its own, so the league sees it. Tempo is the one market fact: hidden per niche, it draws nothing and shifts no stream.
+ * What the market reads of a cut (video §3.5). Craft reaches CTR through `scoreCreative` and `adQ`, with no term of its own,
+ * so the league sees it. Tempo reads nowhere: a niche has no taste, and a cut opens no arm (D149).
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { AdCreative, AdScene, Campaign, CutMetrics, DailyAdStats, NicheTruth, PdfContent, Product, ScenarioConfig, VideoBeat, VideoCut, VideoTempo, VoiceOfCustomer, WorldState } from '../src/shared.js';
@@ -12,7 +12,6 @@ import { applyDailyRewards } from '../src/learning/retro.js';
 import { createContentEngine } from '../src/minds/index.js';
 import { createWorld, defaultScenario } from '../src/runtime/index.js';
 import { createMarketState, createMarketTools, scoreCreative, scoreCut, tickMarket } from '../src/sim/index.js';
-import { nicheTempo, tempoFit, VIDEO_MARKET } from '../src/sim/videoCraft.js';
 import { LEGACY } from './legacy.js';
 
 const steady = (): Rng => ({ normal: () => 0 }) as unknown as Rng;
@@ -275,82 +274,58 @@ describe('the market', () => {
     for (const [i, row] of up.entries()) expect(row.ctr).toBeGreaterThanOrEqual(down[i]!.ctr * 0.9); // same day, same stream
   });
 
-  it('a creative without a cut is judged as before, whatever the tempo of the niche', () => {
-    const { world, niche } = market(null, { videoModel: 'on' });
-    expect(niche.videoTempo).toBeDefined();
+  it('a creative without a cut is judged as before, with the video model on', () => {
+    const { world } = market(null, { videoModel: 'on' });
     const off = market(null);
     expect(run(world, 5).map((r) => [r.impressions, r.clicks])).toEqual(run(off.world, 5).map((r) => [r.impressions, r.clicks]));
   });
 
-  it('a matching tempo sells more than the opposite one, on the same cut', () => {
-    const on = (tempo: VideoTempo, taste: VideoTempo): number => {
-      const { world, niche } = market({ ...cut(), tempo }, { videoModel: 'on' });
-      niche.videoTempo = taste;
-      return ctrOf(run(world, 10));
-    };
-    expect(on('fast', 'fast') / on('calm', 'fast')).toBeGreaterThan(1.08);
-  });
-});
-
-describe('tempoFit', () => {
-  const niche = (videoTempo?: VideoTempo): NicheTruth => ({ videoTempo }) as NicheTruth;
-  const ad = (tempo?: VideoTempo): AdCreative => adOf(tempo ? { cut: { ...cut(), tempo } } : {});
-
-  it.each([
-    ['fast', 'fast', VIDEO_MARKET.tempoMatch], ['calm', 'calm', VIDEO_MARKET.tempoMatch], ['standard', 'standard', VIDEO_MARKET.tempoMatch],
-    ['calm', 'fast', VIDEO_MARKET.tempoOpposite], ['fast', 'calm', VIDEO_MARKET.tempoOpposite],
-    ['standard', 'fast', 1], ['calm', 'standard', 1], ['fast', 'standard', 1], ['standard', 'calm', 1],
-  ] as [VideoTempo, VideoTempo, number][])('%s in a %s niche is worth %d', (tempo, taste, fit) => {
-    expect(tempoFit(niche(taste), ad(tempo))).toBe(fit);
-  });
-
-  it('is 1 without a cut or a truth', () => {
-    expect(tempoFit(niche('fast'), ad())).toBe(1);
-    expect(tempoFit(niche(), ad('fast'))).toBe(1);
+  it('the tempo of a cut moves no click: tempo is cosmetic (D149)', () => {
+    const rows = (tempo: VideoTempo) => run(market({ ...cut(), tempo }, { videoModel: 'on' }).world, 10).map((r) => [r.impressions, r.clicks]);
+    const [first, ...rest] = TEMPOS.map(rows);
+    for (const other of rest) expect(other).toEqual(first);
   });
 });
 
 describe('the truth of a niche', () => {
   const scenario = (videoModel?: 'on' | 'off'): ScenarioConfig => ({ ...defaultScenario({ seed: 5 }), videoModel });
 
-  it('comes from the seed and draws nothing from the market', () => {
+  it('the video model adds nothing to it and draws nothing from the market', () => {
     const on = createRng(5);
     const off = createRng(5);
-    const withTaste = createMarketState(scenario('on'), on);
+    const withModel = createMarketState(scenario('on'), on);
     const without = createMarketState(scenario('off'), off);
     expect(on.state()).toBe(off.state());
-    expect(withTaste.niches.map(({ videoTempo: _, ...n }) => n)).toEqual(without.niches);
-    expect(without.niches.every((n) => n.videoTempo === undefined)).toBe(true);
-    expect(createMarketState(scenario(undefined), createRng(5)).niches.every((n) => n.videoTempo === undefined)).toBe(true);
-    expect(withTaste.niches.map((n) => n.videoTempo)).toEqual(withTaste.niches.map((_, i) => nicheTempo(5, i)));
-    expect(new Set(withTaste.niches.map((n) => n.videoTempo)).size).toBeGreaterThan(1);
-    for (const n of withTaste.niches) expect(TEMPOS).toContain(n.videoTempo);
+    expect(withModel.niches).toEqual(without.niches);
+    expect(createMarketState(scenario(undefined), createRng(5)).niches).toEqual(without.niches);
+    expect(JSON.stringify(withModel.niches)).not.toContain('videoTempo');
   });
 
   it('is the same at every load of a seed', () => {
-    const first = createMarketState(scenario('on'), createRng(5)).niches.map((n) => n.videoTempo);
-    expect(createMarketState(scenario('on'), createRng(5)).niches.map((n) => n.videoTempo)).toEqual(first);
+    const first = createMarketState(scenario('on'), createRng(5)).niches;
+    expect(createMarketState(scenario('on'), createRng(5)).niches).toEqual(first);
   });
 
   it('never leaves the server, the cut\'s own tempo being a decision anyone can read', () => {
-    const { world } = market({ ...cut(), tempo: 'fast' }, { videoModel: 'on' });
-    expect(world.market.niches.some((n) => n.videoTempo)).toBe(true);
-    expect(JSON.stringify(toSnapshot(world))).not.toContain('videoTempo');
-    expect(JSON.stringify(toSnapshot(world, true))).not.toContain('videoTempo');
+    const { world, niche } = market({ ...cut(), tempo: 'fast' }, { videoModel: 'on' });
+    expect(niche.hookAffinity).toBeDefined();
+    const plain = JSON.stringify(toSnapshot(world));
+    expect(plain).not.toContain('hookAffinity');
+    expect(plain).not.toContain('tiktokAffinity');
+    expect(plain).toContain('"tempo":"fast"');
   });
 });
 
-describe('the tempo bandit', () => {
-  it('learns from the same rows as the hook and the format', () => {
+describe('the tempo is no bandit (D149)', () => {
+  it('a day rewards the hook and the format of a cut, and opens no arm for its tempo', () => {
     const { world, niche } = market({ ...cut(), tempo: 'fast' });
     run(world, 1);
     const rewards = applyDailyRewards(world, 1);
-    const arms = world.company.bandits[`video_tempo:${niche.id}`]!;
-    expect(arms.find((a) => a.key === 'fast')?.pulls).toBeGreaterThan(0);
+    expect(world.company.bandits[`hook_style:${niche.id}`]).toBeDefined();
+    expect(world.company.bandits[`video_tempo:${niche.id}`]).toBeUndefined();
     const without = market(null);
     run(without.world, 1);
-    expect(rewards).toBe(applyDailyRewards(without.world, 1) + 1);
-    expect(without.world.company.bandits[`video_tempo:${niche.id}`]).toBeUndefined();
+    expect(rewards).toBe(applyDailyRewards(without.world, 1));
   });
 });
 

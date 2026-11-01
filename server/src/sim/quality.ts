@@ -2,7 +2,7 @@
  * Heuristic quality scorers (0..100) with French, actionable issues. Used by QA agents AND by the
  * market itself (the conversion model trusts these, not the company's self-assessment).
  */
-import { clamp } from '../core/index.js';
+import { BoundedMemo, clamp } from '../core/index.js';
 import type {
   AdCreative, ChapterContent, DesignSpec, InboxMessage, MessageIntent, PdfContent, Product, QualityReport, SalesPage,
   SupportReplyInput, VisualReport, VoiceOfCustomer,
@@ -22,6 +22,7 @@ export const GENERIC_PHRASES: readonly string[] = [
   'faites-vous confiance', 'écoutez votre corps', 'prenez soin de vous', 'rappelez-vous que', "gardez à l'esprit que",
   "il n'y a pas de solution miracle", 'sans plus attendre', 'un véritable atout', 'un outil puissant', 'pour résumer',
   'en somme', 'dans ce guide complet', 'au cœur de', 'faire toute la différence', 'chaque petit pas compte',
+  'changer la donne', 'change la donne', 'changent la donne',
 ];
 
 type Parts = Pick<QualityReport, 'specificity' | 'structure' | 'actionability' | 'humanTone' | 'design' | 'promiseMatch' | 'compliance'>;
@@ -208,8 +209,16 @@ export interface GuideSubstance {
   concreteSteps: number;
 }
 
-/** Deterministic reading of what a guide contains, whatever its length: padding does not count as value. */
+/** Above the guides of a company, drafts included: the reading is asked of the same text again and again. */
+const SUBSTANCES = 256;
+const substances = new BoundedMemo<GuideSubstance>(SUBSTANCES);
+
+/** Deterministic reading of what a guide contains, whatever its length: padding does not count as value. By content: an edit in place is a new text. */
 export function guideSubstance(content: PdfContent): GuideSubstance {
+  return substances.read(JSON.stringify(content), () => readSubstance(content));
+}
+
+function readSubstance(content: PdfContent): GuideSubstance {
   const chapters = content?.chapters ?? [];
   const seen = new Set<string>();
   const sentencesSeen = new Set<string>();

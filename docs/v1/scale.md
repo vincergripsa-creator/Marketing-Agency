@@ -505,7 +505,7 @@ Company side:
 
 ### 6.3 Order bump, rivals, brand
 
-**Kit** (`Product.kind = 'kit'`, `parent.bumpProductId`): a real printable PDF made from the parent's sheets, checklists and bonus grids. It uses `createUpsellPipeline` with `input.kit = true`, without sales page length. `isUpsellProduct` includes kits, so they get no cold ads and are not judged alone.
+**Kit** (`Product.kind = 'kit'`, `parent.bumpProductId`): a real printable PDF made from the parent's sheets, checklists and bonus grids, its count and its plan leaving out what its sheets already hold (D156). It uses `createUpsellPipeline` with `input.kit = true`, without sales page length. `isUpsellProduct` includes kits, so they get no cold ads and are not judged alone.
 `runBumps`: for each non-upsell order of the day, chance `GROWTH.bump.rate × priceFactor`, `newOrder(d, kit, 'bump', …)`. Price `clamp(round(0,3 × parent.price), 5, 9)`. A kit as its own product means `order.price` stays the guide's price, so pricing evidence, `overprice` and refunds keep their meaning. `runUpsells` and `runInbox` skip `bump` orders in their base, as they skip `upsell`.
 
 **Rivals** (`sim/rivals.ts`):
@@ -540,7 +540,7 @@ A niche selling 3/day holds +26 % capacity. `runSales` calls `nichePool`; the ch
 | world.json | ≤ 12 MB | ≤ 1,2 × D365 |
 | Heap peak | ≤ 500 MB | ≤ 500 MB |
 | Live snapshot | ≤ 400 kB | same |
-| `GET /api/state` | ≤ 700 kB with DEFAULT or TIGHT limits, never LIVE | same |
+| `GET /api/state` | ≤ 700 kB in bytes with DEFAULT or TIGHT limits, session and 30 films in (D155), never LIVE | same |
 | Run folder without video | ≤ 150 MB | ≤ 400 MB |
 
 ### 7.2 Compaction

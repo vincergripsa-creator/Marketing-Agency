@@ -333,6 +333,7 @@ describe('nextStepTitle — « La suite est ici » printed once', () => {
     expect(nextStepTitle('La suite est ici')).toBe('');
     expect(nextStepTitle('La suite est ici :')).toBe('');
     expect(nextStepTitle(undefined)).toBe('');
+    expect(nextStepTitle('Votre prochaine étape')).toBe('');
   });
   it('keeps other titles untouched', () => {
     expect(nextStepTitle('Siestes faciles : le guide')).toBe('Siestes faciles : le guide');

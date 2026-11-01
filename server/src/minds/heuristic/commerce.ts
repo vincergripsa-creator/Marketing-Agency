@@ -271,7 +271,9 @@ export function heuristicRedTeam(input: { subject: 'idea' | 'pdf' | 'sales_page'
 
   const who = f ? `« ${fit(f.title, 60)} »` : subj;
   if (verdict === 'kill') {
-    reasons.unshift(`Je tue ${who} en l’état : ${qr && qr.compliance < 35 ? 'risque de conformité trop élevé' : ruleOfOneBroken ? 'la règle du un n’est pas respectée' : severe ? fit(severe.reason, 150) : 'la qualité est trop loin du seuil'}.`.replace(/\.\.$/, '.'));
+    const cause = qr && qr.compliance < 35 ? 'risque de conformité trop élevé' : ruleOfOneBroken ? 'la règle du un n’est pas respectée' : severe ? fit(severe.reason, 150) : 'la qualité est trop loin du seuil';
+    if (severe && cause === fit(severe.reason, 150)) reasons.splice(reasons.indexOf(severe.reason), 1); // the head quotes it: the list would print it twice
+    reasons.unshift(`Je tue ${who} en l’état : ${cause}.`.replace(/([.…])\.$/, '$1'));
     fixes.push(input.subject === 'idea' ? 'Repartir de la recherche : une niche plus étroite, des douleurs plus précises.' : 'Reprendre depuis le plan, pas seulement la forme.');
   } else if (verdict === 'go') {
     if (qr) {

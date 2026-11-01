@@ -318,7 +318,7 @@ The first eleven are today's drawn cells, so the map stays recognisable. This re
 | SSE `tick` | unchanged: clock, finance, `LiveAgent[]` | 7 KB at 60 agents | every tick |
 | SSE `activity` | unchanged, plus kind `equipe` | small | 250 ms batches |
 | SSE `snapshot` (LIVE) | company trimmed, `scene` | **≤ 500 000 bytes, enforced** | at most 1 per second, at once on a new day |
-| `GET /api/state` | DEFAULT limits, `scene` | ≤ 700 000 | on demand |
+| `GET /api/state` | DEFAULT limits, `scene`, the 30 films the stream carries (D155) | ≤ 700 000 | on demand |
 | `GET /api/org` | `OrgDetail` | 40 KB | tab open, then each new day |
 | `GET /api/league` (`?god=1`) | `LeagueDetail` | 80 KB | same |
 | `GET /api/channels` | `ChannelsDetail` | 20 KB | same |
@@ -842,9 +842,9 @@ The channel board of channels.md §10, in its own tab. `pub` becomes « Acquisit
 | Block | Content |
 |---|---|
 | Cartes | Five cards: name, state (« Fermé · ouvre quand 15 ventes », « Vérification, jour 12 », « Ouvert », « Suspendu jusqu'au jour 40 »), budget du jour, avertissements |
-| Table 7 jours | Budget/j, Dépense, ROAS plateforme, ROAS boutique, **ROAS réconcilié**, ROAS marginal, Part du budget. Claimed over shop shows as « gonflé ×1,8 » in amber. Reconciled is the bold one. Column titles explain the three readings |
+| Table 7 jours | Budget/j, Dépense, ROAS plateforme, **ROAS boutique**, ROAS marginal, Part du budget. Claimed over shop shows as « gonflé ×1,8 » in amber. The shop is the bold one and sets the tones (D149). ROAS marginal is a reading, never the reason. Column titles explain the two readings of the ROAS |
 | Matrice canal × niche | À tester, en test (J3/5), rentable (ROAS), coupé (reason in the cell on focus), bloqué (rule) |
-| Décision du CFO | Today's moves, λ. When `unspent > 0`: « 38 € non dépensés : aucun canal ne rapporte son euro suivant » |
+| Décision du CFO | Today's moves, each with the number the money followed. λ prints only when it exists, under the control `marginal_roas`, as does « 38 € non dépensés : aucun canal ne rapporte son euro suivant »; the average rule spends all it may (D149) |
 | Répartition | Stacked area, spend share per channel per day |
 | Conditions d'ouverture | Each condition with a `Bar`: `Ventes 9 / 15` |
 
@@ -871,7 +871,7 @@ export function VideoPlayer(p: { videos: VideoFile[]; poster?: string | null; ca
 | Controls | Play, scrub, time, mute, captions, safe-zone overlay, speed 1× and 1,5× |
 | Safe zones | Toggle draws the area hidden by the platform's interface, from one table per ratio |
 | Keys | Space play, ← → 5 s, M mute, C captions, Esc close |
-| No file (`videos` empty) | The `sandbox="allow-scripts"` iframe of today, with the caption « Aperçu animé : vidéo non générée sur cette machine » |
+| No file (`videos` empty) | The `sandbox="allow-scripts"` iframe of today, with the caption « Pas encore de vidéo pour cette pub », and « Aperçu animé : vidéo non générée sur cette machine » only at `storyboard_only`, where the button is disabled and says why (D151) |
 | Playback error | Same fallback |
 
 **`PdfFlip.tsx`**, loaded by `React.lazy`, so `pdfjs-dist` stays out of the main chunk.

@@ -1,8 +1,9 @@
 /**
  * The CFO's split between channels (channels §7.4). One line is a (channel, product) with a spend-revenue curve fitted on
- * its last closed days. The envelope goes where the next euro earns the most, down to the floor under which a marginal euro
- * loses money: it may stay unspent, and a line whose average still looks fine can be cut. Reads observable rows and the
- * reconciled credit only, draws nothing, and everything it decided lives in `company.channels.plan`.
+ * its last closed days. Each line gets its share of the envelope by its average ROAS, the rule Step 4 kept (D149). The curve
+ * still prices a line's next euro, read by `fitInto` when the minimums do not fit and shown as a reading. The fill that
+ * follows that next euro stays as the `marginal_roas` control. Reads observable rows and the credit only, draws nothing, and
+ * everything it decided lives in `company.channels.plan`.
  */
 import { CHANNELS, channelOf } from '../shared.js';
 import type { Campaign, ChannelId, ChannelPlan, ChannelPlanLine, Product, WorldState } from '../shared.js';
@@ -43,8 +44,8 @@ const spendAt = (c: Curve, lambda: number): number => ((c.a * c.b) / lambda) ** 
 export interface Fill { lambda: number | null; spend: number[]; unspent: number }
 
 /**
- * Bisection on λ ≥ the floor, every line brought to the same marginal ROAS. Under the floor a marginal euro loses money, so
- * what is left stays unspent. A line stopped by `lineCap` hands its excess back to the others.
+ * The `marginal_roas` control. Bisection on λ ≥ the floor, every line brought to the same marginal ROAS. Under the floor a
+ * marginal euro loses money, so what is left stays unspent. A line stopped by `lineCap` hands its excess back to the others.
  */
 export function waterFill(curves: readonly Curve[], budget: number, floor: number = ALLOC.floorRoas, lineCap: number = budget): Fill {
   if (!curves.length || budget <= 0) return { lambda: null, spend: curves.map(() => 0), unspent: Math.max(0, budget) };
@@ -63,7 +64,7 @@ export function waterFill(curves: readonly Curve[], budget: number, floor: numbe
   return { lambda: hi, spend: fill(hi), unspent: 0 };
 }
 
-/** The control arm: each line gets its share of the average ROAS, whatever its next euro earns. */
+/** Each line gets its share of the average ROAS, whatever its next euro earns. */
 function averageSplit(averages: readonly number[], budget: number, lineCap: number): Fill {
   const total = sum(averages);
   return { lambda: null, spend: averages.map((v) => (total > 0 ? Math.min(lineCap, (budget * v) / total) : 0)), unspent: 0 };
@@ -174,16 +175,21 @@ function splitLine(line: Line): Record<string, number> {
 
 const labelOf = (ch: ChannelId): string => CHANNELS[ch].label;
 
-/** The buyer's line for this move: « Meta sommeil : 40 € → 52 €/jour, ROAS marginal 1,62 contre 1,18 sur TikTok ». */
-function noteOf(line: Line, target: number, lines: readonly Line[]): string {
+/** The number the money followed today: a note gives that reason and no other. */
+interface Reading { name: string; of(l: Line): number | null }
+
+const readingOf = (w: WorldState): Reading => (w.scenario.channelControl === 'marginal_roas' ? { name: 'ROAS marginal', of: marginalOf } : { name: 'ROAS moyen', of: averageOf });
+
+/** The buyer's line for this move: « Meta sommeil : 40 € → 52 €/jour, ROAS moyen 1,62 contre 1,18 sur TikTok ». */
+function noteOf(line: Line, target: number, lines: readonly Line[], reading: Reading): string {
   const name = `${labelOf(line.channel)} « ${short(line.product.title, 30)} »`;
   if (!line.curve) return `${name} : ${eur(line.budget)}/jour, moins de ${ALLOC.minDays} jours de mesure, budget inchangé`;
   if (target <= 0) return `${name} : ligne arrêtée, sous le minimum de ${labelOf(line.channel)} depuis ${ALLOC.trimDays} jours`;
-  const marginal = marginalOf(line)!;
+  const read = (l: Line): number => reading.of(l)!; // a line with a curve has days, and so an average
   const others = lines.filter((l) => l !== line && l.channel !== line.channel && l.curve);
   const rising = target >= line.budget;
-  const rival = others.reduce<Line | null>((best, l) => (!best || (rising ? marginalOf(l)! < marginalOf(best)! : marginalOf(l)! > marginalOf(best)!) ? l : best), null);
-  return `${name} : ${eur(line.budget)} → ${eur(target)}/jour, ROAS marginal ${dec(marginal)}${rival ? ` contre ${dec(marginalOf(rival)!)} sur ${labelOf(rival.channel)}` : ''}`;
+  const rival = others.reduce<Line | null>((best, l) => (!best || (rising ? read(l) < read(best) : read(l) > read(best)) ? l : best), null);
+  return `${name} : ${eur(line.budget)} → ${eur(target)}/jour, ${reading.name} ${dec(read(line))}${rival ? ` contre ${dec(read(rival))} sur ${labelOf(rival.channel)}` : ''}`;
 }
 
 /** Today's plan, written in the book. Campaigns on test stay out of it; everything else running has a line. */
@@ -199,15 +205,16 @@ export function allocateChannels(ctx: RuntimeCtx): ChannelPlan {
   const measured = lines.filter((l) => l.curve);
   const left = Math.max(0, room - sum(lines.filter((l) => !l.curve).map((l) => l.budget)));
   const lineCap = ALLOC.maxLineShare * room;
-  const fill = w.scenario.channelControl === 'average_roas'
-    ? averageSplit(measured.map((l) => averageOf(l) ?? 0), left, lineCap)
-    : waterFill(measured.map((l) => l.curve!), left, ALLOC.floorRoas, lineCap);
+  const fill = w.scenario.channelControl === 'marginal_roas'
+    ? waterFill(measured.map((l) => l.curve!), left, ALLOC.floorRoas, lineCap)
+    : averageSplit(measured.map((l) => averageOf(l) ?? 0), left, lineCap);
   const yesterday = book.plan?.day === w.day - 1 ? book.plan.lines : [];
   measured.forEach((l, i) => {
     const before = yesterday.find((y) => y.channel === l.channel && y.productId === l.product.id);
     stepTo(l, fill.spend[i]!, before?.underMin ?? 0);
   });
   fitInto(lines, room);
+  const reading = readingOf(w);
   const planLines = lines.map((l): ChannelPlanLine => {
     const campaignTargets = splitLine(l);
     const target = round2(sum(Object.values(campaignTargets)));
@@ -215,7 +222,7 @@ export function allocateChannels(ctx: RuntimeCtx): ChannelPlan {
       channel: l.channel, productId: l.product.id, campaignIds: l.campaigns.map((c) => c.id),
       budget: round2(l.budget), target, campaignTargets,
       average: averageOf(l), marginal: marginalOf(l), elasticity: l.curve?.b ?? null, days: l.points.length,
-      note: noteOf(l, target, lines), ...(l.underMin ? { underMin: l.underMin } : {}),
+      note: noteOf(l, target, lines, reading), ...(l.underMin ? { underMin: l.underMin } : {}),
     };
   });
   const plan: ChannelPlan = {

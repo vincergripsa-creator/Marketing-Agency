@@ -42,4 +42,6 @@ Les fondateurs sont hors de ces deux règles, qui ne touchent jamais plus d'une 
 - **Trésorerie** : la trésorerie couvre moins de 21 jours de frais et la marge ne couvre plus les frais, 5 soirs de suite. On se sépare de l'agent le moins occupé sur 14 jours.
 - **Doublon inactif** : sur un rôle tenu par 2 personnes ou plus, celle qui reste sous 20 % d'occupation pendant 14 jours, embauchée depuis 14 jours ou plus.
 
+En mode validation, les deux règles ouvrent une demande au fondateur ; rien n'est payé et personne ne part avant son accord.
+
 Liens : [[Organigramme]] · [[Budget et garde-fous]] · [[Playbook RH]] · [[Playbook Finance]]

@@ -30,7 +30,6 @@ import {
 } from '../src/sim/channelBalance.js';
 import { financeSnapshot } from '../src/sim/finance.js';
 import { GROWTH } from '../src/sim/growth.js';
-import { VIDEO_MARKET } from '../src/sim/videoCraft.js';
 import { VISUAL } from '../src/sim/visual.js';
 import type { RunPaths } from '../src/contracts.js';
 import { channelOf } from '../src/shared.js';
@@ -330,7 +329,7 @@ async function makePaths(spec: RunSpec, runId: string): Promise<{ paths: RunPath
 /** Every object a calibration may move (PLAN §2.9), by the name a path starts with. Readers read them at call time: no copy at import. */
 const OVERRIDABLE: Record<string, unknown> = {
   ...Object.fromEntries(Object.entries(BALANCE).filter(([, v]) => typeof v === 'object')),
-  ORG, TALENT, CHANNEL_SIM, SEARCH, ASSIST, CLAIMS, CHANNEL_EVENTS, LEARNING, PAID_TAIL, COST_HINT, CHANNEL_POLICY, RECON, VIDEO_MARKET, VISUAL, GROWTH,
+  ORG, TALENT, CHANNEL_SIM, SEARCH, ASSIST, CLAIMS, CHANNEL_EVENTS, LEARNING, PAID_TAIL, COST_HINT, CHANNEL_POLICY, RECON, VISUAL, GROWTH,
   STAGE_POLICY, STAGE_GATES, COMPACT, CFO, PORTFOLIO,
 };
 

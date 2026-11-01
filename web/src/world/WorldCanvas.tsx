@@ -3,6 +3,7 @@ import { useEffect, useRef, type JSX } from 'react';
 import type { Activity, CompanySnapshot, DeptId } from '../../../shared/types';
 import { WorldEngine } from './engine';
 import type { HotspotId } from './model';
+import { canvasFontsReady } from './text';
 
 const LOW_POWER_FRAME_MS = 48;
 
@@ -73,8 +74,11 @@ export function WorldCanvas(props: WorldCanvasProps): JSX.Element {
     const detach = engine.attachInput();
     let raf = 0;
     let lastDraw = -Infinity;
+    let fontsIn = false; // the first paint is already in the pixel font
+    void canvasFontsReady().then(() => { fontsIn = true; });
     const loop = (t: number) => {
       raf = requestAnimationFrame(loop);
+      if (!fontsIn) return;
       if (propsRef.current.lowPower && t - lastDraw < LOW_POWER_FRAME_MS) return;
       lastDraw = t;
       try {

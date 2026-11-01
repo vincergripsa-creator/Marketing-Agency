@@ -161,7 +161,7 @@ export function buildNicheCtx(nicheIn: Partial<NicheBrief> | null | undefined, v
     audArt,
     audShort: shortAudience(niche.audience),
     audTitle: titleAudience(audArt, 52),
-    audCore: titleAudience(audArt, 40),
+    audCore: titleAudience(audArt, 46), // long enough for its age: « les parents épuisés d’un bébé » reads as tired of the baby
     problem: lf(topic ? topic.pain : free ?? (goal ? mainPain : niche.problem)),
     goal: goal ? lf(goal) : null,
     pbClause: lf(mainPain),

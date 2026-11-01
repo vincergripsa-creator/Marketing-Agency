@@ -12,8 +12,8 @@ Spec for the V1 of the agency. Read-only design, nothing in the repo was touched
 | D4 | **Until the first `open_channel` task, a full run is byte-identical to a TikTok-only run.** No id, no draw, no task before that day. | It is a property one test can check, and it is what makes "TikTok stays comparable" true by construction. |
 | D5 | **Every new draw has its own stream**, and `DAY_PHASES` is not touched. | `rollEvents` draws from `streamRng(dayKey, DAY_PHASES.length)`: one more phase in that array silently reshuffles every event of every run. New phases run outside the array on `CHANNEL_STREAM` keys. |
 | D6 | **Over-claiming is emergent, not a constant.** A platform claims a sale when its ad touched the buyer, whichever channel got the click. One channel open: claims equal the shop, to the cent. | No fudge factor, and TikTok-only needs no special case. |
-| D7 | **Attribution has three readings**: platform claims (too high), shop last click (right total, wrong split, favours Search and retargeting), reconciled (split recomputed, total forced to the shop). Decisions read reconciled. | Last click and claims each cause a real, measurable wrong decision, because the cross-channel effect is real in the market (§4). |
-| D8 | **The CFO allocates by water-filling on fitted marginal ROAS**, floor 1,15. It may refuse to spend the envelope. | Guardrails stay: adCap is a ceiling, ±30 % a day per line, stop-loss per channel. |
+| D7 | **Attribution has two readings** since Step 4 (D149): platform claims (too high) and shop last click (right total, wrong split, favours Search and retargeting). Decisions read the shop. The third, reconciled (split recomputed, total forced to the shop), won 10/30 with a median of 0 € against last click: `claimWeight` 0, every credit is 1. | Last click and claims each cause a real, measurable wrong decision, because the cross-channel effect is real in the market (§4). |
+| D8 | **The CFO splits the envelope by average ROAS** since Step 4 (D149). Water-filling on fitted marginal ROAS, floor 1,15, won 5/30 with a median of -484 € against it, and stays as the control `marginal_roas`, to try again on real data. | Guardrails stay: adCap is a ceiling, ±30 % a day per line, stop-loss per channel. |
 | D9 | **A mechanic that cannot beat its paired control on 30 seeds is removed, not tuned.** | Nothing cosmetic. Six controls exist for that (§12). |
 | D10 | New constants live in `server/src/sim/channelBalance.ts` (market, hidden) and `server/src/runtime/channelPolicy.ts` (company rules). `balance.ts` is not touched. | The final calibration reaches them through `applyOverrides`. |
 
@@ -203,7 +203,7 @@ export interface ChannelPlanLine {
 }
 export interface ChannelPlan {
   day: number; envelope: number; testEnvelope: number;
-  lambda: number | null;           // the marginal ROAS every optimised line is brought to
+  lambda: number | null;           // null under the average rule; `marginal_roas`: the marginal ROAS every optimised line is brought to
   unspent: number;                 // envelope nobody earned: the signal for the scale pillar
   lines: ChannelPlanLine[];
 }
@@ -225,7 +225,7 @@ export interface ChannelBook {
 }
 export interface CompanyState { /* … */ channels?: ChannelBook }
 
-export type ChannelControl = 'none' | 'tiktok_only' | 'no_bandit' | 'average_roas' | 'last_click' | 'platform_claims';
+export type ChannelControl = 'none' | 'tiktok_only' | 'marginal_roas' | 'last_click';
 export interface ScenarioConfig { /* … */ channelControl?: ChannelControl } // benchmark arm, not offered in the UI
 
 export type TaskKind = /* … */ | 'open_channel' | 'adapt_creative' | 'write_search_ads' | 'reconcile_channels' | 'allocate_channels';
@@ -506,12 +506,14 @@ extra(ch)    = Σ_{o ≠ ch} shopRevenue(o, niche) × greed(ch) × touched(ch) �
 
 ### 5.2 Reconciliation: `learning/attribution.ts`
 
+Switched off by Step 4 (D149): `claimWeight` is 0, so reconciled revenue is the shop's and every credit is exactly 1. The machinery stays, it writes what the platforms claim, and the UI shows two readings.
+
 ```ts
-export const RECON = { claimWeight: 0.5, windowDays: 14, minNicheRevenue: 30, staleDays: 4, creditMin: 0.4, creditMax: 2.5 };
+export const RECON = { claimWeight: 0, windowDays: 14, minNicheRevenue: 30, staleDays: 4, creditMin: 0.4, creditMax: 2.5 };
 
 export function reconcile(rows: DailyAdStats[]): AttributionRow[] {
   // S[ch] shop, C[ch] claimed, T = Σ S
-  // blended[ch] = S[ch] + 0.5 × max(0, C[ch] − S[ch])
+  // blended[ch] = S[ch] + claimWeight × max(0, C[ch] − S[ch])
   // reconciled[ch] = T × blended[ch] / Σ blended
   // credit[ch] = (reconciled[ch] + 1) / (S[ch] + 1), clamped to [0.4, 2.5]
 }
@@ -519,7 +521,7 @@ export function reconcile(rows: DailyAdStats[]): AttributionRow[] {
 
 Σ reconciled = shop total, always. One channel: credit 1, exactly. `reconcile_channels` (Raphaël, Analyse) runs each morning once 2 channels have spent in the last 7 days. It reads only `tools.getPlatformReport` and `tools.getShopAttribution`, writes `company.channels.attribution`, the niche credits where shop revenue ≥ 30 €, and a brain note: « Meta s'attribue 1,8 fois ce que la boutique voit ».
 
-`creditOf(world, channel, nicheId)` returns niche credit, else channel credit, else 1. **A report older than 4 days counts as 1**: with no analyst the company falls back to last click and pays for it, so the task matters. `ChannelControl` overrides: `last_click` = 1, `platform_claims` = claimed / shop.
+`creditOf(world, channel, nicheId)` returns niche credit, else channel credit, else 1. **A report older than 4 days counts as 1.** `ChannelControl` override: `last_click` = 1.
 
 The KPI side is pure: `channelDayKpi(world, day)` in `computeDailyKpi` runs the same `reconcile` on one day, so the UI always has numbers.
 
@@ -564,7 +566,7 @@ export function findChannelViolation(c: AdCreative, ch: ChannelId, product: Prod
 Strikes count on the account: 3 Meta strikes, 14 days. 2 Google strikes stop Search **and** YouTube.
 
 What the company does:
-- `learnFromRejection` also reads `res.rule`, adds `Sur Meta, ne jamais écrire « ventre »` to the growth writers' playbooks. `RX.banned` matches it, so the existing banned list carries it.
+- `learnFromRejection` also reads `res.rule`, adds `Sur Meta, ne jamais écrire « ventre »` to the growth writers' playbooks. A rule that names a platform binds the ads only: it reads as `platformBanned`, never as `banned`, so a guide, a kit or a lead magnet keeps the word (D156).
 - After 2 rule rejections in a (channel, niche), the line goes to `blocked` with the reason, and no further creative is submitted there: ventre-apres-40 on Pinterest costs two submissions and no euro.
 - `google.marque` has a real price: headlines without « URSSAF » score lower, CPC × (70/q)^0,5 rises. The writer gets the word as banned after the first rejection.
 - New note `brain/politiques/Conformité pub par canal.md` carries the labels. `Budget et garde-fous.md` rule 3 gets the per-channel spend table.
@@ -669,7 +671,9 @@ The niche choice also moves: when 2 channels are open, `TrendSignal.bestChannelB
 - Bans are per account: `adBanActive(world, ch = 'tiktok')`, `companyPaidBlock(world, ch?)`. Without `ch` it blocks only if every open account is banned, so TikTok-only keeps today's text.
 - `productPaidBlock(world, p, ch = 'tiktok')`: cooldowns and "ads-dead" read `adHistory(world, p.id, since, ch)`, so a guide dead on TikTok can still get its Meta test. Holds, quality gates and `recentLoss` stay product-wide. `cutLesson` applies to the channels whose rows are in its window.
 
-### 7.4 The CFO reallocates on marginal ROAS
+### 7.4 The CFO splits by average ROAS
+
+Step 4 fired the rule of its row: full won 5/30, median -484 €, so the allocator fell back to the average rule (D149). What follows keeps steps 1, 2, 4 and 5 as they run. Step 3 is the average split. The water-fill below it is the control `marginal_roas`, which production never reaches: `allocateChannels` runs it only when the scenario names it, so that the marginal allocator can be tried again on real data. The curve stays: `fitInto` still reads a line's next euro when the minimums do not fit, and the marginal ROAS is shown as a reading, never as the reason.
 
 `allocate_channels` runs at the stand-up right after `budget_review` (`runImmediate`, Gabriel), once 2 channels have active campaigns. `allocateChannels(ctx): ChannelPlan` in `runtime/channels.ts`.
 
@@ -692,7 +696,9 @@ function elasticity(points: { s: number; r: number }[], prior: number): { a: num
 
 The ratio estimator for `a` survives days with zero sales, where a log regression would not. Budgets that never moved give `b = prior`, which is honest. Prior: 0,75 cpm, 0,4 Search, 0,35 retarget. Average = Σr/Σs; marginal at spend s = a·b·s^(b−1). Fewer than 4 days: the line stays as it is.
 
-**3. Water-fill.** `B = adCap − Σ test budgets`. Bisection on λ ≥ 1,15:
+**3. The average split.** `B = adCap − Σ test budgets`. A measured line's share is `B × averageᵢ / Σ average`, capped at 60 % of B, whatever its next euro earns: the money is spent and `plan.lambda` is null.
+
+**The control `marginal_roas`, water-fill.** Bisection on λ ≥ 1,15:
 
 ```
 sᵢ(λ) = (aᵢ bᵢ / λ)^(1 / (1 − bᵢ))
@@ -700,11 +706,11 @@ sᵢ(λ) = (aᵢ bᵢ / λ)^(1 / (1 − bᵢ))
 
 If Σ sᵢ(1,15) < B, λ = 1,15 and the rest is `unspent`. Floor 1,15 = payment fees + refunds on a 20 € guide: under it a marginal euro loses money. A line whose average still looks fine can be cut.
 
-**4. Guardrails, in this order.** No line above 60 % of B. Clamp each target to [0,7 × budget, 1,3 × budget]. Above `minDailyBudget` or trimmed: under it for 3 days in a row, the line is paused. Scale down pro rata if Σ > adCap. `founderCap` keeps its path through `askRaise`. `survival` and `outage` keep their rules above all this.
+**4. Guardrails, in this order.** No line above 60 % of the room. Clamp each target to [0,7 × budget, 1,3 × budget]. Above `minDailyBudget` or trimmed: under it for 3 days in a row, the line is paused. Scale down pro rata if Σ > adCap. `founderCap` keeps its path through `askRaise`. `survival` and `outage` keep their rules above all this.
 
-**5. Execution.** In `optimize_ads`, step 4 reads `planTarget(world, c)`; a campaign in no plan line keeps today's code. Stop-loss and fatigue steps run first, unchanged. Adam says one line per move: « Meta sommeil : 40 € → 52 €/jour, ROAS marginal 1,62 contre 1,18 sur TikTok ».
+**5. Execution.** In `optimize_ads`, step 4 reads `planTarget(world, c)`; a campaign in no plan line keeps today's code. Stop-loss and fatigue steps run first, unchanged. Adam says one line per move: « Meta sommeil : 40 € → 52 €/jour, ROAS moyen 1,62 contre 1,18 sur TikTok ». Under the control the note reads « ROAS marginal ».
 
-Worked example, computed, B = 150 €: TikTok a=3,7 b=.75; Meta a=4,4 b=.8; Pinterest a=3,4 b=.7; Search a=9,9 b=.4 (its 2,07 at 13 € from §1).
+Worked example of the fill, computed before Step 4, B = 150 €: TikTok a=3,7 b=.75; Meta a=4,4 b=.8; Pinterest a=3,4 b=.7; Search a=9,9 b=.4 (its 2,07 at 13 € from §1).
 
 | Allocation | TikTok | Meta | Pinterest | Search | Revenue |
 |---|---|---|---|---|---|
@@ -712,9 +718,9 @@ Worked example, computed, B = 150 €: TikTok a=3,7 b=.75; Meta a=4,4 b=.8; Pint
 | Proportional to average ROAS | 38 € | 50 € | 31 € | 31 € | 234 € |
 | Equal split | 37,5 € | 37,5 € | 37,5 € | 37,5 € | 221 € |
 
-Same money, +14 % over the average rule. Search has the best average (3,38) and gets the least. Test `allocator is marginal, not average` pins this.
+On known curves the fill earns +14 % over the average rule: Search has the best average (3,38) and gets the least. The market disagreed: curves fitted on 10 noisy days cost more than the average rule loses.
 
-The same example shows the risk: a small gap in b (.8 against .75) sends 80 % of the money to Meta, and b̂ is noisy. Hence three brakes: the shrinkage κ, the ±30 % a day, and `maxLineShare: 0.6` in step 4 (the excess goes back into the fill). The share cap also limits what one account ban can stop.
+The same example shows why: a small gap in b (.8 against .75) sends 80 % of the money to Meta, and b̂ is noisy. Under the control three brakes hold it: the shrinkage κ, the ±30 % a day, and `maxLineShare: 0.6` (the excess goes back into the fill). The share cap also limits what one account ban can stop, under either rule.
 
 ### 7.5 Creatives
 
@@ -736,7 +742,7 @@ The same example shows the risk: a small gap in b (.8 against .75) sends 80 % of
 ### 7.7 Lessons
 
 `heuristics.ts` gains `channelLessons(inp)`:
-- `Privilégier le canal « meta » sur « Niche » : ROAS réconcilié 1,62 contre 1,14 sur TikTok` → `PlaybookDirectives.channel`, `RX.channel`, added to `SINGLETONS`. It gives +1 alpha in the bandit, and `directiveSlot` settles contradictions as for hooks.
+- `Privilégier le canal « meta » sur « Niche » : ROAS boutique 1,62 contre 1,14 sur TikTok` → `PlaybookDirectives.channel`, `RX.channel`, added to `SINGLETONS`. It gives +1 alpha in the bandit, and `directiveSlot` settles contradictions as for hooks.
 - `Couper « pinterest » sur « Niche » …`, on a line kill.
 - `Meta s'attribue 1,8 fois ce que la boutique lui donne`, topic `ads`, for Raphaël.
 
@@ -810,9 +816,9 @@ The same example shows the risk: a small gap in b (.8 against .75) sends 80 % of
 
 Additions asked of `ui.md`:
 
-1. `ChannelRow.shopRevenue7d` and `marginalRoas`. Three readings are the point of §5: « Meta annonce 2,4×, la boutique dit 1,3×, réconcilié 1,6×, l'euro suivant rapporte 1,2 ».
+1. `ChannelRow.shopRevenue7d` and `marginalRoas`. Two readings since D149, and the next euro as a reading: « Meta annonce 2,4×, la boutique dit 1,3×, l'euro suivant rapporte 1,2 ». `reconciled*` fields keep their names and carry the shop's numbers.
 2. `ChannelsDetail.lines`: `company.channels.lines` as a matrix channel × niche: à tester, en test, rentable, coupé (reason on hover), bloqué (rule). This is where a viewer sees the agency discovering.
-3. `ChannelsDetail.plan`: today's moves and λ, with `rule` = « Chaque euro va là où le suivant rapporte le plus », and when `unspent > 0`: « 38 € non dépensés : aucun canal ne rapporte son euro suivant ».
+3. `ChannelsDetail.plan`: today's moves, with the rule « chaque ligne reçoit sa part selon son ROAS moyen ». λ prints only under the control, with « chaque euro va là où le suivant rapporte le plus », and when `unspent > 0`: « 38 € non dépensés : aucun canal ne rapporte son euro suivant ».
 
 Chronicle: `logDecision(world, { kind: 'channel_open' | 'channel_close', channel, … })` on open, channel kill and ban. `channel_close` is what the totem reads.
 
@@ -850,8 +856,9 @@ Chronicle: `logDecision(world, { kind: 'channel_open' | 'channel_close', channel
 | `until the first open_channel task, full and tiktok_only are the same run day by day` | D4 is broken: an id or a draw before the unlock |
 | `no holder of the channel's role, no channel, and requestRole was called` | Unlock ignores the org |
 | `founderApproval: opening a channel waits for him` | Guardrail bypassed |
-| `allocator is marginal, not average`: line A avg 2,0 b .3 vs line B avg 1,4 b .9, budget flows to B | It sorts by average |
-| `allocator keeps money unspent when no line earns 1,15` | It always spends the cap |
+| `the rule is the average`: line A avg 2,0 b .3 vs line B avg 1,4 b .9, each gets its share, λ null, the note gives the average | It follows the next euro |
+| `the marginal_roas control follows the next euro`, same lines, budget flows to B | The control is lost |
+| `the marginal_roas control keeps money unspent when no line earns 1,15` | The control always spends the cap |
 | `Σ budgets ≤ adCap, no line moves above +30 %, founderCap respected` | A guardrail leaks |
 | `stop-loss: Meta at 45 €, TikTok at 25 €, credit applied` | One threshold for all |
 | `a stale attribution counts as 1` | The analyst's task has no effect |
@@ -871,9 +878,8 @@ Chronicle: `logDecision(world, { kind: 'channel_open' | 'channel_close', channel
 | Full | `none` | |
 | TikTok only | `tiktok_only` | Channels themselves, and comparability |
 | No bandit | `no_bandit` (round-robin, no prior) | Discovery |
-| Average | `average_roas` (split ∝ average) | Marginal allocation |
-| Last click | `last_click` | Reconciliation |
-| Claims | `platform_claims` | Reconciliation |
+| Marginal | `marginal_roas` (water-fill), since D149 | The average rule |
+| Last click | `last_click` | Reconciliation, off since D149 |
 
 Acceptance, fixed now:
 

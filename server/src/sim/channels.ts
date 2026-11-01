@@ -168,7 +168,7 @@ export interface SearchBuy { impressions: number; clicks: number; spend: number 
 
 /**
  * Bought per click, capped by the queries of the day. The price climbs with the share of queries covered, and the next
- * euros buy less than the last ones: that falling marginal is what the allocator has to find. `budget` may stay unspent.
+ * euros buy less than the last ones: the plan shows that falling marginal as a reading. `budget` may stay unspent.
  */
 export function deliverSearch(world: WorldState, n: NicheTruth, spec: DeliverySpec, quality: number, budget: number, sharers: number, rng: Rng): SearchBuy {
   const cell = cellOf(n, 'google');

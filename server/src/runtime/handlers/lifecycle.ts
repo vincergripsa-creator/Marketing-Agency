@@ -20,7 +20,7 @@ import { mean, round2, short, str, uniq } from '../util.js';
 import { refreshSalesPage } from './boutique.js';
 import type { HandlerMap, HandlerOutcome } from './common.js';
 import { NO_PRODUCT, requireProduct, studioMind } from './common.js';
-import { ensureCoverFile, ensureDesign } from './creation.js';
+import { ensureCoverFile, ensureDesign, writePreviews } from './creation.js';
 import { COMPLIANCE_WORDS } from './phrases.js';
 
 interface BroadcastDraft { subject: string; body: string; hasUnsubscribe: boolean; angle: string }
@@ -139,6 +139,7 @@ export const lifecycleHandlers: HandlerMap = {
       const rel = `${versionDir(kit)}/kit.pdf`;
       const res = await deliverables.renderKit({ product: kit, content, design: kit.design!, brand: w.company.name, outFile: absPath(ctx, rel) });
       kit.files.pdf = rel;
+      kit.files.previews = await writePreviews(ctx, kit, res.previews);
       kit.pdfFacts = { pages: res.pages, sheets: kitSheets(content).length };
       kit.quality = sim.scorePdf(content, { audience: kit.audience, problem: kit.problem, voc, design: kit.design });
       kit.salesPage = { ...kitOffer(kit, parent), priceWritten: kit.price };

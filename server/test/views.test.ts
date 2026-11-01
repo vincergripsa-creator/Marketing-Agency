@@ -330,7 +330,7 @@ describe('the chronicle', () => {
     league!.plans.push({ agentId: 'zoe', skill: 'copy', openedSeason: 1, deadlineDay: 28, metricLabel: 'qualité', baseline: 70, target: 73, coachId: null, text: 'Plan de Zoé', outcome: 'open' });
     growth!.decisions.push(
       { id: 'dec_down', day: 30, kind: 'stage', who: 'system', text: "l'agence quitte l'étape Accélération pour l'étape Adéquation", why: 'perte sur 28 jours' },
-      { id: 'dec_close', day: 30, kind: 'channel', who: 'system', text: 'Pinterest mis en pause', why: 'ROAS réconcilié 0,4' },
+      { id: 'dec_close', day: 30, kind: 'channel', who: 'system', text: 'Pinterest mis en pause', why: 'ROAS boutique 0,4' },
     );
     // the wording of sim/tools.ts, both events
     w.market.events.push(
@@ -403,6 +403,25 @@ describe('the chronicle', () => {
     expect(highlights[0]!.kind.startsWith('stage_')).toBe(true);
     expect(highlights.filter((h) => h.kind === 'hire').every((h) => h.day === 28)).toBe(true); // newest first, inside a kind
     expect(people.headTo).toBeGreaterThanOrEqual(8);
+  });
+
+  it('what « Ce qui a compté » tells, « Décisions » does not repeat, and a decision it left out stays', () => {
+    const w = eventful();
+    w.company.growth!.decisions.push({ id: 'dec_k', day: 30, kind: 'kill', who: 'system', text: 'Guide arrêté', why: 'perte', impactEur: -9 });
+    const { highlights, decisions } = digestPeopleOf(w, 1, w.day);
+    const stage = "l'agence quitte l'étape Accélération pour l'étape Adéquation";
+    expect(highlights.map((h) => h.text)).toContain(stage);
+    expect(decisions.map((d) => d.text)).not.toContain(stage);
+    expect(decisions.map((d) => d.text)).toContain('Guide arrêté');
+  });
+
+  it('a departure whose line already ends on its reason does not carry it twice', () => {
+    const w = eventful();
+    const person = w.company.org!.alumni.at(-1)!;
+    const said = w.company.org!.decisions.find((d) => d.id === 'org_layoff')!;
+    said.text = `${person.name} quitte l'agence : plan raté, ROAS 0,8 pour 1,2 visé`;
+    expect(chronicleOf(w).find((e) => e.key === 'org:org_layoff')?.why).toBeUndefined();
+    expect(chronicleOf(w).find((e) => e.key === 'org:org_leave')?.why).toBe('plan raté, ROAS 0,8 pour 1,2 visé');
   });
 });
 
@@ -533,7 +552,7 @@ describe('the detail views', () => {
     expect(d.duels.find((x) => x.id === 'duel_z')).toMatchObject({ status: 'done', metric: 'CTR', winnerId: replacement.id, a: { name: 'Ancienne', score: 0.01, ratingDelta: -8 }, b: { score: 0.03, ratingDelta: 8 } });
   });
 
-  it('Canaux: the three readings side by side, money from the ledger, five rows and what is missing to open', () => {
+  it('Canaux: the readings side by side, money from the ledger, five rows and what is missing to open', () => {
     const d = channelsDetail(world);
     expect(d.rows.map((r) => r.id)).toEqual(['tiktok', 'meta', 'youtube', 'pinterest', 'google']);
     const tiktok = d.rows[0]!;
@@ -592,6 +611,17 @@ describe('the detail views', () => {
     expect(only.items.some((t) => t.id === 'vid_nothing')).toBe(false);
     expect(only.items.find((t) => t.id === 'dlv_guide')?.poster).toBe(guide.files.cover);
     expect(w.company.deliverables.every((d) => (d.kind as string) !== 'ad_video')).toBe(true);
+  });
+});
+
+describe('the gallery, one film once', () => {
+  it('two ads with the same render key are one tile, and the total says so', () => {
+    const w = clone(world);
+    const [a, b] = w.company.creatives.slice(-2);
+    const film = (id: string, key: string): CreativeVideo => ({ ...video(id), videos: [{ ratio: '9:16', path: `video/${id}/${key}/master.mp4`, durationSec: 30, bytes: 4_465_838 }], poster: `video/${id}/${key}/poster.png` });
+    const page = deliverablesPage(w, { kinds: ['ad_video'] }, { [a!.id]: film(a!.id, '76cd17a8'), [b!.id]: film(b!.id, '76cd17a8'), other: film('other', '11111111') });
+    expect(page.total).toBe(2);
+    expect(page.items.map((t) => t.creativeId).sort()).toEqual([a!.id, 'other'].sort());
   });
 });
 

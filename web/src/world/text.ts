@@ -3,11 +3,30 @@
 export const FONT_UI = '"Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 export const FONT_PIXEL = '"Silkscreen", "Press Start 2P", ui-monospace, "SF Mono", Consolas, monospace';
 
+/** Every face the canvas draws with. A canvas does not wait for a font: it draws its fallback that frame and nothing says so. */
+const CANVAS_FACES = ['10px "Silkscreen"', '500 11px "Inter"', '600 13px "Inter"', '700 12px "Inter"'];
+/** A font that never comes must not leave the world blank. */
+const FONTS_WAIT_MS = 1500;
+
 const widths = new Map<string, number>();
 
 if (typeof document !== 'undefined' && document.fonts) {
   // pixel fonts arrive asynchronously: forget measurements taken with the fallback font
   document.fonts.addEventListener?.('loadingdone', () => widths.clear());
+}
+
+/** Resolves once the canvas can draw in its own fonts, or after `waitMs`. It never rejects: a font missing is a fallback, not a crash. */
+export function canvasFontsReady(fonts: Pick<FontFaceSet, 'load'> | undefined = typeof document === 'undefined' ? undefined : document.fonts, waitMs = FONTS_WAIT_MS): Promise<void> {
+  if (!fonts?.load) return Promise.resolve();
+  const loaded = Promise.allSettled(CANVAS_FACES.map((face) => fonts.load(face)));
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, waitMs);
+    void loaded.then(() => {
+      clearTimeout(timer);
+      widths.clear();
+      resolve();
+    });
+  });
 }
 
 export function measure(g: CanvasRenderingContext2D, font: string, text: string): number {

@@ -4,8 +4,10 @@
  *   cd server && npx tsx scripts/calibrate.ts --step 1                      noise floor: N, the threshold of paired gains
  *   cd server && npx tsx scripts/calibrate.ts --step 2 [--write]            pars, spreads, levers; --write overwrites TALENT.par and TALENT.sd, once
  *   cd server && npx tsx scripts/calibrate.ts --step 3 [--insurance]        the seven candidates, K1 to K8, the winner by the rule; the one re-run of D123
- *   cd server && npx tsx scripts/calibrate.ts --step 4 [--winner-written]   every paired control with its own rule
  *   cd server && npx tsx scripts/calibrate.ts --step 5                      the Markdown block for docs/BALANCE.md
+ *
+ * Step 4, the paired controls, ran once on 9513e97 and its rules took out of the code what its arms name: `--step 4` refuses (D149),
+ * and Step 5 reads runs/calibration/step4.json.
  *
  * Options: --jobs N (14), --out FOLDER (runs/calibration), --smoke (2 seeds, 8 to 12 days, 2 jobs, --out required),
  * --budget-minutes N (240), --candidates A,D,F,B,G,E,C (any other list is refused).
@@ -20,16 +22,14 @@ import { copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runPaths } from '../src/core/index.js';
-import { LEAN_ORG } from '../src/runtime/org/constants.js';
 import { TALENT } from '../src/runtime/talent/constants.js';
 import { SKILLS } from '../src/runtime/talent/skills.js';
 import type { Difficulty, ScenarioConfig, Skill } from '../src/shared.js';
 import { constantAt, eur, num, runOne, type RunResult, type RunSpec, type RunWindows } from './balanceLib.js';
 import {
-  ALREADY_WRITTEN, armScenario, assertCandidates, assertWinnerWritten, averageRoasRow, CANDIDATES, candidateEdits, checksOf, codeStamp, decide, designRow, firingShare, FULL_READS, gains,
-  insuranceDue, LEVER_TEXT, lastClickRow, leagueRead, leagueSwitch, legacyRow, leverOutcome, MAX_IDENTICAL, mdTable, medianOf, noHireRow, noiseRead, noLearningRow, normalMedian, parMarked,
-  passText, PLACEBO_CTR, pooledPars, Refused, retestRead, retestRow, rewritePars, scaleRead, seedCounts, SMOKE_READS, table, TARGET_MEDIAN, threshold, tiktokRow, tempoRow, videoSkillRow, type Candidate,
-  type Check, type CodeEscape, type ControlRow, type LeagueRead, type LeverOutcome, type MeasuredPar, type Reads, type RetestRead, type ScaleRead,
+  ALREADY_WRITTEN, armScenario, assertCandidates, CANDIDATES, candidateEdits, checksOf, codeStamp, decide, FULL_READS, gains, insuranceDue, LEVER_TEXT, leverOutcome, MAX_IDENTICAL, mdTable,
+  medianOf, noiseRead, normalMedian, parMarked, passText, PLACEBO_CTR, pooledPars, Refused, rewritePars, seedCounts, SMOKE_READS, table, TARGET_MEDIAN, threshold, type Candidate, type Check,
+  type CodeEscape, type ControlRow, type LeagueRead, type LeverOutcome, type MeasuredPar, type Reads, type RetestRead, type ScaleRead,
 } from './calibrateLib.js';
 
 class ArgError extends Error {}
@@ -40,7 +40,6 @@ interface Args {
   out: string;
   smoke: boolean;
   write: boolean;
-  winnerWritten: boolean;
   insurance: boolean;
   candidates: string[] | null;
   budgetMinutes: number;
@@ -49,19 +48,20 @@ interface Args {
   code: string;
 }
 
+const STEP4_CLOSED = 'l\'étape 4 a tourné une fois, sur 9513e97, et ses règles ont retiré du code ce que ses bras nomment (D149) : elle ne se relance plus. L\'étape 5 lit runs/calibration/step4.json.';
+
 const USAGE = `Utilisation : npx tsx scripts/calibrate.ts --step N [options]
-  --step N                 1 bruit, 2 pars et leviers, 3 candidats, 4 contrôles, 5 rapport
+  --step N                 1 bruit, 2 pars et leviers, 3 candidats, 5 rapport (l'étape 4 est close, D149)
   --jobs N                 processus en parallèle (défaut 14, 2 en --smoke)
   --out DOSSIER            où vont les résultats (défaut runs/calibration)
   --smoke                  2 graines, 8 à 12 jours : vérifie l'outil, ne décide rien (--out obligatoire)
   --write                  étape 2 : écrit TALENT.par et TALENT.sd dans constants.ts, une seule fois
-  --winner-written         étape 4 : le gagnant est déjà dans le code, ne pas rejouer ses valeurs
   --candidates A,B,...     étape 3 : refusée si ce ne sont pas les sept du plan
   --insurance              étape 3 : l'assurance de D117 est construite, le gagnant rejoue normal et cauchemar, une fois
   --budget-minutes N       plus aucune graine lancée passé ce temps (défaut 240)`;
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { step: null, jobs: 14, out: runPaths('calibration').root, smoke: false, write: false, winnerWritten: false, insurance: false, candidates: null, budgetMinutes: 240, worker: null, code: '' };
+  const a: Args = { step: null, jobs: 14, out: runPaths('calibration').root, smoke: false, write: false, insurance: false, candidates: null, budgetMinutes: 240, worker: null, code: '' };
   let jobs: number | null = null;
   let out: string | null = null;
   for (let i = 0; i < argv.length; i++) {
@@ -70,7 +70,6 @@ function parseArgs(argv: string[]): Args {
     const key = tok.slice(2);
     if (key === 'smoke') { a.smoke = true; continue; }
     if (key === 'write') { a.write = true; continue; }
-    if (key === 'winner-written') { a.winnerWritten = true; continue; }
     if (key === 'insurance') { a.insurance = true; continue; }
     if (key === 'help') throw new ArgError('');
     const value = argv[++i];
@@ -81,7 +80,10 @@ function parseArgs(argv: string[]): Args {
       return n;
     };
     switch (key) {
-      case 'step': a.step = int(1, 5); break;
+      case 'step':
+        a.step = int(1, 5);
+        if (a.step === 4) throw new Refused(STEP4_CLOSED);
+        break;
       case 'jobs': jobs = int(1, 16); break;
       case 'out': out = resolve(value); break;
       case 'candidates': a.candidates = value.split(',').map((s) => s.trim()); break;
@@ -104,7 +106,7 @@ function parseArgs(argv: string[]): Args {
 /** How long a run lasts and where it is read, the real way or the smoke way. */
 interface Plan {
   reads: Reads;
-  short: number; long: number; longest: number;
+  short: number; long: number;
   seeds: (ids: number[]) => number[];
   windows: RunWindows | undefined;
   prefix: string;
@@ -113,8 +115,8 @@ interface Plan {
 
 const range = (from: number, to: number): number[] => Array.from({ length: to - from + 1 }, (_, i) => from + i);
 
-const REAL: Plan = { reads: FULL_READS, short: 60, long: 182, longest: 270, seeds: (ids) => ids, windows: undefined, prefix: 'cal', maxIdentical: MAX_IDENTICAL };
-const SMOKE: Plan = { reads: SMOKE_READS, short: 8, long: 12, longest: 12, seeds: (ids) => ids.slice(0, 2), windows: { work: [2, 8], ratingsDay: 8 }, prefix: 's14t', maxIdentical: Infinity };
+const REAL: Plan = { reads: FULL_READS, short: 60, long: 182, seeds: (ids) => ids, windows: undefined, prefix: 'cal', maxIdentical: MAX_IDENTICAL };
+const SMOKE: Plan = { reads: SMOKE_READS, short: 8, long: 12, seeds: (ids) => ids.slice(0, 2), windows: { work: [2, 8], ratingsDay: 8 }, prefix: 's14t', maxIdentical: Infinity };
 
 const planOf = (args: Args): Plan => (args.smoke ? SMOKE : REAL);
 
@@ -123,7 +125,6 @@ interface Job { file: string; label: string; spec: RunSpec }
 
 const BUDGET = 500;
 const SEEDS = range(1, 30);
-const FRESH_SEEDS = range(31, 60);
 const LEVER_SEEDS = range(1, 12);
 /** The placebo of §4: a market moved by nothing. */
 const perturbed = (): Record<string, number> => ({ 'ADS.baseCtr': constantAt('ADS.baseCtr') * PLACEBO_CTR });
@@ -444,102 +445,13 @@ async function step3(args: Args): Promise<void> {
   await writeReport(args, 3, { step: 3, ...results.status(), N, candidates, winner } satisfies Step3Report);
 }
 
-// ───────────────────────────── step 4: paired controls ─────────────────────────────
+// ───────────────────────────── step 4: what it left ─────────────────────────────
 
+/** runs/calibration/step4.json, the one read of the paired controls. */
 interface Step4Report extends StepStatus {
   step: 4; N: number; threshold: number;
   winner: { id: string; overrides: Record<string, number>; written: boolean };
   rows: ControlRow[]; scale: ScaleRead; league: LeagueRead; retest: RetestRead;
-}
-
-/** Each arm of the table of §4 Step 4, on the winner. 182 days and not 180 for the scaling arms: week 26 closes on D182, and A2 reads D180 on the daily rows. */
-function controlArms(plan: Plan, winner: Record<string, number>): ArmDef[] {
-  const { short, long, longest } = plan;
-  const arm = (name: string, scenario: Partial<ScenarioConfig> = {}, days = short, overrides = winner): ArmDef => ({ arm: name, seeds: SEEDS, days, overrides, scenario });
-  const moved = { ...winner, ...perturbed() };
-  return [
-    arm('full'),
-    arm('no-learning', { control: { noLearning: true } }),
-    arm('flat', { talent: 'flat' }),
-    arm('scale-noise', {}, long, moved),
-    arm('scale-full', {}, long),
-    arm('scale-off', { scaling: false }, long),
-    arm('no-hire', { org: { ...LEAN_ORG, autoHire: false } }),
-    arm('legacy31', { org: { team: 'legacy31', autoHire: false, payroll: true } }),
-    arm('tiktok-only', { channelControl: 'tiktok_only' }),
-    arm('average-roas', { channelControl: 'average_roas' }),
-    arm('last-click', { channelControl: 'last_click' }),
-    arm('video-low', { control: { videoSkill: 0.2 } }),
-    arm('video-high', { control: { videoSkill: 0.9 } }),
-    arm('tempo', { control: { videoTempo: 'standard' } }),
-    arm('design-low', { control: { designTalent: 0.25 } }),
-    arm('design-high', { control: { designTalent: 1 } }),
-    { arm: 'retest-winner', seeds: FRESH_SEEDS, days: longest, overrides: winner },
-    { arm: 'retest-any', seeds: FRESH_SEEDS, days: longest, overrides: { ...winner, 'PORTFOLIO.retestAny': 1 } },
-    { arm: 'retest-placebo', seeds: FRESH_SEEDS, days: longest, overrides: moved },
-  ];
-}
-
-/** The one retry of the Design talent row: it waits for the first read to fail. */
-function designRetryArms(plan: Plan, winner: Record<string, number>): ArmDef[] {
-  const overrides = { ...winner, 'VISUAL.cvr.slope': 0.25 };
-  return [
-    { arm: 'design-low-retry', seeds: SEEDS, days: plan.short, overrides, scenario: { control: { designTalent: 0.25 } } },
-    { arm: 'design-high-retry', seeds: SEEDS, days: plan.short, overrides, scenario: { control: { designTalent: 1 } } },
-  ];
-}
-
-async function winnerOf(args: Args): Promise<Step4Report['winner']> {
-  const report = await readReport<Step3Report>(args, 3);
-  if (!report.winner) throw new Refused('L\'étape 3 n\'a pas de gagnant : la relancer, elle reprend où elle s\'est arrêtée.');
-  if (args.winnerWritten) assertWinnerWritten(report.winner.id, report.winner.overrides, constantAt);
-  else if (report.code !== args.code) throw new Refused(`L'étape 3 vient d'un autre code (${report.code}, celui-ci est ${args.code}) : les contrôles ne liraient pas l'entreprise choisie.`);
-  return { id: report.winner.id, overrides: args.winnerWritten ? {} : report.winner.overrides, written: args.winnerWritten };
-}
-
-async function step4(args: Args): Promise<void> {
-  const plan = planOf(args);
-  const { reads } = plan;
-  const N = await floorOf(args);
-  const t = threshold(N);
-  const winner = await winnerOf(args);
-  let results = await steppedRun(args, 4, controlArms(plan, winner.overrides));
-  const arm = (name: string) => results.arm(name);
-  const firstDesign = designRow(arm('design-low'), arm('design-high'));
-  if (!firstDesign.pass && results.complete) results = await steppedRun(args, 4, [...controlArms(plan, winner.overrides), ...designRetryArms(plan, winner.overrides)]);
-  const retried = arm('design-low-retry').length ? { low: arm('design-low-retry'), high: arm('design-high-retry') } : undefined;
-
-  const full = arm('full');
-  const long = arm('scale-full');
-  const scale = scaleRead(long, arm('scale-off'), arm('scale-noise'), reads);
-  const league = leagueRead(full, arm('flat'), long, reads);
-  const retest = retestRead(arm('retest-winner'), arm('retest-any'), arm('retest-placebo'), reads);
-  const fired = leagueSwitch(league, firingShare(long));
-  const scalePass = scale.checks.every((c) => c.pass);
-  const rows: ControlRow[] = [
-    noLearningRow(full, arm('no-learning'), t),
-    { id: 'no_league', label: 'Sans ligue', pass: league.checks.every((c) => c.pass), value: `M1-M7 : ${league.checks.filter((c) => c.pass).length}/7, remplacements J${reads.early} ${league.replacements.early}, J${reads.late} ${league.replacements.late}`, target: 'M1 à M7', fired },
-    { id: 'no_scaling', label: 'Sans mise à l\'échelle', pass: scalePass, value: `A1-A5 : ${scale.checks.filter((c) => c.pass).length}/5, bruit ${scale.noise.floor === null ? '—' : eur(scale.noise.floor)}`, target: 'A1 à A5', fired: scalePass ? null : `nombres rapportés${scale.checks[0]!.pass ? '' : ' ; A1 manqué : regarder `priceMove` d\'abord (scale §13.2), une fois'}` },
-    noHireRow(full, arm('no-hire'), reads),
-    legacyRow(full, arm('legacy31')),
-    tiktokRow(full, arm('tiktok-only'), reads),
-    averageRoasRow(full, arm('average-roas'), t),
-    lastClickRow(full, arm('last-click'), t),
-    videoSkillRow(arm('video-low'), arm('video-high'), plan.short),
-    tempoRow(full, arm('tempo'), reads),
-    designRow(arm('design-low'), arm('design-high'), retried),
-    retestRow(retest),
-  ];
-  results.banner();
-  console.log(`Gagnant ${winner.id}${winner.written ? ' (écrit dans le code)' : ''}, N = ${eur(N)}, seuil ${eur(t)}`);
-  console.log(`\n${table(['Contrôle', 'Lu', 'Règle', 'Passe', 'Bascule'], rows.map((r) => [r.label, r.value, r.target, passText(r.pass), r.fired ?? '—']))}`);
-  console.log(`\nSans ligue : M1 à M7, remplacements J${reads.early} ${league.replacements.early}, J${reads.late} ${league.replacements.late} (médiane par graine ${num(league.replacements.medianLate, 1)})`);
-  console.log(table(['', 'Lu', 'Cible', 'Passe'], league.checks.map((k) => [k.id, k.value, k.target, passText(k.pass)])));
-  console.log(`\nSans mise à l'échelle : A1 à A5, jusqu'à J${plan.long}`);
-  console.log(table(['', 'Lu', 'Cible', 'Passe'], scale.checks.map((k) => [k.id, k.value, k.target, passText(k.pass)])));
-  console.log(`Bruit, marché à peine bougé contre le bras complet : écart médian ${scale.noise.floor === null ? '—' : eur(scale.noise.floor)} à J${reads.late}, A1 ${num(scale.noise.a1)}, A2 ${num(scale.noise.a2)}, ${scale.noise.identical} graines intactes. Bras sans échelle : pente > 0 sur ${scale.control.rising}/${arm('scale-off').length}, fin/début ${num(scale.control.growth)}.`);
-  console.log(`\nRègle du nouveau test (D122) : ${retest.adopted ? 'adoptée, `PORTFOLIO.retestAny` passe à 1' : 'refusée pour de bon, le drapeau quitte le code'}.`);
-  await writeReport(args, 4, { step: 4, ...results.status(), N, threshold: t, winner, rows, scale, league, retest } satisfies Step4Report);
 }
 
 // ───────────────────────────── step 5: the report ─────────────────────────────
@@ -602,10 +514,10 @@ async function step5(args: Args): Promise<void> {
 
 // ───────────────────────────── main ─────────────────────────────
 
-const STEPS: Record<number, (args: Args) => Promise<void>> = { 1: step1, 2: step2, 3: step3, 4: step4, 5: step5 };
+const STEPS: Record<number, (args: Args) => Promise<void>> = { 1: step1, 2: step2, 3: step3, 5: step5 };
 
 /** Every constant a step moves. A path that no longer exists stops here, before a single run. */
-const MOVED_PATHS: readonly string[] = [...CANDIDATES.flatMap((c) => Object.keys(c.overrides)), 'ADS.baseCtr', 'PORTFOLIO.retestAny', 'VISUAL.cvr.slope'];
+const MOVED_PATHS: readonly string[] = [...CANDIDATES.flatMap((c) => Object.keys(c.overrides)), 'ADS.baseCtr'];
 
 async function main(argv: string[]): Promise<number> {
   try {

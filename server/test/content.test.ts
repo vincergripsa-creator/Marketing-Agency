@@ -21,6 +21,7 @@ import { findCliches, heuristicHumanize } from '../src/minds/heuristic/editing.j
 import { parseKnowledge, type MethodStep } from '../src/minds/heuristic/knowledge.js';
 import { buildPlan } from '../src/minds/heuristic/plan.js';
 import { buildNicheCtx } from '../src/minds/heuristic/niche.js';
+import { topicNotes } from '../src/minds/heuristic/archetypes.js';
 import { archetypeDef, heuristicPdfContent } from '../src/minds/heuristic/studio.js';
 import { CLICHE_TEMPLATES } from '../src/minds/lexicon.js';
 import { ensurePdf } from '../src/minds/shapes.js';
@@ -275,11 +276,38 @@ describe('the plan figure (pdf §9.2, programme)', () => {
     expect(plan).toMatchObject({ days: 8, unit: 'Semaine' });
   });
 
-  it('moments that are no numbers go in reading order: no made-up date on the axis', () => {
+  it('moments that are no numbers go in reading order: no made-up date on the axis, and no unit to count in', () => {
     const plan = of(all.find((x) => x.nicheId === 'mariage-moins-10k')!.parent, 'plan_path')[0]!.plan!;
-    expect(plan.unit).toBe('Étape');
+    expect(plan.unit).toBe('');
     plan.tracks.forEach((t, i) => expect([t.from, t.to]).toEqual([i + 1, i + 1]));
     expect(plan.tracks[0]!.label).toMatch(/mois avant/);
+  });
+
+  it('a bar holds its whole step: « Réévaluer au bout » is half an order', () => {
+    let whole = 0;
+    for (const g of all) {
+      const c = buildNicheCtx(g.brief, g.voc);
+      const key = (s: string): string => norm(s).replace(/[^a-z0-9]+/g, ' ').trim();
+      if (c.method.some((m) => bare(m.text).length > 90 || endsDangling(m.text))) continue; // those are cut at a clause, on purpose
+      const steps = c.method.map((m) => key(bare(m.text).replace(/\s*\([^)]*\)/g, '')));
+      for (const t of of(g.parent, 'plan_path')[0]!.plan!.tracks) {
+        whole += 1;
+        expect(steps.some((s) => key(t.label).endsWith(s)), `${g.nicheId} : ${t.label}`).toBe(true);
+      }
+    }
+    expect(whole).toBeGreaterThan(40);
+  });
+
+  it('a line of a sheet holds its whole step too: « Rattraper une journée ratée par une courte » hangs', () => {
+    const g = all.find((x) => x.nicheId === 'sommeil-bebe')!;
+    const rows = g.follow.chapters[1]!.visual!.grid!.rows.map(norm);
+    expect(rows).toContain(norm('Rattraper une journée ratée par une courte sieste de fin d’après-midi'));
+  });
+
+  it('the last night of a plan starts nothing: it ends', () => {
+    const cells = planGrids(all.find((x) => x.nicheId === 'sommeil-bebe')!.parent).at(-1)!.cells!;
+    expect(cells.at(-1)![0]).toMatch(/^Terminer : /);
+    expect(cells[0]![0]).toMatch(/^Démarrer : /);
   });
 });
 
@@ -320,6 +348,30 @@ describe('each role has its diagram (pdf §9.2)', () => {
         for (const r of rows) expect(r, g.nicheId).not.toMatch(/\d/);
       }
     }
+  });
+
+  it('a ruler rates what the reader does too often: a mistake, from never to often, and never an instruction', () => {
+    for (const g of all) {
+      for (const [guide, upsell] of [[g.parent, null], [g.follow, g.upsellOf]] as const) {
+        const { rows, low, high } = guide.chapters.find((c) => c.figure?.type === 'gauge')!.figure!.gauge!;
+        const mistakes = buildNicheCtx(upsell ? { ...g.brief, problem: g.follow.promise } : g.brief, g.voc, upsell).pairs.map((p) => norm(p.mistake));
+        expect([low, high], g.nicheId).toEqual(['Jamais', 'Souvent']);
+        for (const r of rows) {
+          expect(r, g.nicheId).not.toMatch(/^\p{L}+ez\b/u);
+          expect(mistakes.some((m) => m.startsWith(norm(r))), `${g.nicheId} : ${r}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('the reader’s words are quoted whole or not at all: « Versement libératoire oui » is nobody’s sentence', () => {
+    for (const g of all) {
+      const c = buildNicheCtx(g.brief, g.voc);
+      const heads = [...c.pains, ...c.phrases].flatMap((x) => [norm(bare(x)), norm(bare(x.split(/\s+[:;]\s+/)[0]))]);
+      for (const v of of(g.parent, 'icon_grid')) for (const l of v.labels) expect(heads, `${g.nicheId} : ${l}`).toContain(norm(l));
+    }
+    const urssaf = all.find((x) => x.nicheId === 'urssaf-micro')!;
+    expect(allText(urssaf.parent)).not.toMatch(/Versement libératoire oui(?! ou non)/);
   });
 
   it('a ladder starts from the reader’s own problem: it never says again what the title of its figure said', () => {
@@ -439,6 +491,17 @@ describe('the rail (pdf §9.2)', () => {
     expect(quotes).toBeGreaterThan(0);
   });
 
+  it('a follow-up has its rail too: its text spends all of its research, so its notes are written for it', () => {
+    for (const g of all) expect(g.follow.chapters.filter((c) => c.margin?.note).length, g.nicheId).toBeGreaterThanOrEqual(5);
+    const c = (nicheId: string) => { const g = all.find((x) => x.nicheId === nicheId)!; return buildNicheCtx(g.brief, g.voc); };
+    expect(topicNotes(c('sommeil-bebe'))).toEqual([]); // a parent has research left: the notes of a sub-problem are not for it
+    for (const g of all) {
+      const notes = topicNotes(buildNicheCtx({ ...g.brief, problem: g.follow.promise }, g.voc, g.upsellOf));
+      expect(new Set(notes).size, g.nicheId).toBe(6);
+      for (const n of notes) expect(n, g.nicheId).not.toMatch(/\d/); // a note brings a habit, never a figure of its own
+    }
+  });
+
   it('a margin note adds what the page does not say: research the text never used', () => {
     let notes = 0;
     for (const g of all) {
@@ -456,6 +519,78 @@ describe('the rail (pdf §9.2)', () => {
 });
 
 describe('what a proofreader would circle', () => {
+  it('a case read without its « Si » loses its « que »: « le couple est épuisé et que vous… » is no sentence', () => {
+    let hanging = 0;
+    for (const g of all) {
+      const c = buildNicheCtx(g.brief, g.voc);
+      hanging += c.situations.filter((s) => / et qu(?:e |’)/.test(s.when)).length;
+      const printed = g.parent.chapters.flatMap((ch) => ch.paragraphs).filter((p) => /^Situation n°/.test(p));
+      for (const p of printed) expect(p.split('. ')[0], g.nicheId).not.toMatch(/ et qu(?:e |’)/);
+    }
+    expect(hanging).toBeGreaterThan(0);
+  });
+
+  it('a sentence after a head goes on in lower case, as the head before it does', () => {
+    for (const g of all) {
+      for (const p of [...g.parent.chapters, ...g.follow.chapters].flatMap((c) => c.paragraphs)) {
+        expect(p, g.nicheId).not.toMatch(/^(?:Pourquoi ça marche|Comment faire|En pratique|Modèle à copier) : \p{Lu}\p{Ll}/u);
+      }
+    }
+  });
+
+  it('a run-in head carries one colon, and a bare list is no reason', () => {
+    let lists = 0;
+    for (const g of all) {
+      for (const p of [...g.parent.chapters, ...g.follow.chapters].flatMap((c) => c.paragraphs)) {
+        const m = /^(Pourquoi ça marche|Comment faire|En pratique) : (.*)$/su.exec(p);
+        if (!m) continue;
+        expect(m[2], g.nicheId).not.toMatch(/^[^.!?]*\s:\s/u);
+        if (m[1] === 'En pratique') lists += 1;
+        if (m[1] === 'Pourquoi ça marche') expect(m[2]!.split(/,\s*/).every((x) => x.trim().split(/\s+/).length <= 4), p).toBe(false);
+      }
+    }
+    expect(lists).toBeGreaterThan(0);
+  });
+
+  it('nothing reads « Si il », nor a plural in front of « une semaine », and no fact gets a conclusion it does not hold', () => {
+    for (const g of all) {
+      const text = [...g.parent.chapters, ...g.follow.chapters].flatMap((c) => [...c.paragraphs, ...JSON.stringify(c.visual ?? '').split('"')]).join(' ');
+      expect(text, g.nicheId).not.toMatch(/\bSi il\b|ces une semaine|Le problème n’est donc pas là/);
+    }
+  });
+
+  it('a step that names its moment needs no head on the plan: « À l’échéance : … à l’échéance » stutters', () => {
+    for (const g of all) {
+      const c = buildNicheCtx(g.brief, g.voc);
+      for (const { label } of buildPlan(c, archetypeDef(c)).rows.flatMap((r) => r.tracks)) {
+        const [head, ...rest] = label.split(' : ');
+        if (rest.length) expect(norm(rest.join(' : ')), label).not.toContain(norm(head!));
+      }
+    }
+  });
+
+  it('a follow-up\'s subtitle holds one relative clause and points at nothing outside it', () => {
+    for (const g of all) expect(g.follow.subtitle, g.nicheId).not.toMatch(/ce point précis/);
+  });
+
+  it('no chapter title sells a cliché, and a generic phrase is one for the score too', () => {
+    for (const g of all) for (const c of g.parent.chapters) expect(c.title, g.nicheId).not.toMatch(/changent la donne/);
+    expect(genericPhraseHits(norm('Ces gestes changent la donne dès le premier soir.')).total).toBe(1);
+  });
+
+  it('an audience keeps its age: « les parents épuisés d’un bébé » reads as tired of the baby', () => {
+    const g = all.find((x) => x.nicheId === 'sommeil-bebe')!;
+    expect(buildNicheCtx(g.brief, g.voc).audCore).toMatch(/\d/);
+  });
+
+  it('a checklist only ticks what the chapter asks: its own steps replace the default ones, and « J’ai écrit ma phrase » pointed at nothing', () => {
+    for (const g of all) {
+      for (const guide of [g.parent, g.follow]) {
+        for (const line of guide.chapters.flatMap((c) => c.checklist)) expect(line, g.nicheId).not.toMatch(/J’ai écrit ma phrase|Mon objectif tient en une phrase/);
+      }
+    }
+  });
+
   it('a verbatim that ends on a quoted word keeps both its marks, and only the quotes around the whole text go', () => {
     expect(bare('On a peur que le mariage fasse “cheap”')).toBe('On a peur que le mariage fasse “cheap”');
     expect(q(lf('On a peur que le mariage fasse “cheap”'))).toBe('« on a peur que le mariage fasse “cheap” »');

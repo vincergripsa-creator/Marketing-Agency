@@ -25,7 +25,7 @@ import {
 import { buildHeuristicPlan, keywordMission, materialize, mergePlans, normalizeItem, prepareFounderItem, reactToOutage } from './strategy.js';
 import { addHold, liftHolds, productHold, REFUSAL_COOLDOWN_DAYS } from './holds.js';
 import { linkProductTasks, productInNiche, requestBeside, routeMission, startNicheChain, tellFounder, type MissionRoute } from './missions.js';
-import { executeOrders } from './orders.js';
+import { endTimedStops, executeOrders } from './orders.js';
 import { shelveProduct, cancelProductTasks } from './pipeline.js';
 import { situationFor } from './situation.js';
 import { CANDIDATES } from './org/catalog.js';
@@ -400,6 +400,7 @@ export class Company implements CompanyApi {
 
     // CFO first: the envelope frames every paid decision of the day.
     await this.runImmediate('budget_review', officerId(w, 'cfo'), 'Revue budgétaire du matin');
+    endTimedStops(this.ctx); // before the outage: a stop that ends on such a day goes back to a pause for the day
     const outage = reactToOutage(this.ctx);
     for (const p of PILLARS) await p.morning?.(this.ctx);
 

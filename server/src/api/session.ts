@@ -135,7 +135,7 @@ const BACKOFF_MS = [30_000, 300_000] as const;
 const SKIP_AFTER = 8;
 const RUN_FINISHED = 'Ce run est terminé (horizon atteint) : continue-le sans fin ou lance une nouvelle simulation.';
 const NO_DIRECTOR = 'Rendu vidéo indisponible sur ce serveur';
-/** D52: the stream carries the videos of what it shows, no more. GET /api/state and GET /api/videos keep them all. */
+/** D52, D155: the stream and GET /api/state carry the videos of what they show, no more. GET /api/videos keeps them all. */
 const LIVE_VIDEOS = 30;
 
 /** One tick of the away pace. AGENCY_AWAY_DAYS_PER_WEEK overrides the simulated year per real week. */
@@ -236,6 +236,7 @@ export class AgencySession {
       tick: this.run?.world.tick ?? 0,
       lastError: this.lastError,
       minStartingCash: minRunCash({ org: LEAN_ORG }),
+      claudeReady: Boolean(config.apiKey),
       pace: this.pace(),
       watchers: this.watchers,
       backoffMs: this.backoffMs,
@@ -704,7 +705,7 @@ export class AgencySession {
 
   snapshotJson(god = false): string {
     const run = this.mounted();
-    return snapshotJson(run.world, god, { session: this.info(), videos: this.videoIndex().items });
+    return snapshotJson(run.world, god, { session: this.info(), videos: liveVideos(run.world, this.videoIndex().items) });
   }
 
   /** The snapshot of the live stream: lighter than the one of GET /api/state (see LIVE_LIMITS). */

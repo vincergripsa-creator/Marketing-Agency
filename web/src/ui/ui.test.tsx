@@ -72,12 +72,17 @@ describe('product card « La suite est ici »', () => {
     expect(count(upsell, 'La suite est ici')).toBe(1);
   });
 
-  it('a bare default title does not render « La suite est ici : La suite est ici »', () => {
+  it('a bare default title prints no line: nothing follows yet', () => {
     const s = withProduct(mockSnapshot(), (p) => ({ ...p, upsellProductId: null, content: p.content && { ...p.content, nextStep: { title: 'La suite est ici', text: 'Bientôt', upsellProductId: null } } }));
     const html = render(s, <ProductsTab onClose={noop} />);
     const upsell = html.match(/<div class="upsell small"[^>]*>.*?<\/div>/)?.[0] ?? '';
-    expect(count(upsell, 'La suite est ici')).toBe(1);
-    expect(upsell).toContain('guide suivant en préparation');
+    expect(upsell).toBe('');
+  });
+
+  it('a stopped guide says nothing of a quality control or of files still being made', () => {
+    const card = (status: 'killed' | 'writing') => render(withProduct(mockSnapshot(), (p) => ({ ...p, status, quality: null, files: { pdf: null, cover: null, salesPage: null } })), <ProductsTab onClose={noop} />);
+    expect(count(card('killed'), 'Pas encore évalué')).toBe(count(card('writing'), 'Pas encore évalué') - 1);
+    expect(count(card('killed'), 'Fichiers en cours de fabrication')).toBe(count(card('writing'), 'Fichiers en cours de fabrication') - 1);
   });
 
   it('marks the focused product (links from toasts / journal)', () => {
@@ -134,6 +139,18 @@ describe('founder approval card', () => {
     const card = render(s, <TasksTab onClose={noop} />).match(/<div class="approval-card">.*?<div class="approval-actions">/)?.[0] ?? '';
     expect(card).toContain('Lancer une campagne TikTok à 40,00 €/jour pour « Chiot »');
     for (const raw of ['productId', 'nicheId', 'founderPhase', 'founderAsk', 'prd_91']) expect(card, raw).not.toContain(raw);
+  });
+  it('a layoff or a replacement reads as an HR decision: only a real season close says season close', () => {
+    const season = pending(mockSnapshot(), {});
+    const hr = (input: Task['input']): string => {
+      const s = pending(mockSnapshot(), input);
+      const tasks = s.company.tasks.map((t) => (t.id === 'tsk_ask' ? { ...t, kind: 'league_review' as const } : t));
+      return render({ ...s, company: { ...s.company, tasks } }, <TasksTab onClose={noop} />).match(/<div class="approval-card">.*?<div class="approval-actions">/)?.[0] ?? '';
+    };
+    expect(render(season, <TasksTab onClose={noop} />)).not.toContain('Décision RH');
+    expect(hr({ layoff: { agentId: 'tom', why: 'x' } })).toContain('Décision RH');
+    expect(hr({ swap: { plan: 'tom' } })).toContain('Décision RH');
+    expect(hr({})).toContain('Clôture de saison');
   });
 });
 

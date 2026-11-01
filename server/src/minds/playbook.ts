@@ -15,6 +15,8 @@ export const SUPPORT_TONES: readonly SupportTone[] = ['chaleureux', 'concis', 'f
 
 export interface PlaybookRules {
   banned: string[];
+  /** Refused by one platform (« Sur TikTok, ne jamais écrire « X » »): only an ad loses these words, a guide's reader never sees that platform. */
+  platformBanned: string[];
   preferredHooks: HookStyle[];
   preferredFormats: AdFormat[];
   targetPrice: number | null;
@@ -30,6 +32,7 @@ export interface PlaybookRules {
  */
 const QUOTED = String.raw`\s*(?:«\s*([^»]+?)\s*»|“\s*([^”]+?)\s*”|"\s*([^"]+?)\s*")`;
 const RE_BANNED = new RegExp(String.raw`ne\s+jamais\s+[ée]crire` + QUOTED, 'giu');
+const RE_PLATFORM_RULE = /^sur\s+[^«»“”",]+,\s*ne\s+jamais\s+[ée]crire/iu;
 const RE_HOOK = new RegExp(String.raw`privil[ée]gier\s+le\s+hook` + QUOTED, 'iu');
 const RE_FORMAT = new RegExp(String.raw`privil[ée]gier\s+le\s+format` + QUOTED, 'iu');
 const RE_PRICE = new RegExp(String.raw`prix\s+cible` + QUOTED, 'iu');
@@ -84,7 +87,7 @@ function scopeAfter(rule: string, m: RegExpExecArray): string | null {
  * For singletons (price, hype, tone) a matching scoped rule beats an unscoped one, then the last rule wins.
  */
 export function parsePlaybook(rules: readonly string[] | null | undefined, subjects: readonly (string | null | undefined)[] = []): PlaybookRules {
-  const out: PlaybookRules = { banned: [], preferredHooks: [], preferredFormats: [], targetPrice: null, maxHype: null, supportTone: null, freeText: [] };
+  const out: PlaybookRules = { banned: [], platformBanned: [], preferredHooks: [], preferredFormats: [], targetPrice: null, maxHype: null, supportTone: null, freeText: [] };
   const hooks: Directive<HookStyle>[] = [];
   const formats: Directive<AdFormat>[] = [];
   const prices: Directive<number>[] = [];
@@ -94,9 +97,10 @@ export function parsePlaybook(rules: readonly string[] | null | undefined, subje
     const rule = clean(raw);
     if (!rule) continue;
     let machine = false;
+    const list = RE_PLATFORM_RULE.test(rule) ? out.platformBanned : out.banned;
     for (const m of rule.matchAll(RE_BANNED)) {
       const w = quoted(m);
-      if (w && usableBanned(w) && !out.banned.some((b) => norm(b) === norm(w))) out.banned.push(w);
+      if (w && usableBanned(w) && !list.some((b) => norm(b) === norm(w))) list.push(w);
       machine = true;
     }
     const hook = RE_HOOK.exec(rule);

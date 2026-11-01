@@ -12,9 +12,9 @@ import { conflictsWith, containsBanned, scrubDeep } from '../playbook.js';
 import {
   allText, bare, bestLabel, cap, clauseLabel, clean, composeTitle, endsDangling, hashString, labelOf, lf, lowerFirst, norm, q, qv, sentence, splitSentences, uniqStrings, wordCount, type LocalRng,
 } from '../util.js';
-import { ARCHETYPES, asStep, chaptersFor, SUITES, topicExamples, topicFillers, type ArchetypeDef, type ChapterDef, type Para, type Role } from './archetypes.js';
+import { ARCHETYPES, asStep, chaptersFor, SUITES, topicExamples, topicFillers, topicNotes, type ArchetypeDef, type ChapterDef, type Para, type Role } from './archetypes.js';
 import { belongsToFollowUp, buildNicheCtx, de, FALLBACK, firstPerson, headOf, isInfinitive, titleCaseKeyword, type NicheCtx } from './niche.js';
-import { buildPlan, type PlanModel } from './plan.js';
+import { buildPlan, TRACK_LABEL, type PlanModel } from './plan.js';
 import type { BonusSpec, SheetSpec } from './profiles.js';
 import type { MethodStep, MistakePair, Situation } from './knowledge.js';
 
@@ -258,6 +258,7 @@ export class Draft {
   private readonly outcomes: string[];
   private readonly examples: string[];
   private readonly models: string[];
+  private readonly sideNotes: string[];
   private readonly said = new Set<string>();
   /** Kinds of the chapters of this guide: a paragraph may refer to a chapter only when it exists. */
   readonly kinds = new Set<string>();
@@ -274,6 +275,7 @@ export class Draft {
     const promised = norm(promiseOutcome(c));
     const rest = c.outcomes.filter((o) => norm(lf(o)) !== promised);
     this.outcomes = (rest.length ? rest : [...FALLBACK.outcomes]).slice();
+    this.sideNotes = topicNotes(c).slice();
   }
 
   /** A framing sentence, the first time it is used. */
@@ -293,11 +295,11 @@ export class Draft {
   tipsLeft(k: number): string[] { return this.tips.splice(0, k); }
   /** Full sentence of the research, ready to open a paragraph. */
   fact(): string | null { const f = this.take(this.factsLeft); return f ? sentence(f) : null; }
-  /** A research item the guide does not print: the rail adds substance to a page, it never repeats it. A checklist may have printed one already. */
+  /** A research item the guide does not print: the rail adds substance to a page, it never repeats it. A checklist may have printed one already. A follow-up has none left, its text spent them on its floor: the notes written for its sub-problem take over. */
   note(printed: string): string | null {
     const unsaid = (s: string): boolean => !printed.includes(norm(bare(s)).slice(0, 40));
     const take = (list: string[]): string | null => { const i = list.findIndex(unsaid); return i >= 0 ? list.splice(i, 1)[0]! : null; };
-    const item = take(this.factsLeft) ?? take(this.tips);
+    const item = take(this.factsLeft) ?? take(this.tips) ?? take(this.sideNotes);
     return item ? sentence(item) : null;
   }
   facts(k: number): string { return Array.from({ length: k }, () => this.fact()).filter(Boolean).join(' '); }
@@ -323,15 +325,24 @@ export class Draft {
 const ORD_M = ['Premier', 'Deuxième', 'Troisième', 'Quatrième', 'Cinquième', 'Sixième', 'Septième', 'Huitième'];
 const ORD_F = ['Première', ...ORD_M.slice(1)];
 
-/** A detail that gives an order says how, one that does not says why: its head must say which. */
-const detailHead = (detail: string): string => (/(?<![\p{L}’'])[\p{L}’']{2,}ez\b/u.test(detail.replace(/\b(?:chez|assez)\b/giu, '')) ? 'Comment faire' : 'Pourquoi ça marche');
+/** Short pieces between commas, no sentence: « toilette, pyjama, lait, histoire ». */
+const bareList = (detail: string): boolean => { const parts = detail.replace(/[.!]$/, '').split(/,\s*/); return parts.length >= 2 && parts.every((p) => p.trim().split(/\s+/).length <= 4); };
+
+/** A detail that gives an order says how, one that does not says why, a bare list says neither: its head must say which. */
+function detailHead(detail: string): string {
+  if (bareList(detail)) return 'En pratique';
+  return /(?<![\p{L}’'])[\p{L}’']{2,}ez\b/u.test(detail.replace(/\b(?:chez|assez)\b/giu, '')) ? 'Comment faire' : 'Pourquoi ça marche';
+}
+
+/** A head's colon and the detail's own would make two in a sentence: the first of the detail becomes a period. */
+const oneColon = (detail: string): string => detail.replace(/\s*:\s+(\p{L})/u, (_, ch: string) => `. ${ch.toUpperCase()}`);
 
 /** A paragraph per step: the action, then its detail under a run-in head of its own, so a tired reader finds it. */
 function methodParas(d: Draft, def: ArchetypeDef): string[] {
   const ord = def.stepNoun.fem ? ORD_F : ORD_M;
   return d.c.method.slice(0, MAX_STEPS).flatMap((s, i) => {
     const head = `${ord[i] ?? ORD_M[7]} ${def.stepNoun.word} : ${inline(s.text)}.`;
-    if (s.detail) return [head, `${detailHead(s.detail)} : ${s.detail}`];
+    if (s.detail) return [head, `${detailHead(s.detail)} : ${lowerFirst(oneColon(s.detail))}`];
     return [clean(`${head} ${def.whyFallback.map((w) => d.once(w)).find(Boolean) ?? ''}`)];
   });
 }
@@ -359,8 +370,11 @@ function errorParas(d: Draft): string[] {
   });
 }
 
+/** « Si a et que b » without its « Si »: the « que » hung on it, so it goes too. */
+const withoutIf = (when: string): string => inline(when).replace(/\bet qu(?:e |[’'])/g, 'et ');
+
 function situationParas(d: Draft, def: ArchetypeDef): string[] {
-  return situationsOf(d.c, def).map((s, i) => `Situation n°${i + 1} : ${inline(s.when)}. ${sentence(s.what)}`);
+  return situationsOf(d.c, def).map((s, i) => `Situation n°${i + 1} : ${withoutIf(s.when)}. ${sentence(s.what)}`);
 }
 
 function gridVisual(s: SheetSpec): VisualSpec {
@@ -376,7 +390,7 @@ const DEFAULT_SHEET: SheetSpec = {
 /** A follow-up prints its bonus sheet once: its starting point is read against its own method, line by line. */
 function sheetFor(c: NicheCtx): SheetSpec {
   if (!c.topic) return c.profile?.sheet ?? DEFAULT_SHEET;
-  return { title: 'Votre point de départ', columns: ['Ce que vous vérifiez', 'Où vous en êtes', 'À faire en premier'], rows: c.method.slice(0, MAX_STEPS).map((m) => labelOf(m.text, 46)) };
+  return { title: 'Votre point de départ', columns: ['Ce que vous vérifiez', 'Où vous en êtes', 'À faire en premier'], rows: c.method.slice(0, MAX_STEPS).map((m) => labelOf(m.text, TRACK_LABEL)) };
 }
 
 /** The link of a loop the method attacks first: the first step that talks about one of its nodes. */
@@ -417,10 +431,9 @@ function visualFor(ch: ChapterDef, d: Draft, def: ArchetypeDef, plan: PlanModel,
     case 'comprendre': {
       const loop = c.profile?.loop;
       if (loop && !c.upsellOf && c.archetype === 'habitude') return { type: 'cycle', title: 'La boucle à casser', labels: loop, values: [], cycle: { nodes: loop, breakAt: breakOf(loop, c.method), center: 'Un seul maillon à casser' } };
-      // the few words of a sub-problem are quoted whole: « Versement libératoire oui » is nobody's sentence
-      const labels = c.upsellOf ? uniqStrings([...c.ownPains, ...c.phrases].map((x) => cap(bare(headOf(x)))).filter((x) => x.length <= 60)).slice(0, 6)
-        : labelsFrom([...c.pains.map(headOf), ...c.phrases], 40, 6, ['Le même problème, encore et encore']);
-      return { type: 'icon_grid', title: 'Ce que vous nous décrivez', labels, values: [] };
+      // the few words a reader said are quoted whole or not at all: « Versement libératoire oui » is nobody's sentence
+      const said = uniqStrings([...(c.upsellOf ? c.ownPains : c.pains), ...c.phrases].map((x) => cap(bare(headOf(x)))).filter((x) => x.length <= 60 && !endsDangling(x))).slice(0, 6);
+      return { type: 'icon_grid', title: 'Ce que vous nous décrivez', labels: said.length ? said : ['Le même problème, encore et encore'], values: [] };
     }
     case 'diagnostic':
       return gridVisual(sheetFor(c));
@@ -466,10 +479,10 @@ function visualFor(ch: ChapterDef, d: Draft, def: ArchetypeDef, plan: PlanModel,
 /** The second visual of a chapter: its `visual` stays the tool the reader fills in. */
 function figureFor(ch: ChapterDef, c: NicheCtx, plan: PlanModel): VisualSpec | null {
   if (ch.role === 'diagnostic') {
-    // the ruler stays blank: the reader circles, nothing on it is a value. A follow-up has no `observe`: its own mistakes are what to measure
-    const rows = noDigit(labelsFrom([...c.observe, ...rendered(c).map((p) => p.mistake)], 60, 5)).slice(0, 4);
+    // the ruler stays blank: the reader circles, nothing on it is a value. It rates what they do too often, so a mistake and never an instruction
+    const rows = noDigit(labelsFrom(rendered(c).map((p) => p.mistake), 60, 5)).slice(0, 4);
     if (!rows.length) return null;
-    return { type: 'gauge', title: 'Où vous en êtes aujourd’hui', labels: rows, values: [], gauge: { rows, low: 'Pas du tout', high: 'Tout à fait' } };
+    return { type: 'gauge', title: 'Où vous en êtes aujourd’hui', labels: rows, values: [], gauge: { rows, low: 'Jamais', high: 'Souvent' } };
   }
   if (ch.role !== 'programme') return null;
   const tracks = plan.rows.flatMap((r) => r.tracks);

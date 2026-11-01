@@ -1,9 +1,10 @@
 /**
  * The long run (scale §9.2): one headless company for a year, logged every 30 days, against the targets of §7.1. It fails on any
- * target it misses, on a ledger that is not the cash, and on a crash. Not in `npm test`: `npm run test:long -w server` holds
- * what must stay true at each stage gate, this script is what A6 reads.
+ * target it misses, on a ledger that is not the cash, on a broken org rule and on a crash. Not in `npm test`: `npm run test:long
+ * -w server` holds what must stay true at each stage gate, this script is what A6 reads. The heap is judged under a cap: without
+ * one V8 collects lazily, and the peak says how much room it was given, not how much the company needs.
  *
- *   cd server && npx tsx scripts/longrun.ts --days 365 --seed 7
+ *   cd server && npx tsx --max-old-space-size=500 scripts/longrun.ts --days 365 --seed 7
  *   cd server && npx tsx scripts/longrun.ts --days 365 --seeds 1,2,3,4,5,6,7,8,9,10     survival only: no crash, Σ ledger = cash
  */
 import { readdirSync, statSync } from 'node:fs';
@@ -44,7 +45,24 @@ export async function playLong(run: LongRun, onDay?: (kpi: DailyKpi, world: Worl
   }
 }
 
-const MB = 1024 * 1024;
+/** One film of the index, at the weight of a real `result.json`. */
+const FILM = { status: 'ready', reason: null, videos: [{ ratio: '9:16', path: 'video/cre_00000/00000000/master.mp4', durationSec: 41, bytes: 8783831 }], poster: 'video/cre_00000/00000000/poster.jpg', captions: 'video/cre_00000/00000000/captions.vtt', cards: [], voice: 'Microsoft Hortense Desktop', qa: { ok: true, failed: [], lufs: -14, cuts: 23, avgShotSec: 1.71, mb: 8.8 } };
+
+/** What GET /api/state adds to the view and a CLI run does not have: the session, and the 30 films of D155. */
+export const STATE_EXTRA = {
+  session: { runId: 'longrun-00', playing: true, speed: 1, intervalMs: 3000, busy: false, mindMode: 'heuristic', status: 'running', day: 365, tick: 0, lastError: null, minStartingCash: 300, claudeReady: false, pace: 'live', watchers: 1, backoffMs: null },
+  videos: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`cre_${i}`, FILM])),
+};
+
+/** Payloads and files as §7.1 and `trim.ts` budget them: bytes, in thousands. Only the heap counts as V8 does. */
+const KB = 1000;
+const MB = KB * KB;
+const MIB = 1024 * 1024;
+
+/** What a payload weighs on the wire: French text takes more bytes than characters. */
+export function sizeKb(json: string): number {
+  return Buffer.byteLength(json) / KB;
+}
 
 export interface Target { label: string; value: number; limit: number; unit: string }
 
@@ -86,18 +104,18 @@ async function measure(run: LongRun): Promise<string[]> {
   const world = await playLong(run, (kpi, w, root) => {
     const now = Date.now();
     ms.push(now - last);
-    peakHeap = Math.max(peakHeap, process.memoryUsage().heapUsed / MB);
+    peakHeap = Math.max(peakHeap, process.memoryUsage().heapUsed / MIB);
     if (kpi.day % 30 === 0) {
       const finance = financeSnapshot(w);
-      const live = serializeLiveSnapshot(w, finance).length / 1024;
-      const state = JSON.stringify(buildSnapshot(w, finance, false, TIGHT_LIMITS)).length / 1024; // « never LIVE »: its fallback must not read as a pass
-      const size = JSON.stringify(w).length / MB;
+      const live = sizeKb(serializeLiveSnapshot(w, finance));
+      const state = sizeKb(JSON.stringify({ ...buildSnapshot(w, finance, false, TIGHT_LIMITS), ...STATE_EXTRA })); // « never LIVE »: its fallback must not read as a pass
+      const size = sizeKb(JSON.stringify(w)) / KB;
       const folder = folderBytes(root) / MB;
       peakLive = Math.max(peakLive, live);
       peakState = Math.max(peakState, state);
       peakWorld = Math.max(peakWorld, size);
       peakFolder = Math.max(peakFolder, folder);
-      console.log(`J${String(kpi.day).padStart(4)}  monde ${size.toFixed(2)} Mo  ${Math.round(percentile(ms.slice(-30), 0.5))} ms/j  tas ${Math.round(process.memoryUsage().heapUsed / MB)} Mo  direct ${Math.round(live)} ko  état ${Math.round(state)} ko  dossier ${folder.toFixed(1)} Mo  cash ${kpi.cash}  ${w.company.tasks.length} tâches  [${sections(w)}]`);
+      console.log(`J${String(kpi.day).padStart(4)}  monde ${size.toFixed(2)} Mo  ${Math.round(percentile(ms.slice(-30), 0.5))} ms/j  tas ${Math.round(process.memoryUsage().heapUsed / MIB)} Mo  direct ${Math.round(live)} ko  état ${Math.round(state)} ko  dossier ${folder.toFixed(1)} Mo  cash ${kpi.cash}  ${w.company.tasks.length} tâches  [${sections(w)}]`);
     }
     last = Date.now();
   });
@@ -117,7 +135,9 @@ export function survivalFaults(world: WorldState, seed: number): string[] {
   const faults: string[] = [];
   const cash = world.company.kpis.at(-1)?.cash;
   const ledger = financeSnapshot(world).cash;
-  if (cash !== undefined && Math.abs(cash - ledger) > 0.01 + 1e-9 && world.company.kpis.at(-1)!.day === world.day) faults.push(`graine ${seed} : ${cash} € aux KPI pour ${ledger} € au grand livre`);
+  if (cash !== undefined && Math.abs(cash - ledger) > 0.01 + 1e-9) faults.push(`graine ${seed} : ${cash} € aux KPI pour ${ledger} € au grand livre`);
+  const violations = world.company.org?.stats.violations ?? 0;
+  if (violations) faults.push(`graine ${seed} : ${violations} règle(s) d'organisation enfreinte(s)`);
   for (const k of world.company.kpis) if (!Number.isFinite(k.cash) || !Number.isFinite(k.profit)) faults.push(`graine ${seed} : NaN au jour ${k.day}`);
   return faults;
 }

@@ -68,6 +68,8 @@ const obsLabel = (c: NicheCtx): string => {
   return '3 jours';
 };
 
+const duringObs = (c: NicheCtx): string => (obsLabel(c) === 'une semaine' ? 'Pendant cette semaine' : `Pendant ces ${obsLabel(c)}`);
+
 const columnsOf = (c: NicheCtx): string => {
   const cols = c.profile?.sheet.columns ?? ['le moment', 'ce qui s’est passé', 'ce que vous avez fait', 'le résultat'];
   return cols.map((x) => lf(x)).join(', ');
@@ -92,7 +94,7 @@ const keepUp: Para = (d) => {
 };
 
 /** A ready-to-copy model, placed in the chapter where it is used. */
-const modelPara: Para = (d) => { const m = d.model(); return m ? `Modèle à copier : ${m}` : null; };
+const modelPara: Para = (d) => { const m = d.model(); return m ? `Modèle à copier : ${low(m)}` : null; };
 
 /** A research fact with a neutral lead: what follows a fact must fit any fact. */
 const nextFact = (lead: string): Para => (d) => {
@@ -163,13 +165,13 @@ const HABITUDE: ArchetypeDef = {
       title: () => 'Pourquoi ça recommence malgré vos efforts',
       intro: (c) => `${v(c, 'Tant que le mécanisme reste invisible, chaque nouvelle astuce tombe à plat.', 'Une astuce ne tient pas tant qu’on ne voit pas ce qu’elle doit changer.', 'Avant d’agir, il faut voir ce qui se répète.', 'On ne change bien que ce qu’on a compris.')} Ce chapitre montre ce qui se joue derrière ${pb(c)}, et pourquoi ${c.audCore} n’ont rien à se reprocher.`,
       paras: [
-        (d) => { const f = d.facts(2); return f ? `${f} Le problème n’est donc pas là où on le cherche d’habitude.` : 'Le problème n’est pas toujours là où on le cherche. Ce qui entretient la difficulté, ce sont rarement de grandes erreurs : ce sont de petits gestes répétés, faits de bonne foi, qui finissent par devenir la règle.'; },
+        (d) => { const f = d.facts(2); return f ? f : 'Le problème n’est pas toujours là où on le cherche. Ce qui entretient la difficulté, ce sont rarement de grandes erreurs : ce sont de petits gestes répétés, faits de bonne foi, qui finissent par devenir la règle.'; },
         loopPara,
         (d) => { const p = orJoin(d.painQ(), d.painQ()); return p ? `${v(d.c, `C’est le même enchaînement qu’on retrouve derrière ${p}. Les symptômes changent, la boucle reste.`, `Le même enchaînement se cache derrière ${p}, même si cela n’y ressemble pas au premier regard.`, `On le retrouve aussi derrière ${p} : deux formes différentes, un seul fonctionnement.`, `Derrière ${p}, c’est encore ce fonctionnement qui joue.`)}` : 'Les symptômes changent d’une semaine à l’autre, la boucle reste la même.'; },
         (d) => nextFact('Autre repère utile.')(d) ?? 'Retenez une idée simple : un écart n’annule pas les progrès. Ce qui compte, c’est la direction sur plusieurs jours.',
       ],
       steps: () => ['Repérer dans votre semaine le moment où la boucle démarre', 'Entourer le mécanisme de ce chapitre qui vous ressemble le plus', 'Écrire en une phrase le geste que vous voulez arrêter'],
-      checks: () => ['J’ai repéré le moment où tout démarre', 'Je sais quel maillon je veux casser', 'J’ai écrit ma phrase'],
+      checks: () => ['J’ai repéré le moment où tout démarre', 'Je sais quel maillon je veux casser'],
     },
     {
       kind: 'observation', role: 'diagnostic',
@@ -180,14 +182,14 @@ const HABITUDE: ArchetypeDef = {
         (d) => `La grille tient sur une page : ${columnsOf(d.c)}. ${v(d.c, 'Un stylo suffit. Notez aussi les bons moments : ils montrent ce qui marche déjà.', 'Pas besoin d’application : une feuille posée au bon endroit fait le travail.', 'Gardez-la à portée de main, pour noter sur le moment plutôt que de mémoire.', 'Quelques mots par ligne suffisent, l’important est de ne pas sauter de jour.')}`,
         (d) => d.c.diag?.detail || null,
         (d) => lookFor(d) ?? 'Avec ces notes sous les yeux, cherchez ce qui se répète : même heure, même déclencheur, même réaction. C’est ce schéma, et lui seul, que vous allez travailler en premier.',
-        (d) => `Pendant ces ${obsLabel(d.c)}, ne changez rien. ${v(d.c, 'C’est frustrant, mais c’est ce qui rend vos notes fiables : si vous modifiez tout en même temps, vous ne saurez jamais ce qui a vraiment fonctionné.', 'L’envie d’agir sera forte : tenez bon, car une observation modifiée en route ne vous apprend plus rien.', 'Ce n’est pas du temps perdu : c’est la photo de départ à laquelle vous comparerez tout le reste.', 'Vous comparerez tout le reste à cette photo de départ : mieux vaut qu’elle soit fidèle.')}`,
+        (d) => `${duringObs(d.c)}, ne changez rien. ${v(d.c, 'C’est frustrant, mais c’est ce qui rend vos notes fiables : si vous modifiez tout en même temps, vous ne saurez jamais ce qui a vraiment fonctionné.', 'L’envie d’agir sera forte : tenez bon, car une observation modifiée en route ne vous apprend plus rien.', 'Ce n’est pas du temps perdu : c’est la photo de départ à laquelle vous comparerez tout le reste.', 'Vous comparerez tout le reste à cette photo de départ : mieux vaut qu’elle soit fidèle.')}`,
       ],
       steps: (c) => [c.diag?.text ?? 'Remplir la grille de ce chapitre sans rien changer', 'Surligner ce qui revient au moins deux fois', 'Choisir un seul moment à travailler en priorité'],
       checks: () => ['Ma grille est prête', 'J’ai tout noté sans rien changer', 'J’ai choisi une seule priorité'],
     },
     {
       kind: 'gestes', role: 'methode',
-      title: (_c, n) => `Les ${n} gestes qui changent la donne`,
+      title: (_c, n) => `Les ${n} gestes à installer`,
       intro: (c) => `${v(c, 'Voici le cœur du guide.', 'Passons à l’action.', 'C’est ici que tout se joue.', 'Voici ce qui va vraiment changer votre quotidien.')} Ces gestes sont pensés pour ${c.audCore} : courts, concrets, et faits pour tenir un jour de grande fatigue.`,
       paras: [modelPara],
     },
@@ -256,7 +258,7 @@ const PROJET: ArchetypeDef = {
   ],
   situationsFallback: [
     { when: 'le résultat ne ressemble pas à ce que vous attendiez', what: 'Arrêtez-vous, notez ce qui diffère, et revenez à la dernière étape réussie avant de continuer.' },
-    { when: 'il vous manque un outil au milieu du projet', what: 'Mettez le projet en pause plutôt que d’improviser avec ce que vous avez sous la main.' },
+    { when: 'un outil vous manque au milieu du projet', what: 'Mettez le projet en pause plutôt que d’improviser avec ce que vous avez sous la main.' },
     { when: 'vous prenez du retard', what: 'Ne supprimez aucune étape de préparation : décalez simplement la suivante, et gardez les temps de séchage ou d’attente.' },
   ],
   fillers: [
@@ -277,7 +279,7 @@ const PROJET: ArchetypeDef = {
         (d) => { const p = orJoin(d.painQ(), d.painQ()); return p ? v(d.c, `Quand on lit ${p}, on pense à un manque de talent. C’est presque toujours un manque de méthode, et donc quelque chose qui se corrige.`, `Derrière ${p}, il n’y a pas de mauvaise main verte : il y a surtout une méthode à apprendre.`) : null; },
       ],
       steps: () => ['Lire ce chapitre une fois, sans rien acheter', 'Noter ce qui correspond à votre situation', 'Écrire le résultat que vous visez en une phrase'],
-      checks: () => ['Je sais à quoi j’ai affaire', 'Je connais le point qui ne se rattrape pas', 'Mon objectif tient en une phrase'],
+      checks: () => ['Je sais à quoi j’ai affaire', 'Je connais le point qui ne se rattrape pas'],
     },
     {
       kind: 'preparer', role: 'diagnostic',
@@ -1031,11 +1033,20 @@ interface TopicDepth {
   start: { title: string; intro: string; look: string[] };
   examples?: string[];  // worked cases, used once the research has none left
   spare: string[];      // reserve: printed only when the research sampled for this guide leaves it under the floor
+  rail: string[];       // notes of the rail, one per chapter: the floor spends the research and the reserve, and a note says what the page does not
   angle: string[]; gear: string[]; fault?: string[]; cases: string[]; plan: string[];
 }
 
 const TOPIC_DEPTH: Record<string, TopicDepth> = {
   siestes: {
+    rail: [
+      'Un bébé change vite à cet âge : ce qui marchait il y a un mois peut simplement ne plus lui aller.',
+      'Notez aussi son humeur au réveil : elle en dit parfois plus que la durée de la sieste.',
+      'Une pièce assombrie aide souvent, sans chercher le noir complet : gardez ce qui se refait facilement ailleurs.',
+      'Si vous êtes deux, mettez-vous d’accord sur le mini-rituel : bébé repère vite les différences.',
+      'Un mauvais jour n’annule pas les précédents : notez-le, et reprenez le lendemain à l’heure habituelle.',
+      'Gardez pour vous une sieste sur deux : un parent reposé tient mieux le plan.',
+    ],
     spare: [],
     start: {
       title: 'Où en sont vos siestes aujourd’hui',
@@ -1067,6 +1078,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     ],
   },
   allergenes: {
+    rail: [
+      'Votre inquiétude est légitime : ce qui la calme, c’est de savoir à l’avance quoi surveiller et qui appeler.',
+      'Apportez votre tableau à chaque consultation : il dit en une minute ce qui a déjà été proposé.',
+      'Un essai se prépare comme un rendez-vous : aliment prêt, adulte disponible, téléphone à portée de main.',
+      'Le jour d’un essai, gardez le reste du repas habituel : un seul changement à la fois se lit mieux.',
+      'Un doute après un essai ne se tranche pas seul : décrivez ce que vous avez vu au professionnel qui suit bébé.',
+      'Une semaine chargée n’annule rien : reprenez l’essai suivant quand le calme revient.',
+    ],
     spare: [
       'Choisissez la forme de l’aliment avec soin. Un allergène se propose adapté à l’âge : cuit quand il doit l’être, en poudre ou en purée lisse plutôt qu’en morceau, jamais entier quand il présente un risque d’étouffement. Le professionnel qui suit bébé peut vous dire quelle forme convient pour commencer, et vous évitez ainsi de mélanger deux inquiétudes le même jour.',
       'Pensez aussi aux journées qui suivent un essai réussi. Un aliment bien passé reste un aliment à reproposer : écrivez à côté de sa ligne la date du prochain repas où il reviendra. Cette petite organisation évite qu’il disparaisse du menu pendant des semaines parce qu’un autre sujet a pris toute la place.',
@@ -1093,6 +1112,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['Au fil des semaines, le carnet devient le vrai outil : chaque ligne dit ce qui est acquis et reste au menu. Relisez-le avant chaque rendez-vous, il répond à la plupart des questions qu’on vous posera. Un allergène toléré qui disparaît des repas pendant longtemps mérite de revenir régulièrement.'],
   },
   solitude: {
+    rail: [
+      'Un chiot qui vient d’arriver a toujours vécu entouré : être seul est une nouveauté pour lui, pas un caprice.',
+      'Regardez la vidéo jusqu’au bout : le moment où il se calme compte autant que celui où il s’agite.',
+      'Changez parfois l’ordre de vos gestes de départ : clés et manteau finissent par annoncer votre absence.',
+      'Une absence ratée se corrige le lendemain, un cran plus court : pas besoin de recommencer tout le plan.',
+      'Prévenez vos voisins pendant l’apprentissage : une phrase dans l’escalier évite bien des tensions.',
+      'Une fois le plan terminé, variez vos heures de départ : le chiot apprend que vous revenez, quelle que soit l’heure.',
+    ],
     spare: [
       'Pensez à ce que votre chiot entend quand vous n’êtes pas là. Une radio à faible volume, un rideau tiré sur le passage du couloir ou un parc éloigné de la porte d’entrée réduisent ce qui le met en alerte. Un chiot qui ne guette pas chaque bruit de l’immeuble se pose beaucoup plus vite.',
       'Faites participer toute la maison. Si un seul adulte s’entraîne et que l’autre reprend le chiot dans ses bras à la première plainte, le travail ne tient pas. Fixez ensemble les règles du retour, du coin calme et de la porte : quelques phrases écrites sur le frigo suffisent à ce que tout le monde applique la même chose.',
@@ -1121,6 +1148,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['Lisez le plan comme un escalier et non comme un calendrier. Une ligne se passe en une journée si tout reste calme, en trois si le chiot a besoin de temps. À la fin de chaque semaine, regardez la dernière vidéo : il doit se poser plus vite que la semaine précédente. C’est ce délai, plus que la durée totale, qui montre que l’apprentissage avance.'],
   },
   nuits: {
+    rail: [
+      'Un chat qui griffe une porte ne se venge pas : il a appris que ce geste produit quelque chose.',
+      'Notez aussi les nuits calmes : elles montrent ce qui a changé la veille.',
+      'Rangez la canne à pêche après la séance : un jouet laissé à disposition perd vite son intérêt.',
+      'Mettez-vous d’accord avec toute la maison : il suffit d’une personne qui se lève pour relancer le cycle.',
+      'Des bouchons d’oreilles peuvent aider les premières nuits, le temps que la hausse des sollicitations passe.',
+      'Une rechute après un voyage ou un déménagement n’a rien d’anormal : reprenez la séance du soir sans rien changer d’autre.',
+    ],
     spare: [
       'Pensez aussi au matin. Si le chat apprend que vous vous levez à 6 h pour remplir la gamelle, il attend ce moment avec impatience et commence à réclamer plus tôt. Décalez le premier repas quelques minutes après votre lever, le temps de boire un café. Il comprendra que votre réveil ne déclenche pas son repas, et les appels de l’aube perdront leur intérêt.',
       'Regardez enfin la chambre elle-même. Une porte fermée attire plus qu’une porte ouverte pour beaucoup de chats, qui veulent simplement vérifier ce qui se passe de l’autre côté. Si vous pouvez le laisser entrer sans gêne pour votre sommeil, essayez quelques nuits : certains chats cessent de griffer dès que la pièce n’est plus interdite.',
@@ -1150,6 +1185,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['Pour lire vos progrès, comparez l’heure du premier réveil d’une semaine à l’autre et le nombre de fois où le chat a insisté. Une nuit difficile au milieu d’une bonne série ne remet rien en cause : cherchez seulement si le jeu du soir a sauté ce jour-là. Une fois les nuits calmes, gardez le rituel du soir plusieurs semaines avant de l’assouplir.'],
   },
   situations: {
+    rail: [
+      'Une mise en situation n’a pas une seule bonne réponse : plusieurs conduites sont justes si elles protègent la personne.',
+      'Repérez la situation qui vous met le plus mal à l’aise : c’est elle qu’il faut travailler en premier.',
+      'Prenez deux secondes avant de répondre : un court silence se voit comme de la réflexion, pas comme un blanc.',
+      'Évitez « il faut » et « on doit » : dites ce que vous faites, et pour qui.',
+      'Si vous ne savez pas, dites-le et expliquez à qui vous transmettriez : c’est déjà une réponse de soignant.',
+      'Répétez au moins une fois devant quelqu’un qui ne connaît pas le métier : s’il comprend, le jury comprendra.',
+    ],
     spare: [
       'Observez les soignants que vous croisez, si vous en avez l’occasion : en stage, à l’hôpital, en maison de retraite ou chez un proche. La façon de frapper à une porte, de se présenter, d’expliquer un geste avant de le faire nourrit vos réponses bien mieux qu’un cours appris par cœur. Le jury sent tout de suite ce qui vient de l’observation réelle.',
       'Préparez aussi quelques exemples tirés de votre vie à vous. Une aide apportée à un parent âgé, un moment où vous avez dû rester calme, une erreur que vous avez reconnue : ces souvenirs donnent du poids à vos réponses. Une phrase vraie vaut mieux qu’une formule que tous les candidats ont lue au même endroit.',
@@ -1181,6 +1224,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['Gardez une trace de chaque répétition : la carte travaillée, le temps, et le point à reprendre. À la fin de la deuxième semaine, refaites les trois situations du premier jour et réécoutez les deux enregistrements l’un après l’autre. La différence s’entend tout de suite, et elle vous servira le matin de l’épreuve, au moment où le doute arrive.'],
   },
   impots: {
+    rail: [
+      'L’URSSAF et les impôts ont chacun leur calendrier : aucun des deux ne vous rappelle les dates de l’autre.',
+      'Gardez vos avis et vos attestations dans un seul dossier, classés par année : vous les retrouverez en une minute.',
+      'Vérifiez chaque date sur le site officiel avant de la noter : seuils et échéances changent d’une année à l’autre.',
+      'Une mise de côté mensuelle, même petite, pèse moins qu’un gros paiement en fin d’année.',
+      'Si un montant vous semble faux, écrivez depuis votre espace en ligne : votre demande reste datée et tracée.',
+      'Bloquez un moment chaque trimestre pour relire ce calendrier : rien ne passe alors à travers.',
+    ],
     spare: [
       'Faites relire votre calendrier une fois par une personne qui connaît le sujet, si vous en avez l’occasion : une chambre de métiers, une chambre de commerce, un service d’aide aux créateurs. Ces interlocuteurs répondent souvent sans frais à une question précise. Préparez votre question par écrit, avec vos chiffres sous les yeux.',
       'Prévoyez un rendez-vous d’une heure avec vous-même en fin d’année. Vous y relisez ce qui a été payé, ce qui reste dû et ce qui change pour l’année suivante. Une fin d’année préparée évite les mauvaises surprises de janvier et vous donne une vision claire de ce que votre activité vous a réellement laissé.',
@@ -1206,6 +1257,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['Ce calendrier sert aussi de budget : à chaque ligne qui annonce un paiement, notez une estimation et mettez la somme de côté dès que vous encaissez. Un compte séparé, même modeste, évite de découvrir en décembre que l’argent a déjà été dépensé. Les montants exacts se vérifient chaque année sur les sites officiels.'],
   },
   tarif: {
+    rail: [
+      'Votre prix dit aussi quel client vous attirez : un tarif trop bas peut inquiéter autant qu’un tarif trop haut.',
+      'Reprenez vos trois dernières missions et calculez ce qu’elles vous ont vraiment rapporté par jour.',
+      'Entraînez-vous à dire votre prix à voix haute : une phrase répétée dix fois sort sans trembler.',
+      'Un « non » sur le prix n’est pas un échec : c’est une information sur le marché que vous visez.',
+      'Quand un client hésite, demandez ce qui le retient : la réponse est rarement le prix seul.',
+      'Écrivez votre tarif dans un document daté : vous verrez vos progrès d’une année à l’autre.',
+    ],
     spare: [
       'Regardez aussi ce que votre client achète vraiment. Il paie rarement des jours de travail : il paie un problème réglé, un délai tenu, un risque en moins. Quand vous décrivez votre mission dans ces termes, le prix se compare à ce que coûterait de ne rien faire, et non au tarif d’un autre freelance trouvé en ligne.',
       'Écrivez vos conditions une fois pour toutes dans un modèle de devis : acompte, nombre d’allers-retours inclus, délai de paiement, ce qui se facture en plus. Vous n’avez plus à les renégocier à chaque mission, et le client les découvre comme une règle normale de votre activité plutôt que comme une demande personnelle.',
@@ -1234,6 +1293,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['À la fin de ces sept jours, testez votre nouveau tarif sur une vraie proposition, de préférence auprès d’un prospect qui ne vous connaît pas. Notez sa réaction et ce que vous avez répondu. La première fois est la plus difficile : dès la troisième, le chiffre sort tout seul. Revoyez vos calculs une fois par an, ou à chaque changement important dans vos charges.'],
   },
   nord: {
+    rail: [
+      'À l’ombre, une plante pousse moins vite : cela ne dit rien de votre main verte.',
+      'Refaites votre relevé de lumière en été : un coin sombre en mars peut s’éclaircir quand le soleil monte.',
+      'Tournez les pots d’un quart de tour de temps en temps : les plantes penchent vers la lumière.',
+      'Un très grand pot garde l’eau longtemps : à l’ombre, plusieurs petits contenants se gèrent mieux.',
+      'Une jardinière ratée ne coûte qu’un sachet de graines : videz, ressemez, et notez ce qui n’a pas marché.',
+      'Gardez vos notes de semis d’une année sur l’autre : elles deviennent votre propre calendrier.',
+    ],
     spare: [
       'Protégez aussi vos plantes du vent, souvent plus gênant que l’ombre sur un balcon exposé au nord. Un brise-vue léger, une jardinière lourde placée du côté du courant d’air ou un simple treillage suffisent à garder un peu de chaleur autour des salades. La terre sèche moins vite, et les jeunes semis tiennent mieux pendant leurs premières semaines.',
       'Pensez aussi à la hauteur. Des étagères, une échelle à jardinières ou des suspensions gagnent de la lumière sans prendre de place au sol, et elles laissent passer l’air. Installez les plantes les plus gourmandes en haut, les herbes qui aiment la fraîcheur en bas, et gardez un accès facile pour arroser et cueillir.',
@@ -1263,6 +1330,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['Tenez un carnet très simple : ce qui a été semé, où, quand, et ce que cela a donné. À la fin de la saison, vous aurez la vraie carte de votre balcon. Elle vaut mieux que n’importe quel tableau de culture, car elle tient compte de votre étage, de votre rue et de votre vent. Commencez l’année suivante avec les trois plantes qui ont le mieux donné.'],
   },
   grignotage: {
+    rail: [
+      'Le soir, on décide moins bien qu’au matin : ce plan prépare les choses à l’avance, quand vous avez encore les idées claires.',
+      'Notez aussi les soirs sans envie : ils montrent ce qui vous protège déjà.',
+      'Brossez-vous les dents après le dîner : ce simple geste marque la fin des repas.',
+      'Un soir raté n’efface pas la semaine : reprenez simplement le rituel le lendemain.',
+      'Dites à votre entourage ce que vous changez : un paquet ouvert sur la table basse ne vous aidera pas.',
+      'À la fin du plan, gardez ce qui a le mieux marché et laissez le reste s’alléger.',
+    ],
     spare: [
       'Parlez de votre démarche à la personne qui partage vos soirées. Il ne s’agit pas de lui demander de vous surveiller, mais de changer une habitude à deux : un paquet qui reste au placard, une tisane partagée, une promenade courte après le dîner. Ce qui se fait ensemble tient bien mieux qu’une décision prise seule.',
       'Prévoyez les soirs particuliers : les apéritifs, les dîners dehors, les retours de voyage. Ils ne remettent rien en cause et il n’y a rien à rattraper. Choisissez à l’avance ce qui vous fait vraiment plaisir, savourez-le à table, et revenez le lendemain à vos repères habituels.',
@@ -1291,6 +1366,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['Chaque semaine, relisez votre journal et posez-vous deux questions : combien de soirs l’envie est-elle arrivée, et combien de fois avez-vous choisi ce que vous vouliez faire ? La seconde réponse compte le plus. Une envie qui se présente et qui passe est une victoire, même si elle revient le lendemain. Elle deviendra plus discrète à mesure que le nouveau rituel s’installera.'],
   },
   listening: {
+    rail: [
+      'On ne va jamais plus vite que l’audio : le but est d’arriver avant lui sur la question.',
+      'Un test blanc est la photo d’un jour : comparez plutôt vos types d’erreurs d’un test à l’autre.',
+      'Le jour du test, on ne prend pas de notes : entraînez-vous à retenir sans écrire.',
+      'Ne laissez aucune case vide : une mauvaise réponse ne retire aucun point.',
+      'Quand la fatigue arrive, redressez-vous et respirez une fois : une seconde suffit pour revenir à la question.',
+      'Gardez le même créneau pour vos séances : une habitude se prend plus vite à heure fixe.',
+    ],
     spare: [
       'Entraînez-vous aussi à reconnaître les pièges de sons proches. Le test aime les mots qui se ressemblent à l’oreille et qui n’ont aucun rapport. Quand une réponse contient un son entendu dans l’enregistrement sans rien avoir à voir avec la situation, méfiez-vous. Noter ces paires dans votre carnet vous aidera à les repérer plus vite.',
       'Choisissez des contenus proches du test : des annonces d’aéroport, des messages de répondeur, des réunions, de courtes actualités d’entreprise. Le vocabulaire du TOEIC vient du monde du travail, et le reconnaître à l’oreille vous fait gagner du temps sur chaque question. Une série en anglais détend, mais elle ne remplace pas cet entraînement ciblé.',
@@ -1319,6 +1402,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['Gardez le même type de test pour comparer d’une semaine à l’autre, et regardez le nombre d’erreurs par colonne plutôt que le seul total. Une colonne qui se vide dit ce qui a été acquis. Dans les trois derniers jours, n’ajoutez plus de nouvelles ressources : faites des séries courtes, dormez, et gardez intact le réflexe de lire à l’avance.'],
   },
   enfants: {
+    rail: [
+      'Un enfant qui refuse un plat ne vous juge pas : il teste souvent sa place à table autant que le goût.',
+      'Notez ce qu’il mange sur toute la semaine : un repas raté pèse moins qu’il n’en a l’air.',
+      'Servez de petites quantités : une assiette trop pleine décourage avant la première bouchée.',
+      'Évitez les compliments appuyés quand il goûte : une réaction discrète garde le repas tranquille.',
+      'Un soir difficile se joue sur l’ambiance : mieux vaut un repas simple et calme qu’un beau plat et une dispute.',
+      'Affichez le menu de la semaine : un enfant prévenu discute moins au moment de passer à table.',
+    ],
     spare: [
       'Faites les courses et le menu avec eux une fois par semaine. Un enfant qui a choisi la couleur des poivrons ou qui a coché le plat de mardi arrive à table avec une autre disposition. Il ne s’agit pas de lui laisser le menu, mais de lui donner une petite place dans ce qui se décide pour lui.',
       'Mangez ensemble quand c’est possible, et mangez la même chose. Un enfant apprend beaucoup en regardant les adultes, sans qu’on ait besoin de commenter quoi que ce soit. Un seul repas partagé dans la journée suffit souvent, et il compte plus que le contenu exact de l’assiette de ce soir-là.',
@@ -1343,6 +1434,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['Pour suivre vos progrès, relisez votre liste à la fin de chaque semaine et déplacez les aliments d’une colonne à l’autre. Un aliment passé de « pas encore » à « parfois » est une vraie avancée, même s’il n’a été goûté que du bout des lèvres. Comparez aussi l’ambiance : un dîner plus calme compte autant que ce qui reste dans l’assiette.'],
   },
   negociation: {
+    rail: [
+      'Discuter un prix n’a rien d’impoli : les prestataires reçoivent ces demandes toutes les semaines.',
+      'Posez les devis côte à côte avant d’appeler : on négocie mieux quand on sait déjà ce qu’on veut.',
+      'Gardez un seul interlocuteur par prestataire : deux voix différentes donnent des messages qui se contredisent.',
+      'Parlez de budget et de choix, jamais de la valeur de son travail : un prestataire vexé ne fera aucun geste.',
+      'Un refus poli n’est pas une porte fermée : revenez avec une autre date ou un autre périmètre.',
+      'Remerciez par écrit quand un geste est accordé : c’est aussi la trace qu’il a bien été convenu.',
+    ],
     spare: [
       'Gardez enfin une trace des prestataires que vous n’avez pas retenus, avec leur devis. Un refus poli laisse la porte ouverte : si un partenaire se désiste à quelques mois de la date, vous saurez qui rappeler et à quel prix. Remerciez-les d’un court message, cela ne coûte rien et le milieu est souvent plus petit qu’on ne le croit.',
       'Pensez aussi à regrouper. Un même prestataire qui assure deux prestations, un lieu qui inclut le mobilier, un traiteur qui fournit la vaisselle : un ensemble se négocie souvent mieux que des lignes séparées. Demandez ce que coûterait une formule groupée, puis comparez-la ligne par ligne avec vos autres devis avant de décider.',
@@ -1373,6 +1472,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['Tenez votre tableau à jour après chaque échange : le montant de départ, le montant obtenu et ce qui a changé dans la prestation. À la fin du mois, additionnez et comparez à votre budget. Si vous êtes encore au-dessus, retirez un poste entier plutôt que de grignoter partout. Gardez aussi une marge pour les imprévus : il y a toujours quelque chose qui dépasse.'],
   },
   litiges: {
+    rail: [
+      'La plupart des acheteurs sont de bonne foi : votre méthode sert pour les rares qui ne le sont pas.',
+      'Relisez les règles de temps en temps : une plateforme les modifie sans toujours prévenir.',
+      'Pesez le colis avant de choisir le format d’envoi : une étiquette au mauvais poids complique tout litige.',
+      'Une photo prise à la lumière du jour vaut mieux que dix photos sombres : le défaut doit se voir clairement.',
+      'Un litige perdu n’est pas une faute : notez ce qui a manqué à votre dossier pour la prochaine fois.',
+      'Tenez une petite liste des ventes en cours avec leur date limite : vous saurez quand chacune se clôt.',
+    ],
     spare: [
       'Faites enfin le tri dans ce que vous vendez. Certains articles attirent plus de réclamations que d’autres : les vêtements de marque, l’électronique, les pièces très fragiles. Si un type d’objet vous a déjà causé plusieurs soucis, décrivez-le encore plus précisément, ou réservez-le à une remise en main propre lorsque la plateforme le permet.',
       'Traitez les petites ventes comme les grandes pendant ces deux semaines. C’est en répétant les mêmes gestes sur des articles à quelques euros que la routine s’installe : photo avant fermeture, reçu gardé, message poli à l’envoi. Le jour où vous vendrez un article plus cher, tout sera devenu automatique, et vous n’aurez plus à y penser.',
@@ -1404,6 +1511,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['À la fin de ces deux semaines, vous devez avoir trois outils prêts : un modèle d’annonce, une routine d’expédition et vos réponses types. Gardez un petit tableau des litiges : date, motif, issue, ce que vous changez. Quelques lignes suffisent pour voir si un type d’article ou d’acheteur revient, et décider de ce que vous ne vendez plus de cette façon.'],
   },
   'sur-place': {
+    rail: [
+      'Sur place, le budget file rarement sur un gros achat : ce sont les petites dépenses répétées qui pèsent.',
+      'Gardez les tickets de la journée dans une seule poche : le soir, vos comptes se font en deux minutes.',
+      'Repérez le dernier train de votre ligne dès l’arrivée : il passe souvent plus tôt qu’on ne le pense.',
+      'Une application de conversion aide à sentir la vraie valeur des yens, le temps de prendre vos repères.',
+      'Une journée trop chère ne gâche pas le voyage : elle se rattrape sur les deux suivantes.',
+      'Gardez une petite réserve pour un plaisir imprévu : un budget sans marge finit par être abandonné.',
+    ],
     spare: [
       'Regardez aussi vos habitudes du matin. Un petit-déjeuner pris dans un konbini ou un café de quartier coûte bien moins que celui de l’hôtel, et il vous fait sortir plus tôt. Vous profitez ainsi des temples avant l’arrivée des groupes, et votre journée commence par une petite économie, au lieu d’une dépense faite par habitude.',
       'Regardez les pass de transport avec votre itinéraire sous les yeux, et non par habitude. Un pass rentable pour un voyageur qui change de ville tous les deux jours peut être une dépense inutile pour un séjour tranquille dans deux villes. Faites le calcul avec vos trajets réels avant de payer, sur les sites officiels des compagnies.',
@@ -1432,6 +1547,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['Tous les trois jours, comparez le total dépensé au plafond prévu et décidez une seule chose pour la suite : on continue, on allège, ou on se fait plaisir. Ce rendez-vous évite de découvrir l’écart le dernier soir. Gardez une petite réserve pour les derniers jours : les cadeaux et les dernières envies arrivent toujours à la fin du voyage.'],
   },
   'grand-oral': {
+    rail: [
+      'Le trac n’est pas un défaut : il montre que l’épreuve compte pour vous, et il baisse après les premières phrases.',
+      'Enregistrez-vous une fois au téléphone : on entend vite ce que personne n’ose vous dire.',
+      'Répétez aussi dans une autre pièce : un discours appris dans un seul lieu tient moins bien ailleurs.',
+      'Ne remplissez pas chaque silence : une courte pause aide le jury à suivre votre idée.',
+      'Un jury qui vous relance ne vous piège pas : il vous donne une occasion de montrer ce que vous savez.',
+      'La veille, préparez votre tenue et votre trajet, puis arrêtez de répéter à l’heure du dîner.',
+    ],
     spare: [
       'Pensez aussi à votre tenue et à votre arrivée. Choisissez des vêtements dans lesquels vous êtes à l’aise, préparés la veille, et prévoyez d’arriver en avance pour marcher un peu avant d’entrer. Vous ne serez pas évalué là-dessus, mais tout ce qui est réglé à l’avance laisse de la place dans votre tête pour ce qui compte.',
       'Pendant les 20 minutes de préparation, ne réécrivez pas tout. Reprenez votre plan, vos mots-clés et votre phrase d’ouverture, puis relisez la question choisie par le jury. Le support que vous préparez n’est pas noté : il vous sert à vous rassurer et à montrer votre plan. Gardez-le simple et lisible d’un coup d’œil.',
@@ -1462,6 +1585,14 @@ const TOPIC_DEPTH: Record<string, TopicDepth> = {
     plan: ['À la fin de chaque semaine, refaites votre présentation entière devant une personne, et demandez-lui une seule chose à améliorer. Une remarque à la fois suffit. La dernière semaine, réécoutez l’enregistrement du premier jour : vous mesurerez le chemin parcouru. La veille, faites une dernière répétition courte, préparez votre tenue et votre convocation, puis faites autre chose.'],
   },
   reparer: {
+    rail: [
+      'Un meuble ancien a souvent déjà été réparé : regardez comment, avant de refaire.',
+      'Photographiez le meuble sous tous les angles avant de démonter : ces images servent au remontage.',
+      'Protégez le sol avec un vieux drap : la colle et la sciure vont partout.',
+      'Avant de poncer une vieille peinture, portez un masque : on ne sait pas toujours ce qu’elle contient.',
+      'Quand une réparation résiste, laissez-la une nuit : la colle et le bois se règlent rarement dans l’impatience.',
+      'Laissez le meuble reposer dans la pièce où il vivra avant de peindre : le bois s’y stabilise.',
+    ],
     spare: [
       'Avant de commencer, faites un essai de chaque produit sur une zone cachée : le dessous du plateau, l’arrière d’un tiroir. Vous verrez comment la pâte à bois prend, comment la colle réagit sur ce vieux bois, et combien de temps tout cela met à sécher dans votre pièce. Cet essai de cinq minutes évite une mauvaise surprise sur la face visible.',
       'Préparez votre poste de travail avant de commencer : une bâche, une bonne lampe, de quoi caler le meuble, les outils à portée de main. Travailler à hauteur évite de mal doser un geste. Quelques tréteaux ou une vieille table suffisent, et votre dos vous remerciera dès le deuxième soir.',
@@ -1499,6 +1630,9 @@ export const topicFillers = (c: NicheCtx): Para[] => (depthOf(c)?.spare ?? []).m
 /** The worked cases written for a sub-problem: a chapter of the follow-up gets one when the research runs out. */
 export const topicExamples = (c: NicheCtx): readonly string[] => depthOf(c)?.examples ?? [];
 
+/** The notes written for the rail of a sub-problem. */
+export const topicNotes = (c: NicheCtx): readonly string[] => depthOf(c)?.rail ?? [];
+
 /** The paragraphs of one list of a sub-problem, for the paragraph bank of its chapter. */
 const deep = (pick: (t: TopicDepth) => readonly string[] | undefined): Para[] => [0, 1, 2].map((k) => (d) => { const t = depthOf(d.c); return (t && pick(t)?.[k]) ?? null; });
 
@@ -1515,7 +1649,7 @@ function suiteOf(base: ArchetypeDef, s: SuiteVoice): ArchetypeDef {
     short: { 5: ['angle', 'reglages', 'ecueils', 'resistances', 'mini-plan'], 6: ['angle', 'point-de-depart', 'reglages', 'ecueils', 'resistances', 'mini-plan'] },
     howTo: () => s.howTo,
     promise: (c, o) => `un plan ciblé de ${D(c)} pour arriver à ceci : ${o}`,
-    subtitle: (c) => `Le guide ciblé pour ${c.audArt} qui veulent régler ce point précis`,
+    subtitle: (c) => `Le guide ciblé pour ${c.audArt}`,
     titles: (c) => [c.topic?.title ?? ''],
     introOpen: (c, a) => `${v(c, ...s.open)} : ${a.pain}.${a.p1 ? ` Vous l’avez peut-être dit ainsi : ${a.p1}${a.p2 ? `, ou encore ${a.p2}` : ''}.` : ''}`,
     introWhy: (c, a) => `${v(c, ...s.why)}${a.pains.length ? ` On peut régler ${a.pains[0]} et rester bloqué ici pendant des mois.` : ''}`,

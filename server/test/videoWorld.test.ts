@@ -30,7 +30,6 @@ const { toSnapshot } = await import('../src/api/snapshot.js');
 const { createWorld, defaultScenario, Company } = await import('../src/runtime/index.js');
 const { createContentEngine } = await import('../src/minds/index.js');
 const { createBrainVault } = await import('../src/learning/index.js');
-const { tempoFit } = await import('../src/sim/videoCraft.js');
 const { RESULT_FILE, selectWorthy, VideoDirector } = await import('../src/video/director.js');
 
 afterAll(() => rmSync(fake.base, { recursive: true, force: true }));
@@ -207,13 +206,11 @@ describe('the world holds the plan, never the file', () => {
     expect(decisions(reloaded) === decisions(straight)).toBe(true);
   }, 120_000);
 
-  it('`videoModel: off` plans no cut, keeps no taste, opens no arm, and draws what a scenario with no such field draws', async () => {
+  it('`videoModel: off` plans no cut and draws what a scenario with no such field draws', async () => {
     const days = 6 * 12;
     const off = await play('model-off', days, 0, { ...LEGACY, videoModel: 'off' });
     expect(off.company.creatives.length).toBeGreaterThan(0);
     expect(off.company.creatives.every((c) => c.cut === undefined)).toBe(true);
-    expect(off.market.niches.every((n) => n.videoTempo === undefined)).toBe(true);
-    expect(Object.keys(off.company.bandits).filter((k) => k.startsWith('video_tempo'))).toEqual([]);
 
     const absent = await play('model-absent', days, 0, { ...LEGACY, videoModel: 'off' }, true);
     expect(absent.rngState).toBe(off.rngState);
@@ -224,21 +221,12 @@ describe('the world holds the plan, never the file', () => {
     const on = createWorld(scenarioOf({ ...LEGACY, videoModel: 'on' }), 'p71-on');
     const off = createWorld(scenarioOf({ ...LEGACY, videoModel: 'off' }), 'p71-off');
     expect(on.rngState).toBe(off.rngState);
-    expect(on.market.niches.map((n) => ({ ...n, videoTempo: undefined }))).toEqual(off.market.niches.map((n) => ({ ...n, videoTempo: undefined })));
-    expect(on.market.niches.every((n) => n.videoTempo !== undefined)).toBe(true);
+    expect(on.market.niches).toEqual(off.market.niches);
   });
 
-  it('`tempoFit` draws nothing, and no snapshot holds the taste of a niche', () => {
+  it('no plain snapshot holds the truth of a niche', () => {
     const world = createWorld(scenarioOf(), 'p71-taste');
-    const niche = world.market.niches[0]!;
-    expect(niche.videoTempo).toBeDefined();
-    const ad = { cut: { tempo: niche.videoTempo } } as never;
-    const before = JSON.stringify(world);
-    const fits = Array.from({ length: 50 }, () => tempoFit(niche, ad));
-    expect(new Set(fits).size).toBe(1);
-    expect(fits[0]).toBeGreaterThan(1);
-    expect(JSON.stringify(world)).toBe(before);
-    expect(JSON.stringify(toSnapshot(world, false))).not.toContain('videoTempo');
-    expect(JSON.stringify(toSnapshot(world, true))).not.toContain('videoTempo');
+    expect(world.market.niches[0]!.hookAffinity).toBeDefined();
+    expect(JSON.stringify(toSnapshot(world, false))).not.toContain('hookAffinity');
   });
 });

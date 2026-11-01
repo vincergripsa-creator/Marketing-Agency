@@ -286,8 +286,8 @@ export function productPaidBlock(world: WorldState, p: Product, ch: ChannelId = 
   if (wait > 0 && h.lastEndDay !== null && world.day <= h.lastEndDay + wait) {
     return { reason: `${h.losers} campagnes perdantes d'affilée : on laisse ${wait} jour(s) avant un nouvel angle (reprise le jour ${h.lastEndDay + wait + 1})`, hard: false };
   }
-  // A plan stop holds (channels §7.4): an average can look fine while the next euro loses money. The line stays out while the days
-  // that stopped it are in the plan's window: back any sooner, it would read the same curve and stop again. A new version starts over.
+  // A plan stop holds (channels §7.4): its share sat under what the platform accepts for days in a row. The line stays out while the
+  // days that stopped it are in the plan's window: back any sooner, it would read the same average and stop again. A new version starts over.
   const planStop = Math.max(0, ...world.company.campaigns.filter((c) => c.productId === p.id && channelOf(c) === ch).map((c) => c.planStopped ?? 0));
   const back = planStop + CHANNEL_POLICY.alloc.windowDays;
   if (planStop >= since && world.day < back) return { reason: `le plan du CFO a arrêté cette ligne le jour ${planStop} : reprise le jour ${back}`, hard: false };

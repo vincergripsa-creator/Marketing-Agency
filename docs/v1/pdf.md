@@ -361,7 +361,7 @@ Because block heights are known, one `paginate` call is pure arithmetic. That is
 | Sheets | Tinted paper, ink header band « À IMPRIMER », « Fiche 2 sur 3 » |
 | Memo | « Votre plan sur une page », printable summary. Finish level 2 |
 | Bonus | Opener on ground `b` |
-| Si ça coince | Annex of `situations`, finish level 2 |
+| ~~Si ça coince~~ | Annex dropped at every level (D152): its answers stay in the decision tree |
 | Final page | `finalWording` kept word for word, 2-row art, CTA, recap, disclaimer |
 
 The reading time is `max(3, round(words / 220))` min, computed. Never a promise.
@@ -409,9 +409,9 @@ export interface ChapterContent {
 | Role | Visual | Source, already in the code | Note |
 |---|---|---|---|
 | comprendre (habitude) | `cycle` | `c.profile.loop` | `breakAt` = the node whose step the method addresses first, else 1. Only 4 profiles have a loop (**measured**), others keep `icon_grid` fed by whole labels |
-| diagnostic | `gauge` plus grid | `c.observe` | Blank 0 to 10 rulers for the reader to circle. It holds no value at all |
+| diagnostic | `gauge` plus grid | the mistakes, Jamais to Souvent (D152) | Blank rulers for the reader to circle. It holds no value at all |
 | methode | `step_path` | `c.method`: `text`, `when`, `duration` | Stations with their real moment and duration |
-| erreurs | `before_after` | `rendered(c)`, `fixFor` | Replaces `do_dont`: each mistake stays beside its fix |
+| erreurs | `before_after` | `rendered(c)`, `fixFor` | Replaces `do_dont`: each mistake stays beside its fix. At finish 2 it is not printed when its mistakes stand in the chapter's text, and a box « À arrêter » prints only what that text has not said (D152, D156) |
 | situations | `decision_tree` | `situationsOf`: `when`, `what` | « Si … alors … » ladder |
 | programme | `plan_path` as `figure`, plan grid as `visual` | `PlanModel`, needs `from` and `to` kept in `rows` | One bar per track |
 | durer | `matrix` | `c.keep`, `c.tips`, `pairs`, `observe` | Heads: À garder, À arrêter, À tester, À surveiller. Words, no axis |
@@ -472,7 +472,7 @@ text = `Focus : ${act(focus.s)}${checkOf(focus.s, d)}`;
 |---|---|---|
 | « Pourquoi ça marche » after each method step | `MethodStep.detail`, printed today only as run-in prose | 1 |
 | « Votre plan sur une page » | Plan tracks, first step of each chapter | 2 |
-| « Si ça coince » annex | All `situations`, plus `situationsFallback` | 2 |
+| ~~« Si ça coince » annex~~ | Dropped, D152 | |
 | One worked example per chapter | `Draft.example()`, `situationExample` | content |
 | Ready-to-copy models | `c.models`, as a tinted block | 1 |
 
@@ -657,7 +657,7 @@ export function effortFor(talent: number, attempt = 0): DesignEffort {
 | `covers` | Art candidates explored, best-of-N, +8.3 points of `art` at 8 with perfect judgement (**measured**) |
 | `layouts` | `LayoutParams` tried in `paginate` |
 | `taste` | Perceived score = true + (1 - taste) × 8 × noise. A weak eye sometimes keeps the worse candidate |
-| `finish` | What is drawn. **0:** column, no rail, no drop cap, 3-row openers, chapter visuals only. **1:** adds drop cap, rail notes, pull quotes, models, 4-row openers with « Dans ce chapitre ». **2:** adds `figure` diagrams, memo page, « Si ça coince » annex |
+| `finish` | What is drawn. **0:** column, no rail, no drop cap, 3-row openers, chapter visuals only. **1:** adds drop cap, rail notes, pull quotes, models, 4-row openers with « Dans ce chapitre ». **2:** adds `figure` diagrams, memo page, and leaves out the error table and the stop box lines that only repeat the chapter (D152, D156) |
 
 Even at finish 0 the new type and art apply. The floor is far above today's product.
 

@@ -43,7 +43,7 @@ function effortOf(ctx: RuntimeCtx, task: Task, agent: AgentState): DesignEffort 
 }
 
 /** The pages the shop window shows, cut from the render and never mocked (pdf §11.5), next to the guide. */
-async function writePreviews(ctx: RuntimeCtx, product: Product, previews: { label: string; svg: string }[]): Promise<string[]> {
+export async function writePreviews(ctx: RuntimeCtx, product: Product, previews: { label: string; svg: string }[]): Promise<string[]> {
   const paths: string[] = [];
   for (const [i, preview] of previews.entries()) {
     const rel = `${versionDir(product)}/previews/${String(i + 1).padStart(2, '0')}-${slugify(preview.label)}.svg`;

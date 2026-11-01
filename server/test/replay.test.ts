@@ -112,13 +112,13 @@ describe('A5: a reload is an uninterrupted run', () => {
     expect(firstGap(straight.dump, reloaded.dump)).toBeNull();
   }, LONG_TIMEOUT);
 
-  // Seed 9 hires, overreaches and lays off on D43, with money on 2 channels.
+  // Seed 3 hires, overreaches and lays off on D44, with money on 2 channels. Seeds 1 to 12 hold this road once: a change that moves the market may move the seed.
   it('flat: through a hire, a layoff and a compaction', async () => {
     const ticks = 50 * TICKS_A_DAY;
-    const straight = await play(9, ticks, 0, { ...FULL, talent: 'flat' }, true);
+    const straight = await play(3, ticks, 0, { ...FULL, talent: 'flat' }, true);
     expectFullCompany(straight.world, 'flat', 2);
     expect(straight.world.company.org!.alumni.map((a) => a.kind)).toContain('layoff');
-    const reloaded = await play(9, ticks, 7, { ...FULL, talent: 'flat' }, true);
+    const reloaded = await play(3, ticks, 7, { ...FULL, talent: 'flat' }, true);
     expect(reloaded.reloads).toBe(Math.floor(ticks / 7));
     expect(firstGap(straight.dump, reloaded.dump)).toBeNull();
   }, LONG_TIMEOUT);

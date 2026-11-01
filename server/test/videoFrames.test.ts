@@ -324,14 +324,14 @@ describe('the render spec', () => {
       ],
       products: [{ id: 'prd_1', title: 'Le balcon', design: DESIGN, files: { pdf: 'files/p/guide.pdf', cover: 'files/p/cover.svg', salesPage: null } }],
     },
-    market: { niches: [{ id: 'n', videoTempo: 'fast' }] },
+    market: { niches: [{ id: 'n', demand: 0.91 }] },
     talentTruth: { secret: true },
   } as unknown as WorldState;
 
   it('copies what the worker needs, and nothing hidden', () => {
     const spec = buildRenderSpec(world, 'cre_1', '4:5');
     expect(spec).toMatchObject({ runId: 'r1', creativeId: 'cre_1', ratio: '4:5', brand: 'Pixel Agency', pdf: 'files/p/guide.pdf', cover: 'files/p/cover.svg', voice: null });
-    expect(JSON.stringify(spec)).not.toMatch(/videoTempo|talentTruth|secret/);
+    expect(JSON.stringify(spec)).not.toMatch(/demand|talentTruth|secret/);
   });
 
   it('finds the buyer back on the product, and a pseudo or a lost review names nobody', () => {

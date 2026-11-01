@@ -2,12 +2,13 @@
  * Leaving (org §10). A departure is an agent moved to `org.alumni`, never a status: every loop of the company keeps
  * reading `company.agents`. A role that must not stay empty keeps its holder on notice until the replacement arrives.
  */
-import type { AgentId, AgentState, Alumnus, OrgState, TaskKind, WorldState } from '../../shared.js';
+import type { AgentId, AgentState, Alumnus, OrgState, Task, TaskKind, WorldState } from '../../shared.js';
 import { agentNotePath, handOverRules } from '../../learning/playbooks.js';
 import type { RuntimeCtx } from '../ctx.js';
-import { speak } from '../ctx.js';
-import { activeHolds } from '../holds.js';
+import { nameOf, speak } from '../ctx.js';
+import { activeHolds, addHold } from '../holds.js';
 import { sim } from '../modules.js';
+import { createTask, openTasks } from '../tasks.js';
 import { closeEntry, ratingText } from '../talent/challenge.js';
 import { TALENT } from '../talent/constants.js';
 import { primaryOf } from '../talent/skills.js';
@@ -129,7 +130,7 @@ function firstOut(w: WorldState, org: OrgState, idle: readonly AgentState[], day
 /** The rating a layoff states, when the league holds one: nobody leaves on a number the texts do not show. */
 function ratingLine(w: WorldState, a: AgentState): string {
   const rating = layoffRating(w, a);
-  return rating === null ? '' : `, classement ${ratingText(rating)}`;
+  return rating === null ? '' : `classement ${ratingText(rating)}, `;
 }
 
 /** L2: a role with at least two holders carries someone it has not needed for two weeks. */
@@ -139,7 +140,62 @@ function idleDuplicate(w: WorldState, org: OrgState, free: readonly AgentState[]
   return firstOut(w, org, free.filter((a) => w.day - a.hiredDay >= idleDays && roleHolders(w, a.roleId).length >= 2 && utilisation(w, org, a, idleDays) < idleUtil), idleDays);
 }
 
-/** L1 and L2, founders outside both, at most one per cooldown. Nora signs, Gabriel gives the numbers. */
+/** Who a layoff can take: no founder, nobody on notice, nobody the founder's word protects, and nobody at all under a firing hold. */
+function freeToGo(w: WorldState): AgentState[] {
+  const holds = activeHolds(w);
+  if (holds.some((h) => h.kind === 'firing')) return [];
+  return w.company.agents.filter((a) => !a.founder && !a.notice && canLeave(w, a.id).ok && !holds.some((h) => h.kind === 'pin' && h.agentId === a.id));
+}
+
+/** What a `league_review` task carries once a layoff is decided (D48). Observed numbers only: it sits in `company`. */
+export interface DecidedLayoff { agentId: AgentId; why: string }
+
+export function decidedLayoff(task: Task): DecidedLayoff | null {
+  return (task.input.layoff as DecidedLayoff | undefined) ?? null;
+}
+
+const pendingLayoff = (w: WorldState): boolean => openTasks(w, (t) => t.kind === 'league_review' && decidedLayoff(t) !== null).length > 0;
+
+/** The departure itself: the same one after a yes or outside approval mode, in the words of the evening it was decided. */
+export async function layOff(ctx: RuntimeCtx, target: AgentState, why: string): Promise<void> {
+  await requestDeparture(ctx, target.id, `licenciement, ${why}`, officerId(ctx.world, 'hr'), 'layoff');
+}
+
+/** Where L1 and L2 end. Approval mode stops here, before any money: a normal task of its kind, which waits for the founder and carries what was decided. */
+async function decideLayoff(ctx: RuntimeCtx, target: AgentState, why: string): Promise<void> {
+  const w = ctx.world;
+  if (!w.scenario.founderApproval) {
+    await layOff(ctx, target, why);
+    return;
+  }
+  const hr = officerId(w, 'hr');
+  createTask(w, { kind: 'league_review', title: `Licencier ${target.name}`, input: { layoff: { agentId: target.id, why } }, assignee: hr, createdBy: hr, reviewer: null, workLeft: 0, priority: 1 });
+}
+
+/** Who the decided layoff can still take. Undefined: they left, went on notice, became the last of their role, or the founder's word stands over them. */
+export function layoffTarget(w: WorldState, d: DecidedLayoff): AgentState | undefined {
+  return freeToGo(w).find((a) => a.id === d.agentId);
+}
+
+/** The sentence the founder signs, with what it costs. Nothing is booked before the yes. */
+export function layoffAsk(w: WorldState, target: AgentState, d: DecidedLayoff): string {
+  const severance = w.scenario.org?.payroll ? round2(ORG.severanceDays * payOf(target)) : 0;
+  return `Licencier ${target.name} (${d.why}) : ${eur(severance)} d'indemnité`;
+}
+
+/** The founder's no: the person is protected as after a refused replacement and stays, no money moved, and the count starts over (D49). No draw. */
+export function layoffRefused(ctx: RuntimeCtx, task: Task): void {
+  const d = decidedLayoff(task);
+  const w = ctx.world;
+  if (!d) return;
+  const name = nameOf(ctx, d.agentId);
+  const until = w.day + TALENT.challenge.refusalPinDays;
+  addHold(w, { kind: 'pin', productId: null, agentId: d.agentId, until, reason: `le fondateur a refusé de licencier ${name} le jour ${w.day} (nouvelle demande après le jour ${until})` });
+  w.company.org!.lossDays = 0;
+  speak(ctx, 'hr', `Le fondateur garde ${name} : pas de licenciement avant le jour ${until + 1}.`, 'org');
+}
+
+/** L1 and L2, founders outside both, at most one per cooldown and one ask at a time. Nora signs, Gabriel gives the numbers. */
 async function layoffs(ctx: RuntimeCtx, org: OrgState): Promise<void> {
   const w = ctx.world;
   const { cashDays, cooldownDays, idleDays, idleUtil, lossDays } = ORG.layoff;
@@ -148,17 +204,15 @@ async function layoffs(ctx: RuntimeCtx, org: OrgState): Promise<void> {
   org.lossDays = cash < cashDays * costs && margin < costs ? org.lossDays + 1 : 0;
   if (w.day - org.lastLayoffDay < cooldownDays) return;
 
-  const holds = activeHolds(w);
-  if (holds.some((h) => h.kind === 'firing')) return;
-  const free = w.company.agents.filter((a) => !a.founder && !a.notice && canLeave(w, a.id).ok && !holds.some((h) => h.kind === 'pin' && h.agentId === a.id));
-  const hr = officerId(w, 'hr');
+  const free = freeToGo(w);
+  if (!free.length || pendingLayoff(w)) return;
   if (org.lossDays >= lossDays) {
     const idle = free.filter((a) => utilisation(w, org, a, idleDays) < idleUtil);
     const target = idle.length ? firstOut(w, org, idle, idleDays) : [...free].sort(byLayoffOrder(w, org, idleDays))[0];
     if (!target) return;
-    const seat = talentMode(w) === 'league' ? `${ratingLine(w, target)}, ${pct(utilisation(w, org, target, idleDays), 0)} d'occupation` : '';
+    const seat = talentMode(w) === 'league' ? `${ratingLine(w, target)}${pct(utilisation(w, org, target, idleDays), 0)} d'occupation, ` : '';
     speak(ctx, 'cfo', `${eur(cash)} en caisse, moins de ${cashDays} jours de frais, et ${eur(margin)} de marge par jour pour ${eur(costs)} de frais, ${org.lossDays} soirs de suite.`, 'org');
-    await requestDeparture(ctx, target.id, `licenciement${seat}, ${eur(cash)} en caisse et ${eur(margin)} de marge par jour pour ${eur(costs)} de frais`, hr, 'layoff');
+    await decideLayoff(ctx, target, `${seat}${eur(cash)} en caisse et ${eur(margin)} de marge par jour pour ${eur(costs)} de frais`);
     org.lossDays = 0;
     return;
   }
@@ -166,7 +220,7 @@ async function layoffs(ctx: RuntimeCtx, org: OrgState): Promise<void> {
   if (!idle) return;
   const util = pct(utilisation(w, org, idle, idleDays), 0);
   speak(ctx, 'cfo', `${eur(payOf(idle) * 30)} de salaire par mois pour ${idle.role}, ${util} d'occupation sur ${idleDays} jours.`, 'org');
-  await requestDeparture(ctx, idle.id, `licenciement${ratingLine(w, idle)}, ${util} d'occupation sur ${idleDays} jours sur un rôle tenu à plusieurs`, hr, 'layoff');
+  await decideLayoff(ctx, idle, `${ratingLine(w, idle)}${util} d'occupation sur ${idleDays} jours sur un rôle tenu à plusieurs`);
 }
 
 /** Runs each evening, after the hire logic. Lean teams only: the legacy team stays as it is, notes included. */
