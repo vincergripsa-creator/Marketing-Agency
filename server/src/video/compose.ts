@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createCanvas, loadImage, type Canvas, type Image, type SKRSContext2D } from '@napi-rs/canvas';
 import { field } from '../deliverables/art/field.js';
-import { contrast, ensureContrast, mix } from '../deliverables/color.js';
+import { contrast, ensureContrast, luminance, mix } from '../deliverables/color.js';
 import { normalizeDesign, type Motif } from '../deliverables/design.js';
 import { Scene, toSvg } from '../deliverables/scene.js';
 import { decoRng } from '../deliverables/text.js';
@@ -58,6 +58,7 @@ const BOOK_DROP = 20;
 const SHADOW_ALPHA = 0.6;
 const ACCENT_CONTRAST = 5.5;
 const BUTTON_CONTRAST = 3.1;
+const LIGHT_PRIMARY = 0.22;    // of luminance: a coral this light comes out chestnut when darkened. Its guide's ink is the dark its cover wears
 const MARKER = '#ffe14d';      // a highlighter is yellow on every desk: the one colour no guide owns
 const NBSP = String.fromCharCode(0xa0);
 
@@ -156,7 +157,8 @@ function saturate(c: string, amount: number): string {
 /** The guide's own colours. The accent word and the button come from its inks: two guides do not share a yellow. */
 export function inksOf(design: DesignSpec): Inks {
   const { palette: p, inks } = design;
-  const dark = mix(p.primary, '#050807', 0.68);
+  const inked = luminance(p.primary) >= LIGHT_PRIMARY;
+  const dark = inked ? mix(inks!.ink, '#050807', 0.25) : mix(p.primary, '#050807', 0.68);
   const loudness = (c: string): number => chroma(c) * contrast(c, dark); // a colour, and one that reads as it is
   const loudest = [inks!.c, inks!.b, p.secondary, p.accent].reduce((a, b) => (loudness(b) > loudness(a) ? b : a));
   // White reads on the button as the ink stands: a yellow darkened until it does comes out olive.
@@ -164,7 +166,7 @@ export function inksOf(design: DesignSpec): Inks {
   const button = buttons.length ? buttons.reduce((a, b) => (chroma(b) > chroma(a) ? b : a)) : ensureContrast(p.accent, '#ffffff', BUTTON_CONTRAST);
   return {
     dark,
-    dark2: mix(p.primary, '#050807', 0.42),
+    dark2: inked ? inks!.ink : mix(p.primary, '#050807', 0.42),
     light: mix(inks!.paper, '#ffffff', 0.25), // the guide's paper and its ink: a dark palette keeps a light plate that reads
     ink: mix(inks!.ink, '#000000', 0.25),
     pop: saturate(button, 1.1),
@@ -483,8 +485,8 @@ export function createCompositor(timeline: Timeline, stage: Stage, assets: Asset
     font(size, family);
     const lines: string[] = [];
     let cur = '';
-    // A French line opens neither on a closing mark nor on ? ! : ;, and does not end on an opening one.
-    const glued = text.replace(/« /g, `«${NBSP}`).replace(/ ([»?!:;])/g, `${NBSP}$1`);
+    // A French line opens neither on a closing mark nor on ? ! : ;, does not end on an opening one, and keeps a figure with its unit.
+    const glued = text.replace(/« /g, `«${NBSP}`).replace(/ ([»?!:;])/g, `${NBSP}$1`).replace(/(\d) ([€%])/g, `$1${NBSP}$2`);
     for (const word of glued.split(/[ \t\n]+/)) {
       const next = cur ? `${cur} ${word}` : word;
       if (ctx.measureText(next).width > maxW && cur) { lines.push(cur); cur = word; } else cur = next;

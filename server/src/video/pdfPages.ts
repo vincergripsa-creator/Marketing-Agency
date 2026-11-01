@@ -23,7 +23,7 @@ export interface Guide {
   close(): Promise<void>;
 }
 
-interface Run { x: number; y: number; w: number; h: number; length: number }
+interface Run { x: number; y: number; w: number; h: number; length: number; letter: boolean } // `letter`: one letter alone, a drop cap. A numeral is « 06 » or « + »
 interface PageText { chars: string; at: { run: number; index: number }[]; runs: Run[]; h: number }
 
 const BODY_ENDS = 0.93;        // of the page's height: the folio sits below
@@ -39,7 +39,7 @@ function textOf(items: readonly unknown[], viewport: pdfjs.PageViewport): PageTe
     const [a, , , d, e, f] = item.transform as [number, number, number, number, number, number];
     const [x, y] = viewport.convertToViewportPoint(e, f) as [number, number];
     const size = Math.abs(d || a);
-    const run = page.runs.push({ x, y: y - size * 0.95, w: item.width ?? 0, h: size * 1.3, length: item.str.length }) - 1;
+    const run = page.runs.push({ x, y: y - size * 0.95, w: item.width ?? 0, h: size * 1.3, length: item.str.length, letter: /^\p{L}$/u.test(item.str.trim()) }) - 1;
     let index = 0;
     for (const ch of item.str) {
       for (const c of fold(ch)) {
@@ -109,8 +109,10 @@ export async function openGuide(path: string): Promise<Guide> {
       if (!best) return null;
       const { page, text, from } = best as { page: number; text: PageText; from: number };
       const body = text.runs.filter((r) => r.y + r.h < text.h * BODY_ENDS); // the folio is no text to look at
-      const boxes = boxesOf(text, from, from + wanted.length);
-      const heads = body.filter((r) => r.h >= boxes[0]!.h * HEAD_RATIO && r.y < boxes[0]!.y);
+      const found = boxesOf(text, from, from + wanted.length);
+      const line = found.at(-1)!.h;
+      const boxes = found.filter((b) => b.h <= line * HEAD_RATIO); // a line that opens on a drop cap: the marker keeps to the line's height
+      const heads = body.filter((r) => r.h >= line * HEAD_RATIO && r.y < boxes[0]!.y && !r.letter);
       return { page, boxes, inkEnd: Math.max(...body.map((r) => r.y + r.h)), bodyEnd: text.h * BODY_ENDS, headTop: heads.length ? Math.min(...heads.map((r) => r.y)) : null };
     },
     close: () => loading.destroy(),

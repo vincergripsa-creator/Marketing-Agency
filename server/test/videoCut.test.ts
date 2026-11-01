@@ -443,6 +443,15 @@ describe('proof', () => {
     expect(cuts.filter((c) => c.beats.some((b) => b.kind === 'page_proof')).length).toBeGreaterThanOrEqual(guides.length - 1);
   });
 
+  it('no bubble repeats the voice: a phrase it nearly says is no second voice', () => {
+    const g = guides[0]!;
+    const ad = g.ads.faceless_voiceover!;
+    const scenes = ad.scenes.map((s, i) => (i === 1 ? { ...s, voiceover: 'Si toi aussi tu te dis « le tapis éducateur il le mange », reste deux secondes.' } : s));
+    const phrases = ['le tapis éducateur il le mange lol', 'il pleure dès que je ferme la porte'];
+    const cut = planCut({ creative: { ...ad, scenes }, product: g.product, voc: { ...g.voc, phrases, bannedClaims: [] }, skill: 0.9, tempo: 'standard', rng: steady() });
+    expect(cut.beats.find((b) => b.kind === 'pain_bubble')?.items).toEqual([phrases[1]]);
+  });
+
   it('without a guide, or under .1, a plate stands in for the page: proof is never invented', () => {
     const g = guides[0]!;
     const noGuide = planCut({ creative: g.ads.faceless_voiceover!, product: { ...g.product, content: null }, voc: g.voc, skill: 0.9, tempo: 'standard', rng: steady() });

@@ -8,14 +8,24 @@ import { circleD, ellipseD, n, type Scene } from '../scene.js';
 import { arcs, brushD, crescent, DRAWN_AS, halfD, halftone, heartD, leafAt, paw, quarterD, type DrawnMotif } from './tiles.js';
 
 export interface HeroBox { x: number; y: number; size: number }
-export type Hero = (s: Scene, box: HeroBox, inks: InkSet, seed: number) => void;
+/** `frame` is what crops it: the box, or less on a close-up. */
+export type Hero = (s: Scene, box: HeroBox, inks: InkSet, seed: number, frame: HeroBox) => void;
 
-const moon: Hero = (s, { x, y, size }, inks, seed) => {
+const FRAME_CLEAR = 1.5;       // pt: closer, a star touches the next tile and reads as a bump on it, whole or not
+
+/** A disc the frame leaves whole, and clear of its edge. */
+const clearOf = (f: HeroBox, cx: number, cy: number, r: number): boolean => cx - r >= f.x + FRAME_CLEAR && cx + r <= f.x + f.size - FRAME_CLEAR && cy - r >= f.y + FRAME_CLEAR && cy + r <= f.y + f.size - FRAME_CLEAR;
+
+const moon: Hero = (s, { x, y, size }, inks, seed, frame) => {
   for (let i = 6; i >= 1; i--) s.circle(x + size * 0.5, y + size * 0.5, size * 0.11 * i, undefined, { stroke: inks.a, sw: size * 0.0055 });
   crescent(s, x + size * 0.46, y + size * 0.5, size * 0.36, size * 0.14, inks.c, inks.ink);
   const rnd = decoRng(seed + 3);
   let stars = '';
-  for (let i = 0; i < 18; i++) stars += circleD(x + rnd() * size, y + rnd() * size, size * (0.00275 + rnd() * 0.0055));
+  for (let i = 0; i < 18; i++) {
+    // every draw stays, so that the stars left do not move
+    const [cx, cy, r] = [x + rnd() * size, y + rnd() * size, size * (0.00275 + rnd() * 0.0055)];
+    if (clearOf(frame, cx, cy, r)) stars += circleD(cx, cy, r);
+  }
   s.path(stars, inks.paper);
 };
 
@@ -136,5 +146,5 @@ export function placeHero(s: Scene, motif: DesignSpec['motif'], box: HeroBox, in
   const worn = ground && ground !== hero.ground ? { ...inks, [hero.ground]: inks[ground], [ground]: inks[hero.ground] } : inks;
   const square = `M${n(frame.x)} ${n(frame.y)}h${n(frame.size)}v${n(frame.size)}h${n(-frame.size)}Z`;
   s.path(square, worn[hero.ground]);
-  s.clip(square, (cl) => hero.draw(cl, box, worn, seed));
+  s.clip(square, (cl) => hero.draw(cl, box, worn, seed, frame));
 }

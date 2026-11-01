@@ -209,6 +209,39 @@ describe('measuring', () => {
     expect(fitDisplay('Chiot', FACE, { width: 500, max: 62, min: 30, maxLines: 2 }).size).toBe(62);
   });
 
+  it('fitDisplay passes over a size that strands a short word inside the block, and only the smallest may keep it', () => {
+    const title = 'La peur que bébé s’étouffe avec un morceau';
+    const alone = (lines: string[]) => lines.slice(0, -1).filter((l) => !l.includes(' '));
+    const box = { width: 520, max: 62, min: 30, maxLines: 6, leading: 1.02 };
+    for (const voice of Object.values(VOICES)) {
+      const fit = fitDisplay(title, voice.display, box);
+      expect(alone(fit.lines), voice.display).toEqual([]);
+      expect(fit.size, voice.display).toBeGreaterThanOrEqual(54); // a step or two down, not a smaller title
+      expect(fit.lines.join(' ').replace(/ /g, ' ')).toBe(title);
+    }
+    // no size can avoid it: « Bébé » never fits beside the long word, the block goes as low as it may and keeps every word
+    const word = 'Micro-entrepreneuriat';
+    const stuck = fitDisplay(`Bébé ${word}`, FACE, { width: advance(FACE, word, 40) + 1, max: 40, min: 38, maxLines: 2 });
+    expect(stuck).toEqual({ size: 38, lines: ['Bébé', word] });
+    // a long word on its line is no stray: the size stays the biggest
+    expect(fitDisplay('Micro-entrepreneur sans erreur', FACE, { width: 300, max: 62, min: 20, maxLines: 5 }).lines[0]).toBe('Micro-entrepreneur');
+  });
+
+  it('fitDisplay tries a wider measure before it gives a size up: a title keeps its size, and no word stands alone, on the last line either', () => {
+    const title = 'Enfants difficiles à table';
+    const alone = (lines: string[]) => lines.slice(0, -1).filter((l) => !l.includes(' '));
+    for (const voice of Object.values(VOICES)) {
+      const fit = fitDisplay(title, voice.display, { width: 520, max: 62, min: 30, maxLines: 6, leading: 1.02 });
+      expect(fit.size, voice.display).toBeGreaterThanOrEqual(56);
+      expect(fit.lines, voice.display).toHaveLength(2);
+      expect(alone(fit.lines), voice.display).toEqual([]);
+      expect(fit.lines[1], voice.display).toContain(' ');
+      expect(fit.lines.join(' ').replace(/ /g, ' ')).toBe(title);
+    }
+    const kept = fitDisplay('La peur que bébé s’étouffe avec un morceau', VOICES.conte.display, { width: 520, max: 62, min: 30, maxLines: 6, leading: 1.02 });
+    expect(kept.lines, 'a wider measure that only sends a word alone to the foot is no answer').toEqual(['La peur que bébé', 's’étouffe avec', 'un morceau']);
+  });
+
   it('fitDisplay honours the height, and at the minimum keeps every word', () => {
     const title = 'Un chiot propre en quelques semaines, même en appartement, la méthode simple';
     const free = fitDisplay(title, FACE, { width: 400, max: 62, min: 20, maxLines: 6 });

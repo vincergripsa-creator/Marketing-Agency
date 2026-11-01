@@ -30,6 +30,8 @@ const DIGEST_PAGES = 12;
 const DASH_HEAD = 20;
 const PAIN_ITEMS = 2;
 const PAIN_ITEM_CHARS = 70;
+/** Of a phrase's key tokens, already in the voice: a second bubble saying the same words is no second voice. */
+const PAIN_ECHO = 0.75;
 
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 const total = (ns: readonly number[]): number => ns.reduce((s, n) => s + n, 0);
@@ -225,8 +227,8 @@ export function reviewQuote(voiceover: string): string | null {
 /** Real customer phrases next to the bubble: research, never invented, never a word the platform refuses. */
 function painItems(voc: VoiceOfCustomer, said: string): string[] {
   const banned = voc.bannedClaims.map(norm);
-  const heard = norm(said);
-  return voc.phrases.filter((p) => p.length <= PAIN_ITEM_CHARS && !heard.includes(norm(p)) && !banned.some((b) => norm(p).includes(b))).slice(0, PAIN_ITEMS);
+  const heard = stemSet(said);
+  return voc.phrases.filter((p) => p.length <= PAIN_ITEM_CHARS && overlap(keyTokens(p), heard) < PAIN_ECHO && !banned.some((b) => norm(p).includes(b))).slice(0, PAIN_ITEMS);
 }
 
 const readingSec = (screen: string): number => Math.max(1.8, countWords(screen) / 2.6 + 0.5);

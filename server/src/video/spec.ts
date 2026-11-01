@@ -5,12 +5,13 @@
 import { createHash } from 'node:crypto';
 import { normalizeDesign } from '../deliverables/design.js';
 import { reviewQuote } from '../deliverables/videoCut.js';
-import type { AdCreative, AdFormat, DesignSpec, HookStyle, Product, VideoCut, WorldState } from '../shared.js';
+import type { AdCreative, AdFormat, DesignSpec, HookStyle, Product, Review, VideoCut, WorldState } from '../shared.js';
+import { reviewBasis } from '../sim/feedback.js';
 import { countWords, norm } from '../sim/text.js';
 import type { VideoRatio } from './stage.js';
 
 /** Bump it when the same spec should draw another file: every cached video renders again. */
-export const RENDER_VERSION = 5;
+export const RENDER_VERSION = 6;
 
 /** A buyer's real words as the voice reads them. `name` and `rating` come from the shop's own orders: no order, no name. */
 export interface ReviewCard { quote: string; rating: number | null; name: string | null }
@@ -57,6 +58,20 @@ const buyerName = (world: Readonly<WorldState>, id: string): string | null => {
   return first && /^\p{Lu}/u.test(first) ? first : null; // a pseudo is not a first name
 };
 
+/** The words a card prints: an ad quotes a review's basis, which the shop does not show (D93). */
+const quoted = (r: Review): string => norm(reviewBasis(r));
+
+/** `rev_9` comes before `rev_12`: a string's order is not the shop's. */
+const reviewNo = (r: Review): number => Number(r.id.replace(/\D/g, ''));
+const earlier = (a: Review, b: Review): boolean => a.day < b.day || (a.day === b.day && reviewNo(a) < reviewNo(b));
+
+/**
+ * The market's reviews come from a pool: one sentence can reach two buyers, and a viewer of both ads would read a fake. The first
+ * to write it keeps it, so a later buyer takes no name back from a film already made, on this ratio or the next.
+ */
+const signedBefore = (world: Readonly<WorldState>, review: Review): boolean => world.company.products
+  .some((p) => p.stats?.reviews?.some((r) => r.customerId !== review.customerId && quoted(r) === quoted(review) && earlier(r, review)));
+
 /** The reviews the voice reads in this cut, found back on the product: the plan holds decisions, never a customer. */
 function reviewsOf(world: Readonly<WorldState>, creative: AdCreative, product: Product, cut: VideoCut): Record<number, ReviewCard> {
   const cards: Record<number, ReviewCard> = {};
@@ -64,8 +79,8 @@ function reviewsOf(world: Readonly<WorldState>, creative: AdCreative, product: P
     const quote = reviewQuote(creative.scenes?.[beat.scene]?.voiceover ?? '');
     if (!quote || (beat.kind !== 'fact_card' && beat.kind !== 'slide')) continue; // a silent format has no voice, its script still holds the words
     const said = norm(quote);
-    const review = product.stats?.reviews?.find((r) => norm(r.text).includes(said) || said.includes(norm(r.text)));
-    cards[beat.scene] = { quote, rating: review?.rating ?? null, name: review ? buyerName(world, review.customerId) : null };
+    const review = product.stats?.reviews?.find((r) => quoted(r).includes(said) || said.includes(quoted(r)));
+    cards[beat.scene] = { quote, rating: review?.rating ?? null, name: review && !signedBefore(world, review) ? buyerName(world, review.customerId) : null };
   }
   return cards;
 }

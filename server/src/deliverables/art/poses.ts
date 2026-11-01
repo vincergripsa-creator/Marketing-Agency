@@ -25,9 +25,9 @@ const ASKED: readonly (readonly [RegExp, Pose])[] = [
   [/\b(garder|durer|acquis|tenir|long terme|reflexe|bonus|cadeau)/, 'arch'],
 ];
 
-/** A close-up frames this point of the drawing, in shares of its box: where it says what it is. */
+/** A close-up frames this point of the drawing, in shares of its box: where it says what it is, and no shape left grazing its edge. */
 const FOCUS: Record<DrawnMotif, readonly [number, number]> = {
-  moon: [0.3, 0.52], sun: [0.5, 0.42], paw: [0.5, 0.34], heart: [0.42, 0.42], leaf: [0.56, 0.5], coin: [0.5, 0.42], chart: [0.72, 0.52], home: [0.46, 0.44], brush: [0.46, 0.54],
+  moon: [0.3, 0.52], sun: [0.445, 0.33], paw: [0.5, 0.34], heart: [0.42, 0.42], leaf: [0.56, 0.5], coin: [0.5, 0.43], chart: [0.72, 0.52], home: [0.46, 0.44], brush: [0.46, 0.54],
 };
 
 const CLOSE_UP = 1.75;
@@ -89,7 +89,7 @@ function accentOn(on: string[], fg: string, bg: string): string {
   return [...(readable.length ? readable : on)].sort((a, b) => contrast(b, fg) - contrast(a, fg))[0]!;
 }
 
-interface Pen { m: DrawnMotif; box: HeroBox; units: number; bg: string; on: string[]; hot: string; best: string; pick: number }
+interface Pen { m: DrawnMotif; box: HeroBox; units: number; bg: string; on: string[]; hot: string; best: string; pick: number; paper: string }
 
 /** A grid of signs, one tile each, and the one to look at. */
 function array(s: Scene, { m, box, units, bg, on, hot, pick }: Pen): void {
@@ -150,15 +150,16 @@ function stairs(s: Scene, { m, box, units, bg, on, hot }: Pen): void {
 }
 
 /** A door in the picture, the sign under it: what stays once the chapter is closed. */
-function arch(s: Scene, { m, box, bg, on }: Pen): void {
+function arch(s: Scene, { m, box, bg, on, paper }: Pen): void {
   const { x, y, size } = box;
-  const fg = on[0]!;
+  // both doors go down to the page under the picture: in the ink of the page, nothing would say where they stop
+  const [fg, rim] = on.filter((ink) => ink !== paper) as [string, string];
   const foot = y + size;
   const door = (inset: number, top: number, fill: string) => {
     const r = size / 2 - inset;
     s.path(`M${n(x + inset)} ${n(foot)}V${n(top + r)}A${n(r)} ${n(r)} 0 0 1 ${n(x + size - inset)} ${n(top + r)}V${n(foot)}Z`, fill);
   };
-  door(size * 0.1, y + size * 0.01, on[1]!);
+  door(size * 0.1, y + size * 0.01, rim);
   door(size * 0.19, y + size * 0.1, fg);
   mark(s, m, x + size / 2, foot - size * 0.32, size * 0.384, bg, fg);
 }
@@ -184,5 +185,5 @@ export function drawPose(s: Scene, pose: Pose, motif: DesignSpec['motif'], box: 
   const best = [bg, ...on].sort((a, b) => contrast(b, hot) - contrast(a, hot))[0]!;
   const square = `M${n(box.x)} ${n(box.y)}h${n(box.size)}v${n(box.size)}h${n(-box.size)}Z`;
   s.path(square, bg);
-  s.clip(square, (cl) => DRAWN[pose](cl, { m: DRAWN_AS[motif], box, units, bg, on, hot, best, pick }));
+  s.clip(square, (cl) => DRAWN[pose](cl, { m: DRAWN_AS[motif], box, units, bg, on, hot, best, pick, paper: inks.paper }));
 }

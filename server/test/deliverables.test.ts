@@ -6,6 +6,7 @@ import type { AdCreative, ChapterContent, DesignSpec, PdfContent, Product, Sales
 import { designFor, renderAdStoryboard, renderCoverSvg, renderPdf, renderSalesPageHtml } from '../src/deliverables/index.js';
 import { sanitizePdfText, wholeClause } from '../src/deliverables/text.js';
 import { titleBlock } from '../src/deliverables/cover.js';
+import { advance } from '../src/deliverables/fonts.js';
 import { VOICES } from '../src/deliverables/voices.js';
 import { finalWording } from '../src/deliverables/pdf.js';
 import { gridWidths, splitDoDont } from '../src/deliverables/pdfVisuals.js';
@@ -438,10 +439,19 @@ describe('fillable grid', () => {
 
   it('takes the whole width, however few or many columns it has', () => {
     for (const columns of [['Jour', 'Fait'], ['Jour', 'Note', 'Fait'], ['', 'Prévu', 'Payé'], Array.from({ length: 12 }, (_, k) => `Colonne${k + 1}`)]) {
-      const widths = gridWidths(columns, days(3), columns.map((c) => c === 'Fait'), columns.map(() => false), 475, 'Helvetica-Bold');
+      const widths = gridWidths(columns, days(3), columns.map((c) => c === 'Fait'), columns.map(() => false), 475, 'Helvetica-Bold', 'Helvetica-Bold');
       expect(widths.reduce((a, b) => a + b, 0), columns.join()).toBeCloseTo(475, 3);
       expect(Math.min(...widths), columns.join()).toBeGreaterThan(0);
     }
+  });
+
+  it('measures a row label in the face that prints it: a weekday is never broken, whatever the header is set in', () => {
+    const labels = ['Lundi', 'Mercredi', 'Vendredi', 'Dimanche'];
+    const widest = Math.max(...labels.map((l) => advance('Helvetica-Bold', l, 9)));
+    const [first] = gridWidths(['Jour', 'À faire', 'Fait'], labels, [false, false, true], [false, true, false], 475, 'Courier', 'Helvetica-Bold');
+    expect(first! - 12, 'the text width of the first column').toBeGreaterThanOrEqual(widest);
+    const [narrow] = gridWidths(['Jour', 'À faire', 'Fait'], labels, [false, false, true], [false, true, false], 475, 'Helvetica', 'Courier-Bold');
+    expect(narrow, 'a wide face asks for more than a narrow one').toBeGreaterThan(first!);
   });
 
   it('a malformed grid is skipped, the guide still renders', async () => {

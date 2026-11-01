@@ -24,6 +24,8 @@ const QUICK_TITLE = 0.5;        // a card this short cannot be read: the film op
 const BAR = 8;                  // 8th notes
 const BOOK_LATE_SEC = 1.2;      // a kinetic hook lands on its guide this far in
 const BOOK_LATE_SHARE = 0.6;    // of the hook, on a short one
+const BEFORE = /^Avant\s*:/;
+const AFTER = /^Après\b/u;      // its capital: « le chiot après coup » turns nothing
 
 export const clamp01 = (x: number): number => Math.max(0, Math.min(1, x));
 export const eOut = (x: number): number => 1 - Math.pow(1 - clamp01(x), 3);
@@ -124,7 +126,10 @@ function standingLine(screen: string, words: readonly SpokenWord[]): { line: Spo
     if (at >= 0) from = at + 1;
     return at;
   });
-  if (!from || hits.filter((h) => h >= 0).length < tokens.length * HOOK_SHARE) return null;
+  const said = new Set(hits.filter((h) => h >= 0));
+  if (!from || said.size < tokens.length * HOOK_SHARE) return null;
+  const written = new Set(tokens.map(bareWord));
+  if (words.slice(0, from).some((w, i) => !said.has(i) && /\d/.test(w.text) && !written.has(bareWord(w.text)))) return null; // the voice opens on a figure: a screen without it says less
   const line = tokens.map((text, i) => {
     const said = words[hits[i]! >= 0 ? hits[i]! : hits.slice(i).find((h) => h >= 0) ?? from - 1]!;
     return { text, at: said.at, end: said.end };
@@ -132,10 +137,32 @@ function standingLine(screen: string, words: readonly SpokenWord[]): { line: Spo
   return { line, rest: words.slice(from) };
 }
 
-/** The hook's screens: the line that stands alone when the script has one, then the rest of the voice, clause by clause. */
+/** Where the voice says a quoted line word for word, its opening mark back on it: `wordsOf` keeps a closing mark on its word, never an opening one. */
+function quotedLine(screen: string, words: readonly SpokenWord[]): { at: number; line: SpokenWord[] } | null {
+  const tokens = screenWords(screen);
+  if (!tokens[0]?.startsWith('«')) return null;
+  const at = words.findIndex((_, i) => tokens.every((token, k) => words[i + k] && bareWord(words[i + k]!.text) === bareWord(token)));
+  if (at <= 0) return null;
+  return { at, line: words.slice(at).map((w, i) => (i ? w : { ...w, text: `«\u00a0${w.text}` })) };
+}
+
+/**
+ * The hook's screens: the line that stands alone when the script has one, then the rest of the voice, clause by clause.
+ * A voice telling « Avant : … Après : … » gets a screen a side: the line written for the ad holds the second half alone.
+ * An editor who cut the voice at « Avant » leaves the problem alone: the written Après joins its screen, lit on the voice's last word.
+ * A quoted line with a figure said before it opens its own screen: glued to the figure, it loses its marks and reads as broken French.
+ */
 function hookScreens(words: readonly SpokenWord[], screen: string): SpokenWord[][] {
+  if (BEFORE.test(words[0]?.text ?? '')) {
+    const turn = words.findIndex((w) => AFTER.test(w.text));
+    if (turn >= 0) return [...clauses(words.slice(0, turn)), ...clauses(words.slice(turn))];
+    const last = words.at(-1)!;
+    return AFTER.test(screen.trim()) ? [[...words, ...screenWords(screen).map((text) => ({ text, at: last.at, end: last.end }))]] : clauses(words);
+  }
   const standing = standingLine(screen, words);
-  return standing ? [standing.line, ...clauses(standing.rest)] : clauses(words);
+  if (standing) return [standing.line, ...clauses(standing.rest)];
+  const quoted = quotedLine(screen, words);
+  return quoted ? [...clauses(words.slice(0, quoted.at)), ...clauses(quoted.line)] : clauses(words);
 }
 
 /** Even shots, each moved to the nearest change of text when one is close: a jump on a new word reads as an edit. */

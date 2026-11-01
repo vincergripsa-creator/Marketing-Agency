@@ -204,14 +204,19 @@ export function drawTile(s: Scene, t: Tile): void {
   }
 }
 
-/** A brush along a diagonal, its tip on (x, y), `len` long: three pieces in order from the tip, bristles, ferrule, handle, each a closed path. */
-export function brushD(x: number, y: number, len: number, deg: number): { bristles: string; ferrule: string; handle: string } {
+/**
+ * A brush along a diagonal, its tip on (x, y), `len` long: three pieces in order from the tip, bristles, ferrule, handle, each
+ * a closed path. `tuft` widens the bristles and `reach` scales the handle, for a brush too small to read by its detail.
+ */
+export function brushD(x: number, y: number, len: number, deg: number, tuft = 1, reach = 1): { bristles: string; ferrule: string; handle: string } {
   const a = (deg * Math.PI) / 180;
   const P = (t: number, w: number) => `${n(x + len * (t * Math.cos(a) - w * Math.sin(a)))} ${n(y + len * (t * Math.sin(a) + w * Math.cos(a)))}`;
+  const B = (t: number, w: number) => P(t, w * tuft);
+  const H = (t: number, w: number) => P(0.45 + (t - 0.45) * reach, w);
   return {
-    bristles: `M${P(0, -0.075)}C${P(0.03, -0.1)} ${P(0.2, -0.105)} ${P(0.3, -0.075)}L${P(0.3, 0.075)}C${P(0.2, 0.105)} ${P(0.03, 0.1)} ${P(0, 0.075)}C${P(0.025, 0.03)} ${P(-0.02, -0.03)} ${P(0, -0.075)}Z`,
+    bristles: `M${B(0, -0.075)}C${B(0.03, -0.1)} ${B(0.2, -0.105)} ${B(0.3, -0.075)}L${B(0.3, 0.075)}C${B(0.2, 0.105)} ${B(0.03, 0.1)} ${B(0, 0.075)}C${B(0.025, 0.03)} ${B(-0.02, -0.03)} ${B(0, -0.075)}Z`,
     ferrule: `M${P(0.31, -0.072)}L${P(0.44, -0.062)}L${P(0.44, 0.062)}L${P(0.31, 0.072)}Z`,
-    handle: `M${P(0.45, -0.06)}C${P(0.56, -0.09)} ${P(0.68, -0.07)} ${P(0.95, -0.03)}C${P(1.01, -0.022)} ${P(1.01, 0.022)} ${P(0.95, 0.03)}C${P(0.68, 0.07)} ${P(0.56, 0.09)} ${P(0.45, 0.06)}Z`,
+    handle: `M${H(0.45, -0.06)}C${H(0.56, -0.09)} ${H(0.68, -0.07)} ${H(0.95, -0.03)}C${H(1.01, -0.022)} ${H(1.01, 0.022)} ${H(0.95, 0.03)}C${H(0.68, 0.07)} ${H(0.56, 0.09)} ${H(0.45, 0.06)}Z`,
   };
 }
 
@@ -228,6 +233,9 @@ function crescentD(cx: number, cy: number, r: number): string {
   const P = (side: number) => `${n(cx + along * ux - side * across * uy)} ${n(cy + along * uy + side * across * ux)}`;
   return `M${P(-1)}A${n(r)} ${n(r)} 0 1 0 ${P(1)}A${n(hr)} ${n(hr)} 0 ${along > d ? 1 : 0} 1 ${P(-1)}Z`;
 }
+
+/** Under this many points a mark sits on a tile of its own: a grid, a trail, a stair. */
+const SMALL_BRUSH = 80;
 
 /** The hero as one small sign, for a picture made of several: `fg` on `bg`, centred on (cx, cy), `size` wide. */
 export function mark(s: Scene, motif: DrawnMotif, cx: number, cy: number, size: number, fg: string, bg: string, rot = 0): void {
@@ -254,7 +262,8 @@ export function mark(s: Scene, motif: DrawnMotif, cx: number, cy: number, size: 
       s.rect(cx - r * 0.2, cy + r * 0.3, r * 0.4, r * 0.7, bg);
       return;
     case 'brush': {
-      const b = brushD(cx - r * 0.72, cy + r * 0.72, size * 1.04, -45);
+      // small, a long thin brush reads as a pen: a wide tuft on a short handle stays a brush
+      const b = size < SMALL_BRUSH ? brushD(cx - r * 0.72, cy + r * 0.72, size * 1.18, -45, 1.3, 0.75) : brushD(cx - r * 0.72, cy + r * 0.72, size * 1.04, -45);
       s.path(b.bristles + b.handle, fg);
       s.path(b.ferrule, fg);
     }

@@ -706,7 +706,7 @@ export function heuristicPdfContent(
     introduction: intro0,
     chapters,
     bonus: buildBonus(c),
-    howTo: def.howTo,
+    howTo: def.howTo(c),
     nextStep: nextStepFor({ audience: c.audArt, upsell: upsell ? { title: upsell } : null }),
     wordCount: 0,
   };
@@ -755,6 +755,9 @@ export function heuristicPdfContent(
   return out;
 }
 
+/** A paragraph that opens on its own head, as the layout reads it (`RUN_IN`): the bold exists only at the very start. */
+const OPENS_ON_HEAD = /^[^:.!?]{4,34}\s:\s+\S/u;
+
 /** The reference video: the first draft is "correct mais plat" → 4-8 generic sentences + risky claims. */
 function insertFlatSentences(content: PdfContent, c: NicheCtx, rng: LocalRng, banned: readonly string[], planIndex: number): void {
   const n = Math.min(8, 4 + rng.int(0, 3) + (c.deep ? 1 : 0));
@@ -766,7 +769,8 @@ function insertFlatSentences(content: PdfContent, c: NicheCtx, rng: LocalRng, ba
   for (const ch of content.chapters) ch.paragraphs.forEach((_, i) => slots.push({ arr: ch.paragraphs, i }));
   const chosen = rng.shuffle(slots).slice(0, cliches.length);
   chosen.forEach((s, k) => {
-    const atStart = rng.chance(0.35);
+    // the flaw stays and the draw with it, only its place changes: before a head it would take a step of the ladder out of it
+    const atStart = rng.chance(0.35) && !OPENS_ON_HEAD.test(s.arr[s.i]!);
     s.arr[s.i] = atStart ? `${cliches[k]} ${s.arr[s.i]}` : `${s.arr[s.i]} ${cliches[k]}`;
   });
   // risky claims a careful fact-checker must catch (skipped when the agent learned to ban them)

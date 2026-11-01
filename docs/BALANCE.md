@@ -101,6 +101,23 @@ Le run de référence (entreprise d'avant la V1, 25 jours, graine 7) ne se réen
 |---|---|---|---|---|
 | P8.1 | Texte des guides : détail des étapes sous son propre intertitre, plan sans lignes répétées, exemple pour chaque chapitre, citations et notes en marge | `dc93c9d2173be97aade7336c20a776dd70652baf` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `ledger` et `kpis` (le texte change la note de qualité, donc les ventes) ; `tasks` et `events` inchangés. Enregistrée sur `HEAD` plus les seuls fichiers de P8.1 |
 | P10.2 | Les rivaux remplacent la pénalité permanente des clones ; liste e-mail et kit côté marché | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` (identique) | Rien : en 25 jours, la graine 7 ne voit ni clone ni rival (0 événement `competitor_clone`, `market.rivals` vide) et l'entreprise n'a ni liste ni kit. `--record` réécrit le même fichier, sur `HEAD` plus les seuls fichiers de P10.2 |
+| Dernière liste (D135 à D143) | Texte des guides (D1, D2, N1, `bare`) et couvertures (D3, D138) | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` (identique) | Rien : l'empreinte est restée la même, aucun réenregistrement. Elle couvre l'entreprise d'avant la V1 sur 25 jours, pas le marché ci-dessous |
+
+### Dernière liste : à lire à S14
+
+L'empreinte n'a pas bougé, le marché si. D1, D2 et N1 changent le texte d'un guide, donc parfois le brouillon gardé. D3 change le titre qu'une couverture imprime, donc `lineBalance`, donc la note visuelle (D138). `balance.ts` n'a pas changé.
+
+| Graine | Trésorerie J60, 878f021 → final | Trésorerie J90, 878f021 → final | Première écriture différente |
+|---|---:|---:|---|
+| 7 | 7 777,60 € → 6 496,98 € | 14 465,66 € → 11 006,48 € | J43 |
+| 11 | 3 427,24 € → 3 404,65 € | 8 399,47 € → 10 509,15 € | J51 |
+| 42 | 1 623,79 € → 1 623,79 € | 3 633,24 € → 4 217,45 € | après J60 |
+| 12 | | 13 458,19 € → 13 458,19 € | aucune d'ici J90, mais la ligue a bougé : une note de design, `underBar`, une mise à l'épreuve |
+
+- **D3 seul**, D1, D2 et N1 retirés : graine 7 dès J57 (7 777,60 € → 7 735,29 €), graine 11 dès J51 (3 427,24 € → 3 404,65 €). D3 retiré aussi, les écritures et les KPI redeviennent ceux de 878f021 sur les graines 7, 11 et 42. Q-1 retiré en plus, le monde entier leur est égal, jour après jour jusqu'à J60.
+- **La même couverture vaut 5,5 points de plus** : « La peur que bébé… » passe de 76 à 81,5 sur la graine 7, de 70,2 à 75,8 sur la graine 42.
+- **Les écarts de J90 sont surtout du chaos** : un guide, une note ou une date de lancement qui bouge à J43 déplace tout ce qui suit, dans un sens ou dans l'autre (−24 % sur la graine 7, +25 % sur la graine 11). Ils ne disent pas qu'un meilleur guide vend moins. Pour lire un effet, il faut le contrôle apparié des 30 graines de S14.
+- **Les corrections de la porte ne bougent rien** : le monde final est égal, jour après jour jusqu'à J60 sur les graines 7, 11 et 42, à celui d'avant ces corrections (`fitDisplay` élargi, colonne des fiches, cases à cocher, arches, étoiles, soleil, `bare`).
 
 ### Rivaux : à lire à S14
 

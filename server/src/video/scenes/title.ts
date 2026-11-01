@@ -21,7 +21,7 @@ const BEARING = 10;            // a « J » reaches left of its origin
 export function drawTitle(s: SceneApi, b: TimelineBeat, t: number): void {
   const { ctx, C, stage } = s;
   const box = stage.heroBox;
-  artUnderType(s, b.t0 + t, false);
+  artUnderType(s, b.t0 + t, null);
   const title = splitTitle(s.assets.spec.title).head.toLocaleUpperCase('fr-FR');
   const fit = s.memo(b, () => {
     const room = box.h - BAR_ROOM;

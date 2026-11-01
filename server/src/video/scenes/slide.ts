@@ -1,11 +1,11 @@
 /**
  * Text on a plate: a slide of `text_slideshow`, a card of `carousel`, the one image of `static_image` (video §3.4).
- * Words appear at reading speed, and a card is the same slide at its end state, so the film and the still cannot disagree.
+ * Words come up fast and then stand to be read, and a card is the same slide at its end state, so the film and the still cannot disagree.
  */
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { contrast, mix, rgba } from '../../deliverables/color.js';
-import type { Compositor, SceneApi, TextBox } from '../compose.js';
+import type { Compositor, Inks, SceneApi, TextBox } from '../compose.js';
 import { FACE } from '../fonts.js';
 import { insideSafe, type Rect } from '../stage.js';
 import { eOut, type TimelineBeat } from '../timeline.js';
@@ -14,9 +14,10 @@ import { chipLabel, QUOTE_LABEL } from './fact.js';
 import { accentWord, ORPHAN } from './hook.js';
 import { drawReview, leadOf } from './review.js';
 
-const WORDS_PER_SEC = 2.6;     // what `max(1.8, words / 2.6 + 0.5)` gives a slide to be read in
+const REVEAL_PER_SEC = 6;      // a silent film: `max(1.8, words / 2.6 + 0.5)` gives a slide its time to be read, the words must not spend it arriving
 const FADE_SEC = 0.08;
 const MAX_SIZE = 150;
+const OPENING_SIZE = 240;      // an opening slide does a hook's work on a bare plate
 const MIN_SIZE = 40;
 const SIZE_STEP = 4;
 const LINE = 1.28;             // a French capital carries its accent into the line above
@@ -30,25 +31,36 @@ const PILL_GAP = 30;           // between the guide and its button
 const UNSAID = 0.9;            // a word of the opening slide yet to be read: it reads, and it is not lit
 const DECK_FOOT = 110;         // of the column, on a deck: its place and its arrow
 const ARROW_CONTRAST = 3;
+const DIGIT_CONTRAST = 3;      // large type, over the whole height of its plate
+const DIGIT_STEP = 0.2;        // toward the guide's ink
+const DIGIT_STEPS = 12;
 const SWAY = 7;                // a held slide breathes: all its words out, nothing else would move and QA would call it frozen
 const SWAY_SPEED = 1.4;
 
 interface Plate { top: string; bottom: string; text: string; digit: string }
 interface Fit { size: number; lines: string[]; y0: number }
 
+/** The light plate. A figure wears the guide's colour, gone toward its ink as far as the foot of the plate asks: that foot takes the secondary. */
+export function lightPlate(C: Inks): Plate {
+  const bottom = mix(C.light, C.secondary, 0.7);
+  let digit = C.primary;
+  for (let i = 0; i < DIGIT_STEPS && Math.min(contrast(digit, C.light), contrast(digit, bottom)) < DIGIT_CONTRAST; i++) digit = mix(digit, C.ink, DIGIT_STEP);
+  return { top: C.light, bottom, text: C.ink, digit };
+}
+
 /** Dark, light, dark: a hard cut has to read. A quote stays on the light plate of the comments, past frame 1: the film opens dark. */
 function plateOf(s: SceneApi, b: TimelineBeat, quote: boolean): Plate {
   const { C } = s;
   const dark = { top: C.dark, bottom: C.dark2, text: '#ffffff', digit: C.gold };
-  const light = { top: C.light, bottom: mix(C.light, C.secondary, 0.7), text: C.ink, digit: C.primary };
+  const light = lightPlate(C);
   const deep = { top: C.dark2, bottom: mix(C.primary, C.dark, 0.45), text: '#ffffff', digit: C.gold };
   return quote && b.scene !== 0 ? light : ([dark, deep, light] as const)[b.scene % 3]!;
 }
 
 /** Largest size that fits the box, measured on the ink: Anton's accented capitals rise above any line height, a « j » past its origin. */
-function fit(s: SceneApi, text: string, family: string, box: Rect): Fit {
+function fit(s: SceneApi, text: string, family: string, box: Rect, cap = MAX_SIZE): Fit {
   const { ctx } = s;
-  for (let size = MAX_SIZE; ; size -= SIZE_STEP) {
+  for (let size = cap; ; size -= SIZE_STEP) {
     const lines = s.wrap(text, size, family, box.w);
     const widest = Math.max(...lines.map((l) => {
       const m = ctx.measureText(l);
@@ -63,8 +75,8 @@ function fit(s: SceneApi, text: string, family: string, box: Rect): Fit {
 }
 
 /**
- * Word by word, at reading speed. The first one is there on the cut: the frame is never empty. `whole`: every word is there
- * at once, and they light at that speed: an opening slide says all of its line on its first frame, one word in the colour.
+ * Word by word, quickly. The first one is there on the cut: the frame is never empty. `whole`: every word is there at
+ * once, and they light at that speed: an opening slide says all of its line on its first frame, one word in the colour.
  */
 function words(s: SceneApi, f: Fit, family: string, plate: Plate, box: Rect, center: boolean, t: number, whole = false): void {
   const { ctx } = s;
@@ -75,7 +87,7 @@ function words(s: SceneApi, f: Fit, family: string, plate: Plate, box: Rect, cen
     let x = center ? box.x + (box.w - ctx.measureText(line).width) / 2 : box.x + leadOf(s, line);
     const y = f.y0 + row * f.size * LINE;
     for (const word of line.split(' ')) {
-      const age = t - index / WORDS_PER_SEC;
+      const age = t - index / REVEAL_PER_SEC;
       if (whole || age >= 0) {
         ctx.globalAlpha = !index ? 1 : whole ? UNSAID + (1 - UNSAID) * eOut(age / FADE_SEC) : eOut(age / FADE_SEC);
         ctx.fillStyle = (whole ? index === accent : /\d/.test(word)) ? plate.digit : plate.text;
@@ -122,10 +134,11 @@ function drawStatic(s: SceneApi, b: TimelineBeat, t: number): void {
   const fits = label ? Math.min(1, (y - CTA_H / 2 - PILL_GAP - slot.y) / slot.h) : 1; // the button never lies on the guide's title
   s.book(slot.x + slot.w / 2, slot.y + slot.h * fits / 2, slot.w * fits, 0.14, t);
   const text = b.screen.toLocaleUpperCase('fr-FR');
-  const f = s.memo(b, () => fit(s, text, s.display, hero));
+  const line = label ? { ...hero, h: Math.min(hero.h, y - CTA_H / 2 - PILL_GAP - hero.y) } : hero; // the button never lies on the hook either
+  const f = s.memo(b, () => fit(s, text, s.display, line));
   ctx.shadowColor = 'rgba(0,0,0,0.55)';
   ctx.shadowOffsetY = 9;
-  words(s, f, s.display, { top: C.dark, bottom: C.dark2, text: '#ffffff', digit: C.gold }, hero, true, Infinity);
+  words(s, f, s.display, { top: C.dark, bottom: C.dark2, text: '#ffffff', digit: C.gold }, line, true, Infinity);
   ctx.shadowColor = 'transparent';
   ctx.shadowOffsetY = 0;
 
@@ -171,7 +184,7 @@ export function drawSlide(s: SceneApi, b: TimelineBeat, t: number): void {
   const room = { x: box.x, y: box.y + top, w: box.w, h: box.h - top - SWAY - (deck ? DECK_FOOT : 0) };
   const family = opening ? s.display : FACE.bold;
   const text = opening ? b.screen.toLocaleUpperCase('fr-FR').replace(/[\s.,:;…]+$/, '') : b.screen; // no end mark on a screen, as on the hook
-  const f = s.memo(b, () => fit(s, text, family, room));
+  const f = s.memo(b, () => fit(s, text, family, room, opening ? OPENING_SIZE : MAX_SIZE));
   if (quote) {
     s.font(38, FACE.bold, 3);
     ctx.fillStyle = opening ? s.C.gold : s.C.primary;

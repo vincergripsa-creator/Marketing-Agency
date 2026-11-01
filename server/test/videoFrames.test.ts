@@ -5,11 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import PDFDocument from 'pdfkit';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { normalizeDesign } from '../src/deliverables/design.js';
+import { contrast, mix } from '../src/deliverables/color.js';
+import { normalizeDesign, PALETTES } from '../src/deliverables/design.js';
 import type { DesignSpec, VideoBeat, VideoCut, WorldState } from '../src/shared.js';
 import { detectCaps, findFfmpeg } from '../src/video/caps.js';
 import { buildRenderSpec, renderKey, type RenderSpec } from '../src/video/spec.js';
-import type { SpokenLine } from '../src/video/speech.js';
+import { estimatedWords, type SpokenLine } from '../src/video/speech.js';
 import { insideSafe, safeColumn, stageFor, zoneAt, type Stage, type VideoRatio } from '../src/video/stage.js';
 import { BEAT_GAP, buildTimeline, captionGroups, plannedCuts, priceAt, settledFrames, TEMPO_BPM, type Timeline } from '../src/video/timeline.js';
 import type { Compositor } from '../src/video/compose.js';
@@ -60,8 +61,8 @@ const SPEC: RenderSpec = {
 const tmp = mkdtempSync(join(tmpdir(), 'video-frames-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
-/** Five pages, the needle wrapped on two lines of the third. */
-function writeGuide(path: string): Promise<void> {
+/** Five pages, the needle wrapped on two lines of the third. `width` and `size` set its column: a real guide's is 340 pt wide, at 11 pt. */
+function writeGuide(path: string, width = 300, size = 30, lead = 'Un mot sur la terre.'): Promise<void> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', autoFirstPage: true, compress: false });
     const out = createWriteStream(path);
@@ -69,9 +70,9 @@ function writeGuide(path: string): Promise<void> {
     out.on('error', reject);
     doc.pipe(out);
     doc.font('Helvetica-Bold').fontSize(32).fillColor('#2f6b46').text('Le balcon en 8 étapes');
-    for (const body of ['Avant de commencer, regardez votre balcon.', `Un mot sur la terre. ${NEEDLE}, et il faut le nourrir.`, 'Le calendrier.', 'Fin du guide.']) {
+    for (const body of ['Avant de commencer, regardez votre balcon.', `${lead} ${NEEDLE}, et il faut le nourrir.`, 'Le calendrier.', 'Fin du guide.']) {
       doc.addPage();
-      doc.font('Helvetica').fontSize(30).fillColor('#222222').text(body, { width: 300 });
+      doc.font('Helvetica').fontSize(size).fillColor('#222222').text(body, { width });
     }
     doc.end();
   });
@@ -217,6 +218,14 @@ describe('the timeline', () => {
     expect(timelineOf({ ...cutOf({ captionWords: 2 }, [slide]), sfx: false }).plain).toBe(true);
   });
 
+  /** The screens of a hook on words as speech gives them: a closing mark stays on its word, and « Avant : » is one. */
+  const groupsOf = (line: string, screen: string) => {
+    const cut = cutOf({}, [{ ...BEATS[1]!, spoken: line, screen }, BEATS[6]!]);
+    const lines = cut.beats.map((b): SpokenLine => { const words = estimatedWords(b.spoken); return { text: b.spoken, voice: null, wav: null, speechSec: words.at(-1)?.end ?? 0, words }; });
+    return buildTimeline(cut, lines, TEMPO_BPM.standard).beats[0]!.groups;
+  };
+  const screens = (line: string, screen: string) => groupsOf(line, screen).map((g) => g.map((w) => w.text).join(' '));
+
   const hookLine = (screen: string, line: string) => {
     const tl = timelineOf(cutOf({}, [{ ...BEATS[1]!, spoken: line, screen }, BEATS[6]!]));
     return tl.beats[0]!.groups.map((g) => g.map((w) => w.text).join(' '));
@@ -236,6 +245,40 @@ describe('the timeline', () => {
     expect(first!.map((w) => w.at)).toEqual([...first!.map((w) => w.at)].sort((a, b) => a - b));
   });
 
+  it('never opens on a line that drops the figure the voice opens on: the screen says what the voice says', () => {
+    const [first] = hookLine('La méthode simple', '14 jours, 7 étapes, zéro prise de tête : la méthode simple.');
+    expect(first).toContain('14');
+    expect(first).toContain('7');
+    expect(hookLine('POV : et tu coches la dernière case', 'POV : la nuit 14 du plan, et tu coches la dernière case.').join(' ')).toContain('14');
+    expect(hookLine('Un meuble relooké qui a l’air neuf', '8 étapes, 3 jours : un meuble relooké qui a l’air neuf.')[0]).toContain('8');
+    expect(hookLine('14 nuits de plan', 'En 14 nuits, 14 nuits de plan.'), 'a figure the line holds costs it nothing').toEqual(['14 nuits de plan']);
+  });
+
+  it('gives a voice that tells before and after one screen a side, whatever the line written for the ad holds', () => {
+    expect(screens('Avant : gronder le chiot après coup. Après : nettoyer sans commentaire.', 'Après : nettoyer sans commentaire')).toEqual(['Avant\u00a0: gronder le chiot après coup.', 'Après\u00a0: nettoyer sans commentaire.']);
+    const short = screens('Avant : l’épuisement. Après 14 nuits de plan : arrêter de culpabiliser.', 'Après 14 nuits : arrêter de culpabiliser');
+    expect(short[0], 'a short side stands alone too').toBe('Avant\u00a0: l’épuisement.');
+    expect(short[1]).toMatch(/^Après 14 nuits/);
+    expect(screens('Avant : le stress.', 'Après 3 jours : une peinture qui tient des années'), 'an editor cut the second side: the written one joins its screen').toEqual(['Avant\u00a0: le stress. Après 3 jours\u00a0: une peinture qui tient des années']);
+    expect(screens('Avant : le stress.', 'Le stress'), 'no written Après: the screen follows the voice').toEqual(['Avant\u00a0: le stress.']);
+    expect(screens('Avant de commencer, regarde ton balcon.', 'Regarde ton balcon'), 'a line that merely opens on the word keeps its screen').toEqual(['Regarde ton balcon']);
+  });
+
+  it('lights the written Après on the last word said: the whole story stands from the first frame, and the voice leads it', () => {
+    const [group, ...rest] = groupsOf('Avant : gronder le chiot après coup.', 'Après : nettoyer sans commentaire');
+    expect(rest).toHaveLength(0);
+    const after = group!.findIndex((w) => /^Après/.test(w.text));
+    expect(new Set(group!.slice(after - 1).map((w) => w.at)).size).toBe(1);
+  });
+
+  it('gives a quoted line its own screen behind the figure the voice opens on, both marks on it', () => {
+    const line = '5 erreurs qui entretiennent « bébé se réveille plusieurs fois par nuit ».';
+    expect(screens(line, '« bébé se réveille plusieurs fois par nuit »')).toEqual(['5 erreurs qui entretiennent', '«\u00a0bébé se réveille plusieurs fois par nuit\u00a0».']);
+    expect(screens(line, '« bébé ne dort pas »'), 'a line the voice does not say gives way to the voice').toHaveLength(1);
+    expect(screens('5 erreurs à éviter ce soir.', '« autre chose »'), 'a line the voice does not say opens nothing').toEqual(['5 erreurs à éviter ce soir.']);
+    expect(hook!.typeOf([{ text: '«\u00a0bébé', at: 0, end: 1 }, { text: 'dort\u00a0».', at: 1, end: 2 }])).toEqual(['«\u00a0BÉBÉ', 'DORT\u00a0»']);
+  });
+
   it('leaves no word alone at the end of a clause too long for one screen', () => {
     expect(hookLine('7 étapes', '7 étapes, et le tableau de suivi du chiffre d’affaires à imprimer.')).toEqual(['7 étapes', 'et le tableau de suivi du chiffre d’affaires à imprimer.']);
   });
@@ -248,7 +291,7 @@ describe('the timeline', () => {
     const page = timelineOf(cutOf({}, [BEATS[3]!, BEATS[6]!]));
     expect(plannedCuts(page)).toBe(page.beats.reduce((n, b) => n + b.shotAt.length, 0) + 1);
     const held = timelineOf(cutOf({ captionWords: 6 }, [BEATS[3]!, BEATS[6]!]));
-    expect(plannedCuts(held)).toBe(held.beats.reduce((n, b) => n + b.shotAt.length, 0)); // a plain editor holds his page
+    expect(plannedCuts(held)).toBe(held.beats.reduce((n, b) => n + b.shotAt.length, 0)); // a plain editor holds the page
     const pain = timelineOf(cutOf({}, [BEATS[2]!, BEATS[6]!]));
     expect(plannedCuts(pain)).toBe(pain.beats.reduce((n, b) => n + b.shotAt.length, 0) + 2);
   });
@@ -305,6 +348,39 @@ describe('the render spec', () => {
     expect(reviewed([review], [{ id: 'cus_7', name: '@lea_du_34' }]).reviews[0]).toMatchObject({ rating: 4, name: null });
     expect(reviewed([review], []).reviews[0]).toMatchObject({ rating: 4, name: null });
     expect(reviewed([], []).reviews[0]).toEqual({ quote: 'très clair, je recommande', rating: null, name: null });
+  });
+
+  it('finds a buyer by the words the voice reads: an ad quotes the basis of a review, the shop prints another line (D93)', () => {
+    const fact: VideoBeat = { kind: 'fact_card', scene: 0, spoken: 'x', screen: 'Avis vérifié : 5/5', estSec: 3, shots: 1 };
+    const creative = { id: 'cre_r', productId: 'prd_1', format: 'faceless_voiceover', hook: 'h', cut: cutOf({}, [fact]), scenes: [{ voiceover: 'Un acheteur a écrit sur le guide : « très clair, je recommande ».' }] };
+    const review = { id: 'rev_1', day: 3, customerId: 'cus_7', rating: 4, text: 'Bonne surprise, lu en une soirée.', basis: 'Très clair, je recommande.' };
+    const spec = buildRenderSpec({
+      runId: 'r', company: { name: 'Pixel Agency', creatives: [creative], products: [{ id: 'prd_1', title: 'T', design: DESIGN, files: { pdf: null, cover: null }, stats: { reviews: [review] } }] }, market: { customers: [{ id: 'cus_7', name: 'Sophie Martin' }] },
+    } as unknown as WorldState, 'cre_r', '9:16');
+    expect(spec.reviews[0]).toEqual({ quote: 'très clair, je recommande', rating: 4, name: 'Sophie' });
+  });
+
+  it('keeps the words and leaves the name to the first who signed a sentence: a viewer of both ads would read a fake', () => {
+    const fact: VideoBeat = { kind: 'fact_card', scene: 0, spoken: 'x', screen: 'Avis vérifié : 5/5', estSec: 3, shots: 1 };
+    const creative = { id: 'cre_r', productId: 'prd_1', format: 'faceless_voiceover', hook: 'h', cut: cutOf({}, [fact]), scenes: [{ voiceover: 'Un acheteur a écrit sur le guide : « très clair, je recommande ».' }] };
+    const text = 'Très clair, je recommande.';
+    const card = (other: { customerId: string; text: string; day?: number; id?: string }, id = 'rev_1') => buildRenderSpec({
+      runId: 'r',
+      company: {
+        name: 'Pixel Agency', creatives: [creative],
+        products: [
+          { id: 'prd_1', title: 'T', design: DESIGN, files: { pdf: null, cover: null }, stats: { reviews: [{ id, day: 3, customerId: 'cus_7', rating: 4, text: 'Une ligne de la boutique.', basis: text }] } },
+          { id: 'prd_2', title: 'U', design: DESIGN, files: { pdf: null, cover: null }, stats: { reviews: [{ id: other.id ?? 'rev_2', day: other.day ?? 1, rating: 5, text: 'Une autre ligne de la boutique.', customerId: other.customerId, basis: other.text }] } },
+        ],
+      },
+      market: { customers: [{ id: 'cus_7', name: 'Sophie Martin' }, { id: 'cus_8', name: 'Anaïs Petit' }] },
+    } as unknown as WorldState, 'cre_r', '9:16').reviews[0];
+    expect(card({ customerId: 'cus_8', text: 'TRÈS clair,  je recommande.' })).toEqual({ quote: 'très clair, je recommande', rating: 4, name: null });
+    expect(card({ customerId: 'cus_8', text, day: 5 }), 'the first who wrote it keeps it, whoever wrote it after').toMatchObject({ rating: 4, name: 'Sophie' });
+    expect(card({ customerId: 'cus_8', text, day: 3, id: 'rev_12' }, 'rev_9'), 'the same day goes by the numbers of the ids, not by a string').toMatchObject({ name: 'Sophie' });
+    expect(card({ customerId: 'cus_8', text, day: 3, id: 'rev_9' }, 'rev_12')).toMatchObject({ name: null });
+    expect(card({ customerId: 'cus_7', text }), 'the same buyer on two guides is one buyer').toMatchObject({ name: 'Sophie' });
+    expect(card({ customerId: 'cus_8', text: 'Autre chose.' }), 'another sentence takes nothing').toMatchObject({ name: 'Sophie' });
   });
 
   it('refuses a creative it cannot render', () => {
@@ -450,6 +526,33 @@ describe.skipIf(!hasPdfjs || !hasCanvas)('real pages of the guide', () => {
     await guide.close();
   });
 
+  it('takes a drop cap for what it is: no numeral, and no part of the marked line', async () => {
+    const path = join(tmp, 'drop.pdf');
+    await new Promise<void>((resolve, reject) => {
+      const doc = new PDFDocument({ size: 'A4', compress: false });
+      const out = createWriteStream(path);
+      out.on('finish', () => resolve());
+      out.on('error', reject);
+      doc.pipe(out);
+      doc.font('Helvetica').fontSize(53).text('T', 56, 55, { lineBreak: false });
+      doc.fontSize(12).text('ous les soirs, la même routine en cinq gestes.', 92, 70, { lineBreak: false });
+      doc.text('Une ligne plus bas sur la même page de texte.', 56, 300, { lineBreak: false });
+      doc.addPage();
+      doc.fontSize(120).text('+', 56, 90, { lineBreak: false }); // the bonus chapter's numeral: one mark, no letter
+      doc.fontSize(12).text('Le bonus se lit en dernier, une fois la méthode en place.', 56, 260);
+      doc.end();
+    });
+    const guide = await (await import('../src/video/pdfPages.js')).openGuide(path);
+    const under = guide.findNeedle('Une ligne plus bas sur la même page')!;
+    expect(under.headTop, 'a body page keeps its close-up').toBeNull();
+    const opening = guide.findNeedle('Tous les soirs, la même routine en cinq gestes')!;
+    expect(opening.headTop).toBeNull();
+    expect(opening.boxes).toHaveLength(1);
+    expect(opening.boxes[0]!.h, 'the marker keeps to the line').toBeLessThan(20);
+    expect(guide.findNeedle('Le bonus se lit en dernier')!.headTop, 'a real numeral stays one').not.toBeNull();
+    await guide.close();
+  });
+
   it('points pdf.js at its fonts with a path Node can read: a file:// URL fails in silence', async () => {
     const dir = (await import('../src/video/pdfPages.js')).standardFontDir()!;
     expect(dir.endsWith('/')).toBe(true);
@@ -571,6 +674,16 @@ describe.skipIf(!compose)('the frames', { timeout: 30_000 }, () => {
       expect(boxes.filter((b) => /^[»?!:;]/.test(b.text)), screen).toEqual([]);
       const plate = boxes.filter((b) => b.text !== b.text.toLocaleUpperCase('fr-FR'));
       expect(Math.max(...plate.map((b) => b.y + b.h)), screen).toBeLessThan(stage.captionY - 20);
+    }
+  });
+
+  it('keeps a figure with its unit: « 1000 / € » is no line of a plate', async () => {
+    const words = 'on a mis presque tout notre budget de la semaine dans ce projet et il reste encore'.split(' ');
+    for (let n = 2; n <= words.length; n++) {
+      const screen = `${words.slice(0, n).join(' ')} 1000 € de travaux`;
+      const tl = timelineOf(cutOf({}, [BEATS[1]!, { ...BEATS[4]!, spoken: screen, screen }, BEATS[6]!]));
+      const { comp } = await make(tl, { pages: false });
+      expect(comp.drawFrame(frameOf(tl, 'fact_card')).filter((b) => b.text.startsWith('€')), screen).toEqual([]);
     }
   });
 
@@ -979,6 +1092,37 @@ describe.skipIf(!compose)('the frames', { timeout: 30_000 }, () => {
   const pageTimeline = (spokenLine: string, over: Partial<VideoCut['metrics']> = {}) => timelineOf(cutOf(over, [BEATS[1]!, { ...BEATS[3]!, spoken: spokenLine, shots: 3 }, BEATS[6]!]));
   const WORDS = 'Vous savez déjà ce que tout le monde vous dira un jour sur ce point. Le terreau d’un pot s’épuise vite, il n’a pas la réserve d’un sol de jardin.';
 
+  it('stands a plain hook on a flat ground: the art stays at the edges of the frame, and the accent reads on what is left of it', async () => {
+    const beats = [{ ...BEATS[1]!, spoken: 'Un plan simple pour ce soir.', screen: 'Un plan simple pour ce soir' }, BEATS[6]!];
+    const tl = timelineOf(cutOf({ captionWords: 6, productSec: null }, beats));
+    expect(tl.plain).toBe(true);
+    expect(tl.bookSec).toBeNull();
+    const { comp, stage } = await make(tl, { pages: false, width: 540 });
+    const other = await make(tl, { pages: false, width: 540, spec: { design: { ...DESIGN, motif: 'moon', seed: 99 } } });
+    const f = frameOf(tl, 'hook', 0.5);
+    const boxes = comp.drawFrame(f);
+    const one = Uint8Array.from(comp.canvas.data());
+    other.comp.drawFrame(f);
+    const two = other.comp.canvas.data();
+    const moved = (y0: number, y1: number, x0: number, x1: number) => {
+      let n = 0; let all = 0;
+      for (let y = Math.round(y0); y < Math.round(y1); y++) {
+        for (let x = Math.round(x0); x < Math.round(x1); x++) { all++; const i = (y * stage.w + x) * 4; if (Math.abs(one[i]! - two[i]!) > 30) n++; }
+      }
+      return n / all;
+    };
+    const top = Math.min(...boxes.map((b) => b.y));
+    const bottom = Math.max(...boxes.map((b) => b.y + b.h));
+    const left = Math.min(...boxes.map((b) => b.x));
+    const right = Math.max(...boxes.map((b) => b.x + b.w));
+    expect(moved(top, bottom, left, right), 'one guide or another: the same ground under the type').toBeLessThan(0.04);
+    expect(moved(0, Math.min(top, 130), 0, stage.w), 'the art still stands above it').toBeGreaterThan(0.1);
+    for (const { name, palette, inks } of PALETTES) {
+      const C = compose!.inksOf(normalizeDesign({ ...DESIGN, palette, inks }));
+      expect(contrast(hook!.veiledAccent(C), mix(C.dark, C.light, 0.1)), name).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it('stops the paper where it stops on every beat: the art takes the foot of a tall frame', async () => {
     const tl = pageTimeline(WORDS);
     const { comp, stage } = await make(tl);
@@ -1037,6 +1181,99 @@ describe.skipIf(!compose)('the frames', { timeout: 30_000 }, () => {
       expect(waits).toBeGreaterThan(0);
       expect(waits).toBeLessThan(250);
     }
+  });
+
+  it('rests with the whole mark in the frame once the line is swept, its first line included', () => {
+    const { aimAt, wholeMark } = proofScene!;
+    const W = 1080;
+    const floor = 2.69;
+    const boxes = [{ x: 54, y: 100, w: 328, h: 13.4 }, { x: 54, y: 118, w: 120, h: 13.4 }];
+    const k = wholeMark(boxes, 3.6 * 1.16, floor, W); // the push of a long hold
+    const aim = aimAt(boxes, k, W, 1, 1);
+    for (const b of boxes) {
+      expect(W / 2 + (b.x - aim.x) * k).toBeGreaterThanOrEqual(40);
+      expect(W / 2 + (b.x + b.w - aim.x) * k).toBeLessThanOrEqual(W - 40);
+    }
+    expect(aimAt(boxes, 3.6, W, 1, 1).x, 'on the way there, the middle of the whole mark').toBeCloseTo(218, 6);
+    expect(aimAt(boxes, 3.6, W, 1, 0).x, 'not yet: the line the marker ended on').toBeCloseTo(114, 6);
+    expect(wholeMark(boxes, 2, floor, W), 'a punch-in stays one').toBe(floor);
+    expect(wholeMark([boxes[1]!], 3, floor, W), 'a short mark keeps the camera where it is').toBe(3);
+  });
+
+  /** The marked boxes a frame draws, where they land on it: the canvas's own transform says. */
+  function marksOn(comp: Awaited<ReturnType<typeof make>>['comp'], frame: number): { x0: number; x1: number }[] {
+    const proto = Object.getPrototypeOf(comp.canvas.getContext('2d')) as { roundRect: (...a: number[]) => void };
+    const round = proto.roundRect;
+    const marks: { x0: number; x1: number }[] = [];
+    proto.roundRect = function (this: { globalCompositeOperation: string; getTransform(): { a: number; c: number; e: number } }, ...a: number[]) {
+      if (this.globalCompositeOperation === 'multiply') {
+        const m = this.getTransform();
+        const [x, y, w] = a as [number, number, number];
+        marks.push({ x0: m.a * x + m.c * y + m.e, x1: m.a * (x + w) + m.c * y + m.e });
+      }
+      round.apply(this, a);
+    };
+    try {
+      comp.drawFrame(frame);
+    } finally {
+      proto.roundRect = round;
+    }
+    return marks;
+  }
+
+  const plainPage = (spokenLine: string) => timelineOf(cutOf({ captionWords: 6 }, [BEATS[1]!, { ...BEATS[3]!, spoken: spokenLine, shots: 1 }, BEATS[6]!])); // a plain editor's one shot: the push runs on
+
+  const expectWhole = (marks: { x0: number; x1: number }[]) => {
+    expect(marks.length).toBeGreaterThan(1);
+    for (const m of marks) {
+      expect(m.x0, 'its start').toBeGreaterThanOrEqual(0);
+      expect(m.x1, 'its end').toBeLessThanOrEqual(1080);
+    }
+  };
+
+  it('holds every marked box inside the frame to the last frame of a long beat, on the real page', async () => {
+    const tail = Array.from({ length: 90 }, (_, i) => `mot${i}`).join(' ');
+    const tl = plainPage(`${NEEDLE}, ${tail}.`);
+    const { comp, assets } = await make(tl, { width: 1080 });
+    expect(assets.proofs.size).toBe(1);
+    const b = tl.beats.find((x) => x.kind === 'page_proof')!;
+    expect(b.dur).toBeGreaterThan(30);
+    expectWhole(marksOn(comp, Math.round((b.t0 + b.dur) * 30) - 1));
+  });
+
+  // the end of one line, the start of the next: side by side the two halves are as wide as the column, and neither alone needs the camera back
+  const wideMark = async (tl: Timeline) => {
+    await writeGuide(join(tmp, 'wide-guide.pdf'), 360, 11, 'Un mot sur la terre de votre balcon.');
+    return make(tl, { width: 1080, spec: { pdf: 'wide-guide.pdf' } });
+  };
+
+  it('steps back before the cut when the voice ends on the line: no time left after the sweep, the mark still stands whole', async () => {
+    const tl = plainPage(`${NEEDLE}.`);
+    const { comp, assets } = await wideMark(tl);
+    expect(assets.proofs.get(1)!.boxes).toHaveLength(2);
+    const b = tl.beats.find((x) => x.kind === 'page_proof')!;
+    expect(b.dur - b.words.at(-1)!.end, 'less than the step back takes').toBeLessThan(0.4);
+    expectWhole(marksOn(comp, Math.round((b.t0 + b.dur) * 30) - 1));
+  });
+
+  it('keeps the page moving at rest: a long hold never freezes, the type never shrinks and the mark stays whole', async () => {
+    const { restPush } = proofScene!;
+    const box = [{ x: 54, y: 100, w: 335, h: 13.4 }];
+    expect(restPush(box, 3, 1080, -1), 'not yet').toBe(3);
+    expect(restPush(box, 3, 1080, 1)).toBeCloseTo(3 * 1.0075, 6);
+    expect(restPush(box, 3, 1080, 60), 'to the edge of the margin, no further').toBeCloseTo((1080 - 40) / 335, 6);
+    expect(restPush(box, 3.3, 1080, 4), 'a mark already past that margin is not pulled back').toBe(3.3);
+
+    const tail = Array.from({ length: 22 }, (_, i) => `mot${i}`).join(' ');
+    const tl = plainPage(`${NEEDLE}, ${tail}.`);
+    const { comp } = await wideMark(tl);
+    const b = tl.beats.find((x) => x.kind === 'page_proof')!;
+    expect(b.dur).toBeGreaterThan(12);
+    const end = Math.round((b.t0 + b.dur) * 30) - 1;
+    const [later, earlier] = [marksOn(comp, end - 15), marksOn(comp, end - 45)];
+    const span = (ms: { x0: number; x1: number }[]) => Math.max(...ms.map((m) => m.x1)) - Math.min(...ms.map((m) => m.x0));
+    expect(span(later), 'one second on, the page has moved').toBeGreaterThan(span(earlier) + 2);
+    expectWhole(later);
   });
 
   it('never leaves a marked line behind while a two-line needle is swept, on the real page', async () => {

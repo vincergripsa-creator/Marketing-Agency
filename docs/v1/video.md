@@ -220,10 +220,10 @@ On the prototype creative: level 0 gives 38 s, level 1 about 33 s, level 2 about
 | AdFormat | Beats | Audio | Output |
 |---|---|---|---|
 | `faceless_voiceover` | hook, pain_bubble, page_proof or step_list, page_proof, bonus_stack, end_card | voice, ducked music, SFX | MP4 |
-| `text_slideshow` | slide × n, end_card. Words appear by reading time: `max(1.8, words / 2.6 + 0.5)` s | music at full level, hard cuts on the bar | MP4 |
+| `text_slideshow` | slide × n, end_card. A slide lasts its reading time, `max(1.8, words / 2.6 + 0.5)` s. Its words come up at 6 a second, so the whole text stands for most of that time: `readingSec` and `estSec` do not move, an opening slide takes a cap of 240 px | music at full level, hard cuts on the bar | MP4 |
 | `ugc_avatar` | hook, narrator (pain), narrator with a page inset (step), page_proof, bonus_stack, end_card | voice, music | MP4 |
 | `carousel` | slide stills at their end state | none | PNG cards in the creative's ratio |
-| `static_image` (channels) | one still, hook over the cover | none | PNG |
+| `static_image` (channels) | one still, hook over the cover, stopped above its button | none | PNG |
 | `search_text` (channels) | no media | | |
 
 `before_after` replaces `hook` when `hookStyle === 'before_after'` and the text parses as « Avant … Après … ». `step_list` replaces the step's `page_proof` when the product has at least 3 steps and the hook is a listicle.
@@ -343,15 +343,17 @@ Grain: one static full-frame noise image at alpha 13/255. Never one per frame.
 
 All proven in the prototype unless marked.
 
-- **Hook** (D66 changed this line): the first screen is the line written to stand alone, whole on frame 1, flush left, one accent word; each word hits on the voice. Later screens are clauses of at most 9 words. `Timeline.plain` (`captionWords` ≥ 6 on a voiced cut, no `sfx` on a slide) stands the type centred over a dark plate, nothing hits, no book. A kinetic hook lands on its guide at 1,2 s, at most 60 % of the hook (D77). It was: Anton, largest size that fits the box in 3 lines at most. Each word slams from ×1,55 with `easeOutBack` over 0,14 s, shake 10 px over 0,1 s, digits in gold. One screen per clause. The cover rises at 0,45 s (x ≥ 0,65).
+- **Hook** (D66 changed this line): the first screen is the line written to stand alone, whole on frame 1, flush left, one accent word; each word hits on the voice. Later screens are clauses of at most 9 words. `Timeline.plain` (`captionWords` ≥ 6 on a voiced cut, no `sfx` on a slide) stands the type centred over a dark plate, nothing hits, no book. A kinetic hook lands on its guide at 1,2 s, at most 60 % of the hook (D77). The screen says what the voice says (D136): a figure the voice opens on is never dropped, a quoted line behind that figure opens its own screen with both marks, a voice telling « Avant … Après … » gets a screen a side, and a voice cut at « Avant » keeps the written Après on its one screen, lit on the last word said. That one screen may pass 9 words, 14 at most on the seeds read: it is the whole story, whole on frame 1. A plain hook's art stays at the edges and the foot: a veil of .74 over the frame, a shade of .62 with a soft edge over the type's box, about .9 in all, and the accent held at 4,5:1 on what still shows. It was: Anton, largest size that fits the box in 3 lines at most. Each word slams from ×1,55 with `easeOutBack` over 0,14 s, shake 10 px over 0,1 s, digits in gold. One screen per clause. The cover rises at 0,45 s (x ≥ 0,65).
 - **Pain bubble**: light plate for contrast with the dark hook, typing dots 0,55 s, words appear at 45 ms each, second real phrase pops at 2,3 s. Label « LU DANS LES COMMENTAIRES ». The phrases are VoC research, never invented, and no fake user name.
-- **Page proof**: real page at scale 3,4 (2 024 px wide), tilted −0,05 rad, then two punch-ins centred on the real text box, marker sweep in `multiply` at 20 % of the beat. Chip « ÉTAPE 1 » or « REPÈRE ».
+- **Page proof**: real page at scale 3,4 (2 024 px wide), tilted −0,05 rad, then two punch-ins centred on the real text box, marker sweep in `multiply` at 20 % of the beat. Chip « ÉTAPE 1 » or « REPÈRE ». As shipped (D135): 3,6 px a point, 3 for a plain editor, 2,7 on a real opener only, a one-letter drop cap being no chapter numeral and no marker box. The marker runs with the voice, then the camera steps back over 0,4 s until the whole mark stands in the frame, 50 px a side, before the cut when the voice runs to it. It then goes on pushing, 0,75 % a second to +6 %, into that margin down to 20 px: type never shrinks, the mark stays whole and no frame is dead.
 - **Bonus stack**: three real pages fan out behind the book, sticker « BONUS OFFERT » pops on the word « cadeau ».
 - **End card**: rays, book with a moving sheen, CTA pill pulsing ±3,5 %, « Lien en bio », bouncing arrow. No caption: the voice says the same thing and they collided.
 - **Captions**: Montserrat ExtraBold 76, uppercase, one group at a time, pops ×0,86 to 1 over 0,13 s, the spoken word on a rounded pill. Black stroke 15 px, `lineJoin` round. Below the bubbles on `pain_bubble`.
 - **Cuts**: every beat change has a white flash 0,07 s at 32 %, a punch ×1,07 falling over 0,16 s and a whoosh. Inside a beat a shot change is a real camera jump (+6 % scale, D66).
 - **Progress bar**: 10 px, gold, at the top of the safe area, hidden on the end card.
 - **Depth**: drifting leaves (shapes by motif), radial glow, vignette 0,34.
+- **Slide**: digits on the light plate walk toward the guide's ink until they read at 3:1 at its top and its foot, on all 15 palettes. A light primary (Pêche tendre, Corail vitalité, Coucher de soleil) takes `dark` and `dark2` from `inks.ink`, as its cover does, so the CTA pill stands on its plate. A dark primary keeps its own: Nuit douce still sits at 1,53:1, the white label reads, the pill's edge barely does.
+- **Review card**: stars, the quote the voice reads and a first name (`reviewsOf`, by `reviewBasis`, D93). The first buyer to write a sentence keeps it (D137): later cards read « Un acheteur du guide ».
 - **Not prototyped**: `before_after`, `step_list`, `slide`, `title_card`, carousel export. Drawn with the same helpers. `narrator` exists as one still (`sheet4.png`, middle).
 
 Layout rules per ratio, from `sheet5.png`: the book in the hook covers the text on 4:5 and 1:1, and the end card's arrow clips on 1:1. So `Stage` carries `heroBox`, `bookSlot`, `captionY`, and on 1:1 the hook's book moves to the right third and the arrow goes.
@@ -435,7 +437,7 @@ Fonts, committed to `server/assets/fonts/`, copied once from `@expo-google-fonts
 | `Montserrat-ExtraBold.ttf` | 344 KB | Captions, bubbles, CTA |
 | `Montserrat-SemiBold.ttf` | 334 KB | Secondary text |
 | `Caveat-Bold.ttf` | 257 KB | Handwritten notes |
-| `DMSerifDisplay-Regular.ttf` | 72 KB | Hooks when `design.titleFont` is Times-Bold (not visually tested yet) |
+| `DMSerifDisplay-Regular.ttf` | 72 KB | Hooks when `design.titleFont` is Times-Bold. Read on frames decoded from MP4 at 9:16, 4:5 and 1:1 (last list, V3-D) |
 | `OFL-<name>.txt` | | Each font's `LICENSE_FONT` |
 
 Skia loaded the first four. Anton and Montserrat drew French capitals with accents in the prototype. A test must check accent coverage for all five. If the pdf pillar adds fonts, same folder.
@@ -494,7 +496,7 @@ On-demand requests from the UI go first. Everything else stays a storyboard.
 
 **Worker.** `fork(worker, { execArgv: process.execArgv })`, `os.setPriority(pid, PRIORITY_BELOW_NORMAL)`, `-threads 2`, kill after 180 s, one retry, then `failed` with a French reason. A failed QA is a failed job: its file is deleted, never served.
 
-**Disk.** `manifest.json` in `runs/<id>/video/`, written after each job. `maxVideoDiskMb` default 1 200, about 240 masters at 5 MB. Over the cap, the lowest-impression `ready` video is evicted, its poster stays, status `evicted`, re-render on demand. `retireCreativeFiles` is the hook for scale's `dropFiles`.
+**Disk.** `manifest.json` in `runs/<id>/video/`, written after each job. `maxVideoDiskMb` default 1 200, about 130 to 240 masters at 5 to 9 MB (a page held long costs more than a hook: 8,7 MB seen, QA's cap is 12). Over the cap, the lowest-impression `ready` video is evicted, its poster stays, status `evicted`, re-render on demand. `retireCreativeFiles` is the hook for scale's `dropFiles`.
 
 **Reload.** Manifest reread at mount. Anything `rendering` becomes `queued`. A key already on disk is `ready` after a light QA (size, duration).
 
@@ -612,7 +614,7 @@ The founder opens Pubs, sees the real video play in a phone frame with sound. De
 | **org** | Whoever edits holds `produce_ad`. Chloé's role reads « Monteuse vidéo » | Works as is |
 | **channels** | `AdRatio`, `masterId`, `ratio`, `static_image`. A cut creative copies its master's `cut`. I deliver `renderAdCut` as asked | 9:16 only |
 | **pdf** | `product.files.pdf` stays the current version, text stays real text, not outlines, or needles stop matching. Cover on page 1. Embedded fonts must render with `disableFontFace: true`: tested on standard fonts only | `no_pages` for that beat |
-| **scale** | `maxVideoDiskMb` in its budget, `dropFiles` calls `retireCreativeFiles`. Plan on 5 MB a master, not 2 | Default 1 200 MB |
+| **scale** | `maxVideoDiskMb` in its budget, `dropFiles` calls `retireCreativeFiles`. Plan on 5 to 9 MB a master, not 2 | Default 1 200 MB |
 | **ui** | §13 | The HTML preview stays |
 
 ## 15. Build order
@@ -656,7 +658,9 @@ Cut from the bottom if time runs short: 2:3 first, then `step_list`, then `befor
 - **Hortense is a dated synthetic voice.** Word timing and diction are clean, but it will not pass for a human. This is the weakest link of the video and it stays so offline.
 - The prototype's hook lasts 4,2 s because the real hook is long. Good for the score, but a stronger hook would help more than any editing.
 - The ugly product title (« … — les citadins débutants ») shows on the cover. That belongs to the pdf and copy pillars.
-- `narrator`, `slide`, `before_after`, `step_list`, `title_card` and carousel export are designed, not rendered end to end.
+- `narrator`, `slide`, `title_card` and carousel export render end to end, on real MP4s and cards. `before_after` and `step_list` are designed, and no cut of the seeds read reaches them: a before/after hook runs as a `hook` (§4.2).
+- A wide mark at rest reads about 31 px at 1080 wide, under the 36 px of a phone's message: the whole mark comes first, the list's own formula. 9 of 76 rest under 30 px, none under 29.
+- A slide still opens on its first word alone on the cut, for about 0,17 s a word.
 - Safe-zone numbers come partly from third-party tools and must be checked in-app before anything real.
 - `ffmpeg-static` printed npm's `allow-scripts` warning. The binary arrived here, but a stricter npm could skip it: the ladder then lands on `storyboard_only`.
 

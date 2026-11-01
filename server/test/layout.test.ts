@@ -307,6 +307,35 @@ describe('paginate: sheets and short pages', () => {
     expect(paginate([sheetBlock(grid(60), theme)!], PLAIN)[0]!.fill).toBeCloseTo((full.end - GRID.top) / BODY_H, 3);
   });
 
+  it('a short plan holds its page: the table reaches 45 % of the body before the ruled lines start', () => {
+    const plan = (rows: number): VisualSpec => ({ type: 'grid', title: 'Votre plan à cocher', labels: [], values: [], grid: { columns: ['Quand', 'À faire', 'Fait'], rows: Array.from({ length: rows }, (_, k) => `Jour ${k + 1}`), cells: Array.from({ length: rows }, () => ['Une action du plan', null]) } });
+    for (const rows of [3, 4, 5, 6, 7]) {
+      const part = sheetBlock(plan(rows), theme)!.parts[0]!;
+      expect((part.end - GRID.top) / BODY_H, `${rows} lignes`).toBeCloseTo(0.45, 2);
+      expect(part.notes, `${rows} lignes`).toMatchObject({ label: 'Ce que j’ai observé' });
+      expect(part.notes!.y + part.notes!.h).toBeCloseTo(BODY_BOTTOM, 3);
+    }
+    // a plan that fills its page keeps its rows, and a sheet to write in is not a plan
+    expect(sheetBlock(plan(14), theme)!.parts[0]!.grow).toBeLessThanOrEqual(12);
+    expect(sheetBlock(plan(60), theme)!.parts[0]!.grow).toBeLessThanOrEqual(12);
+    const write = sheetBlock(grid(5), theme)!.parts[0]!;
+    expect(write.grow).toBe(36);
+  });
+
+  it('a tall row of a short plan keeps its box beside its words: the row grows under them, not around them', () => {
+    const v: VisualSpec = { type: 'grid', title: 'Votre plan à cocher', labels: [], values: [], grid: { columns: ['Quand', 'À faire', 'Fait'], rows: ['Jour 1', 'Jour 2'], cells: [['Une action', null], ['Une autre action', null]] } };
+    const boxTops = (extra: number): number[] => {
+      const s = new Scene(595, 842);
+      const model = gridModel(v, 475, theme)!;
+      model.draw(s, 60, 100, 0, 2, extra);
+      return s.ops.flatMap((o) => { const box = o.k === 'path' ? /^M\S+ (\S+)h13v13h-13Z$/.exec(o.d) : null; return box ? [Number(box[1])] : []; });
+    };
+    const [flat, grown] = [boxTops(0), boxTops(60)];
+    expect(flat).toHaveLength(2);
+    expect(grown[0], 'the first row stands where it stood').toBeCloseTo(flat[0]!, 3);
+    expect(grown[1]! - grown[0]!, 'the second row comes down by the whole row').toBeCloseTo(flat[1]! - flat[0]! + 60, 3);
+  });
+
   it('every sheet of every guide ends past the floor, in ink', () => {
     let sheets = 0;
     let written = 0;

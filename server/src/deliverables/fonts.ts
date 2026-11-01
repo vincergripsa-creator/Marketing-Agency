@@ -141,10 +141,24 @@ export function wrapFace(text: string, face: FaceName, size: number, width: numb
   return lines;
 }
 
-/** The biggest size that fits, then the narrowest measure that keeps the line count, so that no line is left with one short word. */
+/** One word alone inside a block, under half its longest line: the block reads in pieces. The last line is the measure's to settle. */
+function stranded(lines: string[], face: FaceName, size: number): boolean {
+  const widths = lines.map((l) => advance(face, l, size));
+  const half = Math.max(...widths) / 2;
+  return lines.slice(0, -1).some((l, k) => !l.includes(' ') && widths[k]! < half);
+}
+
+const WIDER = 16;              // steps from the narrowest measure to the full one
+
+/**
+ * The biggest size that fits, then the narrowest measure that keeps the line count, so that no line is left with one short
+ * word. A measure that strands a word inside the block gives way to the next that does not, unless that only sends a word
+ * alone to the last line. A size with no such measure is passed over: only the smallest that fits may keep the stray.
+ */
 export function fitDisplay(text: string, face: FaceName, o: { width: number; max: number; min: number; maxLines: number; maxHeight?: number; leading?: number }): { size: number; lines: string[] } {
   const words = frenchNbsp(collapseSpaces(text)).split(' ').filter(Boolean);
   const leading = o.leading ?? 1;
+  let last: { size: number; lines: string[] } | null = null;
   for (let size = o.max; size >= o.min; size -= 1) {
     const widest = Math.max(0, ...words.map((w) => advance(face, w, size)));
     if (widest > o.width) continue; // « Micro-entrepreneur » is never cut in two
@@ -157,9 +171,14 @@ export function fitDisplay(text: string, face: FaceName, o: { width: number; max
       if (wrapFace(text, face, size, mid).length <= lines.length) hi = mid;
       else lo = mid;
     }
-    return { size, lines: wrapFace(text, face, size, hi) };
+    last = { size, lines: wrapFace(text, face, size, hi) };
+    if (!stranded(last.lines, face, size)) return last;
+    for (let k = 1; k <= WIDER; k += 1) {
+      const wider = wrapFace(text, face, size, hi + ((o.width - hi) * k) / WIDER);
+      if (!stranded(wider, face, size) && wider.at(-1)!.includes(' ')) return { size, lines: wider };
+    }
   }
-  return { size: o.min, lines: wrapFace(text, face, o.min, o.width) };
+  return last ?? { size: o.min, lines: wrapFace(text, face, o.min, o.width) };
 }
 
 // The marks the standard fonts have to spell out or drop: a face that draws one keeps it.

@@ -95,12 +95,29 @@ export function clean(s: string | null | undefined): string {
   return String(s ?? '').replace(/\s+/g, ' ').trim();
 }
 
+const TAIL = /[\s.;:,!?…]+$/;
+
+/** The mark opening `s` closes before its end: “Bio” ne veut rien dire. It belongs to the text, it does not surround it. */
+function closesInside(s: string, open: string, close: string): boolean {
+  if (!s.startsWith(open)) return false;
+  const body = s.replace(TAIL, '');
+  let depth = 0;
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === open) depth += 1;
+    else if (body[i] === close && --depth === 0) return i < body.length - 1;
+  }
+  return false;
+}
+
 /** Remove surrounding quotes and trailing punctuation. */
 export function bare(s: string | null | undefined): string {
-  const head = clean(s).replace(/^[«"“'\s]+/, '').replace(/[\s.;:,!?…]+$/, '');
-  // a closing guillemet that answers one inside the text stays: « viser « toutes les entreprises » » must not lose it
-  const unmatched = (head.match(/»/g) ?? []).length > (head.match(/«/g) ?? []).length;
-  return head.replace(unmatched ? /[»"”\s]+$/ : /["”\s]+$/, '').replace(/[\s.;:,!?…]+$/, '').trim();
+  const text = clean(s);
+  let out = (closesInside(text, '«', '»') || closesInside(text, '“', '”') ? text : text.replace(/^[«"“'\s]+/, '')).replace(TAIL, '');
+  // a closing mark that answers one inside the text stays: « viser « toutes les entreprises » » must not lose it, nor « fasse “cheap” ». Only the spare ones go
+  const count = (mark: string): number => out.split(mark).length - 1;
+  const spare = (): boolean => { const end = out.at(-1); return end === '"' || (end === '»' && count('»') > count('«')) || (end === '”' && count('”') > count('“')); };
+  while (spare()) out = out.slice(0, -1).trimEnd();
+  return out.replace(TAIL, '').trim();
 }
 
 export function cap(s: string): string {

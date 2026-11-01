@@ -9,7 +9,7 @@ import PDFDocument from 'pdfkit';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/index.js';
 import { contrast } from '../src/deliverables/color.js';
-import { normalizeDesign } from '../src/deliverables/design.js';
+import { normalizeDesign, PALETTES } from '../src/deliverables/design.js';
 import { renderAdCut, renderAdStoryboard } from '../src/deliverables/storyboard.js';
 import { textWidth } from '../src/deliverables/text.js';
 import { planCut } from '../src/deliverables/videoCut.js';
@@ -302,16 +302,60 @@ describe.skipIf(!compose)('drawn on a canvas', { timeout: 60_000 }, () => {
   const texts = (boxes: readonly { text: string }[]): string => boxes.map((b) => b.text).join(' ');
 
   describe('slides', () => {
-    it('words appear at reading speed, the first one on the cut, and the frame ends with the whole text', async () => {
+    it('words come up fast, the first one on the cut, and the frame ends with the whole text', async () => {
       const { timeline, comp } = await stageUp(planned('text_slideshow', { scenes: SCENES.map((s) => ({ ...s, onScreenText: LONG_TEXT })) }), '9:16', { width: 540 });
       const b = timeline.beats[1]!;
       const at = (sec: number) => Math.round((b.t0 + sec) * timeline.fps);
       const seen = (sec: number) => comp.drawFrame(at(sec)).filter((x) => x.text !== 'ÉTAPE 1').length;
-      expect(seen(0.4)).toBeLessThanOrEqual(2);
-      expect(seen(3)).toBeGreaterThan(5);
-      expect(seen(3)).toBeLessThan(10);
+      expect(seen(0)).toBe(1);
+      expect(seen(0.4)).toBeLessThanOrEqual(3);
+      expect(seen(3)).toBeGreaterThan(12);
+      expect(seen(3)).toBeLessThan(22);
       const all = LONG_TEXT.split(/\s+/).length;
       expect(seen(b.dur - 0.05)).toBe(all);
+    });
+
+    it('stands a 7-word slide whole by 40 % of its time, at every tempo: its reading time is for reading', async () => {
+      const line = 'Sept mots tiennent sur cette slide courte';
+      for (const tempo of ['calm', 'standard', 'fast'] as const) {
+        const scenes = SCENES.map((s, i) => (i === 3 ? { ...s, onScreenText: line } : s));
+        const { timeline, comp } = await stageUp(planned('text_slideshow', { scenes }, tempo), '9:16', { width: 540 });
+        const b = timeline.beats.find((x) => x.screen === line)!;
+        const said = comp.drawFrame(Math.round((b.t0 + b.dur * 0.4) * timeline.fps)).filter((x) => line.split(' ').includes(x.text));
+        expect(said, tempo).toHaveLength(7);
+      }
+    });
+
+    it('lets an opening slide take a hook\'s size on a bare plate, and keeps it in the zone on every ratio', async () => {
+      const scenes = SCENES.map((s, i) => (i === 0 ? { ...s, onScreenText: '5 erreurs' } : s));
+      for (const format of ['carousel', 'text_slideshow'] as const) {
+        for (const ratio of ['9:16', '4:5', '1:1'] as const) {
+          const { timeline, comp, stage } = await stageUp(planned(format, { scenes }), ratio);
+          const boxes = comp.drawFrame(Math.round((timeline.beats[0]!.t0 + timeline.beats[0]!.dur - 0.05) * timeline.fps));
+          const tallest = Math.max(...boxes.filter((b) => /ERREURS/.test(b.text)).map((b) => b.h));
+          expect(tallest, `${format} ${ratio}`).toBeGreaterThan(150);
+          for (const b of boxes) expect(insideSafe(stage, b), `${format} ${ratio}: ${b.text}`).toBe(true);
+        }
+      }
+    });
+
+    it('sets a figure at 3:1 or more over the whole of the light plate, on every shipped palette', () => {
+      for (const { name, palette, inks } of PALETTES) {
+        const plate = slide!.lightPlate(compose!.inksOf(normalizeDesign({ ...DESIGN, palette, inks })));
+        expect(contrast(plate.digit, plate.bottom), `${name}: its foot`).toBeGreaterThanOrEqual(3);
+        expect(contrast(plate.digit, plate.top), `${name}: its top`).toBeGreaterThanOrEqual(3);
+      }
+    });
+
+    it('takes the dark of a light coral from the guide\'s ink, as its cover does: the button reads on it, and a dark primary keeps its own', () => {
+      const of = (name: string) => { const { palette, inks } = PALETTES.find((p) => p.name === name)!; return { inks, C: compose!.inksOf(normalizeDesign({ ...DESIGN, palette, inks })) }; };
+      const peach = of('Pêche tendre');
+      expect(peach.C.dark2).toBe(peach.inks.ink);
+      expect(contrast(peach.C.pop, peach.C.dark)).toBeGreaterThanOrEqual(3);
+      expect(contrast(peach.C.pop, peach.C.dark2)).toBeGreaterThanOrEqual(3);
+      expect(contrast(peach.C.gold, peach.C.dark)).toBeGreaterThanOrEqual(5.5);
+      const night = of('Nuit douce');
+      expect(night.C.dark2).not.toBe(night.inks.ink);
     });
 
     it('stands an opening slide whole on the cut, then lights it at reading speed: a line cut after three words says nothing', async () => {
@@ -645,6 +689,18 @@ describe.skipIf(!compose)('drawn on a canvas', { timeout: 60_000 }, () => {
         expect(pngSize(join(dir, 'card-1.png'))).toEqual({ w, h });
         expect(cards[0]!.outside).toBe(0);
         expect(texts(cards[0]!.boxes)).toBe('5 CHOSES À ARRÊTER SI LE BALCON GRILLE EN ÉTÉ TÉLÉCHARGE LE GUIDE');
+      }
+    });
+
+    it('a pin keeps its hook off its button, on every ratio', async () => {
+      const pin = creativeOf('static_image', { cut: null, scenes: [{ visual: '', onScreenText: 'L’erreur : laisser bébé seul pendant le repas', voiceover: '', durationSec: 5 }] });
+      for (const ratio of ['2:3', '4:5', '1:1'] as VideoRatio[]) {
+        const { comp, timeline } = await stageUp(pin, ratio);
+        const boxes = comp.drawFrame(timeline.frames - 1);
+        const button = boxes.find((b) => b.text === 'TÉLÉCHARGE LE GUIDE')!;
+        const hook = boxes.filter((b) => b !== button);
+        expect(hook.length, ratio).toBeGreaterThan(4);
+        expect(Math.max(...hook.map((b) => b.y + b.h)), ratio).toBeLessThan(button.y - 40); // the pill stands over its label
       }
     });
 

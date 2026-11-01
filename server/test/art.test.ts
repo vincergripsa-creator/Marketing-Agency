@@ -8,9 +8,9 @@ import type { DesignEffort, DesignSpec, InkSet, PdfContent, Product, WorldState 
 import type { RunPaths } from '../src/contracts.js';
 import { artCandidate, artScore, coverHero, coverScore, fieldArt, pickArt, scoreField } from '../src/deliverables/art/evaluate.js';
 import { field, GROUNDS, groundsOf, HERO_CELL, shapeInk, type HeroPlace } from '../src/deliverables/art/field.js';
-import { HEROES, placeHero } from '../src/deliverables/art/heroes.js';
+import { HEROES, placeHero, type HeroBox } from '../src/deliverables/art/heroes.js';
 import { closesOf, drawPose, poseGround, POSES, posesOf } from '../src/deliverables/art/poses.js';
-import { DRAWN_AS, heartD } from '../src/deliverables/art/tiles.js';
+import { brushD, DRAWN_AS, heartD, mark } from '../src/deliverables/art/tiles.js';
 import { COVER_TITLE_MAX_CHARS, coverAudit, coverScene, renderCoverSvg, splitTitle, titleBlock, type CoverInput } from '../src/deliverables/cover.js';
 import { contrast } from '../src/deliverables/color.js';
 import { designFor, MOTIFS, normalizeDesign, PALETTES } from '../src/deliverables/design.js';
@@ -59,6 +59,49 @@ const textOps = (s: Scene) => s.ops.filter((o): o is Extract<Op, { k: 'text' }> 
 /** Every line a reader gets from the SVG, the root's whole title left out: what is really drawn. */
 const shownWords = (svg: string): string => [...svg.matchAll(/<path aria-label="([^"]*)"/g)].map((m) => m[1]!).join(' ')
   .replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\s+/g, ' ');
+
+type Point = [x: number, y: number];
+
+/** One outline per subpath, lines and curves sampled: a control point says nothing of where the ink is. */
+function outlines(d: string): Point[][] {
+  return d.split(/(?=M)/).filter(Boolean).map((sub) => {
+    const out: Point[] = [];
+    let at: Point = [0, 0];
+    const line = (to: Point) => {
+      for (let k = 1; k <= 24; k++) out.push([at[0] + ((to[0] - at[0]) * k) / 24, at[1] + ((to[1] - at[1]) * k) / 24]);
+      at = to;
+    };
+    for (const m of sub.matchAll(/([MLCHVhv])([^MLCHVhvZ]*)/g)) {
+      const v = (m[2]!.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+      if (m[1] === 'M') { at = [v[0]!, v[1]!]; out.push(at); }
+      if (m[1] === 'L') for (let i = 0; i < v.length; i += 2) line([v[i]!, v[i + 1]!]);
+      if (m[1] === 'h') line([at[0] + v[0]!, at[1]]);
+      if (m[1] === 'v') line([at[0], at[1] + v[0]!]);
+      if (m[1] === 'H') line([v[0]!, at[1]]);
+      if (m[1] === 'V') line([at[0], v[0]!]);
+      if (m[1] === 'C') {
+        for (let i = 0; i < v.length; i += 6) {
+          const [from, [a, b, c, e, f, g]] = [at, v.slice(i, i + 6) as [number, number, number, number, number, number]];
+          for (let k = 1; k <= 24; k++) {
+            const t = k / 24;
+            const u = 1 - t;
+            out.push([u * u * u * from[0] + 3 * u * u * t * a + 3 * u * t * t * c + t * t * t * f, u * u * u * from[1] + 3 * u * u * t * b + 3 * u * t * t * e + t * t * t * g]);
+          }
+          at = [f, g];
+        }
+      }
+    }
+    return out;
+  });
+}
+
+/** Even-odd test on an outline. */
+const within = (poly: Point[], [x, y]: Point): boolean => poly.reduce((odd, [ax, ay], k) => {
+  const [bx, by] = poly[(k + 1) % poly.length]!;
+  return (ay > y) !== (by > y) && x < ax + ((y - ay) / (by - ay)) * (bx - ax) ? !odd : odd;
+}, false);
+
+const flatPaths = (ops: Op[]): Extract<Op, { k: 'path' }>[] => ops.flatMap((o) => (o.k === 'clip' ? flatPaths(o.ops) : o.k === 'path' ? [o] : []));
 
 /** The cells next to the hero, by row and column. */
 const heroEdge = (g: number[][]) => g.flatMap((row, r) => row.flatMap((v, c) => (v !== HERO_CELL && [g[r]![c + 1], g[r]![c - 1], g[r + 1]?.[c], g[r - 1]?.[c]].includes(HERO_CELL) ? [v] : [])));
@@ -262,6 +305,91 @@ describe('the poses of a chapter (D66)', () => {
         expect(s.ops[1]).toMatchObject({ k: 'clip', d: square });
       });
     }
+  });
+
+  it('a close-up leaves no sliver: what its frame cuts shows at least a tenth of a unit, or does not show', () => {
+    const tenth = BOX.size / 3 / 10;
+    const depth = (x: number, y: number): number => Math.min(x - BOX.x, BOX.x + BOX.size - x, y - BOX.y, BOX.y + BOX.size - y);
+    for (const motif of [...DRAWN, 'brush'] as const) {
+      const s = new Scene(600, 500);
+      drawPose(s, 'closeup', motif, BOX, 3, INK_SET, 11, undefined, 0);
+      // a stroke is a line, it may cross a corner, and a halftone is a texture: both are cut on purpose
+      const shapes = flatPaths((s.ops[1] as Extract<Op, { k: 'clip' }>).ops).filter((o) => o.fill).map((o) => outlines(o.d)).filter((parts) => parts.length <= 18).flat();
+      const bounds = shapes.map((points) => ({ x1: Math.min(...points.map((p) => p[0])), x2: Math.max(...points.map((p) => p[0])), y1: Math.min(...points.map((p) => p[1])), y2: Math.max(...points.map((p) => p[1])) }));
+      const cut = shapes.filter((points) => points.some(([x, y]) => depth(x, y) <= 0));
+      // the frame point by point: each shows the shape painted last, and a shape is as deep as the deepest point it shows
+      const deepest = new Map<Point[], number>();
+      for (let x = BOX.x + 0.5; x < BOX.x + BOX.size; x += 1) {
+        for (let y = BOX.y + 0.5; y < BOX.y + BOX.size; y += 1) {
+          const k = shapes.findLastIndex((points, i) => { const b = bounds[i]!; return x >= b.x1 && x <= b.x2 && y >= b.y1 && y <= b.y2 && within(points, [x, y]); });
+          if (k >= 0) deepest.set(shapes[k]!, Math.max(deepest.get(shapes[k]!) ?? 0, depth(x, y)));
+        }
+      }
+      expect(deepest.size, motif).toBeGreaterThan(0);
+      for (const shape of cut) if (deepest.has(shape)) expect(deepest.get(shape), motif).toBeGreaterThanOrEqual(tenth);
+      // and the ground: a big shape clears the frame or leaves it by 2 pt at least, no line of ground and no shaved edge. The sun, the one disc, by a tenth
+      shapes.forEach((shape, k) => {
+        const { x1, x2, y1, y2 } = bounds[k]!;
+        if (!deepest.has(shape) || Math.max(x2 - x1, y2 - y1) < BOX.size / 3) return;
+        for (const gap of [x1 - BOX.x, BOX.x + BOX.size - x2, y1 - BOX.y, BOX.y + BOX.size - y2]) expect(Math.abs(gap), motif).toBeGreaterThanOrEqual(motif === 'sun' ? tenth : 2);
+      });
+    }
+  });
+
+  it('a star is whole or it is not there, and the ones that stay have not moved', () => {
+    const CLOSE = { x: BOX.x - 120, y: BOX.y - 160, size: BOX.size * 1.75 };
+    const NO_CROP = { x: -300, y: -300, size: 1500 };
+    const starsOf = (box: HeroBox, frame: HeroBox, seed: number): string[] => {
+      const s = new Scene(600, 500);
+      placeHero(s, 'moon', box, INK_SET, seed, undefined, frame);
+      return flatPaths(s.ops).find((o) => o.fill === INK_SET.paper)!.d.split(/(?=M)/).filter(Boolean);
+    };
+    const margin = (p: Point): number => Math.min(p[0] - BOX.x, BOX.x + BOX.size - p[0], p[1] - BOX.y, BOX.y + BOX.size - p[1]);
+    let gone = 0;
+    for (let seed = 0; seed < 200; seed++) {
+      for (const box of [BOX, CLOSE]) {
+        const every = starsOf(box, NO_CROP, seed);
+        const kept = starsOf(box, BOX, seed);
+        expect(every, `graine ${seed}`).toHaveLength(18);
+        gone += every.length - kept.length;
+        for (const star of kept) {
+          expect(every, `graine ${seed}`).toContain(star);
+          for (const p of outlines(star)[0]!) expect(margin(p), `graine ${seed}`).toBeGreaterThanOrEqual(1.49); // 1.5 pt, to a rounding of the path
+        }
+      }
+    }
+    expect(gone).toBeGreaterThan(0);
+  });
+
+  it('neither door wears the ink of the page they stand on, on every ink set and every ground', () => {
+    for (const inks of INKS) {
+      for (const motif of MOTIFS) {
+        for (let k = 0; k < 4; k++) {
+          const s = new Scene(600, 500);
+          const ground = poseGround('arch', k, 3);
+          drawPose(s, 'arch', motif, BOX, 4, inks, 11, ground, k);
+          const [rim, door] = flatPaths(s.ops).filter((o) => o.fill && /V.*A.*V/.test(o.d));
+          expect(door!.fill, `${motif} ${ground}`).not.toBe(inks.paper);
+          expect(rim!.fill, `${motif} ${ground}`).not.toBe(inks.paper);
+          expect(door!.fill, `${motif} ${ground}`).not.toBe(rim!.fill);
+        }
+      }
+    }
+  });
+
+  it('a small brush keeps a wide tuft on a short handle: a long thin one reads as a pen', () => {
+    /** Width of the tuft over length of the handle, read across and along the diagonal the brush lies on. */
+    const stout = (size: number): number => {
+      const s = new Scene(400, 400);
+      mark(s, 'brush', 200, 200, size, INK_SET.ink, INK_SET.paper);
+      const [tuft, handle] = outlines((s.ops[0] as Extract<Op, { k: 'path' }>).d);
+      const span = (points: Point[], at: (p: Point) => number): number => Math.max(...points.map(at)) - Math.min(...points.map(at));
+      return span(tuft!, ([x, y]) => x + y) / span(handle!, ([x, y]) => x - y);
+    };
+    for (const size of [24, 40, 56, 70]) expect(stout(size), `${size} pt`).toBeGreaterThan(1.5 * stout(200));
+    expect(stout(120)).toBeCloseTo(stout(200), 1);
+    // the hero is the drawing it was
+    expect(brushD(0, 0, 100, 0).handle).toContain('95 -3C101 -2.2 101 2.2 95 3');
   });
 
   it('eight poses of one drawing are eight pictures, and a pose is the same picture twice', () => {

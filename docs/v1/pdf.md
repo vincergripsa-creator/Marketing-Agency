@@ -260,7 +260,7 @@ Files: `deliverables/art/tiles.ts`, `art/heroes.ts`, `art/field.ts`, `art/evalua
 `art/heroes.ts` exports one `Hero` per motif:
 
 ```ts
-export type Hero = (s: Scene, box: { x: number; y: number; size: number }, inks: InkSet, seed: number) => void;
+export type Hero = (s: Scene, box: { x: number; y: number; size: number }, inks: InkSet, seed: number, frame: HeroBox) => void; // `frame` crops it: the box, or less on a close-up
 export const HEROES: Record<DesignSpec['motif'], { draw: Hero; ground: keyof InkSet }>;
 ```
 
@@ -270,6 +270,7 @@ export const HEROES: Record<DesignSpec['motif'], { draw: Hero; ground: keyof Ink
 
 - **Cover:** `field({ cols: 6, rows, hero })`. `rows = head.length > 40 ? 4 : 5`, so a long title gets more room.
 - **Chapter openers:** `rows = 4`, seed `artSeed + n × 7`. Each takes its own pose (`art/poses.ts`, D133). Before D66: odd chapters a 4-unit hero, even chapters a 3-unit hero on the other side, which left eight openers alike.
+- **What a frame cuts** (D139): on a close-up a shape shows a tenth of a unit or does not show, and a big shape clears the frame or leaves it by 2 pt at least, a tenth for the sun's disc. A star the frame would cut or touch (1,5 pt) is left out, every draw kept so the others do not move. The arch's two doors never wear the page's ink: they go down to the page, and nothing would say where they stop.
 - **Bonus:** hero on ground `b`, label « CADEAU ».
 - **Introduction and final page:** 2 rows.
 
@@ -285,7 +286,7 @@ export function splitTitle(t: string): { head: string; tail: string };
 ```
 
 The cover is laid out bottom-up: audience line, deck, then the title gets what is left.
-`fitDisplay` rejects any size where a single word exceeds the measure. That rule exists because "Micro-entrepreneur" overflowed in the prototype. It then narrows the measure, so no line is left with one short word ("dans" alone in the first render).
+`fitDisplay` rejects any size where a single word exceeds the measure. That rule exists because "Micro-entrepreneur" overflowed in the prototype. It then narrows the measure, so no line is left with one short word ("dans" alone in the first render). A measure that strands one short word inside the block gives way to the next wider one that does not, unless that only sends a word alone to the last line; a size with no such measure is passed over, and only the smallest that fits may keep the stray (D138). This reads the layout the cover really prints, so it reaches `lineBalance` and the score: §12.
 
 "GUIDE PDF" becomes `GUIDE PRATIQUE`. The audience appears once, as « Pour … » at the foot, never again as a pill. The sparkles, dot grids and features list are gone.
 
@@ -340,7 +341,7 @@ export function paginate(blocks: Block[], params: LayoutParams): PagePlan[];
 4. Rail blocks sit on the baseline of their anchor. A rail block that does not fit moves to the next page's top.
 5. A `steps` item is never split.
 6. A `sheet` block ends the chapter on its own full-bleed tinted page.
-7. No body page stops under `PAGE_FLOOR` (0.6, D133): lines move from the pages before it (`PAGE_AIM`, trims of at most 6 lines), a short page breathes up to `PAGE_BREATH`, then its section closes on a band of the guide's tiles or on ruled « Vos notes ». Sheets get the same notes under a short table. `fill` means ink, a close counts at half weight, so it cannot game the score. It was: under `fill < 0.45`, try the next params, then ruled notes.
+7. No body page stops under `PAGE_FLOOR` (0.6, D133): lines move from the pages before it (`PAGE_AIM`, trims of at most 6 lines), a short page breathes up to `PAGE_BREATH`, then its section closes on a band of the guide's tiles or on ruled « Vos notes ». Sheets get the same notes under a short table, and a plan to tick grows its rows until the table reaches 45 % of the body, its boxes staying beside their words. `fill` means ink, a close counts at half weight, so it cannot game the score. It was: under `fill < 0.45`, try the next params, then ruled notes.
 
 Because block heights are known, one `paginate` call is pure arithmetic. That is why a designer can try 24 layouts for free.
 
@@ -479,6 +480,7 @@ text = `Focus : ${act(focus.s)}${checkOf(focus.s, d)}`;
 
 - The renderer strips `^Fait : ` and `^Je ne fais plus : ` from printed checklist lines. The box says it already. `Je ne fais plus` becomes a column head « À arrêter ».
 - Methode and situations checklists repeat the steps above them, so they render compact, in 2 columns, in the rail-width block. The items still count for `ITEMS_PER_CHAPTER`.
+- `bare()` keeps a quote mark answered inside the text (« “Bio” ne veut rien dire », « fasse “cheap” ») and strips only the spare closing marks. A cliché of the writer's flaw goes to the end of a paragraph that opens on a run-in head: the flaw stays, the ladder of steps keeps its bold, and the `chance(0.35)` draw stays too. The sheet's first column is measured in the face that prints its labels, so a weekday is never broken. The travel guide says « réserver » where the wedding guide says « contacter » (`v(c, wedding, travel)`).
 
 ## 11. Sales page
 
@@ -853,7 +855,7 @@ Phases 1 and 2 are safe alone: they change the look and nothing economic. Phase 
 
 ## 22. Evidence
 
-All under `C:/Users/33647/AppData/Local/Temp/claude/C--Users-33647-Documents-GitHub-Marketing-Agency/530d848d-7783-4b2f-b1ce-05a23bd30602/scratchpad/v1/pdf-proto/`:
+All under `scratchpad/v1/pdf-proto/` of the build session, local and not in this repo:
 
 | File | What it shows |
 |---|---|

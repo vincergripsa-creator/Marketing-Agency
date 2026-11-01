@@ -3,8 +3,8 @@
  * so it reads with the sound off; each word then hits on the voice. A plain editor sets it centred, over the same art
  * darkened, and it only pushes in: nothing hits, and no frame is dead.
  */
-import { rgba } from '../../deliverables/color.js';
-import type { SceneApi } from '../compose.js';
+import { ensureContrast, mix, rgba } from '../../deliverables/color.js';
+import type { Inks, SceneApi } from '../compose.js';
 import type { SpokenWord } from '../speech.js';
 import type { Rect } from '../stage.js';
 import { eBack, eOut, leadIn, type TimelineBeat } from '../timeline.js';
@@ -29,6 +29,10 @@ export const BOOK_TILT = 0.1;
 const BOOK_PEEK = 0.33;        // of its height, under its slot on frame 1: the hook and the guide, its title included, stand on the first frame together
 const ART_FADE = 0.28;         // of the frame, past the type: the dark gives way to the art
 const VEIL = 0.74;             // over the art when the type takes the whole frame: its colours stay, nothing fights the words
+const SHADE = 0.62;            // over the veil, under the type alone: .9 in all, and a thin stroke meets no tile
+const SHADE_PAD = 60;          // past the type: the box grows, and the shade's edge stays clear of it
+const SHADE_FADE = 130;
+const ACCENT_MIN = 4.5;        // the accent, on the lightest tile under the shade
 const PUSH = 0.01;             // a second, on a plain hook
 const PUSH_MAX = 0.08;         // the box leaves room for this
 const JUMP = 0.05;             // a shot inside a screen: the type jumps with the art, or the cut would not read over a long line
@@ -109,11 +113,35 @@ export function accentWord(words: readonly string[]): number {
   return words.reduce((best, w, i) => (!FLAT.test(w) && letters(w) > (best < 0 ? 2 : letters(words[best]!)) ? i : best), -1);
 }
 
+/** The accent of a veiled hook: the guide's own, as far as the lightest tile left under the shade allows. */
+export const veiledAccent = (C: Pick<Inks, 'gold' | 'dark' | 'light'>): string => ensureContrast(C.gold, mix(C.dark, C.light, (1 - VEIL) * (1 - SHADE)), ACCENT_MIN);
+
+/** Dark over `r`, its edges fading: the art stays at the frame's edges and foot, the type stands on a flat ground. */
+function shade(s: SceneApi, { x, y, w, h }: Rect): void {
+  const { ctx, C } = s;
+  const solid = rgba(C.dark, SHADE);
+  const paint = (g: ReturnType<typeof ctx.createLinearGradient>, px: number, py: number, pw: number, ph: number): void => {
+    g.addColorStop(0, solid); g.addColorStop(1, rgba(C.dark, 0));
+    ctx.fillStyle = g; ctx.fillRect(px, py, pw, ph);
+  };
+  const f = SHADE_FADE;
+  const x1 = x + w;
+  const y1 = y + h;
+  ctx.fillStyle = solid;
+  ctx.fillRect(x, y, w, h);
+  paint(ctx.createLinearGradient(x, 0, x - f, 0), x - f, y, f, h);
+  paint(ctx.createLinearGradient(x1, 0, x1 + f, 0), x1, y, f, h);
+  paint(ctx.createLinearGradient(0, y, 0, y - f), x, y - f, w, f);
+  paint(ctx.createLinearGradient(0, y1, 0, y1 + f), x, y1, w, f);
+  for (const [cx, cy] of [[x, y], [x1, y], [x, y1], [x1, y1]] as const) paint(ctx.createRadialGradient(cx, cy, 0, cx, cy, f), cx === x ? x - f : x1, cy === y ? y - f : y1, f, f);
+}
+
 /**
  * The film starts on the guide's art: dark where the type sits, its own colours where it does not. On a tall frame the art
- * rises under the type, on the square it stands beside it. `veil`: the type takes the whole frame, so the art goes dark under it.
+ * rises under the type, on the square it stands beside it. `veil`: the type takes the whole frame, this box of it, so the
+ * art goes dark under it.
  */
-export function artUnderType(s: SceneApi, at: number, veil: boolean): void {
+export function artUnderType(s: SceneApi, at: number, veil: Rect | null): void {
   const { ctx, C, stage } = s;
   const { w: W, h: H, heroBox: hero } = stage;
   s.background(C.dark, C.dark2, 0.5);
@@ -124,6 +152,7 @@ export function artUnderType(s: SceneApi, at: number, veil: boolean): void {
   if (veil) {
     ctx.fillStyle = rgba(C.dark, VEIL);
     ctx.fillRect(0, 0, W, H);
+    shade(s, veil);
     s.band(at);
     return;
   }
@@ -135,7 +164,7 @@ export function artUnderType(s: SceneApi, at: number, veil: boolean): void {
 }
 
 /** A screen's words as they stand: quotes only when both are there, no end mark on its last word but the one it asks with. */
-function typeOf(group: readonly SpokenWord[]): string[] {
+export function typeOf(group: readonly SpokenWord[]): string[] {
   const words = group.map((w) => w.text.toLocaleUpperCase('fr-FR'));
   const quoted = words.some((w) => w.includes('«')) && words.some((w) => w.includes('»'));
   const clean = quoted ? words : words.map((w) => w.replace(/[«»"]\s?|\s?[«»"]/g, ''));
@@ -153,7 +182,6 @@ export function drawHook(s: SceneApi, b: TimelineBeat, t: number): void {
   const cx = box.x + box.w / 2;
   const cy = box.y + box.h / 2;
   const rail = plain || !lower ? null : { x1: cx + (upper!.x1 - cx) / room, y: cy + (upper!.y1 - cy) / room }; // both under the shot's jump
-  artUnderType(s, b.t0 + t, bookAt === null);
 
   const fallback = s.memo(b, () => [b.screen.split(/\s+/).map((text) => ({ text, at: 0, end: b.dur }))]);
   const screens = b.groups.length ? b.groups : fallback;
@@ -163,6 +191,9 @@ export function drawHook(s: SceneApi, b: TimelineBeat, t: number): void {
   const pieces = s.memo(words, () => piecesOf(words));
   const { accent, size, lines, y0 } = s.memo(pieces, () => ({ accent: accentWord(words), ...fit(s, pieces, box, rail) }));
   const lineH = size * LINE;
+  const veil = bookAt !== null ? null : { x: box.x - SHADE_PAD, y: y0 - size - SHADE_PAD, w: box.w + SHADE_PAD * 2, h: size + (lines.length - 1) * lineH + size * INK_FOOT + SHADE_PAD * 2 };
+  artUnderType(s, b.t0 + t, veil);
+  const accentInk = veil ? veiledAccent(C) : C.gold;
   const lead = leadIn(timeline, b);
   const opened = index ? t - group[0]!.at + 0.05 : t + lead;
   const spoken = group.map((w) => t - (w.at - 0.05));
@@ -194,7 +225,7 @@ export function drawHook(s: SceneApi, b: TimelineBeat, t: number): void {
       ctx.scale(hit, hit);
       ctx.translate(left - width / 2, 0);
       ctx.globalAlpha = plain || age >= 0 || word === accent ? 1 : UNSAID;
-      ctx.fillStyle = word === accent ? C.gold : '#fff';
+      ctx.fillStyle = word === accent ? accentInk : '#fff';
       s.drawText(text, 0, 0, { moving: opened < ENTER_SEC || (!plain && age >= 0 && age < SLAM_SEC) || shake > 0 });
       ctx.restore();
       x += width;

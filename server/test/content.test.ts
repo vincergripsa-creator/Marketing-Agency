@@ -10,8 +10,12 @@ import type { AgentState, ChapterContent, NicheBrief, PdfContent, Product, Task,
 import type { Craft, MindContext, UpsellContext } from '../src/contracts.js';
 import { createRng } from '../src/core/index.js';
 import { effortFor } from '../src/deliverables/effort.js';
+import { normalizeDesign } from '../src/deliverables/design.js';
 import { designFor } from '../src/deliverables/index.js';
+import { paraBlock } from '../src/deliverables/layout/blocks.js';
 import { renderPdf } from '../src/deliverables/pdf.js';
+import { themeFor } from '../src/deliverables/pdfVisuals.js';
+import { VOICES } from '../src/deliverables/voices.js';
 import { createContentEngine, upsellTopics } from '../src/minds/index.js';
 import { findCliches, heuristicHumanize } from '../src/minds/heuristic/editing.js';
 import { parseKnowledge, type MethodStep } from '../src/minds/heuristic/knowledge.js';
@@ -21,7 +25,7 @@ import { archetypeDef, heuristicPdfContent } from '../src/minds/heuristic/studio
 import { CLICHE_TEMPLATES } from '../src/minds/lexicon.js';
 import { ensurePdf } from '../src/minds/shapes.js';
 import { speakable } from '../src/minds/heuristic/voice.js';
-import { allText, bare, endsDangling, norm, seededRng } from '../src/minds/util.js';
+import { allText, bare, endsDangling, lf, mapStrings, norm, q, seededRng } from '../src/minds/util.js';
 import { createWorld, defaultScenario } from '../src/runtime/index.js';
 import type { RuntimeCtx } from '../src/runtime/ctx.js';
 import { studioHandlers } from '../src/runtime/handlers/studio.js';
@@ -448,6 +452,82 @@ describe('the rail (pdf §9.2)', () => {
       }
     }
     expect(notes).toBeGreaterThan(0);
+  });
+});
+
+describe('what a proofreader would circle', () => {
+  it('a verbatim that ends on a quoted word keeps both its marks, and only the quotes around the whole text go', () => {
+    expect(bare('On a peur que le mariage fasse “cheap”')).toBe('On a peur que le mariage fasse “cheap”');
+    expect(q(lf('On a peur que le mariage fasse “cheap”'))).toBe('« on a peur que le mariage fasse “cheap” »');
+    expect(bare('Il répète “ça va passer”.')).toBe('Il répète “ça va passer”');
+    expect(bare('“cheap”')).toBe('cheap');
+    expect(bare('fasse cheap”')).toBe('fasse cheap');
+    expect(bare('viser « toutes les entreprises »')).toBe('viser « toutes les entreprises »');
+    expect(bare('« viser les entreprises »')).toBe('viser les entreprises');
+  });
+
+  it('a mark answered inside the text belongs to it, and a doubled closing mark loses only what is spare', () => {
+    expect(bare('“Bio” ne veut rien dire.')).toBe('“Bio” ne veut rien dire');
+    expect(bare('« Bio » ne veut rien dire')).toBe('« Bio » ne veut rien dire');
+    expect(bare('“ça va” et “ça vient”')).toBe('“ça va” et “ça vient”');
+    expect(bare('il répète “oui””')).toBe('il répète “oui”');
+    expect(bare('« viser « toutes les entreprises » »')).toBe('viser « toutes les entreprises »');
+    expect(bare('il répète « oui » »')).toBe('il répète « oui »');
+  });
+
+  it('no guide of the catalogue prints half a pair of quotes', () => {
+    const pair = (s: string, where: string): string => {
+      expect((s.match(/“/g) ?? []).length, `${where} : ${s}`).toBe((s.match(/”/g) ?? []).length);
+      return s;
+    };
+    expect(allText(all.map((g) => [g.parent, g.follow]))).toContain('“');
+    for (const g of all) for (const guide of [g.parent, g.follow]) mapStrings(guide, (s) => pair(s, g.nicheId));
+  });
+
+  it('a cliché of the draft stays, and never takes a step of the ladder out of its bold', () => {
+    const theme = themeFor(normalizeDesign(designFor({ nicheName: 'Propreté du chiot', category: 'animaux', seed: 3 })), VOICES.conte);
+    const texts = CLICHE_TEMPLATES.map((t) => t.replace(/[.]/g, '\\.').replace('{sujet}', '\\S+').replace('{diff}', '\\S+'));
+    const opening = new RegExp(`^(?:${texts.join('|')})\\s+`, 'u');
+    const closing = new RegExp(`\\s(?:${texts.join('|')})$`, 'u');
+    const outline = { title: 'Un titre', chapters: [], bonusTitle: '', nextStepTitle: '' };
+    let first = 0;
+    let last = 0;
+    let headed = 0;
+    let draws = 0;
+    for (const seed of [3, 7, 13, 42]) {
+      for (const id of ALL_NICHES) {
+        const { brief, voc } = research(seed, id);
+        const rng = seededRng(seed, 'draft', id);
+        const counted = { ...rng, chance: (p: number) => { if (p === 0.35) draws += 1; return rng.chance(p); } };
+        const draft = heuristicPdfContent({ title: 'Un titre', outline, niche: brief, voc, upsellTitle: null }, counted, { banned: [] });
+        for (const p of [...draft.introduction, ...draft.chapters.flatMap((c) => c.paragraphs)]) {
+          const open = opening.exec(p);
+          if (open) {
+            first += 1;
+            expect(paraBlock(p.slice(open[0].length), theme)?.head, p).toBeUndefined();
+          }
+          if (closing.test(p)) {
+            last += 1;
+            if (paraBlock(p, theme)?.head) headed += 1;
+          }
+        }
+      }
+    }
+    expect(first).toBeGreaterThan(0); // the flaw still opens a paragraph where it harms nothing
+    expect(headed).toBeGreaterThan(0); // and closes the ones that open on a head
+    expect(last).toBeGreaterThan(first);
+    expect(draws).toBeGreaterThanOrEqual(first + last); // one draw per cliché, wherever it lands: the stream does not shift
+  }, 60_000);
+
+  it('the wedding’s words stay in the wedding guide: a trip has nobody to contact and no quote to check', () => {
+    const printed = (nicheId: string): string => {
+      const { parent } = all.find((g) => g.nicheId === nicheId)!;
+      return allText({ howTo: parent.howTo, titles: parent.chapters.map((c) => c.title), steps: parent.chapters.map((c) => c.steps) });
+    };
+    expect(printed('mariage-moins-10k')).toContain('contacter qui que ce soit');
+    expect(printed('mariage-moins-10k')).toContain('Vérifier le devis');
+    expect(printed('japon-petit-budget')).not.toMatch(/contacter qui que ce soit|le devis/);
+    expect(printed('japon-petit-budget')).toContain('réserver quoi que ce soit');
   });
 });
 

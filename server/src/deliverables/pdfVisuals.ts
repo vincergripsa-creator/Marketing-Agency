@@ -329,12 +329,12 @@ export interface GridModel {
 }
 
 /** Share of the width per column: names and tick boxes take what they need, text columns twice the blank ones. */
-export function gridWidths(columns: string[], labels: string[], boxes: boolean[], filled: boolean[], width: number, bold: FaceName): number[] {
+export function gridWidths(columns: string[], labels: string[], boxes: boolean[], filled: boolean[], width: number, bold: FaceName, strong: FaceName): number[] {
   const pad = GRID_PAD_X * 2 + 2;
   const wide = (s: string): number => advance(bold, s, GRID_HEAD);
   const longestWord = (s: string): number => Math.max(0, ...s.split(/[\s\u00a0]+/).map(wide));
   const min = columns.map((c, i) => Math.max(i === 0 ? 46 : 38, longestWord(c) + pad));
-  const widest = Math.max(0, ...labels.map(wide));
+  const widest = Math.max(0, ...labels.map((s) => advance(strong, s, GRID_TEXT))); // a row's label prints in its own face, not the header's
   const fixed = columns.map((_, i) => {
     if (boxes[i]) return Math.max(min[i]!, GRID_BOX + pad);
     if (i === 0 && widest > 0) return Math.max(min[0]!, Math.min(widest + pad, width * 0.3));
@@ -372,7 +372,7 @@ export function gridModel(v: VisualSpec, width: number, t: PdfTheme): GridModel 
   const grid = rawRows.map((_, r) => cellsOf(r));
   const filled = columns.map((_, i) => i > 0 && grid.some((row) => row[i - 1] !== null));
   const boxes = columns.map((c, i) => i > 0 && TICK_COLUMN.test(c) && !filled[i]);
-  const widths = gridWidths(columns, labels, boxes, filled, width, voice.labelB);
+  const widths = gridWidths(columns, labels, boxes, filled, width, voice.labelB, voice.textB);
   const textW = (i: number) => widths[i]! - GRID_PAD_X * 2;
 
   const heads = columns.map((c, i) => wrapWords(c, voice.labelB, GRID_HEAD, textW(i)));
@@ -417,7 +417,7 @@ export function gridModel(v: VisualSpec, width: number, t: PdfTheme): GridModel 
         setLines(s, r.label, x + GRID_PAD_X, cy + GRID_PAD_Y - 1.5, { face: voice.textB, size: GRID_TEXT, leading: GRID_LEADING, fill: inks.ink });
         r.cells.forEach((cell, c) => {
           const i = c + 1;
-          if (boxes[i]) tickBox(s, xs[i]! + (widths[i]! - GRID_BOX) / 2, cy + (h - GRID_BOX) / 2, GRID_BOX, inks.ink);
+          if (boxes[i]) tickBox(s, xs[i]! + (widths[i]! - GRID_BOX) / 2, cy + (r.h - GRID_BOX) / 2, GRID_BOX, inks.ink); // beside the words it ticks, however tall a short plan grows the row
           else if (cell) setLines(s, cell, xs[i]! + GRID_PAD_X, cy + GRID_PAD_Y - 1.5, { face: voice.text, size: GRID_TEXT, leading: GRID_LEADING, fill: inks.ink });
         });
         cy += h;

@@ -16,17 +16,21 @@ const TILTS = [-0.012, 0.008, -0.006, 0.01];
 const PLAIN_TIGHT = 3;
 const OPENER_TIGHT = 2.7;       // an opener is a picture: the camera keeps its numeral with the line
 const LINE_MARGIN = 50;        // a line never touches the sides of the frame
+const REST_MARGIN = 20;        // the push at rest may run into that margin, this far
 const MIN_PUNCH = 1.18;        // on the full-bleed page: a punch-in is a real jump
 const FOCUS_Y = 0.36;          // where the line rests, on the height of the safe band
 const FOCUS_LOW = 0.6;         // the lowest it goes under the art of a tall frame
 const FOCUS_OPEN = 0.74;       // on a frame with no art at its foot, the paper runs to the edge: a line near the foot of its page goes this low
 const INK_REACH = 0.94;        // of the frame's height: the page's text reaches this far down, where no art takes over
 const PUSH = 0.018;            // a second
+const REST_PUSH = 0.0075;      // a second, once the whole mark rests: no frame is dead
+const REST_MAX = 0.06;
 const MARKER_AT = 0.16;        // of the beat, when the voice does not say the line
 const MARKER_SEC = 0.8;
 const ENTER_SEC = 0.28;
 const HANDOFF_SEC = 0.42;      // the single-shot beat eases from the page to the line
 const WIDE_SEC = 0.4;          // the viewer meets the page, however early the line comes
+const BACK_SEC = 0.4;          // once marked, the camera steps back this long: the whole mark rests in the frame
 const PAGE_CHIP = 32;
 const CHIP_GAP = 16;
 const CHIP_AT = 0.12;
@@ -64,13 +68,23 @@ export function markerTip(boxes: readonly Rect[], sweep: number): number | null 
   return back > 0 ? null : box.x + box.w * part;
 }
 
+const leftOf = (boxes: readonly Rect[]): number => Math.min(...boxes.map((b) => b.x));
+const rightOf = (boxes: readonly Rect[]): number => Math.max(...boxes.map((b) => b.x + b.w));
+
+/** The camera once the line is marked: as close as it was, no closer than the whole mark allows. `floor` keeps it a punch-in. */
+export const wholeMark = (boxes: readonly Rect[], k: number, floor: number, W: number, margin = LINE_MARGIN): number => Math.max(floor, Math.min(k, (W - margin * 2) / (rightOf(boxes) - leftOf(boxes))));
+
+/** `sec` past the step back: the page goes on pushing, slowly, into the margin the whole mark left it, and never shrinks the type. */
+export const restPush = (boxes: readonly Rect[], k: number, W: number, sec: number): number => wholeMark(boxes, k * (1 + Math.min(REST_MAX, REST_PUSH * Math.max(0, sec))), k, W, REST_MARGIN);
+
 /**
  * Where the camera looks on the page, in points. Lines that fit the frame together stay centred: their start must not
  * leave it. Otherwise it reads the line the marker is on, panning inside that line when it is too long for the frame.
+ * `rest`, 0..1: the line is marked, the camera comes back to the middle of the whole mark.
  */
-export function aimAt(boxes: readonly Rect[], k: number, W: number, sweep: number): { x: number; y: number } {
-  const x0 = Math.min(...boxes.map((b) => b.x));
-  const x1 = Math.max(...boxes.map((b) => b.x + b.w));
+export function aimAt(boxes: readonly Rect[], k: number, W: number, sweep: number, rest = 0): { x: number; y: number } {
+  const x0 = leftOf(boxes);
+  const x1 = rightOf(boxes);
   const half = (W / 2 - LINE_MARGIN) / k;
   const along = (box: Rect, part: number): number => (box.w / 2 <= half ? box.x + box.w / 2 : box.x + half + (box.w - half * 2) * part);
   const { line, part, back } = markerAt(boxes, sweep);
@@ -79,7 +93,9 @@ export function aimAt(boxes: readonly Rect[], k: number, W: number, sweep: numbe
   const ease = eIO(back);
   const from = along(here, part);
   const y = here.y + here.h / 2 + (next.y - here.y) * ease;
-  return { x: (x1 - x0) / 2 <= half ? (x0 + x1) / 2 : from + (along(next, 0) - from) * ease, y };
+  const centre = (x0 + x1) / 2;
+  const x = (x1 - x0) / 2 <= half ? centre : from + (along(next, 0) - from) * ease;
+  return { x: x + (centre - x) * rest, y };
 }
 
 /** When the voice reaches the line, and how long it takes to say it: the marker runs with the words. */
@@ -127,11 +143,14 @@ export function drawProof(s: SceneApi, b: TimelineBeat, t: number): void {
   const line = s.memo(proof, () => lineTimes(b));
   const punchAt = Math.max(WIDE_SEC, Math.min(line.at, b.shotAt[1] ?? line.at)); // the camera is on the line when the voice reaches it
   const close = plain ? 1 : single ? eIO((t - Math.max(0, punchAt - HANDOFF_SEC)) / HANDOFF_SEC) : t >= punchAt ? 1 : 0;
-  const k = (bleed + (tight * steps[look]! - bleed) * close) * (1 + PUSH * s.since);
+  const pushed = (bleed + (tight * steps[look]! - bleed) * close) * (1 + PUSH * s.since);
 
   const markFrom = plain ? line.at : Math.max(line.at, punchAt); // the marker waits for the punch-in: it is the same gesture
   const sweep = eIO((t - markFrom) / line.sec);
-  const aim = aimAt(proof.boxes, k, W, sweep);
+  const backAt = Math.min(markFrom + line.sec, b.dur - BACK_SEC); // before the cut, when the voice runs to it
+  const settled = eIO((t - backAt) / BACK_SEC);
+  const k = restPush(proof.boxes, pushed + (wholeMark(proof.boxes, pushed, bleed * MIN_PUNCH, W) - pushed) * settled, W, t - backAt - BACK_SEC);
+  const aim = aimAt(proof.boxes, k, W, sweep, settled);
   const focusX = (aim.x - a.w / 2) * k;
   const focusY = (aim.y - a.h / 2) * k;
   const top = stage.zones[0]!.y0;

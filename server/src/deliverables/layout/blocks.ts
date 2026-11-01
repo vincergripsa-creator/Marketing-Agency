@@ -48,6 +48,8 @@ const WRITE_TARGET = 38;
 const WRITE_TARGET_SHORT = 60;
 const SHORT_SHEET = 10;
 const READ_TARGET = 34;
+/** A plan to tick keeps this share of the body: under it, what the reader paid for is a page of ruled lines. */
+const PLAN_REACH = 0.45;
 /** A table that ends higher than this share of the page leaves room to write under it. */
 const SHEET_FULL = 0.85;
 const SHEET_NOTES_GAP = 18;
@@ -195,7 +197,8 @@ export function sheetBlock(visual: VisualSpec, t: PdfTheme): SheetBlock | null {
     const rows = model.rows.slice(from, to);
     const writable = rows.filter((r) => r.writable).length;
     const spare = room - model.heightOf(from, to);
-    const grow = Math.max(0, writable ? Math.min((rows.length <= SHORT_SHEET ? WRITE_TARGET_SHORT : WRITE_TARGET) - GRID_WRITE_ROW, spare / writable) : Math.min(READ_TARGET - GRID_READ_ROW, spare / rows.length));
+    const reach = model.ticks ? (GRID.top + PLAN_REACH * BODY_H - sheetTop(title.length) - model.heightOf(from, to)) / rows.length : 0;
+    const grow = Math.max(0, writable ? Math.min((rows.length <= SHORT_SHEET ? WRITE_TARGET_SHORT : WRITE_TARGET) - GRID_WRITE_ROW, spare / writable) : Math.min(Math.max(READ_TARGET - GRID_READ_ROW, reach), spare / rows.length));
     const end = sheetTop(title.length) + model.heightOf(from, to, grow);
     const y = end + SHEET_NOTES_GAP;
     const writes = (end - GRID.top) / BODY_H < SHEET_FULL && BODY_BOTTOM - y >= MIN_SHEET_NOTES;

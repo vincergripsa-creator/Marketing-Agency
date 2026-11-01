@@ -35,7 +35,7 @@ export interface ArchetypeDef {
   promise(c: NicheCtx, outcome: string): string;
   subtitle(c: NicheCtx): string;
   /** The « Comment utiliser ce guide » box of the promise page: what the introduction says, in three steps. */
-  howTo: [string, string][];
+  howTo(c: NicheCtx): [string, string][];
   /** Lead title formulas, strongest first. */
   titles(c: NicheCtx, a: { P: string; Ps: string; D: string; steps: number; desired: string | null }): string[];
   introOpen(c: NicheCtx, a: { pain: string; p1: string | null; p2: string | null }): string;
@@ -130,7 +130,7 @@ const genericFillers: Para[] = [
 
 const HABITUDE: ArchetypeDef = {
   id: 'habitude',
-  howTo: [['Lisez un chapitre à la fois', 'Chaque chapitre règle une partie précise du problème, et l’observation vient avant le plan.'], ['Appliquez le jour même', 'Les gestes sont pensés pour être testés tout de suite.'], ['Cochez la checklist', 'Passez à la suite quand tout est coché.']],
+  howTo: () => [['Lisez un chapitre à la fois', 'Chaque chapitre règle une partie précise du problème, et l’observation vient avant le plan.'], ['Appliquez le jour même', 'Les gestes sont pensés pour être testés tout de suite.'], ['Cochez la checklist', 'Passez à la suite quand tout est coché.']],
   stepNoun: { word: 'geste', fem: false },
   plan: 'parallele',
   planColumn: 'Jour',
@@ -237,7 +237,7 @@ const HABITUDE: ArchetypeDef = {
 
 const PROJET: ArchetypeDef = {
   id: 'projet',
-  howTo: [['Lisez tout avant d’acheter', 'Vous saurez ce qui vous attend, et ce qu’il est inutile de payer.'], ['Reprenez chapitre par chapitre', 'Le matériel à portée de main, une étape après l’autre.'], ['Cochez la checklist', 'Elle évite d’oublier une préparation qui ne se rattrape pas.']],
+  howTo: () => [['Lisez tout avant d’acheter', 'Vous saurez ce qui vous attend, et ce qu’il est inutile de payer.'], ['Reprenez chapitre par chapitre', 'Le matériel à portée de main, une étape après l’autre.'], ['Cochez la checklist', 'Elle évite d’oublier une préparation qui ne se rattrape pas.']],
   stepNoun: { word: 'étape', fem: true },
   plan: 'phases',
   planColumn: 'Quand',
@@ -351,7 +351,7 @@ const PROJET: ArchetypeDef = {
 
 const DEMARCHE: ArchetypeDef = {
   id: 'demarche',
-  howTo: [['Gardez votre espace ouvert', 'Faites chaque étape au moment où vous la lisez.'], ['Gardez chaque preuve', 'Une attestation, un seul dossier, nommé avec la date.'], ['Cochez la checklist', 'Vous voyez d’un coup d’œil ce qui reste à faire.']],
+  howTo: () => [['Gardez votre espace ouvert', 'Faites chaque étape au moment où vous la lisez.'], ['Gardez chaque preuve', 'Une attestation, un seul dossier, nommé avec la date.'], ['Cochez la checklist', 'Vous voyez d’un coup d’œil ce qui reste à faire.']],
   stepNoun: { word: 'étape', fem: true },
   plan: 'phases',
   planColumn: 'Quand',
@@ -456,7 +456,7 @@ const DEMARCHE: ArchetypeDef = {
 
 const EXAMEN: ArchetypeDef = {
   id: 'examen',
-  howTo: [['Commencez par l’épreuve', 'Sachez ce qui est évalué avant de réviser quoi que ce soit.'], ['Mesurez votre point de départ', 'Le plan se règle sur ce que vous aurez mesuré.'], ['Cochez la checklist', 'Elle montre ce qui est solide et ce qu’il reste à travailler.']],
+  howTo: () => [['Commencez par l’épreuve', 'Sachez ce qui est évalué avant de réviser quoi que ce soit.'], ['Mesurez votre point de départ', 'Le plan se règle sur ce que vous aurez mesuré.'], ['Cochez la checklist', 'Elle montre ce qui est solide et ce qu’il reste à travailler.']],
   stepNoun: { word: 'étape', fem: true },
   plan: 'phases',
   planColumn: 'Quand',
@@ -561,7 +561,7 @@ const EXAMEN: ArchetypeDef = {
 
 const EVENEMENT: ArchetypeDef = {
   id: 'evenement',
-  howTo: [['Lisez avant de réserver', 'C’est l’ordre des décisions qui fait le budget.'], ['Remplissez le budget', 'Avant de contacter qui que ce soit.'], ['Cochez la checklist', 'Chaque décision prise libère la suivante.']],
+  howTo: (c) => [['Lisez avant de réserver', 'C’est l’ordre des décisions qui fait le budget.'], ['Remplissez le budget', v(c, 'Avant de contacter qui que ce soit.', 'Avant de réserver quoi que ce soit.')], ['Cochez la checklist', 'Chaque décision prise libère la suivante.']],
   stepNoun: { word: 'décision', fem: true },
   plan: 'phases',
   planColumn: 'Quand',
@@ -604,7 +604,7 @@ const EVENEMENT: ArchetypeDef = {
     },
     {
       kind: 'budget', role: 'diagnostic',
-      title: () => 'Fixer le cadre avant de contacter qui que ce soit',
+      title: (c) => v(c, 'Fixer le cadre avant de contacter qui que ce soit', 'Fixer le cadre avant de réserver quoi que ce soit'),
       intro: (c) => `${v(c, 'Un cadre fixé tôt évite cent discussions plus tard.', 'Quelques réponses simples évitent bien des mauvaises réservations.')} ${cap(c.audCore)} posent ici les chiffres et les priorités qui décideront de tout le reste.`,
       paras: [
         (d) => d.c.diag ? `Tout commence par là : ${low(d.c.diag.text)}. ${d.c.diag.detail}` : 'Tout commence par là : poser vos chiffres et vos priorités, avant de demander le moindre prix.',
@@ -626,7 +626,7 @@ const EVENEMENT: ArchetypeDef = {
       title: (_c, n) => `Les ${n} erreurs qui font exploser le budget`,
       intro: (c) => `${v(c, 'Aucune de ces erreurs ne semble grave sur le moment, et c’est leur danger.', 'Prises une à une, ces erreurs ont l’air anodines : additionnées, elles pèsent lourd.')} Ce sont celles qui coûtent le plus cher ${toAud(c)}.`,
       paras: [],
-      steps: () => ['Relire cette liste avant chaque signature ou réservation', 'Vérifier le devis ou les conditions ligne par ligne', 'Demander ce qui manque par écrit'],
+      steps: (c) => ['Relire cette liste avant chaque signature ou réservation', v(c, 'Vérifier le devis ou les conditions ligne par ligne', 'Vérifier les conditions de chaque réservation ligne par ligne'), 'Demander ce qui manque par écrit'],
     },
     {
       kind: 'imprevus', role: 'situations',
@@ -666,7 +666,7 @@ const EVENEMENT: ArchetypeDef = {
 
 const SYSTEME: ArchetypeDef = {
   id: 'systeme',
-  howTo: [['Lisez le cycle en entier', 'Vous verrez comment les étapes s’enchaînent.'], ['Lancez un premier tour', 'Sans chercher à tout réussir du premier coup.'], ['Cochez, puis ajustez', 'C’est le deuxième tour qui montre quoi changer.']],
+  howTo: () => [['Lisez le cycle en entier', 'Vous verrez comment les étapes s’enchaînent.'], ['Lancez un premier tour', 'Sans chercher à tout réussir du premier coup.'], ['Cochez, puis ajustez', 'C’est le deuxième tour qui montre quoi changer.']],
   stepNoun: { word: 'maillon', fem: false },
   plan: 'phases',
   planColumn: 'Quand',
@@ -772,7 +772,7 @@ const SYSTEME: ArchetypeDef = {
 
 const PALIERS: ArchetypeDef = {
   id: 'paliers',
-  howTo: [['Lisez à deux', 'Chaque adulte qui donne à manger doit avoir les mêmes repères.'], ['Un palier à la fois', 'Passez au suivant quand celui-ci est devenu facile.'], ['Cochez la checklist', 'Elle dit ce qui est en place avant le prochain repas.']],
+  howTo: () => [['Lisez à deux', 'Chaque adulte qui donne à manger doit avoir les mêmes repères.'], ['Un palier à la fois', 'Passez au suivant quand celui-ci est devenu facile.'], ['Cochez la checklist', 'Elle dit ce qui est en place avant le prochain repas.']],
   stepNoun: { word: 'palier', fem: false },
   plan: 'phases',
   planColumn: 'Quand',
@@ -1513,7 +1513,7 @@ function suiteOf(base: ArchetypeDef, s: SuiteVoice): ArchetypeDef {
     plan: 'phases',
     planColumn: 'Quand',
     short: { 5: ['angle', 'reglages', 'ecueils', 'resistances', 'mini-plan'], 6: ['angle', 'point-de-depart', 'reglages', 'ecueils', 'resistances', 'mini-plan'] },
-    howTo: s.howTo,
+    howTo: () => s.howTo,
     promise: (c, o) => `un plan ciblé de ${D(c)} pour arriver à ceci : ${o}`,
     subtitle: (c) => `Le guide ciblé pour ${c.audArt} qui veulent régler ce point précis`,
     titles: (c) => [c.topic?.title ?? ''],
