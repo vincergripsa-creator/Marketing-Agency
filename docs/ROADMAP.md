@@ -13,8 +13,10 @@ L'agence a **le même fonctionnement qu'en réel** dès aujourd'hui : mêmes dé
 - [x] Licenciements qui attendent le fondateur en mode validation, comme chaque canal, embauche, remplacement et envoi
 - [x] Polices auto-hébergées : l'interface ne fait aucune requête vers l'extérieur
 - [x] Partie sans fin : paliers, portefeuille, liste e-mail, concurrents, résumé du fondateur, compaction, parties d'un an sans plantage
+- [x] Mode survie : les fondateurs ne se versent plus rien, un petit test tourne sous la ligne, à 5 €/jour et 30 € en tout. Adopté comme une assurance, pas comme un gain (`docs/BALANCE.md` §4.8)
+- [x] Ordres du fondateur : stop pub, reprise, et « Baisse le budget de pub », qui baisse ce qui tourne, gèle le neuf et retient la croissance
 - [x] Acceptation lue ligne par ligne : `docs/v1/ACCEPTANCE.md` (26 lignes passent, A6 et A10 échouent)
-- [ ] **Critère de sortie** : sur au moins 4 seeds sur 5 en difficulté `normal`, l'agence est rentable avant J40 ; sur `cauchemar`, elle survit (pas de faillite) sur au moins 3 seeds sur 5. Le critère complet est dans `docs/BALANCE.md` §6. Lu sur le code final, il **n'est pas rempli à la lettre** : ces deux lignes tiennent, mais l'apprentissage visible lit 40 % pour 70 % et les arrêts de pub 3 pour 0. Passer à la phase 2 reste la décision du fondateur.
+- [ ] **Critère de sortie** : sur au moins 4 seeds sur 5 en difficulté `normal`, l'agence est rentable avant J40 ; sur `cauchemar`, elle survit (pas de faillite) sur au moins 3 seeds sur 5. Le critère complet est dans `docs/BALANCE.md` §6. Lu sur le code final, il **n'est pas rempli à la lettre** : ces deux lignes tiennent, mais l'apprentissage visible lit 40 % pour 70 %, les arrêts de pub 2 pour 0, et une falaise reste sans chaîne d'événements. Passer à la phase 2 reste la décision du fondateur.
 
 ## Phase 2 — Réel en lecture seule (aucun risque)
 Brancher la **recherche** sur le vrai monde, sans rien publier ni dépenser :

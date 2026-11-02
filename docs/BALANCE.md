@@ -107,18 +107,21 @@ Le run de référence (entreprise d'avant la V1, 25 jours, graine 7) ne se réen
 | Dernière liste (D135 à D143) | Texte des guides (D1, D2, N1, `bare`) et couvertures (D3, D138) | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` | `efab7b77a2fb2a886d24927b06e7b5b86a2afdd4` (identique) | Rien : l'empreinte est restée la même, aucun réenregistrement. Elle couvre l'entreprise d'avant la V1 sur 25 jours, pas le marché ci-dessous |
 | S15 (D152, D156) | Texte des guides : titres de chapitres, jauges, plans, notes de marge, audiences avec leur âge, têtes de paragraphe, phrases cassées | `bf66359a8b97fe09b4a55e417d303d0608f69ac7` | `b6b0ec5a8530dea8a2cf7985c93eeac7253e6b2f` | `ledger`, `kpis` et `tasks` ; `events` inchangés. Vérifié : l'arbre sans le paquet pdf lit `bf66359a…` ; le monde diffère d'abord le soir du J1 par un seul titre de chapitre du plan, jusqu'au J12 par le texte du guide et ce qui le cite, le J13 par les titres, le J14 par une note qui lit ce texte, et ce que l'empreinte couvre bouge le J15 |
 | Passe de texte (`9b3cdc4`, `67a5152`) | Modèles à copier, une étape du mariage, une étape URSSAF, sommaire du bonus | `b6b0ec5a8530dea8a2cf7985c93eeac7253e6b2f` | `b6b0ec5a8530dea8a2cf7985c93eeac7253e6b2f` (identique) | Rien côté empreinte : `golden.ts --check` passe sur `67a5152`. Le marché de la V1 a bougé, d'où la dernière course relancée (§4.1) |
+| Dernière liste de S15 (`fff9634`, D165 à D173) | Pages de vente et kits, ordres du fondateur, test sous la ligne, fondateurs à 0 en survie | `b6b0ec5a8530dea8a2cf7985c93eeac7253e6b2f` | `b6b0ec5a8530dea8a2cf7985c93eeac7253e6b2f` (identique) | Rien côté empreinte : `golden.ts --check` passe sur `fff9634`, sans réenregistrement. Le run de référence n'a pas `scaling`, donc ni test ni nouvelle paie. Le marché de la V1 a bougé (§4.1) |
 
 ### S15 : ce qui a bougé après l'étape 4
 
-Ces nombres comparent 9513e97 au code final, 60 jours, 500 €, `normal`. Ils mêlent les bascules de l'étape 4 (D149) et le texte des guides (D152, D156). Aucune constante de `balance.ts` n'a changé, et une graine ne prouve rien : la vraie médiane est au §4.1.
+Ces nombres comparent 9513e97 au code final, 60 jours, 500 €, `normal`. Ils mêlent les bascules de l'étape 4 (D149), le texte des guides (D152, D156) et, pour la colonne « Sur `fff9634` », la dernière liste (D165 à D173). Aucune constante de `balance.ts` n'a changé, et une graine ne prouve rien : la vraie médiane est au §4.1.
 
-| Graine | Trésorerie J60, 9513e97 → `67a5152` | Première écriture différente |
-|---|---:|---|
-| 4 | 3 549,79 € → 4 559,56 € | J7 |
-| 7 | 8 684,29 € → 6 313,85 € | J5 |
-| 42 | 1 411,67 € → 447,17 € | J16 |
+| Graine | Trésorerie J60, 9513e97 → `67a5152` | Sur `fff9634` | Première écriture différente, 9513e97 contre `67a5152` |
+|---|---:|---:|---|
+| 4 | 3 549,79 € → 4 559,56 € | 4 559,56 € | J7 |
+| 7 | 8 684,29 € → 6 313,85 € | 6 313,85 € | J5 |
+| 42 | 1 411,67 € → 447,17 € | 1 395 € | J16 |
 
-Sur un an, graines 1 à 10, lu sur `11b3f20` : médiane de la trésorerie à J360 environ 36 440 €, contre environ 21 500 € avant les dernières corrections du texte et environ 38 000 € à la lecture d'acceptation. Aucun plantage, aucun écart de grand livre.
+Entre `67a5152` et `fff9634`, la médiane `normal` passe de 2 728 à 2 629 € à J60. Le bras `off`, sans l'assurance, lit déjà 2 629 € sur le code final : cet écart ne vient pas de l'assurance, et personne ne l'a découpé entre les pages, les kits et les textes de la dernière liste.
+
+Sur un an, graines 1 à 10, lu sur `11b3f20` : médiane de la trésorerie à J360 environ 36 440 €, contre environ 21 500 € avant les dernières corrections du texte et environ 38 000 € à la lecture d'acceptation. Sur `fff9634` : médiane 29 033 €, de 14 339 à 67 805 €. Aucun plantage, aucun écart de grand livre.
 
 ### Dernière liste (D135 à D143)
 
@@ -136,16 +139,18 @@ Mesuré à la fin de P10.2, rien n'a été réglé dessus (`GROWTH.rivals` reste
 - **Un clone mord fort et tôt.** Il coûte 10 % de conversion d'un coup, puis s'efface (demi-vie 60 jours). En `normal`, un événement `competitor_clone` tombe environ tous les 33 jours et vise un guide en ligne au hasard : avec un seul guide en vente, ces clones seuls tiennent la niche vers −26 %, tout près du plafond de −30 %.
 - **Les rivaux naturels prennent le relais quand les ventes montent :** 7 rivaux sur une route de la graine 7 d'ici J127, sans aucun événement `competitor_clone`.
 
-**Ce que S14 a trouvé :** le gagnant E relève `CONVERSION.base` de 0,018 à 0,0195 sans qu'aucun contrôle ne lise les clones à part. Sur `67a5152`, à J30, le profit médian `normal` est de 76 € et 14 graines sur 30 sont à perte : le premier mois reste le plus étroit.
+**Ce que S14 a trouvé :** le gagnant E relève `CONVERSION.base` de 0,018 à 0,0195 sans qu'aucun contrôle ne lise les clones à part. Sur `fff9634`, à J30, le profit médian `normal` est de 76 € et 14 graines sur 30 sont à perte : le premier mois reste le plus étroit.
 
 ### Réserve et survie
 
-D9 dit `adCap = min(part, trésorerie − réserve)`, et le plancher de la réserve (30 % du départ) est exactement la ligne de survie : sous cette ligne le plafond valait 0 pour de bon et coupait les pubs qui rapportaient. La porte de S10 y a mis la plus petite exception qui garde l'intention (D67) : en survie la réserve ne compte plus, et le mode survie suit ses propres règles, rien de neuf ne se lance, une pub rentable continue.
+D9 dit `adCap = min(part, trésorerie − réserve)`, et le plancher de la réserve (30 % du départ) est exactement la ligne de survie : sous cette ligne le plafond valait 0 pour de bon et coupait les pubs qui rapportaient. La porte de S10 y a mis la plus petite exception qui garde l'intention (D67) : en survie la réserve ne compte plus, et le mode survie suit ses propres règles : une pub rentable continue, et rien de neuf ne se lance, sauf un petit test à la fois (D167, §4.8).
+
+**`ORG.survivalPayCut` a changé de sens.** Il vaut toujours 0,5, mais ce n'est plus ce que prennent les fondateurs d'une partie normale : sous la ligne, ils ne se versent plus rien (`founderShare` 0, `survivalInsured`). 0,5 ne sert plus qu'au contrôle `control.noSurvivalTest` et aux parties sans `scaling`, anciennes sauvegardes comprises. Les recrues gardent leur contrat, et en faillite les fondateurs prennent 0 dans tous les cas.
 
 **Ce que S14 et le relevé final ont trouvé :**
 
 - `STAGE_POLICY.reserveDays` et `CFO.reserveSpendShare` n'ont pas bougé : aucun candidat ne les portait.
-- 8 graines sur 30 passent par la survie sur 182 jours (`67a5152`). Six y cumulent de 3 à 41 jours. Les graines 5 et 20, les deux seules faillites, y cumulent 104 et 122 jours, en 7 et 5 épisodes : à J182, la graine 5 en est sortie, pas la graine 20.
+- 8 graines sur 30 passent par la survie sur 182 jours (`fff9634`). Cinq y cumulent de 3 à 8 jours. Les graines 5, 29 et 20 y cumulent 51, 61 et 103 jours, en 9, 5 et 9 épisodes, sans aucune clôture négative. À J182, aucune n'est en survie, la graine 20 reste au palier Survie.
 - Une pub qui rapporte peut encore s'arrêter quand la trésorerie passe sous une réserve au-dessus du plancher : c'est D9 à la lettre, et `allocator.test.ts` l'épingle.
 - La croissance coûte d'abord : à J60, le bras complet lit 3 053 € contre 3 699 € sans mise à l'échelle, et à J180 il ne passe devant que de 1,15 fois (étape 4, `9513e97`).
 
@@ -160,62 +165,63 @@ Mesuré à la fin de S8, rien n'a été réglé dessus (`sim/visual.ts` reste ce
 
 ## 4. Résultats
 
-Ce paragraphe décrit la V1 et remplace les tableaux d'avant la V1, qui mesuraient l'ancienne équipe fixe (ils restent dans l'historique git). Chaque tableau dit de quel commit il parle. Le code final est **`67a5152`**. Les contrôles appariés et les regards à 182 jours n'existent que sur un code plus ancien, et ils le disent : ils décrivent l'entreprise d'avant les bascules de l'étape 4.
+Ce paragraphe décrit la V1 et remplace les tableaux d'avant la V1, qui mesuraient l'ancienne équipe fixe (ils restent dans l'historique git). Chaque tableau dit de quel commit il parle. Le code final est **`fff9634`**. Ses tableaux sont recomptés sur les 90 runs du bras `on` de la lecture appariée (§4.8) : `normal` 182 jours, `facile` et `cauchemar` 60 jours. Ces runs ont été relancés sur l'arbre final, 150 sur 150 identiques aux lectures appariées (§4.7, point 10). Les contrôles appariés de l'étape 4 et les regards à 182 jours n'existent que sur un code plus ancien, et ils le disent : ils décrivent l'entreprise d'avant les bascules de l'étape 4.
 
-- **La référence est 2 728 €**, la médiane `normal` à J60 sur `67a5152`. 3 053 € reste le nombre de l'étape 3, celui du candidat E avant les bascules, et n'est plus une référence. 1 408 € (avant la V1) non plus.
+- **La référence est 2 629 €**, la médiane `normal` à J60 sur `fff9634`. 2 728 € est le nombre de `67a5152`, 3 053 € celui de l'étape 3, le candidat E avant les bascules, 1 408 € celui d'avant la V1 : aucun n'est plus une référence.
 - **Le bruit :** deux runs qui ne diffèrent que d'un placebo (`ADS.baseCtr` × 1,01) s'écartent en médiane de 1 176 € à J60 sur le candidat A (étape 1), de 1 301 € à J60 et de 6 341 € à J180 sur le gagnant (étape 4). La règle gardait N = 1 176 €, aucun verdict n'en change. Le commit final n'a aucune mesure de bruit. Un écart plus petit ne dit rien.
 - **Une médiane ne se lit jamais seule.** Les quartiles sont la médiane de chaque moitié des 30 graines. Environ 1 graine sur 10 reste près de la mort à chaque lecture du code.
 - **Une faillite** est au moins une clôture sous zéro, remontée ou non. **Rentable** : profit cumulé positif ce jour-là.
 
-### 4.1 La dernière course, J60, commit `67a5152`
+### 4.1 La dernière course, J60, commit `fff9634`
 
-Graines 1 à 30, 500 € de départ, sans fin (`--open-ended`, comme le produit), cerveau heuristique. `facile` et `cauchemar` viennent de `last-fc`, `normal` des 60 premiers jours du relevé de 182 jours du §4.2 : ces 60 lignes égalent un run de 60 jours (vérifié sur 30 graines sur 30, sur `11b3f20`).
+Graines 1 à 30, 500 € de départ, sans fin, comme le produit, cerveau heuristique. `normal` vient des 60 premiers jours du relevé de 182 jours du §4.2, `facile` et `cauchemar` de runs de 60 jours. Les trois ont tourné par le pilote de la lecture appariée, avec les champs de `balance.ts --open-ended` (D169).
 
 | Difficulté | Profit médian | Q1 / Q3 | min / max | Rentables | À perte | Objectif 1 000 € | Faillites | À noter |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| `facile` | 8 857 € | 4 271 / 11 329 € | -110 / 15 652 € | 28/30 | 2 | 26/30 | 0 | clôture la plus basse 121 € |
-| `normal` | **2 728 €** | 245 / 5 224 € | -416 / 9 512 € | 24/30 | 6 | 21/30 | 0 | la graine 3 finit à +1 €, 9 graines sous 1 000 €, clôture la plus basse 84 € |
-| `cauchemar` | -187 € | -375 / 852 € | -462 / 3 427 € | 14/30 | 16 | 7/30 | 0 | trésorerie médiane 313 €, 10 graines en survie le dernier jour, clôture la plus basse 38 € |
+| `facile` | 8 089 € | 4 172 / 10 758 € | -199 / 17 719 € | 29/30 | 1 | 26/30 | 0 | clôture la plus basse 121 € |
+| `normal` | **2 629 €** | 181 / 5 224 € | -370 / 9 490 € | 25/30 | 5 | 19/30 | 0 | les graines 3 et 14 finissent à +1 et +3 €, 11 graines sous 1 000 €, clôture la plus basse 122 € |
+| `cauchemar` | +130 € | -337 / 852 € | -393 / 3 427 € | 16/30 | 14 | 7/30 | 0 | trésorerie médiane 630 €, 8 graines en survie le dernier jour, clôture la plus basse 87 € |
 
-« 0 faillite sur 90 » dit peu sur la solvabilité : cette course s'arrête à J60. En `normal`, les premières clôtures négatives viennent après : J66 sur les 210 runs de l'étape 3, J87 sur le commit final. En `cauchemar`, elles peuvent venir avant : J51 à l'étape 3, 11 runs sur 210 à J60, tous sous A, B ou C, aucun sous le gagnant. La solvabilité se lit au §4.2.
+« 0 faillite sur 90 » dit peu sur la solvabilité : cette course s'arrête à J60. En `normal`, la solvabilité se lit au §4.2, et sur le code final les 182 jours n'ont aucune clôture négative. Avant l'assurance, la première venait à J87 sur `67a5152` et à J66 sur les 210 runs de l'étape 3. En `cauchemar`, elles peuvent venir avant J60 : J51 à l'étape 3, 11 runs sur 210 à J60, tous sous A, B ou C, aucun sous le gagnant. Personne n'a lu `cauchemar` après J60 sur le code final.
 
-### 4.2 Le relevé de 182 jours, commit `67a5152`
+### 4.2 Le relevé de 182 jours, commit `fff9634`
 
 30 graines, `normal`, 500 €, sans fin.
 
 | Profit cumulé | J60 | J120 | J180 | J182 |
 |---|---:|---:|---:|---:|
-| Médiane | 2 728 € | 12 389 € | **24 955 €** | 24 744 € |
-| Q1 / Q3 | 245 / 5 224 € | 6 696 / 24 835 € | 18 339 / 38 782 € | 18 594 / 39 451 € |
-| min / max | -416 / 9 512 € | -465 / 32 250 € | -386 / 55 775 € | -396 / 57 008 € |
-| Graines à perte ce jour | 6 | 2 | 2 | 2 |
-| Graines en survie ce jour | 3 | 2 | 1 | 1 |
-| Faillites depuis le début | 0 | 1 | 2 | 2 |
+| Médiane | 2 629 € | 13 906 € | **24 865 €** | 24 927 € |
+| Q1 / Q3 | 181 / 5 224 € | 7 282 / 23 925 € | 18 556 / 36 316 € | 18 834 / 36 918 € |
+| min / max | -370 / 9 490 € | -356 / 33 609 € | -279 / 54 973 € | -226 / 55 042 € |
+| Graines à perte ce jour | 5 | 3 | 1 | 1 |
+| Graines en survie ce jour | 3 | 0 | 0 | 0 |
+| Faillites depuis le début | 0 | 0 | 0 | 0 |
 
-- **À J180 :** 28/30 positives, 2 faillites, aucune morte. Graine 5 : 4 clôtures négatives de J87 à J90, -8,39 € au plus bas. Graine 20 : 14 clôtures négatives entre J150 et J171, -15,94 € au plus bas. Les deux sont vivantes à J182, avec 417 € et 104 € en caisse, après 104 et 122 jours cumulés en survie.
-- **Palier à la fin :** 26 Portefeuille, 2 Accélération, 2 Survie.
-- **Effectif médian 16,5**, de 8 à 19. Médianes par graine : 10 embauches, 1 départ, 0 remplacement. 5 remplacements en tout.
-- **Sur 182 jours, en médiane :** 81 057 € de chiffre d'affaires pour 44 061 € de pub.
-- **Intégrité :** violations 0, écarts au grand livre 0, NaN 0.
+- **À J180 :** 29/30 positives, 0 faillite. Aucune clôture sous zéro en 182 jours, la plus basse est 71,22 € (graine 20). C'est l'assurance qui l'explique, test et fondateurs à 0 mêlés : le bras `off`, qui coupe les deux, lit 2 faillites (§4.8).
+- **La queue :** la graine 20 est à -279 € à J180, avec 103 jours de survie, et finit à J182 avec 273,96 € en caisse, hors du mode survie mais encore au palier Survie. Les graines 5 et 29 sont à 3 377 et 2 199 € à J180, après 51 et 61 jours de survie.
+- **Palier à la fin :** 24 Portefeuille, 5 Accélération, 1 Survie.
+- **Effectif médian 16**, de 10 à 18. Médianes par graine : 10 embauches, 1 départ, 0 remplacement. 4 remplacements en tout.
+- **Sur 182 jours, en médiane :** 78 790 € de chiffre d'affaires pour 41 665 € de pub.
+- **Intégrité :** violations 0, écarts au grand livre 0, NaN 0, sur les 90 runs.
 
 ### 4.3 Les huit contrôles sur le commit final
 
-Recomptés sur les fichiers bruts avec la méthode de `server/scripts/calibrateLib.ts` : K1, K2, K3, K7, K8 sur le relevé de 182 jours, K4 et K5 sur `last-fc`, K6 sur les 90 runs. La colonne de droite est le candidat E à l'étape 3 (code `e6fb49336df90154`). **L'entreprise livrée rate deux contrôles, K7 et K8, et non un seul.**
+Recomptés sur les fichiers bruts avec la méthode de `server/scripts/calibrateLib.ts` : K1, K2, K3, K7, K8 sur le relevé de 182 jours, K4 et K5 sur les runs de 60 jours, K6 sur les 90 runs. `checksOf` lui-même, lancé sur les mêmes fichiers, donne les mêmes nombres. La colonne de droite est le candidat E à l'étape 3 (code `e6fb49336df90154`). **L'entreprise livrée rate deux contrôles, K7 et K8.**
 
-| # | Contrôle | Cible | `67a5152` | Passe | Étape 3, E |
+| # | Contrôle | Cible | `fff9634` | Passe | Étape 3, E |
 |---|---|---|---:|---|---:|
-| K1 | `normal` : objectif à J60 | 15 à 27 sur 30 | 21/30 | oui | 21/30 |
-| K2 | `normal` : médiane à J60 | 1 000 à 4 000 € | 2 728 € | oui | 3 053 € |
-| K3 | `normal` : faillites à J60 et à J180 | au plus 2 à chacun | 0 et 2 | oui, à la limite | 0 et 0 |
+| K1 | `normal` : objectif à J60 | 15 à 27 sur 30 | 19/30 | oui | 21/30 |
+| K2 | `normal` : médiane à J60 | 1 000 à 4 000 € | 2 629 € | oui | 3 053 € |
+| K3 | `normal` : faillites à J60 et à J180 | au plus 2 à chacun | 0 et 0 | oui | 0 et 0 |
 | K4 | `facile` : objectif, faillites | au moins 24 sur 30, 0 | 26/30, 0 | oui | 28/30, 0 |
-| K5 | `cauchemar` : faillites, trésorerie médiane | au plus 8, au moins 250 € | 0, 313 € | oui | 0, 388 € |
+| K5 | `cauchemar` : faillites, trésorerie médiane | au plus 8, au moins 250 € | 0, 630 € | oui | 0, 388 € |
 | K6 | Violations, écarts au grand livre, NaN | tout à 0 | 0, 0, 0 sur 90 runs | oui | 0, 0, 0 sur 90 runs |
-| K7 | `normal` : remplacements par graine, médiane | au moins 1 | **0**, 5 en tout | **NON** | 0, 3 en tout |
-| K8 | `normal` : pente des semaines 9 à 26 positive, S26/S9 | au moins 24 sur 30, au moins 2,0 | **20/30, 1,79** | **NON** | 27/30, 2,06 |
+| K7 | `normal` : remplacements par graine, médiane | au moins 1 | **0**, 4 en tout | **NON** | 0, 3 en tout |
+| K8 | `normal` : pente des semaines 9 à 26 positive, S26/S9 | au moins 24 sur 30, au moins 2,0 | **20/30, 1,92** | **NON** | 27/30, 2,06 |
 
-K8 lit le chiffre d'affaires net des remboursements, semaine par semaine : le brut donne 1,80. 7 graines finissent la semaine 26 sous leur semaine 9.
+K8 lit le chiffre d'affaires net des remboursements, semaine par semaine, et le brut donne aussi 1,92. 7 graines finissent la semaine 26 sous leur semaine 9.
 
-### 4.4 La courbe de la semaine, commit `67a5152`
+### 4.4 La courbe de la semaine, commit `fff9634`
 
 Médianes des 30 graines de `normal`, semaine par semaine. Le chiffre d'affaires net retire les remboursements. **CA / pub** divise tout le chiffre d'affaires brut de la semaine, organique, e-mail et upsells compris, par la pub. **ROAS pub** ne compte que les ventes de la pub, lues jour par jour : c'est le ROAS du §4.7 et du §6. Ces deux colonnes prennent la médiane des graines qui ont dépensé en pub cette semaine-là, 28 à 30 sur 30.
 
@@ -224,31 +230,31 @@ Médianes des 30 graines de `normal`, semaine par semaine. Le chiffre d'affaires
 | 1 | 26 € | 26 € | 33 € | 1,08 | 0,81 | -107 € |
 | 2 | 126 € | 123 € | 81 € | 1,43 | 0,79 | -22 € |
 | 3 | 251 € | 248 € | 132 € | 1,98 | 1,35 | 23 € |
-| 4 | 313 € | 313 € | 187 € | 1,88 | 1,34 | 24 € |
-| 5 | 538 € | 512 € | 238 € | 2,47 | 1,65 | 127 € |
-| 6 | 998 € | 942 € | 417 € | 2,21 | 1,58 | 235 € |
-| 7 | 1 564 € | 1 511 € | 578 € | 2,46 | 1,67 | 602 € |
-| 8 | 1 946 € | 1 850 € | 858 € | 2,40 | 1,71 | 714 € |
-| 9 | 2 502 € | 2 380 € | 1 048 € | 2,38 | 1,82 | 1 060 € |
-| 10 | 2 750 € | 2 555 € | 1 271 € | 2,28 | 1,73 | 834 € |
-| 11 | 2 914 € | 2 657 € | 1 457 € | 2,07 | 1,57 | 1 021 € |
-| 12 | 3 752 € | 3 447 € | 1 812 € | 1,93 | 1,64 | 950 € |
-| 13 | 3 164 € | 2 978 € | 1 695 € | 2,13 | 1,60 | 1 213 € |
-| 14 | 4 014 € | 3 884 € | 1 910 € | 2,18 | 1,71 | 1 489 € |
-| 15 | 3 970 € | 3 640 € | 2 177 € | 1,98 | 1,51 | 1 325 € |
-| 16 | 4 346 € | 4 048 € | 2 290 € | 1,91 | 1,54 | 1 331 € |
-| 17 | 4 140 € | 3 824 € | 2 334 € | 1,88 | 1,41 | 1 272 € |
-| 18 | 4 072 € | 3 742 € | 2 506 € | 1,85 | 1,38 | 1 181 € |
-| 19 | 4 188 € | 3 869 € | 2 164 € | 1,82 | 1,43 | 1 561 € |
-| 20 | 4 728 € | 4 439 € | 2 601 € | 1,88 | 1,51 | 1 146 € |
-| 21 | 4 644 € | 4 234 € | 2 697 € | 1,67 | 1,29 | 1 287 € |
-| 22 | 4 784 € | 4 415 € | 2 626 € | 1,81 | 1,32 | 1 368 € |
-| 23 | 4 362 € | 4 078 € | 2 633 € | 1,72 | 1,33 | 1 415 € |
-| 24 | 4 864 € | 4 456 € | 2 908 € | 1,68 | 1,25 | 1 134 € |
-| 25 | 4 710 € | 4 373 € | 3 110 € | 1,64 | 1,28 | 1 139 € |
-| 26 | 4 476 € | 4 213 € | 3 012 € | 1,53 | 1,19 | 912 € |
+| 4 | 313 € | 313 € | 187 € | 1,88 | 1,34 | 30 € |
+| 5 | 538 € | 512 € | 238 € | 2,35 | 1,56 | 127 € |
+| 6 | 998 € | 942 € | 417 € | 2,07 | 1,57 | 235 € |
+| 7 | 1 564 € | 1 511 € | 578 € | 2,36 | 1,62 | 602 € |
+| 8 | 1 946 € | 1 850 € | 858 € | 2,54 | 1,72 | 560 € |
+| 9 | 2 543 € | 2 380 € | 1 019 € | 2,49 | 1,86 | 970 € |
+| 10 | 2 618 € | 2 432 € | 1 238 € | 2,29 | 1,80 | 863 € |
+| 11 | 3 030 € | 2 831 € | 1 392 € | 2,15 | 1,66 | 1 270 € |
+| 12 | 3 701 € | 3 518 € | 1 648 € | 2,04 | 1,65 | 1 127 € |
+| 13 | 3 502 € | 3 264 € | 1 781 € | 2,15 | 1,56 | 1 320 € |
+| 14 | 4 188 € | 3 983 € | 2 176 € | 2,15 | 1,74 | 1 777 € |
+| 15 | 4 330 € | 3 998 € | 2 163 € | 1,85 | 1,47 | 1 449 € |
+| 16 | 4 346 € | 4 014 € | 2 330 € | 1,79 | 1,47 | 1 137 € |
+| 17 | 4 070 € | 3 806 € | 2 340 € | 1,83 | 1,49 | 1 349 € |
+| 18 | 4 953 € | 4 472 € | 2 723 € | 2,01 | 1,47 | 1 579 € |
+| 19 | 4 810 € | 4 630 € | 2 512 € | 1,76 | 1,36 | 1 619 € |
+| 20 | 5 484 € | 5 132 € | 2 664 € | 1,86 | 1,42 | 1 249 € |
+| 21 | 4 731 € | 4 376 € | 2 721 € | 1,70 | 1,25 | 1 164 € |
+| 22 | 4 568 € | 4 184 € | 2 791 € | 1,70 | 1,32 | 990 € |
+| 23 | 4 458 € | 4 180 € | 2 687 € | 1,64 | 1,15 | 980 € |
+| 24 | 4 925 € | 4 598 € | 2 807 € | 1,76 | 1,38 | 1 167 € |
+| 25 | 4 612 € | 4 263 € | 3 121 € | 1,69 | 1,28 | 1 201 € |
+| 26 | 4 320 € | 3 930 € | 2 743 € | 1,57 | 1,21 | 804 € |
 
-Le chiffre d'affaires monte vite jusqu'à la semaine 16, puis lentement : un plateau près de 4 500 € par semaine. La pub, elle, continue de monter (× 2,9 entre les semaines 9 et 26, pour un chiffre d'affaires × 1,8), le CA / pub passe de 2,38 à 1,53, le ROAS pub de 1,82 à 1,19, et le profit de la semaine reste entre 900 et 1 600 € depuis la semaine 14. L'agence grandit seule, puis elle bute sur le marché (§7).
+Le chiffre d'affaires monte vite jusqu'à la semaine 15, puis il plafonne : de la semaine 15 à la semaine 26, sa médiane reste entre 4 070 et 5 484 €, près de 4 600 € par semaine. La pub, elle, continue de monter (× 2,7 entre les semaines 9 et 26, pour un chiffre d'affaires × 1,7), le CA / pub passe de 2,49 à 1,57, le ROAS pub de 1,86 à 1,21, et le profit de la semaine reste entre 800 et 1 800 € depuis la semaine 14. L'agence grandit seule, puis elle bute sur le marché (§7).
 
 ### 4.5 La calibration (`runs/calibration/step5.md`)
 
@@ -334,17 +340,80 @@ Profit médian du bras complet : 3 053, 14 179, 27 916 €. Bras à J180 : 18 70
 Elles valent autant que les tableaux.
 
 1. **Le gagnant a été décidé par un seul contrôle, dans son bruit.** E l'emporte à l'étape 3 parce qu'il passe K8, 27/30 et 2,06 pour 2,0 demandé. Relu sur le code de l'étape 4, celui de `9513e97`, qui lit 26/30 et 2,03 : jumeau placebo sur les mêmes graines 20/30 et 1,46 ; graines neuves 31 à 60 26/30 et 1,84 ; ces 60 graines ensemble 52/60 et 1,91, ou 53/60 et 1,97 avec les 30 de l'étape 3 ; un tirage neuf de 30 graines passerait K8 environ une fois sur trois. Si E avait raté K8, D gagnait ; si G l'avait passé aussi, G gagnait. E reste : D121 avait fixé la règle avant tout résultat, et ses K1 à K3 se répètent sur les graines neuves (23/30, 3 245 €, 0 et 0, bras `retest-winner` de l'étape 4). Sur le commit livré, K8 échoue.
-2. **K7 et A10 échouent : la compétition existe et mord rarement.** Commit final : 5 remplacements en 30 entreprises sur 182 jours, 1 à J60, 4 à J180, médiane 0. Les 5 ont pris une personne sous la moyenne de sa famille, gain moyen de talent réel +0,17. La chaîne s'arrête au marché : D147 lisait 0,78 sur une famille de copie, graines 1 à 15, avant les bascules. Sur le commit final, le talent réel moyen de la ligue lit 0,76 en médiane à J182, et le marché reste à 0,52.
-3. **« 0 faillite à J180 » ne vaut que pour le code de `9513e97` et d'avant.** Le commit livré lit 2/30, exactement à la limite de K3, sans marge. L'assurance de D117 n'est pas construite, puisque son déclencheur (K3 ou K5 en échec) n'a pas tiré.
-4. **Une queue d'environ 1 graine sur 10 reste près de la mort.** Commit final : 6 graines à perte à J60 et la graine 3 à +1 €, 2 graines à perte à J180, qui cumulent 104 et 120 jours de survie à cette date. Les médianes ne le montrent pas.
-5. **La dernière course s'arrête à J60.** En `normal`, elle ne peut presque pas voir une faillite (§4.1). La solvabilité se lit sur 182 jours.
+2. **K7 et A10 échouent : la compétition existe et mord rarement.** Commit final : 4 remplacements en 30 entreprises sur 182 jours, 1 à J60, 4 à J180, médiane 0. Deux des quatre ont remplacé une personne sous la moyenne de sa famille, les deux autres une personne juste au-dessus. Une recrue sur quatre arrive sous cette moyenne, les trois autres au-dessus. Gain moyen de talent réel +0,14. La chaîne s'arrête au marché : D147 lisait 0,78 sur une famille de copie, graines 1 à 15, avant les bascules. Sur le commit final, le talent réel moyen de la ligue lit 0,76 en médiane à J182, et le marché reste à 0,52.
+3. **« 0 faillite à J180 » est de nouveau vrai, et c'est l'assurance qui le fait.** `9513e97` lisait 0, `67a5152` lisait 2/30, les graines 5 et 20, exactement à la limite de K3. Le déclencheur de D117 (K3 ou K5 en échec) n'avait pas tiré : l'assurance a été construite parce qu'un fondateur qui lance une seule partie a environ une chance sur quinze de regarder une entreprise morte pendant des mois (D167). `fff9634` lit 0/30. Sans elle, le même code lit toujours 2 (§4.8).
+4. **Une queue d'environ 1 graine sur 10 reste près de la mort.** Commit final : 5 graines à perte à J60 et les graines 3 et 14 à +1 et +3 €, 3 graines à perte à J120, 1 à perte à J180, avec 103 jours de survie à cette date. L'assurance les garde en vie, elle ne les guérit pas. Les médianes ne le montrent pas.
+5. **La dernière course s'arrête à J60.** En `normal`, elle ne peut presque pas voir une faillite (§4.1). La solvabilité se lit sur 182 jours, et `cauchemar` n'a aucune lecture après J60.
 6. **K6 est un contrôle de fraîcheur, pas de justesse.** `cash` et `ledgerCash` sont deux sommes des mêmes écritures, et un montant non fini est mis à zéro avant que le contrôle NaN ne le voie. K6 attrape un KPI en retard, pas un montant faux. `violations` est un vrai compte.
-7. **L'allocateur au ROAS moyen est la règle de l'étape 4, lue à J60, et il a aussi retiré le plancher de ROAS de 1,15.** De J121 à J182 : ROAS médian 1,37 et 22 713 € de pub sur le commit final, 9 graines sous 1,2 ; 1,69 et 16 754 € sur `9513e97`, sous la règle marginale, 0 graine sous 1,2. Soit 36 % de pub en plus pour un profit qui reste dans le bruit : commit final moins `9513e97` à J180, -957 €, 14/30, tous les changements de S15 mêlés. Rien n'est prouvé après J60, pour aucune des deux règles.
+7. **L'allocateur au ROAS moyen est la règle de l'étape 4, lue à J60, et il a aussi retiré le plancher de ROAS de 1,15.** De J121 à J182 : ROAS médian 1,33 et 24 479 € de pub sur le commit final, 8 graines sous 1,2 ; 1,69 et 16 754 € sur `9513e97`, sous la règle marginale, 0 graine sous 1,2. Soit 46 % de pub en plus pour un profit qui reste dans le bruit : commit final moins `9513e97` à J180, -2 019 €, 13/30, tous les changements de S15 mêlés. Rien n'est prouvé après J60, pour aucune des deux règles.
 8. **Le tempo est presque cosmétique.** Il a quitté le marché et le bandit, mais il change la longueur des plans (`TEMPO_SHOT`), donc le rythme, donc la note d'un film, donc son CTR : au plus ±1,6 %, sur une minorité de films.
-9. **Les contrôles de l'étape 4 sont fermés (D149).** Ils décrivent l'entreprise d'avant les bascules. Aucun contrôle de mise à l'échelle n'existe sur le commit final : A1, A2, A4 et A5 de scale n'y sont pas revendiqués. A3 y échoue (20/30, 1,79). A5 demande au plus le contrôle + 1 : le commit final lit 2 faillites à J180, donc A5 échoue si le contrôle lit encore 0, ce qui n'est pas mesuré. Les trois bascules n'ont jamais été mesurées ensemble contre un contrôle.
-10. **Les fichiers `--json` du banc ne portent pas de tampon de code** (`sweep182`, `last-fc`), à la différence des fichiers de calibration. Ce qui prouve leur commit est un rejeu : `npm run balance`, relancé sur `67a5152` pendant cette passe, redonne les graines 1, 2, 3 et 7 du relevé à l'euro près.
+9. **Les contrôles de l'étape 4 sont fermés (D149).** Ils décrivent l'entreprise d'avant les bascules. Aucun contrôle de mise à l'échelle n'existe sur le commit final : A1, A2 et A4 de scale n'y sont pas revendiqués. A3 y échoue (20/30, 1,92). A5 demande au plus le contrôle + 1 : avec 0 faillite à J180, il tient quel que soit le contrôle. Les trois bascules n'ont jamais été mesurées ensemble contre un contrôle.
+10. **Les fichiers de résultats ne portent pas de tampon de commit.** Le banc `--json` et les runs de la lecture appariée n'en ont pas, à la différence des fichiers de calibration. Ce qui prouve leur code est un rejeu : les 150 runs ont été relancés sur l'arbre final (518 fichiers, tampon `cba37981…`), 150 sur 150 identiques, résultat complet et tests, hors durée et dossier. `npm run balance`, relancé sur `fff9634` pendant cette passe, redonne les graines 1, 2, 3 et 7 des trois difficultés à l'euro près.
 
-Une partie dépend beaucoup de son chemin (première niche choisie, premiers avis, un événement au mauvais moment) : deux graines voisines peuvent finir à 9 512 € et à -170 € à J60 (graines 12 et 13). C'est voulu, c'est un marché, mais il faut juger un réglage sur 30 graines et contre un contrôle apparié, jamais sur une seule graine.
+Une partie dépend beaucoup de son chemin (première niche choisie, premiers avis, un événement au mauvais moment) : deux graines voisines peuvent finir à 9 490 € et à -170 € à J60 (graines 12 et 13). C'est voulu, c'est un marché, mais il faut juger un réglage sur 30 graines et contre un contrôle apparié, jamais sur une seule graine.
+
+### 4.8 Le test sous la ligne (D167 à D173)
+
+Tous les tableaux de cette section décrivent `fff9634`. La lecture a tourné sur `fad5554` plus 41 entrées non commitées (tampon `aa5d71e3…`, D169). Ses 150 runs ont été relancés sur l'arbre final (tampon `cba37981…`), égal à `fff9634` sur ses 518 fichiers, sauf `docs/v1/PLAN.md` : 150 sur 150 identiques (§4.7, point 10).
+
+Jusqu'à `67a5152`, une entreprise qui tombait sous la ligne de survie sans pub qui tourne n'en sortait que par l'organique : graine 20, 113 jours de suite sans un euro de pub avec un produit vendable. L'assurance de D117 a été construite pour ça, et **elle est adoptée comme une assurance, pas comme un gain.**
+
+**Ce qu'elle fait.** Sous la ligne (30 % du départ, 150 € ici), sans campagne qui tourne, l'agence lance un seul test à la fois : 5 €/jour pendant 6 jours au plus, 30 € en tout. Il faut une pub validée, aucun compte banni, aucune panne, aucun gel du fondateur, et au moins 30 € plus 7 jours de frais fixes et de paie encore due, soit 39,59 € pour l'équipe de départ. Aujourd'hui seul TikTok le permet : les autres canaux demandent plus de 5 € par jour. Le verdict tombe 6 jours après le lancement : un ROAS d'au moins 1,2 sur au moins 10 €, et le test devient une campagne comme les autres, sous la règle de survie. Sinon il s'arrête et le suivant attend 14 jours. Il y a une autre sortie : ce qui arrête un test avant son verdict le rate aussitôt, même s'il rapporte, sauf une panne, qui ne compte que comme un jour de repos. 2 des 41 tests fermés ont fini ainsi : `normal` graine 20, J102 → J106 ; `cauchemar` graine 9, J43 → J45, à 9,70 €. Les fondateurs ne se versent plus rien en survie (§3, Réserve et survie).
+
+**Le bras `off` n'est pas « le même code sans le test ».** Un seul interrupteur, `control.noSurvivalTest`, retire le test et remet les fondateurs à 50 % en survie (D167). Aucun run ne sépare les deux : tout ce qui suit lit l'assurance entière, paie et test mêlés.
+
+**La règle, fixée avant le résultat (D168).** Runs appariés sur le même code, assurance coupée (bras `off`) contre assurance en marche (bras `on`), `normal` 30 graines 182 jours, `cauchemar` 30 graines 60 jours, soit 120 runs, plus `facile` 30 graines 60 jours sur le bras `on` seulement. Adopté seulement si tout tient, sinon coupé par défaut, sans deuxième essai.
+
+| Ligne | Demandé | Bras `off` | Bras `on` | Tient |
+|---|---|---:|---:|---|
+| 1. `normal` : graines au palier Survie à J182, ou jours de survie | de 2 à au plus 1, ou -30 % | 2 ; 296 jours | 1 (graine 20) ; 242 jours, -18,2 % | oui, sur sa première branche seule |
+| 2. `normal` : faillites à J180 | pas plus que `off` | 2 (graines 5, 20) | 0 | oui |
+| 3. `normal` : médiane à J60 et à J180 | au moins `off` moins 1 176 € et 6 341 € | 2 629,24 € ; 23 971,89 € | 2 629,24 € ; 24 864,78 € | oui |
+| 4. `cauchemar` : K5 et faillites | K5 tient, faillites au plus `off` + 1 | 0 ; 293 € | 0 ; 630 € | oui |
+| 5. K1, K2, K4, K6 | ils passent encore | 21/30, 2 629 €, pas de bras `facile`, 0/0/0 sur 60 runs | 19/30, 2 629 €, 26/30 et 0, 0/0/0 sur 90 runs | oui |
+
+Aucune fuite : les 22 graines `normal` et les 14 graines `cauchemar` qui n'entrent jamais en survie sont identiques entre les deux bras, jusqu'au dernier octet des lignes. La graine `cauchemar` 13 aussi, avec son seul jour de survie.
+
+**Ce que l'assurance change.**
+
+| Lecture | Bras `off` | Bras `on` |
+|---|---:|---:|
+| `normal`, faillites à J180 | 2 | 0 |
+| `normal`, clôture la plus basse | -15,94 € | 71,22 € |
+| `normal`, plus long arrêt de pub avec un produit vendable | 113 jours | 15 jours |
+| `normal`, jours sans pub avec un produit vendable | 485 | 326 |
+| `cauchemar`, trésorerie médiane à J60 | 293 € | 630 € |
+| `cauchemar`, profit médian à J60 | -207 € | +130 € |
+| `cauchemar`, plus long arrêt de pub avec un produit vendable | 38 jours | 14 jours |
+| `cauchemar`, en survie à J60 | 10 | 8 |
+
+**Ces 2 faillites ne créditent pas le test.** Elles tiennent en peu d'argent : clôture la plus basse -8,39 € pour la graine 5, -15,94 € pour la graine 20. Avant sa première clôture négative, la graine 5 a versé environ 150 € de demi-paie aux fondateurs en survie, la graine 20 environ 270 €. C'est un calcul sur la paie de la semaine 1, pas un run. Sur le bras `on`, les tests de la graine 20 ont raté 6 fois sur 7. La paie seule a pu suffire, le test aussi : aucun run ne le dit.
+
+**Ce que la règle ne lit pas.** En `normal`, sur l'argent, l'assurance ne montre rien. En `cauchemar`, 15 graines changent, 13 en hausse, 2 en baisse, somme +2 187 €, médiane +57 €. C'est sur 60 jours seulement, paie et test mêlés, sans aucune lecture après J60 : ce n'est pas un gain prouvé du test.
+
+Graines `normal` qui changent :
+
+| Graine | Trésorerie J182, bras `off` | Bras `on` | Écart |
+|---:|---:|---:|---:|
+| 5 | 417 € | 3 773 € | +3 356 € |
+| 10 | 18 830 € | 30 470 € | +11 640 € |
+| 14 | 27 610 € | 37 418 € | +9 808 € |
+| 18 | 51 028 € | 46 431 € | -4 597 € |
+| 20 | 104 € | 274 € | +170 € |
+| 27 | 32 539 € | 30 586 € | -1 953 € |
+| 29 | 16 493 € | 2 741 € | -13 752 € |
+| 30 | 39 951 € | 24 936 € | -15 015 € |
+
+- **4 en hausse, 4 en baisse, somme -10 344 €, médiane -892 €.** Une paire de runs a un bruit de 6 341 € à J180 : ces écarts ne prouvent rien, dans aucun sens. Les +893 € de la médiane à J180 viennent de la graine qui se trouve au milieu, pas d'un gain général.
+- **La graine 29 perd 13 752 €, et on ne sait pas prouver pourquoi.** La revue du lundi lit la dépense d'un guide testé et l'a arrêté à J92, pour -11,56 € sur 28 jours, là où le bras `off` doublait la mise à J85. Mais un garde sur cet arrêt finit la graine à 3 575 €, loin des 16 493 € : il n'explique pas l'écart. La graine 30 perd 15 015 €, sans lecture non plus.
+- **K1 tombe de 21 à 19**, sur les graines 18 et 30 : 1 918 → 952 € et 1 715 → 181 € à J60, chacune après un test raté. Aucun run n'isole la cause.
+- **Le chemin coûte avant de rendre.** Médiane lue jour par jour : égale jusqu'à J62, derrière de J63 à J104 sauf J64, égale (-2 289 € au pire, à J81, encore -246 € à J104), égale ou à peine à côté de J105 à J118 (-103 € à J110, +347 € à J118). À partir de J119, elle n'est plus jamais derrière : devant, sauf J164 à J166 et J171, égale.
+- **Trois graines passent plus de temps en survie avec le test :** 10, 29 et 30 (4 → 7, 41 → 61, 4 → 8 jours). Quatre en passent moins, la graine 14 reste à 3.
+- **Les tests eux-mêmes :** `normal` 20 tests, 6 gagnés, 14 ratés, 562,50 € en tout, 29,03 € au plus. `cauchemar` 25 tests, 8 gagnés, 10 ratés, 7 encore ouverts à J60, 570,50 €.
+- **Un test gagné peut être coupé le lendemain matin** par la règle de survie, qui lit les 4 derniers jours : graine 20, gagné à J167, coupé à J168 ; graine 29, J40 et J41. La graine 5, gagnée à J66, tombe à J69 sur l'enveloppe du CFO. C'est laissé ainsi exprès : c'est la règle écrite, mesurée par la lecture, et une refonte serait le deuxième essai que D168 ferme. D172 l'écrit comme un jugement, pour qu'il puisse être contesté : qui le lit comme un défaut doit reprendre l'autre moitié de la règle, le correctif touche l'argent et le bras n'est alors plus adopté.
+- **`facile` n'est pas strictement inchangé.** Les graines 14, 18 et 30 y entrent en survie (10, 3 et 5 jours) et lancent 3 tests. Sans bras `off` en `facile`, l'effet ne se lit pas.
+
+**Verdict (D173) :** adopté, `control.noSurvivalTest` reste éteint, les fondateurs prennent 0 en survie, un test tourne sous la ligne. Rien de ce qui a suivi la lecture ne touche l'argent : les 150 runs relancés sur l'arbre final sont identiques.
 
 ## 5. Lancer le banc d'essai
 
@@ -361,7 +430,7 @@ npx tsx scripts/balance.ts --json resultats.json  # résultats détaillés, jour
 npx tsx scripts/balance.ts --no-hire              # bras de contrôle ; aussi --no-payroll et --team legacy31
 ```
 
-Chaque commande ci-dessus a été lancée sur le code final, sur quelques jours ou en entier. Aide complète : `npx tsx scripts/balance.ts --help`.
+Chaque commande ci-dessus a été lancée sur `67a5152`, sur quelques jours ou en entier. Sur `fff9634` ont tourné `npm run balance` et `--open-ended`, à 10 processus, et `--details` sur une graine. Aide complète : `npx tsx scripts/balance.ts --help`.
 
 **Temps mesurés sur `67a5152` :**
 
@@ -372,10 +441,10 @@ Chaque commande ci-dessus a été lancée sur le code final, sur quelques jours 
 | 60 runs de 60 jours, `facile` et `cauchemar` | 6 | 650,7 s |
 | 30 runs de 182 jours, `normal` | 12 | 757,1 s |
 
-Sur `11b3f20`, `--open-ended --jobs 6` a pris 97,1 s. Un run de 60 jours prend environ 50 s pour une entreprise qui marche : de 12 à 53 s à 10 processus, de 19 à 97 s à 6 processus. Un run de 182 jours a pris de 68 à 407 s à 12 processus.
+Sur `fff9634`, à 10 processus : 77,7 s sans `--open-ended`, 77,8 s avec, et les deux tables sont identiques. Sur `11b3f20`, `--open-ended --jobs 6` a pris 97,1 s. Un run de 60 jours prend environ 50 s pour une entreprise qui marche : de 12 à 53 s à 10 processus, de 19 à 97 s à 6 processus. Un run de 182 jours a pris de 68 à 407 s à 12 processus.
 
 - Chaque run est une vraie entreprise sans interface (une équipe fondatrice de 8 agents qui recrute quand les chiffres le demandent, cerveau heuristique, PDF et pages de vente réellement générés, pas de film) dans un dossier temporaire supprimé à la fin, sauf avec `--keep`. Les runs tournent dans `--jobs` processus (3 par défaut, 16 au plus ; `--jobs 1` = tout dans le même processus, mêmes résultats). Le mode `claude` n'est jamais utilisé par le banc (aucune clé n'est transmise).
-- `--open-ended` retire l'échéance, comme le produit. Sur ces 15 runs de 60 jours, le résultat est le même avec et sans (vérifié sur `67a5152`). Avec une échéance, la ligue s'arrête 10 jours avant la fin : un bras de calibration tourne donc toujours sans fin (D125).
+- `--open-ended` retire l'échéance, comme le produit. Sur ces 15 runs de 60 jours, le résultat est le même avec et sans (vérifié sur `fff9634`). Avec une échéance, la ligue s'arrête 10 jours avant la fin : un bras de calibration tourne donc toujours sans fin (D125).
 - Colonnes : **J>0** = premier jour où le profit cumulé (frais de démarrage compris) passe au-dessus de 0 ; **Objectif** = premier jour à 1 000 € de profit cumulé ; **Faillite** = au moins une clôture négative, remontée ou non ; **Prod. L/A** = produits en ligne / arrêtés ; **ROAS 1→2** et **CTR 1→2** = pubs payantes de la première puis de la seconde moitié du run (↑ = mieux en 2e moitié) ; **CTR neuf** = TikTok, créations sous 30 000 impressions ; **Angle** = accroche × format de ce qui a tourné, rapporté au meilleur couple de la niche ; **Remb.** = part des commandes remboursées ou contestées ; **Leçons** = leçons chiffrées écrites dans le cerveau ; **Effectif** = agents le dernier jour ; **Masse salariale**, **Embauches**, **Départs** sur tout le run ; **Survie** = jours sous la ligne du CFO ; **Violations** = invariants d'organisation rompus.
 - **Artefacts** surveillés : **F** = falaise (le profit cumulé perd plus de 40 % d'un pic ≥ 100 € en moins de 7 jours ; `--details` liste la chaîne qui l'explique : événements du marché, jours de pub sans vente, vagues de remboursements) ; **S** = plus de 2 jours sans pub alors qu'il reste plus de 30 % de la trésorerie de départ, un produit vendable et un compte pub actif ; **K** = KPI du jour ≠ somme du grand livre ; **N** = valeur non numérique.
 - `--set CHEMIN=N` remplace le temps du banc une constante du marché ou d'un pilier (`docs/v1/PLAN.md` §2.9). Un chemin inconnu est une erreur, pour ne jamais mesurer le marché par défaut sans le savoir.
@@ -385,7 +454,7 @@ Sur `11b3f20`, `--open-ended --jobs 6` a pris 97,1 s. Un run de 60 jours prend e
 
 | Commande (dans `server/`) | Ce qu'elle fait |
 |---|---|
-| `npx tsx scripts/golden.ts --check` | Compare le run de référence à son empreinte (`b6b0ec5a…` sur `67a5152`) |
+| `npx tsx scripts/golden.ts --check` | Compare le run de référence à son empreinte (`b6b0ec5a…` sur `fff9634`) |
 | `npx tsx scripts/autonomy.ts --seeds 1-30 --days 90` | Lignes A8 et A9 : l'agence tourne seule, sans action du fondateur |
 | `npx tsx --max-old-space-size=500 scripts/longrun.ts --days 365 --seed 7` | Ligne A6 : un an, sous plafond de mémoire, sort en code 1 tant que le p95 d'une journée dépasse sa cible |
 | `npx tsx scripts/pdfSheet.ts --run <id>` | Ligne A16 : planches d'images des guides d'un run |
@@ -407,37 +476,37 @@ La phase 2 (« réel en lecture seule ») ne commence que si, sur la version à 
 
 ### Lecture sur le commit final
 
-**État de cette version, `67a5152` : critère non rempli, à la lettre. Deux lignes échouent : l'apprentissage visible (40 % pour 70 %) et les arrêts de pub (3 pour 0).** La ligne 1 lit `npm run balance` (15 runs, les mêmes avec et sans `--open-ended`). La colonne de droite lit les 30 graines de la dernière course et du relevé de 182 jours, qui sont plus nombreuses que les 15 demandées et plus sévères que les 5 du banc.
+**État de cette version, `fff9634` : critère non rempli, à la lettre. Trois lignes échouent : l'apprentissage visible (40 % pour 70 %), les arrêts de pub (2 pour 0) et une falaise sans chaîne d'événements (1 pour 0).** Cette troisième ligne tenait sur `67a5152`. La ligne 1 lit `npm run balance` (15 runs, les mêmes avec et sans `--open-ended`, vérifié sur `fff9634`). La colonne de droite lit les 30 graines de la dernière course et du relevé de 182 jours, qui sont plus nombreuses que les 15 demandées et plus sévères que les 5 du banc.
 
 | Ligne du critère | Cible | 5 graines, 60 jours | Verdict | 30 graines |
 |---|---|---|---|---|
-| `normal` : positif avant J40 | au moins 4/5 | 4/5 (J12, J13, J15, J23 ; la graine 42 jamais) | tient | 21/30 |
-| `normal` : positif à J60 | au moins 4/5 | 4/5 (la graine 3 à +1 €, la graine 42 à -53 €) | tient, à 1 € près | 24/30 |
-| `cauchemar` : aucune faillite | au moins 3/5 | 5/5 (la graine 42 finit à 48 € après 28 jours de survie) | tient | 30/30 à J60 |
-| Apprentissage visible, CTR **et** ROAS | au moins 70 % | **40 %** (CTR 60 %, ROAS 40 %, 10 parties) | **échoue** | 57 % sur 60 parties |
-| Zéro arrêt de pub | 0 | **3** (`normal` 3 et 42, `cauchemar` 2) | **échoue** | 18 sur 90 runs, de 3 à 6 jours chacun, au sens du détecteur S (§5) |
+| `normal` : positif avant J40 | au moins 4/5 | 5/5 (J12, J13, J15, J23, J37) | tient | 21/30 |
+| `normal` : positif à J60 | au moins 4/5 | 5/5 (la graine 3 à +1 €, la graine 42 à 895 €) | tient | 25/30 |
+| `cauchemar` : aucune faillite | au moins 3/5 | 5/5 (la graine 42 finit à 314 € après 20 jours de survie) | tient | 30/30 à J60 |
+| Apprentissage visible, CTR **et** ROAS | au moins 70 % | **40 %** (CTR 60 %, ROAS 60 %, 10 parties) | **échoue** | 63 % sur 60 parties |
+| Zéro arrêt de pub | 0 | **2** (`normal` 3, `cauchemar` 2) | **échoue** | 20 arrêts sur 19 des 90 runs, de 3 à 6 jours chacun, au sens du détecteur S (§5) |
 | Zéro écart KPI / grand livre | 0 | 0 | tient (K6, §4.7) | 0 sur 90 runs |
 | Zéro NaN | 0 | 0 | tient | 0 sur 90 runs |
-| Aucune falaise sans chaîne | 0 | 1 falaise, expliquée | tient sur 5 graines | **5 inexpliquées sur 22**, sur 90 runs |
-| Médiane `normal` entre 1 000 et 3 000 € | sur 15 graines | 4 625 € sur 5 graines, trop peu pour lire une médiane | tient sur 30 graines | 2 728 € |
-| Aucune faillite en `normal` | sur 15 graines | 0/5 à J60 | tient à J60, **échoue à J180** | 0/30 à J60, 2/30 à J180 |
+| Aucune falaise sans chaîne | 0 | **1 sans chaîne sur 2** (`normal` 42, J38 → J40, 105 € → 62 €, aucun événement ; `facile` 3 expliquée) | **échoue** | **5 inexpliquées sur 26**, sur 90 runs |
+| Médiane `normal` entre 1 000 et 3 000 € | sur 15 graines | 4 625 € sur 5 graines, trop peu pour lire une médiane | tient sur 30 graines | 2 629 € |
+| Aucune faillite en `normal` | sur 15 graines | 0/5 à J60 | tient à J60 et à J180 | 0/30 à J60, 0/30 à J180 |
 | Types et tests | verts | voir `docs/v1/ACCEPTANCE.md`, A1 et A2 | tient | — |
 
 **Pourquoi la lecture ROAS baisse quand l'entreprise monte.** C'est ce que disent les données, sur 30 graines, `normal`, commit final :
 
 | Médianes | Jours 1-91 | Jours 92-182 | Mieux en 2e moitié |
 |---|---:|---:|---:|
-| Dépense pub | 9 781 € | 33 581 € | |
-| ROAS | 1,63 | 1,41 | 20 % des graines |
-| CTR | 2,15 % | 2,54 % | 73 % |
-| CTR neuf | 2,52 % | 3,14 % | 87 % |
-| Angle | 0,86 | 0,94 | 100 % |
+| Dépense pub | 9 793 € | 33 498 € | |
+| ROAS | 1,67 | 1,39 | 13 % des graines |
+| CTR | 2,16 % | 2,44 % | 70 % |
+| CTR neuf | 2,52 % | 2,97 % | 90 % |
+| Angle | 0,86 | 0,93 | 100 % |
 
 Ce que l'agence met en vitrine devient meilleur, et chaque euro de plus rapporte moins. Trois raisons :
 
-- **La saturation.** Une niche n'absorbe qu'un nombre limité de visiteurs par jour. Entre les semaines 9 et 26, la pub est multipliée par 2,9 et le chiffre d'affaires par 1,8.
-- **La règle de l'allocateur.** Le ROAS moyen répartit l'enveloppe sans plancher : une ligne qui rapporte peu garde sa part (§4.7, point 7). L'enveloppe n'est pas forcément dépensée : une ligne s'arrête à 60 %, bouge d'au plus ±30 % par jour, et ce qu'elle laisse ne va pas aux autres. Graine 42, J116, `67a5152` : enveloppe 1 455 €, budgets du jour 414 €. La part laissée n'a pas été mesurée sur 30 graines.
-- **La chance à J60.** Sur 60 parties, les graines où le ROAS baisse et celles où il monte ont multiplié leur dépense autant l'une que l'autre (× 3,97 et × 4,03). La baisse à J60 n'est donc pas prouvée être de la saturation : c'est aussi le souvenir d'une première moitié heureuse.
+- **La saturation.** Une niche n'absorbe qu'un nombre limité de visiteurs par jour. Entre les semaines 9 et 26, la pub est multipliée par 2,7 et le chiffre d'affaires par 1,7.
+- **La règle de l'allocateur.** Le ROAS moyen répartit l'enveloppe sans plancher : une ligne qui rapporte peu garde sa part (§4.7, point 7). L'enveloppe n'est pas forcément dépensée : une ligne s'arrête à 60 %, bouge d'au plus ±30 % par jour, et ce qu'elle laisse ne va pas aux autres. Graine 42, J116, lu sur `67a5152` : enveloppe 1 455 €, budgets du jour 414 €. La part laissée n'a pas été mesurée sur 30 graines.
+- **La chance à J60.** Sur 60 parties, les graines où le ROAS baisse ont multiplié leur dépense par 4,20, celles où il monte par 3,45, pour 16 et 44 parties. L'écart est faible et ne prouve pas la saturation : la baisse à J60 est aussi le souvenir d'une première moitié heureuse.
 
 **Cette ligne ne sépare pas assez ce qu'elle veut séparer.** Bras appariés de l'étape 4, code `9513e97`, 30 graines `normal` :
 
@@ -448,79 +517,98 @@ Ce que l'agence met en vitrine devient meilleur, et chaque euro de plus rapporte
 | CTR neuf **et** angle, J60 | 70 % | 40 % |
 | CTR neuf **et** angle, 182 jours | **97 %** | **50 %** |
 
-Avec tout l'apprentissage en marche, une entreprise qui monte en dépense n'atteint pas 70 % sur la ligne écrite : 50 % à J60, 30 % sur 182 jours.
+Avec tout l'apprentissage en marche, une entreprise qui monte en dépense n'atteint pas 70 % sur la ligne écrite : 50 % à J60, 30 % sur 182 jours. Sur `fff9634`, en `normal` : 53 % à J60, 13 % sur 182 jours.
 
 **Les meilleures lectures proposées, à côté du critère, sans le remplacer :**
 
 | Ligne écrite | Pourquoi elle ne convient plus | Lecture proposée | Ce qu'elle lit aujourd'hui |
 |---|---|---|---|
-| Apprentissage visible, CTR et ROAS, 70 % | Elle mesure l'échelle autant que l'apprentissage | Contrôle apparié `control.noLearning` à 182 jours, positif sur au moins 19/30 ; et en lecture simple, CTR neuf et angle meilleurs sur au moins 70 % des runs de 182 jours | +6 342 €, 26/30, sur `9513e97` seulement ; 87 % sur `67a5152` |
-| Zéro arrêt de pub | Écrite pour une équipe sans paie. Aujourd'hui une réserve du CFO peut couper la pub (D9), et le détecteur S ne compte pas les jours sous 30 % du départ. La cause de ces 18 arrêts n'a pas été lue | Aucun arrêt de plus de 7 jours avec un produit vendable et plus de 30 % du départ en caisse | 6 jours au plus, sur 90 runs. **Sans la condition de trésorerie, la lecture échoue :** 16 runs sur 90 passent plus de 7 jours sans pub avec un produit vendable, jusqu'à 113 jours (graine 20, J61 à J173) et 71 jours (graine 5, J37 à J107). Hors jours de survie, le maximum retombe à 6 jours |
-| Aucune faillite, lue à J60 | En `normal`, la fenêtre finit avant les premières clôtures négatives | K3 : au plus 2 sur 30 à J180 | 2/30, à la limite |
+| Apprentissage visible, CTR et ROAS, 70 % | Elle mesure l'échelle autant que l'apprentissage | Contrôle apparié `control.noLearning` à 182 jours, positif sur au moins 19/30 ; et en lecture simple, CTR neuf et angle meilleurs sur au moins 70 % des runs de 182 jours | +6 342 €, 26/30, sur `9513e97` seulement ; 90 % sur `fff9634` |
+| Zéro arrêt de pub | Écrite pour une équipe sans paie. Aujourd'hui une réserve du CFO peut couper la pub (D9), et le détecteur S ne compte pas les jours sous 30 % du départ. La cause de ces 20 arrêts n'a pas été lue | Aucun arrêt de plus de 7 jours avec un produit vendable et plus de 30 % du départ en caisse | 6 jours au plus, sur 90 runs. **Sans la condition de trésorerie, la lecture échoue encore :** 6 runs sur 90 passent plus de 7 jours sans pub avec un produit vendable, jusqu'à 15 jours (graine 20). C'étaient 16 runs et 113 jours sur `67a5152`, avant l'assurance. Hors jours de survie, le maximum reste 6 jours |
+| Aucune faillite, lue à J60 | En `normal`, la fenêtre finit avant les premières clôtures négatives | K3 : au plus 2 sur 30 à J180 | 0/30 |
 
 Ces lectures sont des propositions : une lecture choisie après le résultat ne prouve rien, et le contrôle apparié n'existe pas sur le commit final.
 
-**La phase 2 reste la décision du fondateur.** Ce document donne les chiffres, il ne décide pas. Le critère écrit échoue sur deux lignes, et il reste écrit.
+**La phase 2 reste la décision du fondateur.** Ce document donne les chiffres, il ne décide pas. Le critère écrit échoue sur trois lignes, et il reste écrit.
 
 ## 7. Limites connues
 
-Ce qui reste vrai sur le commit final, lu dans le code ou à l'écran. Un nombre sans commit vient d'une lecture plus ancienne et n'a pas été recompté. Les réserves sur les chiffres sont au §4.7, chaque ligne d'acceptation dans `docs/v1/ACCEPTANCE.md`.
+Ce qui reste vrai sur `fff9634`, lu dans le code ou à l'écran. Un nombre sans commit vient d'une lecture plus ancienne et n'a pas été recompté. Les réserves sur les chiffres sont au §4.7 et au §4.8, chaque ligne d'acceptation dans `docs/v1/ACCEPTANCE.md`. Le code n'a pas bougé après ce commit : ces défauts restent ouverts.
 
 **Marché et argent**
 
-- Le vrai plafond est le réservoir de chaque niche : le candidat G, qui le doublait, n'a pas gagné. Le chiffre d'affaires plafonne près de 4 500 € par semaine et retombe après J180 (D106, lu avant le gagnant E, sur 8 graines : 0,84 de la base à J270, en baisse sur 7). Personne n'a lu plus loin.
+- Le vrai plafond est le réservoir de chaque niche : le candidat G, qui le doublait, n'a pas gagné. Le chiffre d'affaires plafonne près de 4 600 € par semaine et retombe après J180 (D106, lu avant le gagnant E, sur 8 graines : 0,84 de la base à J270, en baisse sur 7). Personne n'a lu plus loin.
 - Levier `buying` négatif, levier `copy` dans le bruit (§4.5).
-- L'organique pèse peu : 176 à 180 posts en 60 jours, 11 à 13 % des tâches d'une partie qui vend, 22 % de celle qui ne vend pas (4 runs sur `67a5152`), pour 1,24 % du chiffre d'affaires sur 182 jours et 3,9 % sur les 8 premières semaines (30 graines). Personne n'y a touché.
+- L'organique pèse peu : 176 à 180 posts en 60 jours, 11 à 13 % des tâches d'une partie qui vend, 22 % de celle qui ne vend pas (4 runs sur `67a5152`), pour 1,28 % du chiffre d'affaires sur 182 jours et 3,9 % sur les 8 premières semaines (30 graines, `fff9634`). Personne n'y a touché.
 - Les arnaques au support ne coûtent presque rien à l'agence : 0 € de `scam_loss` sur 4 runs de 60 jours sur 4 (`67a5152`, `cauchemar` 1 et 103, `normal` 29 et 102).
-- Le mode survie ne lance rien de neuf : une entreprise qui y entre sans pub qui tourne n'en sort que par l'organique. Graine 20 : 113 jours de suite sans un euro de pub avec un produit vendable, J61 à J173. Graine 5 : 71 jours, J37 à J107.
 - Un film garde le prix avec lequel il a été monté (D131).
+
+**Le mode survie**
+
+- Le test sous la ligne est une assurance, pas un gain : §4.8. Un test gagné peut être coupé le lendemain, et la revue du lundi lit la dépense d'un guide testé et peut l'arrêter (D172).
+- Une entreprise reste vivante sans guérir : graine 20, 103 jours de survie sur 182. À la clôture de J130, 4 tests, aucun gagné, 114,40 € en caisse, encore au palier Survie.
+- Les tests s'arrêtent quand les pubs validées manquent : aucune accroche neuve ne s'écrit sous la ligne. Seul TikTok peut porter un test, donc un gel du fondateur sur TikTok veut dire pas de test.
+- La page Publicité ne marque pas une campagne comme test. Seuls le journal, le résumé et Croissance le disent.
+- « Survie » veut dire deux choses à l'écran. Le palier 1/4 s'appelle Survie, même à J18 avec 611 € et +111 € de profit, et le mode survie veut dire une caisse sous 30 % du départ. La graine 20 revient au palier Survie à J50, le mode survie se lève à J61 à 151,57 €, et le palier ne bouge pas.
+- Le grand nombre de la tuile « Trésorerie » du résumé est la variation, pas le solde : « −361,52 € », avec « 500 € → 138,48 € » en petit dessous. Le plus gros chiffre d'une entreprise en survie est donc une perte, et sa caisse passe au second plan.
+- Non vérifiés : un rechargement pendant qu'un test attend le oui du fondateur, un rechargement un jour de panne pendant un test. Le jour de panne lui-même est tenu par un test du code, et un rechargement à chaque tick autour d'un test a été vérifié, graine 20, J60 à J70.
+- En mode Claude, `mergePlans` peut remplacer le test par une action de même guide : `itemKey` ne lit pas `underLine`. Lu dans le code, jamais lancé.
 
 **Ligue**
 
 - Les compétences aveugles ne peuvent pas être remplacées : `design`, `support`, `buying`, `research`, `polish`. Un plan raté y finit sans candidat.
 - Le talent de `polish` ne change plus sa propre production (D144).
 - `shots`, dans un fichier de film, resserre un peu la bande de talent d'un monteur (D129).
+- La fiche d'un agent dit « pas encore noté » sous Performance, à côté de « note 1 502 » dans Carrière : ce sont deux notes différentes, et rien ne le dit.
+
+**Les ordres du fondateur**
+
+- Le « plafond » de la semaine ne plafonne pas, alors que le fondateur lit « Plafond / jour » et « La pub peut monter jusqu'à X €/jour cette semaine ». `adTarget` est de la place pour grandir, seule l'enveloppe du jour tient (A22). Graine 42, semaine 6 : plafond 19,53 €, dépense moyenne 42,9 €, maximum 48,6 €. Graine 4, semaine 9 : 177,96 €, 233,4 €, 291 €. Graine 9467, semaine 5 : 26,77 €, 55,5 €, 81,5 €.
+- Un ordre de baisse pose un plafond qui s'arrête au lundi suivant du CFO, pas avec le gel, et « reprends les pubs » rouvre le neuf en laissant ce plafond (D166).
+- « reprends les pubs » n'est un ordre que quand un arrêt ou un gel tient. Sans rien d'arrêté, la phrase ouvre une mission qui commande de nouvelles pubs : graine 42, J31, `write_ad_hooks`, `produce_ad`, `launch_campaign`, sur `fff9634`.
+- « Rien à baisser » sans campagne ne pose rien, c'est voulu, mais la réponse ne le dit pas : graine 9467, ordre à J18, une campagne à 14 €/jour démarre à J19.
+- En mode `heuristic`, une mission se lit par mots-clés, pas par le sens. « Baisse le budget de pub » et sa famille sont réglés, 0 pub commandée sur 27 phrases (D166), mais « Baisse le budget pub, on a une perte de 50 euros » échoue sur « aucun guide sur perte », et « baisse le prix de la pub » commande un changement de prix et des pubs. Seul le libellé demandé a été rejoué à l'écran, deux fois (N1).
+- Un ordre exécuté à côté d'une demande ratée laisse la mission `failed` : le titre d'une notification peut dire « ne peut pas s'en charger » au-dessus de « C'est fait ».
+- Une mission qui nomme des créateurs sans nommer de guide se ferme comme faite.
+- Une mission qui nomme un canal ne l'ouvre que par `keywordMission`.
+- Le temps des expressions régulières sur un très long texte de mission n'a pas été mesuré.
 
 **Le fondateur et l'entreprise**
 
-- Une mission qui nomme des créateurs sans nommer de guide se ferme comme faite.
-- Une mission qui nomme un canal ne l'ouvre que par `keywordMission`.
+- Un arrêt est daté par le jour du séjour suivant, réécrit à sa fin : deux arrêts de suite, à J131 puis à J132, disent deux fois « Jour 132 », et un arrêt peut sortir de la bonne fenêtre du résumé.
+- Le texte du CFO dit « 0 €/jour de pub dépensés sur 7 jours » à J4, quand le run a 4 jours.
 - Les jours calmes retirent les mots de progrès du fil, pas la confiance que la rétro continue de monter (D95).
 - Un serveur peut ouvrir un run qu'une commande en ligne écrit encore.
 - Un Ctrl+C à la main dans un terminal Windows n'a pas été essayé. Le même signal, envoyé à une console cachée sur `67a5152`, a sauvegardé le run et libéré le port. Les arrêts brutaux sont sûrs (A27), donc au pire c'en est un.
 - Le mode Claude n'a jamais été appelé en vrai : aucune clé n'a servi.
-- En mode `heuristic`, une mission se lit par mots-clés, pas par le sens. Graine 42 : « Baisse le budget de pub » a commandé des accroches, une campagne et deux pubs, le contraire de la demande, et une demande composée (« Baisse le budget de pub sur TikTok et prépare un nouveau guide sur le jardinage en balcon ») a échoué sur « aucune niche de notre veille ne correspond ».
-- La fiche d'un agent peut écrire « Pas encore de tâche pour Nadia » à côté de « 7 tâches faites » : la liste et le compteur ne lisent pas la même chose.
-- Le résumé ouvert par `d` s'appelle « Les 7 derniers jours » même au J3, quand il couvre J1 → J3.
-- Dans la Galerie, le compteur « Vidéo pub » lit d'abord les films du flux direct, puis le vrai total après le clic : 3, puis 11.
-- Un guide arrêté par l'agence garde sa page de vente et ses boutons d'achat simulés.
 
-**Guides**
+**Guides et pages**
 
 - Les guides se répètent par construction : 49,7 % des mots imprimés se trouvent aussi sur une autre page, l'arbre de décision reprend les situations mot pour mot.
-- Un guide garde parfois le lien vers la v1 d'une suite republiée : la page s'ouvre, 1 guide sur 29.
-- La page de vente compte les actions du bonus, pas le PDF : 4 actions de plus sur 20 guides sur 20 (graine 42, `prd_1555` v2 : 35 contre 31).
-- Un kit garde le gabarit d'un guide : `prd_13520`, 8 pages, annonce « 7 chapitres, 35 actions guidées » et « Chapitre par chapitre », et ses lignes finissent par deux points.
-- Le lien de la dernière page d'un guide est relatif à la partie (`/runs/<id>/files/…`) : il devrait être mort dans un PDF téléchargé. Lu dans le fichier, pas cliqué dans un lecteur extérieur.
-- Des coutures de gabarit restent visibles : « Remplir chaque ligne : question, votre réponse. », un bloc « À surveiller » qui liste des conseils, une citation qui perd ses guillemets dans une autre.
-- Les avis d'une page sont datés du jour de la partie, « Jour 94 », pas d'une date.
+- Un guide garde parfois le lien vers la v1 d'une suite republiée : la page s'ouvre, mais sur la v1 (graine 4, `prd_173` vers `prd_1425`, 1 guide sur 37).
+- Le lien de la dernière page d'un guide reste relatif à la partie (`/runs/<id>/files/…`) : il devrait être mort dans un PDF téléchargé. Il attend la vraie boutique, qui fixera son adresse (`docs/ROADMAP.md`, phase 3). Lu dans le fichier, pas cliqué dans un lecteur extérieur.
+- « 1 avis vérifiés » sur une page de vente : 11 pages sur 70 sur les graines 4, 7 et 42.
+- Une checklist de kit se coupe entre deux pages : titre et une case en bas de page, deux cases sans titre en haut de la suivante (graine 4, `prd_9619`, p. 7 et 8).
+- Des avis sur des kits disent « Le chapitre », 4 sur 23 : ce sont les mots des clients simulés, laissés tels quels (D165).
+- La voix de secours `STD_VOICE`, celle des polices absentes, n'a pas été rendue sur un kit ni sur une page arrêtée.
 - La ligne « Novembre » de la fiche URSSAF n'a pas de date.
 - La fixture de démonstration contient des adresses générées sur de vrais domaines.
 
 **Films**
 
 - Le son est jugé par le volume et les silences seulement. Personne n'a écouté un film : une personne doit le faire une fois.
+- Les films citent un « Avis d'acheteur » cinq étoiles écrit sur aucune page : la citation vient du champ caché `basis`, que les vues publiques retirent, pas du texte que la boutique affiche (D93). Sur les graines 4, 7 et 42, 98 passages viennent de 4 phrases, dont « Je craignais un énième PDF générique » 24 fois, sur des produits différents, alors que la boutique dit ne jamais afficher de faux témoignages. Tout est simulé aujourd'hui, mais ce serait un témoignage mal attribué le jour d'un passage au réel.
+- Le zoom sur une page coupe le début de la phrase surlignée, « mmence par là », et le chiffre d'une étape. À 4:5, le badge ÉTAPE 1 mord les premières lignes de la page.
 - Une partie des zones de sécurité vient d'outils tiers, à vérifier dans les applications avant tout réel.
 - Crête réelle -0,3 dBFS dans le pire film, pour -2,5 demandés.
 - Au premier rendu, un diaporama dépasse sa durée estimée de 31 %.
 - Chez un monteur faible, l'accroche arrive après le carton-titre.
-- La preuve d'une pub cite la base d'un avis, que l'avis public ne montre pas (D93).
 - Les storyboards SVG n'ont pas reçu le nouveau dessin.
 
 **Tenue et marges**
 
-- A6 échoue sur un seul nombre : le p95 d'une journée, 1 060 ms pour 800, lu sur `11b3f20`.
-- Les marges d'une année sont minces sur dix graines, lues sur `11b3f20` : direct 397,6 kB sur 400, dossier 148,4 MB sur 150, `/api/state` 693,0 kB sur 700, et 225,4 s sur 240 pour la graine 7, sur une machine calme.
+- A6 échoue sur un seul nombre : le p95 d'une journée, 1 048 ms pour 800, sur `fff9634`, machine calme. `renderPdf` pèse 28,9 % de la bande de journées qui fixe ce p95 (`perf.json`). Il n'y a pas de petite correction : soit une décision qui amende la cible, soit sortir le rendu PDF de la boucle du jour.
+- Les marges d'une année sont minces sur dix graines, lues sur `fff9634` : direct 399,3 kB sur 400, dossier 143,0 MB sur 150, `/api/state` 685,0 kB sur 700, et 226,4 s sur 240 pour la graine 7, sur une machine calme.
 - La compaction peut laisser partir le premier signataire d'une carte d'avis, qu'un film montre encore (D131, D137).
 - L'échelle de coupes du plan n'a pas servi (D65).
 - `docs/v1/talent.md` n'a pas été réécrit là où les décisions l'ont dépassé : `docs/v1/PLAN.md` §8 fait foi.

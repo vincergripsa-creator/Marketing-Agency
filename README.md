@@ -17,9 +17,9 @@ npm run agency
 
 Puis ouvre <http://localhost:4317>.
 
-`npm ci` installe tout (22 s sur une copie propre). `npm run agency` construit l'interface si elle manque, lance le serveur en moins de 10 s, le relance s'il tombe, et reprend la même partie là où elle en était. Ses messages vont aussi dans `runs/agency.log`. Pour l'arrêter : Ctrl+C dans le terminal.
+`npm ci` installe tout (10 à 22 s sur une copie propre). `npm run agency` construit l'interface si elle manque, lance le serveur en moins de 10 s, le relance s'il tombe, et reprend la même partie là où elle en était. Ses messages vont aussi dans `runs/agency.log`. Pour l'arrêter : Ctrl+C dans le terminal.
 
-**La première fois**, une partie démarre seule, sans rien te demander : 500 €, difficulté `normal`, sans fin, graine 42, à ×1 (une journée simulée en 24 s). Les 8 fondateurs sont déjà au travail, et le premier guide sort en quelques jours simulés. Cette graine 42 est l'une des plus dures du banc : elle finit à -53 € au jour 60. Pour voir une autre partie : **Nouveau scénario**, et le dé à côté de la graine. Le bouton ×8 fait passer une journée en quelques secondes. Ces vitesses valent quand une page est ouverte, et 5 minutes après : sans personne qui regarde, l'agence passe à une année simulée par semaine réelle, environ 28 minutes par journée, quel que soit le bouton de vitesse. Elle reprend sa vitesse dès que tu reviens.
+**La première fois**, une partie démarre seule, sans rien te demander : 500 €, difficulté `normal`, sans fin, graine 42, à ×1 (une journée simulée en 24 s). Les 8 fondateurs sont déjà au travail, et le premier guide sort en quelques jours simulés. Cette graine 42 est lente : elle finit à 895 € de profit au jour 60, sous l'objectif de 1 000 €. Pour voir une autre partie : **Nouveau scénario**, et le dé à côté de la graine. Le bouton ×8 fait passer une journée en quelques secondes. Ces vitesses valent quand une page est ouverte, et 5 minutes après : sans personne qui regarde, l'agence passe à une année simulée par semaine réelle, environ 28 minutes par journée, quel que soit le bouton de vitesse. Elle reprend sa vitesse dès que tu reviens.
 
 Pour travailler sur le code : `npm run dev` lance le serveur et une interface sur <http://localhost:5173>.
 
@@ -29,7 +29,7 @@ Pour travailler sur le code : `npm run dev` lance le serveur et une interface su
 - **Le résumé du fondateur** : après 7 jours simulés sans regarder, il s'ouvre seul (touche `d` pour le rouvrir) et dit ce qui a changé : l'argent, l'équipe, les décisions. Après un arrêt d'au moins une minute, il nomme le trou.
 - **Le HUD** : trésorerie, profit cumulé, jour et moment de la journée (matin, travail, marché, soir), vitesse (pause, ×1, ×2, ×4, ×8), avancer d'un tick ou d'une journée.
 - **Le fil d'activité** en direct (travail, cerveau, marché) et des notifications pour les ventes, arnaques, pubs refusées, avis…
-- **La barre de mission** « Donne une mission à Camille… » : la CEO (ou l'agent choisi) transforme ta demande en tâches pour son équipe. En mode `heuristic`, ta demande se lit par mots-clés, pas par le sens : elle ne tient pas toujours (`docs/BALANCE.md` §7).
+- **La barre de mission** « Donne une mission à Camille… » : la CEO (ou l'agent choisi) transforme ta demande en tâches pour son équipe. Un ordre passe tout de suite, sans tâche : « stop pub », « reprends les pubs » quand un arrêt ou un gel tient, et « Baisse le budget de pub », qui baisse ce qui tourne de 30 % (ou de ce que tu dis), gèle le neuf 7 jours et retient la croissance jusqu'au lundi du CFO. Sans rien d'arrêté, « reprends les pubs » ouvre une mission normale, qui commande de nouvelles pubs. En mode `heuristic`, ta demande se lit par mots-clés, pas par le sens : elle ne tient pas toujours (`docs/BALANCE.md` §7).
 - **Clic sur un agent** : une discussion, sa fiche (rôle, performance, travail en cours) et son playbook. **Clic sur une île** : aperçu, tâches et calendrier du département.
 - **Les onglets** (touches 1 à 0, et `m`, `c`, `b`, `a` sous « Plus ») : Bureau, Tâches, Produits (chaque guide, ses versions, son PDF, sa page de vente, ses scores), Publicité (créas, films à regarder avec le son, campagnes, CTR/ROAS), Canaux (ce que chaque plateforme annonce et ce que la boutique a vraiment encaissé), Croissance (paliers, portefeuille, liste e-mail), Effectif (organigramme, masse salariale, postes ouverts, refus du CFO), Compétition (classement, plans d'amélioration, duels, dernier recrutement, transferts, panthéon, anciens), Finance (grand livre, budget), Galerie (tous les visuels, les vidéos, les PDF à feuilleter), Boîte mail (clients pénibles et réponses du support), Calendrier, Cerveau (le vault de la run), Apprentissage (bandits, expériences A/B, leçons).
 - **Nouveau scénario** : budget de départ, horizon (ou « Sans fin »), objectif de profit, difficulté (`facile`, `normal`, `cauchemar`), graine du marché, mode cerveau et **validation fondateur** (chaque mise en ligne, canal, embauche, remplacement, licenciement et envoi à la liste attend ton clic dans l'onglet Tâches).
@@ -64,29 +64,33 @@ Une journée simulée = 12 ticks.
 
 **Comment elle passe à l'échelle** : quatre paliers (Survie, Adéquation, Accélération, Portefeuille). Le CFO partage l'argent entre ce qui marche, les tests et la réserve, et le répartit entre les canaux selon le ROAS moyen mesuré à la boutique, pas selon ce que chaque plateforme s'attribue. L'onglet Canaux montre les deux lectures. TikTok est ouvert dès le jour 1, sans media buyer. Chacun des quatre autres canaux s'ouvre quand ses conditions sont réunies et qu'un media buyer le tient. Les guides sont lancés, doublés, retravaillés, exploités ou arrêtés au vu des chiffres, et la liste e-mail vend aux clients déjà acquis.
 
+**Quand la caisse tombe** : sous 30 % du budget de départ, l'agence passe en mode survie. Les fondateurs ne se versent plus rien, une pub rentable continue, et rien de neuf ne se lance, sauf un petit test à la fois : 5 €/jour pendant 6 jours au plus, 30 € en tout. S'il rapporte (ROAS d'au moins 1,2 sur au moins 10 €), il devient une campagne comme les autres. Sinon, le suivant attend 14 jours. C'est une assurance, pas un gain (`docs/BALANCE.md` §4.8).
+
 **Garde-fous** (dans le code, pas seulement dans le cerveau) : la pub ne dépasse pas une part de la trésorerie, stop-loss sur les campagnes perdantes, aucune dépense hors budget, rien de réel publié, rien d'inventé (fact-check), plafond de coût pour le mode Claude. En mode **validation fondateur**, chaque canal, embauche, remplacement, licenciement et envoi à la liste attend ton clic.
 
 ## Résultats actuels
 
-Code final `67a5152`, graines 1 à 30, 60 jours, 500 € de départ, sans fin, objectif 1 000 € de profit. Les quartiles sont la médiane de chaque moitié des graines.
+Code final `fff9634`, graines 1 à 30, 60 jours, 500 € de départ, sans fin, objectif 1 000 € de profit. Les quartiles sont la médiane de chaque moitié des graines.
 
 | Difficulté | Profit médian à J60 | Q1 / Q3 | Rentables | À perte | Objectif atteint | Faillites |
 |---|---:|---:|---:|---:|---:|---:|
-| facile | 8 857 € | 4 271 / 11 329 € | 28/30 | 2 | 26/30 | 0 |
-| normal | 2 728 € | 245 / 5 224 € | 24/30 | 6 | 21/30 | 0 |
-| cauchemar | -187 € | -375 / 852 € | 14/30 | 16 | 7/30 | 0 |
+| facile | 8 089 € | 4 172 / 10 758 € | 29/30 | 1 | 26/30 | 0 |
+| normal | 2 629 € | 181 / 5 224 € | 25/30 | 5 | 19/30 | 0 |
+| cauchemar | +130 € | -337 / 852 € | 16/30 | 14 | 7/30 | 0 |
 
-Sur 182 jours, en `normal` : 24 955 € de profit médian à J180 (Q1 18 339 €, Q3 38 782 €), 28/30 positives, 16,5 personnes en médiane, un chiffre d'affaires qui plafonne près de 4 500 € par semaine.
+Sur 182 jours, en `normal` : 24 865 € de profit médian à J180 (Q1 18 556 €, Q3 36 316 €), 29/30 positives, 16 personnes en médiane, un chiffre d'affaires qui plafonne près de 4 600 € par semaine.
 
 **Ce que ces chiffres ne disent pas :**
 
-- **2 faillites sur 30 à J180** (graines 5 et 20, remontées, vivantes à J182), exactement à la limite du contrôle K3. La course de 60 jours ne peut pas les voir, et environ 1 graine sur 10 reste près de la mort.
-- **Deux contrôles de calibration sur huit échouent sur le code livré :** K7 (0 remplacement en médiane, 5 en 30 entreprises sur 182 jours) et K8 (pente positive sur 20/30 pour 24, semaine 26 / semaine 9 à 1,79 pour 2,0). Le gagnant a été choisi par K8, à l'intérieur de son bruit.
-- **Deux lignes d'acceptation sont en échec :** A6 (p95 d'une journée, 1 060 ms pour 800, lu sur `11b3f20`) et A10 (la compétition remplace trop peu).
-- **Le critère de sortie de la phase 1 n'est pas rempli à la lettre :** apprentissage visible 40 % pour 70 %, 3 arrêts de pub pour 0. Passer à la phase 2 reste ta décision.
+- **0 faillite sur 30 à J180, grâce à une assurance sans gain prouvé.** Un seul interrupteur la coupe : le test sous la ligne, et les fondateurs à 0 en survie. Sans elle, le même code lit 2 faillites (graines 5 et 20) et jusqu'à 113 jours de suite sans pub. Avec elle : 0 faillite et 15 jours au plus. Aucun run ne sépare le test de la paie, et ces 2 faillites sont bien plus petites que la demi-paie des fondateurs : rien ne montre que le test les a évitées. Sur l'argent en `normal`, elle ne montre aucun effet : 8 graines changent, 4 en hausse, 4 en baisse, somme -10 344 €, dans le bruit. Les graines 29 et 30 perdent 13 752 et 15 015 € sans qu'on sache prouver pourquoi, et l'objectif à J60 passe de 21 à 19 graines sur 30.
+- **Environ 1 graine sur 10 reste près de la mort.** La graine 20 finit J182 au palier Survie avec 274 € en caisse. L'assurance la garde en vie, elle ne la guérit pas.
+- **Deux contrôles de calibration sur huit échouent sur le code livré :** K7 (0 remplacement en médiane, 4 en 30 entreprises sur 182 jours) et K8 (pente positive sur 20/30 pour 24, semaine 26 / semaine 9 à 1,92 pour 2,0). Le gagnant a été choisi par K8, à l'intérieur de son bruit.
+- **Deux lignes d'acceptation sont en échec :** A6 (p95 d'une journée, 1 048 ms pour 800) et A10 (la compétition remplace trop peu).
+- **Le critère de sortie de la phase 1 n'est pas rempli à la lettre :** apprentissage visible 40 % pour 70 %, 2 arrêts de pub pour 0, 1 falaise sans chaîne d'événements pour 0. Passer à la phase 2 reste ta décision.
 - **Le mode Claude n'a jamais été appelé en vrai, et personne n'a écouté un film.** Le son a été mesuré, pas entendu. Écoute-en un.
+- **Des défauts se voient à l'écran.** Le « plafond » de la semaine ne plafonne pas, « Survie » veut dire deux choses, et les films citent des avis qu'aucune page ne montre. La liste est au §7.
 
-Tout est dans [docs/BALANCE.md](docs/BALANCE.md) (§4 résultats, §6 critère, §7 limites) et [docs/v1/ACCEPTANCE.md](docs/v1/ACCEPTANCE.md) (les 28 lignes, les contrôles, les coupes).
+Tout est dans [docs/BALANCE.md](docs/BALANCE.md) (§4 résultats, §4.8 le test sous la ligne, §6 critère, §7 limites) et [docs/v1/ACCEPTANCE.md](docs/v1/ACCEPTANCE.md) (les 28 lignes, les contrôles, les coupes).
 
 ## Commandes
 
