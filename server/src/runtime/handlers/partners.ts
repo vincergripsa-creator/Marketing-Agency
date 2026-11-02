@@ -97,7 +97,7 @@ export const partnerHandlers: HandlerMap = {
       const product = requireProduct(ctx, task);
       if (!product) return NO_PRODUCT;
       const already = new Set(ctx.world.market.partnerships.filter((p) => p.productId === product.id).map((p) => p.creatorId));
-      // Who refused any commission deal has shown he only wants the cash: never again, whatever the product.
+      // Who refused any commission deal has shown they only want the cash: never again, whatever the product.
       const cashOnly = new Set([...(ctx.world.company.cashOnlyCreators ?? []), ...ctx.world.company.tasks.filter((t) => t.kind === 'negotiate_deal' && t.output?.cashOnly === true).map((t) => str(t.input.creatorId))]);
       const creators = listCreators(ctx, product.nicheId).filter((c) => !already.has(c.id) && !cashOnly.has(c.id));
       const rejected: { handle: string; reasons: string[] }[] = [];

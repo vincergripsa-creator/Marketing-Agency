@@ -240,7 +240,7 @@ export interface OrgState {
 
 Catalog total: 34 roles, 86 seats, capped by `ORG.maxHeadcount = 60`.
 
-Fatou shares `support_agent`: her "anti-fraud" job has no distinct kind, so a separate role would be a label. Same reason there is no recruiter: 0.2 tick/day.
+Fatou shares `support_agent`: the "anti-fraud" job has no distinct kind, so a separate role would be a label. Same reason there is no recruiter: 0.2 tick/day.
 
 **`legacyDept`.** `CANDIDATES.chloe` and `CANDIDATES.tom` carry `legacyDept: 'growth'`, used only by `team: 'legacy31'`, so that team stays on 11 departments.
 
@@ -404,7 +404,7 @@ task.workLeft = Math.max(0, round2(task.workLeft - speedFor(w, agent, task.kind)
 
 **Reviewers.** `reviewerFor(world, kind)`: for the office's first role, the least loaded holder (ties by id), else the office holder.
 
-`fixSelfReview` walks: dept chief, `ceo`, `chief_of_staff`, `hr`, `cfo`, and takes the first who is not the assignee. In lean, `chief_of_staff` resolves to Camille, so this list is what prevents a self-review of her work.
+`fixSelfReview` walks: dept chief, `ceo`, `chief_of_staff`, `hr`, `cfo`, and takes the first who is not the assignee. In lean, `chief_of_staff` resolves to Camille, so this list is what prevents a self-review of Camille's work.
 
 **Rebalancing on hire.** Tasks of the hire's core kinds with `status === 'pending'` and `progress === 0`, assigned to a hat wearer, go back to `assignee: null`.
 
@@ -471,7 +471,7 @@ Real costs of a queue, all already in the market or the plan, none invented here
 
 ### Measuring
 
-`recordLoad(ctx, worked)` at the end of `workTick`: `load.work[kind] += ticks`, `busy[id] += 1` for each worker and reviewer. For each open task: `pending` and `depState === 'ready'` adds 1 to `wait[kind]`; `review` adds 1 to `reviewWait[kind]`. `awaiting_founder` counts nowhere: his latency is not a reason to hire.
+`recordLoad(ctx, worked)` at the end of `workTick`: `load.work[kind] += ticks`, `busy[id] += 1` for each worker and reviewer. For each open task: `pending` and `depState === 'ready'` adds 1 to `wait[kind]`; `review` adds 1 to `reviewWait[kind]`. `awaiting_founder` counts nowhere: the founder's latency is not a reason to hire.
 
 Everything is in `world.company.org.load`, so reload is exact.
 

@@ -94,7 +94,7 @@ const keepUp: Para = (d) => {
 };
 
 /** A ready-to-copy model, placed in the chapter where it is used. */
-const modelPara: Para = (d) => { const m = d.model(); return m ? `Modèle à copier : ${low(m)}` : null; };
+const modelPara: Para = (d) => { const m = d.model(); return m ? sentence(`Modèle à copier : ${low(m)}`) : null; };
 
 /** A research fact with a neutral lead: what follows a fact must fit any fact. */
 const nextFact = (lead: string): Para => (d) => {

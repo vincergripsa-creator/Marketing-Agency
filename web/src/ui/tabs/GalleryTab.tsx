@@ -102,7 +102,7 @@ export function GalleryTab({ onClose }: { onClose(): void }) {
     try {
       const res = await fetch(pathOf(askedKinds, older.length + 2));
       page = res.ok ? pageOf(await res.json()) : null;
-    } catch { /* the button stays: he can ask again */ }
+    } catch { /* the button stays: the founder can ask again */ }
     if (ticket !== asked.current) return;
     setBusy(false);
     if (page) setOlder((pages) => [...pages, page.items]);

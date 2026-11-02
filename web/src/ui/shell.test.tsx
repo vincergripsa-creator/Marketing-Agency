@@ -141,7 +141,7 @@ describe('when the digest opens', () => {
   it('opens on the first snapshot of a run after 7 unseen days, and only then', () => {
     const { w, posts } = watcher();
     expect(w.snapshot(clock(17), true, 0)).toBe(true);
-    expect(posts).toEqual([]); // he has not read it: « seen » waits for him to close it
+    expect(posts).toEqual([]); // the founder has not read it: « seen » waits for them to close it
     expect(watcher().w.snapshot(clock(16), true, 0)).toBe(false);
   });
 
@@ -173,7 +173,7 @@ describe('when the digest opens', () => {
   it('a tab hidden for a moment owes nothing, however old the last post is', () => {
     const { w } = watcher();
     w.snapshot(clock(50, 50), true, 0);
-    w.visibility(clock(58, 50), false); // ×8: eight days since the last post, and he was there
+    w.visibility(clock(58, 50), false); // ×8: eight days since the last post, and the founder was there
     expect(w.visibility(clock(60, 50), true)).toBe(false);
   });
 
@@ -289,7 +289,7 @@ describe('when the digest opens', () => {
     at(100_000);
     expect(w.snapshot(clock(11), true, 100_000)).toBe(false);
     expect(w.leaving()).toBe(true);
-    expect(posts).toEqual([100_000]); // the day moved: he is back, and « seen » follows him again
+    expect(posts).toEqual([100_000]); // the day moved: the founder is back, and « seen » follows them again
   });
 });
 

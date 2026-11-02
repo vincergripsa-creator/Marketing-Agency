@@ -73,7 +73,7 @@ function withChannelBuzz(ctx: RuntimeCtx, signals: TrendSignal[]): TrendSignal[]
   });
 }
 
-/** The CEO signs the pick, whoever prepared it: the bandit is read through her eyes (talent §4.6). */
+/** The CEO signs the pick, whoever prepared it: the bandit is read through the CEO's eyes (talent §4.6). */
 function ceoSharp(ctx: RuntimeCtx, task: Task, mind: MindContext): ReturnType<typeof armSharp> {
   const ceo = officerOf(ctx.world, 'ceo');
   return armSharp(ctx, ceo, { ...mind, agent: ceo, craft: craftFor(ctx.world, ceo, task.kind) }, 'niche');

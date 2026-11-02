@@ -92,7 +92,7 @@ export function VideoPlayer({ videos, poster, captions, fallbackHtml, title, rea
     if (track) track.mode = subtitles ? 'showing' : 'hidden'; // the captions are burned in the master: the track starts off
   }, [subtitles, path]);
   useEffect(() => {
-    ref.current?.play().catch(() => undefined); // he clicked to watch. Refused by the browser: the poster and the play button stay
+    ref.current?.play().catch(() => undefined); // the viewer clicked to watch. Refused by the browser: the poster and the play button stay
   }, []);
 
   const toggle = () => {

@@ -37,7 +37,7 @@ export interface ViewSources { videos?: Readonly<Record<string, CreativeVideo>>;
 
 const intOf = (v: string | null): number | undefined => (v !== null && /^\d+$/.test(v) ? Number(v) : undefined);
 
-/** `since` defaults to the last day he looked (scale §3.2). Its window is the one `buildDigest` really covers. */
+/** `since` defaults to the last day the founder looked (scale §3.2). Its window is the one `buildDigest` really covers. */
 function digestView(world: WorldState, query: URLSearchParams, stays: readonly SessionRecord[]): FounderDigest {
   const since = intOf(query.get('since')) ?? world.company.growth?.founder.lastSeenDay ?? 0;
   const digest = buildDigest(world, since, intOf(query.get('to')) ?? world.day, stays);

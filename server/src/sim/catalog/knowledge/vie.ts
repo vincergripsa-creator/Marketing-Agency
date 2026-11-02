@@ -136,7 +136,7 @@ export const MARIAGE_KNOWLEDGE: Knowledge = {
     'Comparer trois devis pour chaque prestataire restant. Photographe, musique, fleurs, tenue : demandez le même détail à chacun. (étape 6 ; 8 mois avant)',
     'Déposer le dossier de mariage à la mairie. Les pièces et les délais varient : renseignez-vous tôt auprès de votre mairie. (étape 7 ; 3 mois avant)',
     'Organiser l’aide des proches pour la décoration, les desserts et la musique. Confiez une seule tâche à chacun, avec une personne responsable le jour J. (étape 8 ; 2 mois avant)',
-    'Suivre les paiements dans un tableur jusqu’au jour J. Date, montant, reste à payer, et un rappel avant chaque solde. (étape 9 ; jusqu’au jour J)',
+    'Suivre les paiements dans un tableur. Date, montant, reste à payer, et un rappel avant chaque solde. (étape 9 ; jusqu’au jour J)',
     '[negociation] Lister ce qui compte vraiment pour vous. Séparez ce qui est non négociable, ce qui est important et ce qui peut disparaître. (étape 1 ; semaine 1)',
     '[negociation] Demander trois devis détaillés, sans parler de budget. Laissez chaque prestataire proposer : vous voyez alors comment se répartissent les prix. (étape 2 ; semaines 1 et 2)',
     '[negociation] Comparer les devis ligne par ligne. Reportez chaque poste dans un tableau : ce qui n’est pas écrit n’est pas inclus. (étape 3 ; semaine 3)',

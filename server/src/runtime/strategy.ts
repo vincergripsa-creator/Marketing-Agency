@@ -158,7 +158,7 @@ async function ceoDecisions(ctx: RuntimeCtx, notes: string[], items: DayPlanItem
     // Without ads, "no traction" only counts for a guide that was really shown (organic posts): one the budget went
     // past has proved nothing, it costs nothing to keep and its turn may come.
     const posts = w.market.organicPosts.filter((x) => x.productId === p.id && x.day >= w.day - KILL_WINDOW_DAYS).length;
-    // Neither has one the founder kept off the ads: his refusal is not the market's.
+    // Neither has one the founder kept off the ads: their refusal is not the market's.
     // Under growth nothing is judged before its paid test, what the portfolio harvested it judges itself, this morning's verdict stands,
     // and a guide its buyers like waits for Monday: the review harvests it, this rule would stop it (Budget et garde-fous, rule 12).
     const tested = !growth || (!reviewedToday && !p.harvest && paidOn(w, p.id, h.since) >= paidTestEur && !buyersLike(buyersRead(w, p)));
@@ -394,7 +394,7 @@ function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
     const p = cand.product;
     let inFlight = openTasks(w, (t) => t.input.productId === p.id && taskChannel(t) === 'tiktok' && (t.kind === 'launch_campaign' || t.kind === 'write_ad_hooks' || t.kind === 'produce_ad'));
     // Watchdog: acquisition tasks that have been sitting for 2+ days while nothing runs are stuck → start again.
-    // Waiting for the founder is not being stuck, and neither is a task he just approved: it runs at the next work tick.
+    // Waiting for the founder is not being stuck, and neither is a task they just approved: it runs at the next work tick.
     if (inFlight.length && idle >= MAX_IDLE_DAYS && !companyBlock && (!cand.block || !cand.block.hard)
       && inFlight.every((t) => t.status !== 'awaiting_founder' && t.input.founderApproved !== true && t.status !== 'in_progress' && t.dayCreated <= w.day - MAX_IDLE_DAYS)) {
       for (const t of inFlight) { t.status = 'cancelled'; t.dayDone = w.day; logTask(t, `Jour ${w.day} : annulée — bloquée depuis le jour ${t.dayCreated}, on repart de zéro.`); }
@@ -807,7 +807,7 @@ const MISSION_RULES: [RegExp, TaskKind][] = [
   [/red team|critique|tuer|risque/i, 'red_team'],
 ];
 
-/** A channel the founder names, in his words. */
+/** A channel the founder names, in their words. */
 const CHANNEL_WORDS: [RegExp, ChannelId][] = [
   [/\b(?:meta|facebook|instagram)\b/i, 'meta'],
   [/\bpinterest\b/i, 'pinterest'],

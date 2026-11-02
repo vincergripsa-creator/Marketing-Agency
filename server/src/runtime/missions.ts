@@ -164,7 +164,7 @@ export type MissionRoute = (
   | { kind: 'no_product'; nicheId: string; name: string }
   | { kind: 'unknown'; topic: string; leads: string[]; near: string[] }
   | { kind: 'unclear'; topic: string; niche: string | null } // nothing in the request tells what to do
-  | { kind: 'held'; reason: string }                         // the work asked for is what the founder himself stopped
+  | { kind: 'held'; reason: string }                         // the work asked for is what the founder stopped
   | { kind: 'order'; orders: FounderOrder[] }
 ) & { orders?: FounderOrder[] }; // beside any other route: said in the same sentence
 
@@ -174,7 +174,7 @@ function topicWords(text: string, topic: string[]): string {
   return uniq(text.split(/[^\p{L}\p{N}-]+/u).filter((w) => { const s = stemOf(fold(w)); return wanted.has(s) || wanted.has(canon(s)); })).join(' ') || text;
 }
 
-/** What the trend tool is asked: his words, and the catalogue's when a synonym stood for them. */
+/** What the trend tool is asked: the founder's words, and the catalogue's when a synonym stood for them. */
 function trendQuery(text: string, topic: string[]): string {
   return uniq([...topicWords(text, topic).split(' '), ...topic]).join(' ');
 }
@@ -215,12 +215,12 @@ export type FounderOrder =
   | { action: 'no_target'; asked: OrderAction; topic: string }
   | { action: 'no_agent'; asked: PersonOrder; name: string; left: Alumnus | null }
   | { action: 'trim_ads'; channel: ChannelId | null } // beside a request: on its own a trim is a plain task
-  | { action: 'negated'; text: string }               // he said what must not happen: nothing happens, and he is told
+  | { action: 'negated'; text: string }               // the founder said what must not happen: nothing happens, and they are told
   | { action: 'stop_campaign' | 'resume_campaign'; campaign: Campaign; number: number }
   | { action: 'no_campaign'; asked: 'stop_ads' | 'resume_ads'; number: number };
 
 const ADS_WORD = '(?:pubs?|publicites?|campagnes?|ads|acquisition payante)';
-/** His words for a channel: « Facebook » is the account Meta runs (D59), « Google » alone is Search, YouTube has its own name. */
+/** The founder's words for a channel: « Facebook » is the account Meta runs (D59), « Google » alone is Search, YouTube has its own name. */
 const CHANNEL_WORDS: Readonly<Record<string, ChannelId>> = {
   tiktok: 'tiktok', meta: 'meta', facebook: 'meta', fb: 'meta', instagram: 'meta', insta: 'meta',
   youtube: 'youtube', shorts: 'youtube', pinterest: 'pinterest', google: 'google', search: 'google', adwords: 'google',
@@ -300,17 +300,17 @@ const STOP_FIRING = anyOf(
   `\\bne\\s+${FIRE_VERB}\\s+(?:plus\\s+)?personne\\b`, `\\bne\\s+${FIRE_VERB}\\s+(?:plus|pas)\\s*$`, `\\b(?:pas|plus|aucun|zero)\\s+(?:de\\s+|d')?(?:licenciements?|renvois?)\\b`,
   `\\barrete[rz]?\\s+de\\s+(?:virer|licencier)\\b`, `\\b${STOP_VERB}\\b${NEAR}(?:licenciements?|renvois?|departs?)\\b`,
 );
-/** What refuses the verb after it, however he says it: « pas question de virer », « évite de couper ». */
+/** What refuses the verb after it, however the founder says it: « pas question de virer », « évite de couper ». */
 const REFUSAL = "(?:\\b(?:pas|plus)\\s+(?:besoin|question|la\\s+peine|utile|necessaire)|\\b(?:evite[rz]?|refuse[rz]?|hors\\s+de\\s+question|interdit|inutile))\\s+(?:de\\s+|d')";
 /** « il ne faut pas couper », « faut pas virer », « jamais virer »: the negation stands right before an infinitive, or « en plus coupe les pubs » would refuse its own order. */
 const NOT_BEFORE = (verb: string): string => `\\b(?:pas|jamais|(?<!\\b(?:en|de|au)\\s)plus)\\s+(?:surtout\\s+|du\\s+tout\\s+|\\S+ment\\s+)?${verb}\\b`;
 /** « que tu », the way a wish opens an order: « je veux que tu vires Tom », « il faut qu'on vire Tom ». */
 const THAT_YOU = "(?:que\\s+(?:tu|vous|l'on)|qu'on)\\s+";
-/** « ne vire pas Sarah » protects her: the same order as « garde Sarah ». */
+/** « ne vire pas Sarah » protects Sarah: the same order as « garde Sarah ». */
 const SPARE_PERSON = anyOf(`\\bpas\\s+${THAT_YOU}${FIRE_VERB}\\b${PERSON}`, `\\b(?:ne\\s+)?${FIRE_VERB}\\s+(?:pas|plus|jamais|ni)${PERSON}`, `${REFUSAL}${FIRE_VERB}\\b${PERSON}`, `${NOT_BEFORE(FIRE_INFINITIVE)}${PERSON}`);
-/** Every verb of an order, « touche » and « bouge », which are how he says to leave things alone. Not « publie »: « ne publie plus de pubs » is a stop. Not the firing verbs: their refusal is a pin. */
+/** Every verb of an order, « touche » and « bouge », which are how the founder says to leave things alone. Not « publie »: « ne publie plus de pubs » is a stop. Not the firing verbs: their refusal is a pin. */
 const UNDONE_VERB = `(?:${STOP_VERB}|eteindre|tue[rz]?|kill|supprime[rz]?|abandonne[rz]?|enterre[rz]?|retire[rz]?|enleve[rz]?|reprends?|reprenez|reprendre|relance[rz]?|reactive[rz]?|remets?|remettez|remettre|redemarre[rz]?|rallume[rz]?|degele[rz]?|debloque[rz]?|leve[rz]?|annule[rz]?|double[rz]?|triple[rz]?|multiplie[rz]?|augmente[rz]?|monte[rz]?|booste[rz]?|touche[rz]?|bouge[rz]?|change[rz]?|modifie[rz]?|baisse[rz]?|reduis|reduisez|reduire)`;
-/** « ne coupe pas les pubs », « ne coupe absolument pas », « ne coupe ni… », « n'arrête rien », « pas besoin de couper », « arrête de couper », « je ne veux pas que tu coupes »: what he refuses is the verb of the order itself. */
+/** « ne coupe pas les pubs », « ne coupe absolument pas », « ne coupe ni… », « n'arrête rien », « pas besoin de couper », « arrête de couper », « je ne veux pas que tu coupes »: what the founder refuses is the verb of the order itself. */
 const NEGATED = anyOf(
   `(?:\\bne\\s+|\\bn')(?:les?\\s+|la\\s+|l'|y\\s+|me\\s+|nous\\s+)?${UNDONE_VERB}\\s+(?:\\S+\\s+){0,2}?(?:pas|plus|jamais|rien|aucune?|ni)\\b`,
   `${REFUSAL}${UNDONE_VERB}\\b`, NOT_BEFORE(UNDONE_INFINITIVE), `\\barrete[rz]?\\s+de\\s+${UNDONE_VERB}\\b`, "\\b(?:pas|plus)\\s+(?:que\\s+|qu')(?:tu|vous|on|nous|ils?|elles?)\\b",
@@ -444,7 +444,7 @@ function liveOrders(clauses: readonly string[], whole: string, asking: boolean):
  * What the founder orders, read before anything looks for keywords: « coupe toutes les pubs » is not a request about pubs.
  * One sentence can hold several orders and each one runs, money first: a stop is never lost to a word about staff. A
  * clause about staff is read alone, so its words mean nothing to the money rules (« lève le gel des embauches »).
- * What he refuses goes first: « ne coupe pas les pubs » must never reach the rules that read « coupe » and « pubs ».
+ * What the founder refuses goes first: « ne coupe pas les pubs » must never reach the rules that read « coupe » and « pubs ».
  */
 export function ordersIn(text: string): SaidOrder[] {
   const { clauses, whole, asking } = spoken(text);
@@ -456,7 +456,7 @@ export function ordersIn(text: string): SaidOrder[] {
 const POLITE_ASK = new RegExp(`^(?:(?:bon|ok|alors|donc|stp|svp)[\\s,]+)*(?:tu\\s+peux|peux[\\s-]tu|tu\\s+pourrais|pourrais[\\s-]tu|vous\\s+pouvez|pouvez[\\s-]vous|vous\\s+pourriez|pourriez[\\s-]vous)\\s+(?:(?:me|nous|juste|vite|stp|svp|\\S+ment)\\s+)*(?:${UNDONE_INFINITIVE}|mettre|ne\\s+plus)\\b`);
 const POLITE_STOPS: readonly OrderAction[] = ['stop_ads', 'stop_spending', 'stop_launches', 'trim_ads'];
 
-/** His sentences less his questions: « faut-il reprendre les pubs ? » lifts nothing, « tu as coupé les pubs ? » stops nothing. */
+/** The founder's sentences less their questions: « faut-il reprendre les pubs ? » lifts nothing, « tu as coupé les pubs ? » stops nothing. */
 function stated(text: string): string {
   return text.split(/(?<=[.!?\n])\s+/).filter((sentence) => {
     const t = fold(sentence).trim();
@@ -468,10 +468,10 @@ function stated(text: string): string {
 
 /** The forms of the order verbs that fold like the imperative. Only an auxiliary tells them apart: « à couper » keeps its r, « j'ai coupé » has lost its accent. */
 const PARTICIPLE = '(?:coupe|arrete|stoppe|gele|desactive|bloque|tue|supprime|abandonne|enterre|retire|enleve|relance|reactive|redemarre|rallume|republie|publie|degele|debloque|leve|annule|double|triple|multiplie|augmente|monte|booste|vire|licencie|garde|protege|epingle)';
-/** What he reports: « j'ai coupé les pubs », « hier on a coupé les pubs ». */
+/** What the founder reports: « j'ai coupé les pubs », « hier on a coupé les pubs ». */
 const TOLD = new RegExp(`\\b(?:ai|as|a|avons|avez|ont|avais|avait|avions|aviez|avaient)(?:[\\s-]+(?:tu|il|elle|on|nous|vous|ils|elles))?(?:\\s+(?:deja|bien|encore|aussi|donc|pas|jamais|plus|tout|\\S+ment))*\\s+${PARTICIPLE}\\b`);
 
-/** What may hold an order: the clauses of what he stated, without what he only reports. */
+/** What may hold an order: the clauses of what the founder stated, without what they only report. */
 function spoken(text: string): { clauses: string[]; whole: string; asking: boolean } {
   const said = stated(text);
   const all = clausesOf(said);
@@ -532,7 +532,7 @@ const CHANNEL_STEMS = new Set(Object.keys(CHANNEL_WORDS).map(stemOf));
 
 const channelWordsIn = (t: string): ChannelId[] => uniq([...t.matchAll(new RegExp(CHANNEL_NAMED, 'g'))].map((m) => CHANNEL_WORDS[m[0]]!));
 
-/** The channels an order is about, [] for all of them. « coupe tout sauf TikTok » names every other one, opened or not: he said so. */
+/** The channels an order is about, [] for all of them. « coupe tout sauf TikTok » names every other one, opened or not: the founder said so. */
 function channelsIn(text: string): ChannelId[] {
   const [said = '', ...rest] = fold(text).split(SPARED);
   const spared = channelWordsIn(rest.join(' '));
@@ -549,13 +549,13 @@ function orderTarget(ctx: RuntimeCtx, text: string): { product: Product | null; 
     const product = productInNiche(ctx, n.nicheId);
     if (product) return { product, topic: '' };
   }
-  // Words around the order (« ça coûte trop cher ») name no product unless the founder says he means one.
+  // Words around the order (« ça coûte trop cher ») name no product unless the founder says they mean one.
   return { product: null, topic: named.length || new RegExp(`\\b${PRODUCT_NOUN}\\b`).test(fold(text)) ? topicWords(text, about) : '' };
 }
 
 const plain = (s: string): string => fold(s).replace(/[^a-z0-9]+/g, ' ').trim();
 
-/** The full name he wrote (« Léa B. » before « Léa »), else a first name only one person carries. */
+/** The full name the founder wrote (« Léa B. » before « Léa »), else a first name only one person carries. */
 function named<T extends { name: string }>(people: readonly T[], word: string, text: string): T | undefined {
   const said = ` ${plain(text)} `;
   const key = plain(word);
@@ -566,13 +566,13 @@ function named<T extends { name: string }>(people: readonly T[], word: string, t
 
 /**
  * The person an order names. A word the company does not know is a name only when it is written as one: « garde
- * Zorglub » is said back to him, « garde confiance » is no order at all.
+ * Zorglub » is said back to the founder, « garde confiance » is no order at all.
  */
 function orderPerson(ctx: RuntimeCtx, text: string, asked: PersonOrder, person?: string, target?: AgentId): FounderOrder | null {
   const t = fold(text).trim();
   const word = person ? fold(person).split(/\s+/)[0]! : [UNPIN_PERSON, SPARE_PERSON, PIN_PERSON, FIRE_PERSON].map((re) => re.exec(t)?.slice(1).find(Boolean)).find(Boolean) ?? '';
   const agent = named(ctx.world.company.agents, word, text);
-  if (agent && person && agent.id === target) return null; // the name in a list is the one he is talking to
+  if (agent && person && agent.id === target) return null; // the name in a list is the one the founder is talking to
   if (agent) return { action: asked, agent };
   const spoken = text.split(/[^\p{L}\p{N}'-]+/u).find((w) => fold(w) === word) ?? word;
   if (!/^\p{Lu}/u.test(spoken) || asksForProduct(text)) return null;
@@ -582,7 +582,7 @@ function orderPerson(ctx: RuntimeCtx, text: string, asked: PersonOrder, person?:
 /** The number a campaign keeps for life, the one the Publicité tab prints. Starts at 1. */
 export const campaignNumber = (c: Campaign, index: number): number => (c.seq ?? index) + 1;
 
-/** The campaigns he named by number, null when he named none: an order on one of them never reaches the others. */
+/** The campaigns the founder named by number, null when they named none: an order on one of them never reaches the others. */
 function campaignOrders(ctx: RuntimeCtx, text: string, asked: 'stop_ads' | 'resume_ads'): FounderOrder[] | null {
   const numbers = numbersIn(text);
   if (!numbers.length) return null;
@@ -593,7 +593,7 @@ function campaignOrders(ctx: RuntimeCtx, text: string, asked: 'stop_ads' | 'resu
   });
 }
 
-/** What « sauf » leaves running: the campaigns he numbered, or every campaign of the guide he named. A number nobody carries comes back in `missing`. */
+/** What « sauf » leaves running: the campaigns the founder numbered, or every campaign of the guide they named. A number nobody carries comes back in `missing`. */
 function sparedBy(ctx: RuntimeCtx, text: string): { spared: Campaign[]; missing: number[] } {
   const kept = keptOf(text);
   if (!kept) return { spared: [], missing: [] };
@@ -646,7 +646,7 @@ function readOrder(ctx: RuntimeCtx, { action, text: full, person }: SaidOrder, t
   }
 }
 
-/** Ad work the founder himself stopped is not started again behind his back: he lifts his order first. */
+/** Ad work the founder stopped is not started again behind their back: they lift their order first. */
 function respectHolds(ctx: RuntimeCtx, route: Extract<MissionRoute, { kind: 'tasks' }>): MissionRoute {
   const heldBy = (it: DayPlanItem) => (PAID_AD_TASKS.includes(it.kind) ? adsHold(ctx.world, str(it.input.productId) ?? null, channelOf(it.input as { channel?: ChannelId })) : null);
   const free = route.items.filter((it) => !heldBy(it));
@@ -659,7 +659,7 @@ export function routeMission(ctx: RuntimeCtx, text: string, items: DayPlanItem[]
   const orders = read.filter((o): o is FounderOrder => !!o && o !== 'trim_ads');
   const trim = read.includes('trim_ads');
   const beside = requestBeside(text);
-  // A vague clause beside an order asks nothing: the order is what he said.
+  // A vague clause beside an order asks nothing: the order is what the founder said.
   const request = beside && (asksForProduct(beside) || !items.every((it) => it.input.vague === true)) ? beside : '';
   if (trim && !request) {
     const [channel] = channelsIn(text);

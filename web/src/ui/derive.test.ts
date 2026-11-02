@@ -99,7 +99,7 @@ describe('scenario form — number fields', () => {
     expect(typed.byDay).toBe('60');
     expect(deadlineNote(typed)).toContain('jour 30');
     expect(scenarioConfig(typed)).toMatchObject({ horizonDays: 30, goal: { byDay: 30 } });
-    // the founder corrects the horizon: the deadline he chose is still there
+    // the founder corrects the horizon: the deadline they chose is still there
     expect(deadlineNote(settleField(type(typed, 'horizonDays', '90'), 'horizonDays'))).toBeNull();
     expect(scenarioConfig(settleField(type(typed, 'horizonDays', '90'), 'horizonDays'))).toMatchObject({ horizonDays: 90, goal: { byDay: 60 } });
   });

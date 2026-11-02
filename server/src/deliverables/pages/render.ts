@@ -24,7 +24,7 @@ const TOP_BAND = 2 * U;        // introduction and last page
 const WORDS_PER_MIN = 220;
 const LEADER = { dot: 1, gap: 3 };
 
-export interface ChapterSpec { content: ChapterContent; title: string; head: string; example: { label: string; text: string } | null }
+export interface ChapterSpec { content: ChapterContent; title: string; head: string; listed: string; example: { label: string; text: string } | null }
 
 /** Everything `pdf.ts` decided about the wording. No page reads the product itself. */
 export interface GuideSpec {
@@ -605,7 +605,7 @@ export function layoutGuide(spec: GuideSpec, t: PdfTheme, effort: DesignEffort):
       } else slots.push({ plan, section, first: opens && k === 0, draw: textPage(section, index, plan, pose, k === 0 ? top : null) });
     });
   };
-  const entry = (section: Section, number: string | null) => entries.push({ number, label: section.label, title: section.title, page: 0, dest: section.dest });
+  const entry = (section: Section, number: string | null, title = section.title) => entries.push({ number, label: section.label, title, page: 0, dest: section.dest });
 
   front('promise', plain, promisePage({
     chapters: chapters.length,
@@ -635,7 +635,7 @@ export function layoutGuide(spec: GuideSpec, t: PdfTheme, effort: DesignEffort):
     const section: Section = isBonus
       ? { dest: 'bonus', label: 'Bonus', title: ch.title, head: ch.head, tab: 'B' }
       : { dest: `chapitre-${number}`, label: `Chapitre ${number}`, title: ch.title, head: ch.head, tab: String(number) };
-    entry(section, isBonus ? '+' : pad2(number));
+    entry(section, isBonus ? '+' : pad2(number), ch.listed);
     const opener = openerText(ch, t, finish);
     slots.push({ plan: { kind: 'opener', chapter: number, items: [], fill: 1 }, section, first: true, draw: openerPage(opener, number, chapters.length, isBonus, poses[k]!) });
     const blocks = chapterBlocks(ch.content, t, { finish, lead: opener.lead ? null : ch.content.intro, example: ch.example });
@@ -667,7 +667,7 @@ export function layoutGuide(spec: GuideSpec, t: PdfTheme, effort: DesignEffort):
     c.links = [];
     const scene = slot.draw(c, k + 2);
     const opens = slot.first ? entries.find((e) => e.dest === slot.section.dest) : undefined;
-    pages.push({ scene, scale: 1, links: c.links, dest: opens?.dest ?? null, outline: opens ? sanitizeFor(t.v.text, opens.title) : null, preview: previews.get(slot) ?? null });
+    pages.push({ scene, scale: 1, links: c.links, dest: opens?.dest ?? null, outline: opens ? sanitizeFor(t.v.text, slot.section.title) : null, preview: previews.get(slot) ?? null });
   });
   return { pages, plans: slots.map((slot) => slot.plan), audit: auditOf(slots, chapters.length, c.overflow, pages.length) };
 }

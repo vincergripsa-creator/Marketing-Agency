@@ -402,11 +402,11 @@ export interface Campaign {
   targeting: { interests: string[]; ageMin: number; ageMax: number };
   startDay: number;
   createdBy: AgentId;
-  pausedFor?: 'outage' | 'founder'; // outage: resumed the next morning; founder: resumed when he lifts his order
+  pausedFor?: 'outage' | 'founder'; // outage: resumed the next morning; founder: resumed when they lift their order
   planStopped?: number;     // the day the CFO's plan stopped it: the line stays out while that reading stands (channels §7.4)
-  founderForced?: boolean;  // launched by the founder against the company's own stop rules: only he (or the stop-loss) ends it
+  founderForced?: boolean;  // launched by the founder against the company's own stop rules: only the founder (or the stop-loss) ends it
   founderCap?: number;      // approval mode: the daily budget the founder agreed to
-  raiseRefusedDay?: number; // approval mode: the day he last refused a raise
+  raiseRefusedDay?: number; // approval mode: the day the founder last refused a raise
   channel?: ChannelId;         // absent = 'tiktok'
   learning?: { events: number; exitedDay: number | null; days?: number }; // channels with a learning phase. days: delivered since it (re)started
   test?: boolean;              // paid by the test envelope, left alone by the allocator until its verdict
@@ -759,7 +759,7 @@ export interface CompanyState {
 
 /**
  * A standing decision of the founder: the plan and the handlers respect it until it ends, whatever their own rules
- * say. An order lasts until he lifts it; a refusal lasts for a cooldown.
+ * say. An order lasts until the founder lifts it; a refusal lasts for a cooldown.
  */
 export interface FounderHold {
   id: string;

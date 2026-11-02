@@ -688,7 +688,7 @@ export class AgencySession {
     this.touch();
   }
 
-  /** The founder wants to see this ad: his render goes first. */
+  /** The founder wants to see this ad: their render goes first. */
   async requestVideo(creativeId: string, ratio?: AdRatio): Promise<CreativeVideo> {
     await this.switching;
     const run = this.mounted();

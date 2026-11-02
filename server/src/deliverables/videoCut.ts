@@ -41,7 +41,7 @@ interface Decisions {
   tighten: 0 | 1 | 2;
   shotSec: number;             // the shot length aimed at
   pages: number;               // real pages the cut may show: a plain editor stops at one
-  holdPage: boolean;           // a plain editor holds his page on one shot
+  holdPage: boolean;           // a plain editor holds the page on one shot
   guideSec: number | null;     // the guide enters during the hook, this long after its first word
   pain: boolean;               // the customers' own words, or a plain plate
   captionWords: number;        // 3 or under: the spoken word sits on a pill
@@ -289,7 +289,7 @@ export function planCut(input: { creative: AdCreative; product: Product; voc: Vo
   if (narrated && roles[1] === 'proof' && !reviewQuote(scenes[1]!.voiceover ?? '')) roles[1] = 'pain';
   const spokenOf = (i: number): string => (voiced ? tightenSpoken(scenes[i]!.voiceover ?? '', d.tighten, roles[i] === 'end') : '');
   const showsPage = (i: number): boolean => voiced && (roles[i] === 'step' || roles[i] === 'proof') && !reviewQuote(scenes[i]!.voiceover ?? '');
-  /** A later scene of its own will fill the frame with a page: the narrator may keep this one beside him. */
+  /** A later scene of its own will fill the frame with a page: the narrator may keep this one beside them. */
   const pageLater = (from: number, line: VideoBeat['proof']): boolean => scenes.some((_, j) => j > from && roles[j] === 'proof' && showsPage(j)
     && !!findNeedle(product, spokenOf(j), new Set([...taken, ...(line ? [line.needle] : [])]), false));
 

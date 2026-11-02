@@ -1,4 +1,4 @@
-// Run milestone banner: bankrupt and goal reached (the agency keeps working) / horizon finished (the run is over, unless he lets it go on).
+// Run milestone banner: bankrupt and goal reached (the agency keeps working) / horizon finished (the run is over, unless the founder lets it go on).
 import { cx } from './common';
 import { useApp } from './context';
 import { endedBankrupt, goalLate, goalTitle } from './derive';

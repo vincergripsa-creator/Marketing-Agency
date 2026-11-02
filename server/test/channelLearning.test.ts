@@ -190,7 +190,7 @@ describe('« coupe Meta »', () => {
     expect(adsHold(world, p.id, 'meta')).not.toBeNull();
     expect(companyPaidBlock(world, 'meta')).toMatch(/ordre du fondateur/);
     expect(productPaidBlock(world, p, 'meta')).toMatchObject({ hard: true, final: true });
-    // …TikTok is not, and neither are the channels he did not name.
+    // …TikTok is not, and neither are the channels the founder did not name.
     expect(adsHold(world, p.id)).toBeNull();
     expect(adsHold(world, p.id, 'pinterest')).toBeNull();
     expect(companyPaidBlock(world) ?? '').not.toMatch(/ordre du fondateur/);

@@ -165,9 +165,9 @@ function sendBroadcast(world: WorldState, a: AudienceState, rng: Rng, b: Broadca
 }
 
 /**
- * The day's mail. Broadcasts go first: a lead leaving the pipe today already got his mail of the day. Steps are read before
- * the pipe shifts: the close first sees a lead the day after he signed up, and that is day 0 of his sequence. Past day 10
- * he joins this month's lead bucket. The tool is billed last, on who stayed.
+ * The day's mail. Broadcasts go first: a lead leaving the pipe today already got their mail of the day. Steps are read before
+ * the pipe shifts: the close first sees a lead the day after they signed up, and that is day 0 of their sequence. Past day 10
+ * they join this month's lead bucket. The tool is billed last, on who stayed.
  */
 export function deliverEmails(world: WorldState, rng: Rng): { rows: EmailClicks[]; notes: string[] } {
   const a = world.market.audience;

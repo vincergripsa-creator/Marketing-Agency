@@ -12,7 +12,7 @@ Product-facing strings are French, the rest of this file is English.
 5. **Three modes** in `ScenarioConfig.talent`: `off` (no talent at all, today's output), `flat` (talent and practice act, no consequence: this is the paired control), `league` (routing, duels, coaching, firing, hiring). Default `league`. A save without the field is `off`.
 6. **Only seats with a lever enter the league.** A seat without a measurable effect on a result (finance, analysis, QA gates, HR, covers) has no talent, no rating, cannot be fired. Immunity comes from function, never from rank: chiefs and the CEO with a lever are judged like everyone.
 7. **The rating is an Elo-like number per person and per skill**, updated by luck-adjusted evidence. The scorer is the main evidence (noise-free), market results and duels weigh by how much they really say (`S = Φ(z)`: a noisy result moves almost nothing).
-8. **A firing is a challenge, not a verdict.** After a failed improvement plan, the incumbent and three candidates sit the same real test. The swap happens only if a candidate beats him by 3 points, and it is atomic.
+8. **A firing is a challenge, not a verdict.** After a failed improvement plan, the incumbent and three candidates sit the same real test. The swap happens only if a candidate beats the incumbent by 3 points, and it is atomic.
 9. **Ads get duels, nothing else does.** Every campaign mixing two authors is already a natural duel, and one formal duel per week runs through the existing `Experiment` machinery. Pages get none (numbers in section 12).
 10. **Proof is paired**: 30 seeds, `league` against `flat`, same seed, same initial talents. Metrics fixed in section 10, decided before any run, one pass.
 
@@ -178,7 +178,7 @@ Nothing is kept in `Company` beyond what the world holds. `league_review` and th
 ### 2.4 Guardrails kept, one line each
 
 - Compliance: flaws can add a risky claim. The reviewer and TikTok stop it as today, the strike falls on the author.
-- Founder approval: a replacement waits for him in approval mode (section 7.6).
+- Founder approval: a replacement waits for the founder in approval mode (section 7.6).
 - Stop-loss: `stopLossReason` is called unchanged. Talent may prune or stop earlier, never later.
 - CFO cap: a perk's budget comes inside `launchBudget`, under `Math.min(remaining, …)`. A hire needs the CFO's room (section 7.5).
 - Ledger: the only new money is `recruiting`, through `sim.recordLedger`.
@@ -358,7 +358,7 @@ Sharper noise reading picks worse niches (section 1). So the lever is what the r
 
 - `heuristicRanking(input, target, opts?: { valueWeight: number })`: `score += valueWeight * (medianKnownPrice - 19)`, with `medianKnownPrice` from the company's own anchors, else competitors' prices. `valueWeight = 1.2 * t`. `t` undefined = 0 = today.
 - `scan_trends`: VoC and competitors for `3 + round(2 * t)` niches instead of 3: more ranked niches have a known price.
-- `pick_opportunity`: `chooseArm('niche', …)` gets the CEO's `sharp`: she signs the pick, whoever prepared it.
+- `pick_opportunity`: `chooseArm('niche', …)` gets the CEO's `sharp`: the CEO signs the pick, whoever prepared it.
 
 ### 4.7 `support` (P1)
 
@@ -469,7 +469,7 @@ The pars are constants measured at t=.56 by the lever test, one pass (`constants
 export const MIN_SEASON_N: Record<Skill, number> = { copy: 4, longform: 2, editing: 2, page: 2, buying: 3, research: 1, support: 4, direction: 1 };
 ```
 
-Support's 4 is a weighted sum, so 16 replies. Élise wrote no `write_pdf` in the probe: she will simply never be judged on it. Rank protects nobody, the sample does.
+Support's 4 is a weighted sum, so 16 replies. Élise wrote no `write_pdf` in the probe: Élise will simply never be judged on it. Rank protects nobody, the sample does.
 
 ## 6. Competition
 
@@ -560,7 +560,7 @@ The candidates and the rest of the sort do not change, nor does `farBehind`: nob
 - `routing: 1`;
 - `budgetPct: 10` for a buyer.
 
-**Promotion to chief.** A non-chief with a rating at least 120 above the chief of his department on the same skill, both `rd < 110`, two closes in a row: the two persons swap seats. The former chief stays, on the member seat. Real effects: the seat's kinds, the review duty, the Claude tier. At most one per season. A promotion moves no talent value, only who sits where, so `craftFor` needs a talent for the new seat's skills: a missing skill is drawn from the `hire` stream.
+**Promotion to chief.** A non-chief with a rating at least 120 above the chief of their department on the same skill, both `rd < 110`, two closes in a row: the two persons swap seats. The former chief stays, on the member seat. Real effects: the seat's kinds, the review duty, the Claude tier. At most one per season. A promotion moves no talent value, only who sits where, so `craftFor` needs a talent for the new seat's skills: a missing skill is drawn from the `hire` stream.
 
 ## 7. Consequences
 
@@ -580,8 +580,8 @@ Enters a plan, at a close, a person who meets **all** of:
 
 - `mode === 'league'`, status `active`, tenure ≥ 14 days;
 - primary skill sample ≥ `MIN_SEASON_N`;
-- `rating + 0.75 * rd < 1500`: confident, about 77 %, that he is under par;
-- lowest of his family when it has two rated persons or more;
+- `rating + 0.75 * rd < 1500`: confident, about 77 %, that they are under par;
+- lowest of their family when it has two rated persons or more;
 - no `firing` hold, no `pin`;
 - `day <= horizon - HORIZON_GUARD`.
 
@@ -670,13 +670,13 @@ Founder, through `holds.ts`, `missions.ts readOrder`, `orders.ts` (another workf
 - `firingHold(world)` and `pinHold(world, seat)`.
 - New order actions `stop_firing`, `allow_firing`, `pin_agent`, `unpin_agent`, from: « ne vire personne », « pas de licenciement », « tu peux virer », « garde Sarah », « protège Sarah », « épingle Sarah ». Unknown name: said so, no action.
 - A pin keeps the person out of plans and challenges, and is listed in `activeHolds`.
-- Approval mode: `runChallenge` stops before the swap, a task `league_review` with `awaitFounder: « Remplacer Tom par Yanis (91/100 contre 79/100 au test) : 25 € »`. Refusal: `pin` for 14 days, `REFUSAL_COOLDOWN` logic. The 25 € is booked only on his yes.
+- Approval mode: `runChallenge` stops before the swap, a task `league_review` with `awaitFounder: « Remplacer Tom par Yanis (91/100 contre 79/100 au test) : 25 € »`. Refusal: `pin` for 14 days, `REFUSAL_COOLDOWN` logic. The 25 € is booked only on the founder's yes.
 
 ### 7.7 The CEO and the chiefs
 
 Chiefs with a lever follow the same rules: Léo, Clara, Élise, Inès, Nadia.
 
-The CEO: skill `direction`, evidence `board` and `pick`, one lever (she signs the niche pick). Plans follow the same rule, but her replacement is by promotion only: a chief with `rating ≥ 1550` on his skill and `rd < 120` swaps seats with her, and his old seat goes through a normal challenge. No such chief: she stays. Stated once: a 60-day run will rarely see this, and it should stay rare, because `board` evidence is the noisiest of the table.
+The CEO: skill `direction`, evidence `board` and `pick`, one lever (signing the niche pick). Plans follow the same rule, but the CEO's replacement is by promotion only: a chief with `rating ≥ 1550` on their skill and `rd < 120` swaps seats with the CEO, and the chief's old seat goes through a normal challenge. No such chief: the CEO stays. Stated once: a 60-day run will rarely see this, and it should stay rare, because `board` evidence is the noisiest of the table.
 
 ## 8. Files and functions
 
@@ -828,7 +828,7 @@ Then `flat` median against the current 1 408 € tells the final calibration wha
 13. **Evidence**: `qa` recorded once on a task with a rework; no `natural` or `market` event for an announced outage day; `s` within .45-.55 for two creatives at 200 impressions.
 14. **Elo**: settled duel moves both ratings by opposite amounts, and a cancelled duel moves nothing.
 15. **Protections**: no plan before day 14; no plan under the sample; no replacement with a `firing` hold; pinned seat out; at most 2 replacements per season, even with 5 forced failures; none in the last 10 days; none on a season over 3 disrupted days.
-16. **Challenge**: each `CandidateResult.score` equals `sim.scoreCreative` recomputed on the stored deliverable; the incumbent stays when no candidate beats him by 3.
+16. **Challenge**: each `CandidateResult.score` equals `sim.scoreCreative` recomputed on the stored deliverable; the incumbent stays when no candidate beats them by 3.
 17. **Seat continuity**: after a swap on `leo`, `agentById(w, 'leo')` is the new person, `company.agents.length` unchanged, open tasks of the seat are reassigned, no new activity text contains « Léo », `DEFAULT_REVIEWER` still routes.
 18. **Ledger**: `recruiting` booked once, Σ amounts = cash, `reconcileDay` shows no gap, no hire in survival.
 19. **Approval**: in approval mode the swap waits; refusal pins for 14 days, nothing booked.

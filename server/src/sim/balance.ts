@@ -200,7 +200,7 @@ export const SCAM = {
   discountLossMultiplier: 2,        // a discount code handed to a scammer gets resold
   friendlyFraudPerRate: 0.08,       // × difficulty scamRate = share of orders followed by a false claim from the real buyer
   friendlyFraudWindowDays: 4,       // the claim arrives within this many days after the purchase
-  friendlyDisputeRefused: 0.25,     // × (1 - reply score): a refused fraudster who still goes to his bank
+  friendlyDisputeRefused: 0.25,     // × (1 - reply score): a refused fraudster who still goes to their bank
   friendlyDisputeIgnored: 0.3,      // same, when the claim is left unanswered
 };
 

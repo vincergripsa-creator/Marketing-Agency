@@ -1,5 +1,5 @@
 /**
- * The founder's orders, executed on the spot: a stop is a standing hold the plan and the handlers respect until he lifts
+ * The founder's orders, executed on the spot: a stop is a standing hold the plan and the handlers respect until the founder lifts
  * it, not a task that may or may not reach its goal. An order that cannot be carried out is said so, never closed as done.
  */
 import type { AgentState, Campaign, ChannelId, Mission, Task, WorldState } from '../shared.js';
@@ -36,7 +36,7 @@ const PERSON_FR: Record<PersonOrder, string> = {
   fire_agent: 'je n’ai renvoyé personne',
 };
 
-/** His latest word: a pin does not protect someone from the founder who set it. */
+/** The founder's latest word: a pin does not protect someone from the founder who set it. */
 async function fireAgent(ctx: RuntimeCtx, agent: AgentState): Promise<{ text: string; left: boolean }> {
   const w = ctx.world;
   if (isLegacyOrg(w)) return { text: `Je ne peux pas : l'équipe de cette partie est fixe, ${agent.name} reste.`, left: false };
@@ -49,7 +49,7 @@ async function fireAgent(ctx: RuntimeCtx, agent: AgentState): Promise<{ text: st
 const channelNames = (order: { channels?: readonly ChannelId[] }): string => (order.channels ?? []).map((ch) => CHANNELS[ch].label).join(', ');
 
 /**
- * What « sauf » spares keeps running under the hold, on his word: the hold stops what is new, and a campaign he kept is
+ * What « sauf » spares keeps running under the hold, on the founder's word: the hold stops what is new, and a campaign they kept is
  * not cut by the plan or the buyer. The stop-loss still reads it.
  */
 function stopAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'stop_ads' }, when: string): string {
@@ -91,7 +91,7 @@ export function endTimedStops(ctx: RuntimeCtx): void {
   }
 }
 
-/** « Reprends Meta » lifts what he said about Meta: an order on every channel still stands, and he is told so. */
+/** « Reprends Meta » lifts what the founder said about Meta: an order on every channel still stands, and they are told so. */
 function resumeAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'resume_ads' }): { text: string; resumed: boolean } {
   const w = ctx.world;
   const { product, channels, spared } = order;
@@ -107,8 +107,8 @@ const campaignLabel = (c: Campaign, number: number): string => `n° ${number} «
 const numberOf = (ctx: RuntimeCtx, c: Campaign): number => campaignNumber(c, ctx.world.company.campaigns.indexOf(c));
 
 /**
- * One campaign, on his word: the others go on, and no hold stops the company from running them. The plan may give the same
- * guide a new campaign the next days, and he is told so with the sentence that stops it for good.
+ * One campaign, on the founder's word: the others go on, and no hold stops the company from running them. The plan may give the same
+ * guide a new campaign the next days, and the founder is told so with the sentence that stops it for good.
  */
 function stopCampaign(ctx: RuntimeCtx, c: Campaign, number: number): string {
   if (c.status !== 'active') return `La campagne ${campaignLabel(c, number)} ne tourne pas : je n'ai rien changé.`;
@@ -120,7 +120,7 @@ function stopCampaign(ctx: RuntimeCtx, c: Campaign, number: number): string {
   return `C'est fait : la campagne ${campaignLabel(c, number)} est en pause, les autres continuent.${forGood} Dis « reprends la campagne ${number} » pour la relancer.`;
 }
 
-/** His order on all the ads still stands over one campaign: he lifts it first. A refused resume keeps his stop: the next try reads it. */
+/** The founder's order on all the ads still stands over one campaign: they lift it first. A refused resume keeps their stop: the next try reads it. */
 function resumeCampaign(ctx: RuntimeCtx, c: Campaign, number: number): { text: string; resumed: boolean } {
   const hold = adsHold(ctx.world, c.productId, channelOf(c));
   if (hold) return { text: `Je n'ai rien relancé : ${hold.reason}. Dis « reprends les pubs » pour lever cet ordre.`, resumed: false };
@@ -131,7 +131,7 @@ function resumeCampaign(ctx: RuntimeCtx, c: Campaign, number: number): { text: s
   return { text: `Je n'ai pas relancé la campagne ${campaignLabel(c, number)} : ${stopped === 'founder' ? 'son produit, son budget ou les règles de la pub l\'en empêchent pour l\'instant' : 'elle n\'est pas en pause sur ton ordre'}.`, resumed: false };
 }
 
-/** Every order of one sentence on one mission: he reads each answer, and one refused order shows on it. */
+/** Every order of one sentence on one mission: the founder reads each answer, and one refused order shows on it. */
 export async function executeOrders(ctx: RuntimeCtx, m: Mission, orders: readonly FounderOrder[]): Promise<void> {
   const answers: string[] = [];
   const statuses: Mission['status'][] = [];
@@ -187,7 +187,7 @@ async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): P
       done(liftHolds(w, (h) => h.kind === 'firing').length ? 'C’est noté : la ligue reprend ses remplacements à la prochaine clôture de saison.' : 'Rien à lever : aucun gel des départs n’était en cours.');
       return;
     case 'stop_hiring':
-      liftHolds(w, (h) => h.kind === 'hiring'); // a refusal's cooldown ends by itself, his order does not
+      liftHolds(w, (h) => h.kind === 'hiring'); // a refusal's cooldown ends by itself, the founder's order does not
       addHold(w, { kind: 'hiring', productId: null, until: lastDay(w, order.days), reason: `embauches gelées sur ordre du fondateur (jour ${w.day})` });
       done(`C’est noté : plus aucune embauche ${untilText(w, order.days, 'reprends les embauches')}. Seule la relève d’un départ reste possible.`);
       return;
@@ -197,7 +197,7 @@ async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): P
       return;
     case 'pin_agent': {
       const { agent } = order;
-      liftHolds(w, (h) => h.kind === 'pin' && h.agentId === agent.id); // a refused swap pins for 14 days, his order does not end
+      liftHolds(w, (h) => h.kind === 'pin' && h.agentId === agent.id); // a refused swap pins for 14 days, the founder's order does not end
       addHold(w, { kind: 'pin', productId: null, until: null, agentId: agent.id, reason: `${agent.name} ne part pas, sur ordre du fondateur (jour ${w.day})` });
       done(`C’est noté : ${agent.name} ne passera ni en plan d’amélioration ni en remplacement tant que tu ne me dis pas le contraire.`);
       return;
@@ -241,7 +241,7 @@ async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): P
       const p = order.product!;
       closeProductMissions(ctx, p, `le fondateur l'a arrêté le jour ${w.day}`);
       await killProduct(ctx, p, `décision du fondateur du jour ${w.day}`);
-      // His word is no wait: the niche this kill closed stays closed, no timer gives it back to the team. A follow-up or a kit closes nothing.
+      // The founder's word is no wait: the niche this kill closed stays closed, no timer gives it back to the team. A follow-up or a kit closes nothing.
       const niche = w.company.growth?.niches[p.nicheId];
       if (niche?.lastEndDay === w.day) niche.reopenDay = null;
       done(`C'est fait : « ${short(p.title, 60)} » est arrêté définitivement.`);
@@ -265,7 +265,7 @@ async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): P
     case 'resume_product': {
       const p = order.product!;
       liftHolds(w, (h) => h.productId === p.id);
-      // His word stands for the Red Team's: a guide held at its gate ships on his signature.
+      // The founder's word stands for the Red Team's: a guide held at its gate ships on their signature.
       const gate = redTeamGate(w, p);
       const last = gate.state === 'blocked' && gate.taskId ? taskById(w, gate.taskId) : undefined;
       if (last) last.output = { ...(last.output ?? {}), waiver: { day: w.day, by: 'founder', reasons: [] } };

@@ -45,7 +45,7 @@ export function angleRng(w: WorldState, nicheId: string): Rng {
   return streamRng(w.scenario.seed, EMAIL_STREAM, w.day, w.tick, hashString(nicheId));
 }
 
-/** The founder's word on this guide's mails: on all of them, or on this one. A guide he took off the shelf is not pitched either. */
+/** The founder's word on this guide's mails: on all of them, or on this one. A guide the founder took off the shelf is not pitched either. */
 export function emailsHold(w: WorldState, productId: string): FounderHold | null {
   return activeHolds(w).find((h) => h.kind === 'emails' && (h.productId === null || h.productId === productId)) ?? productHold(w, productId);
 }

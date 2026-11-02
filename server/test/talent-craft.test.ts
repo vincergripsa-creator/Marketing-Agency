@@ -323,7 +323,7 @@ describe('who has talent', () => {
     expect(primaryOf('video_editor')).toBe('copy');
     expect(primaryOf('motion_designer')).toBe('video');
     expect(primaryOf('hook_writer')).toBe('copy');        // a hook is read through the ad of the same hand
-    expect(primaryOf('growth_lead')).toBe('buying');      // he writes hooks, no ad: he is read on his campaigns
+    expect(primaryOf('growth_lead')).toBe('buying');      // the growth lead writes hooks, no ad: they are read on their campaigns
     expect(primaryOf('media_buyer_tiktok')).toBe('buying');
     expect(primaryOf('cover_designer')).toBe('design');   // no route: the first skill stays, unrated, and the hire test with it (D16)
     expect(primarySkill(world, 'leo')).toBe('buying');

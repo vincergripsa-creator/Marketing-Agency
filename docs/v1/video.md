@@ -482,7 +482,7 @@ export function selectWorthy(world: Readonly<WorldState>): { creativeId: string;
 
 **Who gets rendered.** `selectWorthy` is pure:
 
-1. Creatives in a launch awaiting the founder, so he can watch before he clicks.
+1. Creatives in a launch awaiting the founder, so they can watch before they click.
 2. Approved, in an active campaign, at least 1 000 impressions (scale pillar), quality ≥ 70, by impressions. Three at most in the queue.
 
 On-demand requests from the UI go first. Everything else stays a storyboard.

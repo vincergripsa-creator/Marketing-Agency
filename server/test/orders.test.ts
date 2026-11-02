@@ -190,7 +190,7 @@ describe('founder orders', () => {
     // The plan respects it…
     const plan = await buildHeuristicPlan(ctx);
     expect(plan.items.filter((i) => PAID.includes(i.kind))).toEqual([]);
-    // …even a launch the founder himself asked for before his order…
+    // …even a launch the founder asked for before their order…
     const old = createTask(world, { kind: 'launch_campaign', input: { productId: p.id }, createdBy: 'founder' });
     const out = await HANDLERS.launch_campaign.run(ctx, old, agent(world, 'adam'), mind(agent(world, 'adam')));
     expect(out.output).toMatchObject({ skipped: true });
@@ -218,7 +218,7 @@ describe('founder orders', () => {
     expect(adsHold(world, chiot.id)).not.toBe(null);
     expect(adsHold(world, bebe.id)).toBe(null);
     expect(adsHold(world)).toBe(null);
-    // A launch he asked for earlier does not pass it: this is the block a founder request used to override.
+    // A launch the founder asked for earlier does not pass it: this is the block a founder request used to override.
     const old = createTask(world, { kind: 'launch_campaign', input: { productId: chiot.id }, createdBy: 'founder' });
     const out = await HANDLERS.launch_campaign.run(ctx, old, agent(world, 'adam'), mind(agent(world, 'adam')));
     expect(out.output).toMatchObject({ skipped: true, reason: 'founder' });
@@ -490,7 +490,7 @@ describe('budget raises in approval mode', () => {
     // Only one question at a time.
     await HANDLERS.optimize_ads.run(ctx, createTask(world, { kind: 'optimize_ads', input: {} }), adam(world), mind(adam(world)));
     expect(world.company.tasks.filter((t) => t.input.campaignId === c.id).length).toBe(1);
-    // His yes moves the budget and becomes the new limit.
+    // The founder's yes moves the budget and becomes the new limit.
     ask.status = 'awaiting_founder';
     company.approve(ask.id, true);
     await HANDLERS.optimize_ads.run(ctx, ask, adam(world), mind(adam(world)));

@@ -1,6 +1,6 @@
 /**
  * Who waited, who worked (org §9). Everything sits in `company.org.load`, last 14 days, so a reload reads what a straight
- * run read. The founder's latency counts nowhere: he is not a reason to hire.
+ * run read. The founder's latency counts nowhere: it is not a reason to hire.
  */
 import type { AgentId, ChannelId, KindLoadDay, RoleId, RolePressure, TaskKind, WorldState } from '../../shared.js';
 import { sameAccount } from '../../shared.js';

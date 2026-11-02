@@ -493,7 +493,7 @@ describe('guard kinds (org test 17)', () => {
       const day = w.day;
       leo.currentTaskId = backlog.id;
       for (let tick = 0; tick < 10; tick++) {
-        leo.energy = 5; // a coffee would hide it: he never gets above the gate
+        leo.energy = 5; // a coffee would hide it: Leo never gets above the gate
         await company.step();
       }
       expect(w.tick).toBe(10);

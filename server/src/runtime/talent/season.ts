@@ -272,7 +272,7 @@ export function pickEmployee(w: WorldState, season: number): SeasonReport['emplo
 
 // ───────────────────────────── Formation continue ─────────────────────────────
 
-/** What the founder said that training cannot pass: his stop on spending or on every ad, and approval mode, where nothing paid goes out without his yes. */
+/** What the founder said that training cannot pass: their stop on spending or on every ad, and approval mode, where nothing paid goes out without their yes. */
 function trainingStopped(w: WorldState): string | null {
   const stop = advancesHold(w) ?? activeHolds(w).find((h) => h.kind === 'ads' && h.productId === null && !h.channel);
   return stop?.reason ?? (w.scenario.founderApproval ? 'en mode validation, rien de payant ne part sans ton accord' : null);

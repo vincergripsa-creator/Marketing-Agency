@@ -139,7 +139,7 @@ describe('rendering and the simulation', () => {
     const jobs: string[] = [];
     const session = await playRun('founder', {
       director: (paths, onChange) => new VideoDirector({ paths, mode: 'auto', caps: CAPS, maxDiskMb: 1200, render: fakeRender(jobs) as never, probe: () => 20, onChange }),
-    }, { founderApproval: true }, async (s) => { // he says yes to everything but the launch
+    }, { founderApproval: true }, async (s) => { // the founder says yes to everything but the launch
       const { tasks, pendingApprovals } = s.world.company;
       for (const id of [...pendingApprovals]) if (tasks.find((t) => t.id === id)?.kind !== 'launch_campaign') await s.approve(id, true);
     });

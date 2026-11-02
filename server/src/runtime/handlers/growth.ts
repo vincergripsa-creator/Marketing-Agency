@@ -51,7 +51,10 @@ export function reworkCraft(task: Task, mind: MindContext): MindContext {
   return task.attempts > 0 && mind.craft ? { ...mind, craft: { ...mind.craft, flaw: mind.craft.flaw / 2 } } : mind;
 }
 
-/** The tempo of a cut keeps films varied and moves no number (D149): a uniform draw on a stream of its own. */
+/**
+ * The tempo of a cut keeps films varied: a uniform draw on a stream of its own (D149). It left the bandit, not the score: TEMPO_SHOT moves
+ * avgShotSec, then pace, then struct, then the score, then CTR, by at most ±1,6 % on a minority of films, a mean of ±0,2 %.
+ */
 function pickTempo(ctx: RuntimeCtx, variant: number): VideoTempo {
   const w = ctx.world;
   return TEMPOS[streamRng(w.scenario.seed, STREAM.videoTempo, w.day, w.tick, variant).int(0, TEMPOS.length - 1)]!;
@@ -221,11 +224,11 @@ function askRaise(ctx: RuntimeCtx, task: Task, c: Campaign, raiseTo: number, roa
   createTask(w, { kind: 'optimize_ads', title: `Hausse de budget — ${short(c.name, 50)}`, input: { campaignId: c.id, productId: c.productId, raiseTo, roas }, createdBy: task.assignee ?? officerId(w, 'growth'), missionId: task.missionId, priority: 2 });
 }
 
-/** The founder's answer to a raise: nothing moves before his yes, and the amount he agreed to becomes the campaign's limit. */
+/** The founder's answer to a raise: nothing moves before their yes, and the amount they agreed to becomes the campaign's limit. */
 function runRaise(ctx: RuntimeCtx, task: Task): HandlerOutcome {
   const c = ctx.world.company.campaigns.find((x) => x.id === task.input.campaignId && x.status === 'active');
   const product = productOf(ctx, c?.productId);
-  // His yes does not widen the CFO's envelope: it may have shrunk since the question.
+  // The founder's yes does not widen the CFO's envelope: it may have shrunk since the question.
   const room = c && product ? Math.max(0, scalingRoom(ctx.world, product, currentBudget(ctx.world).adCap) - committedAdBudget(ctx.world, c.id)) : 0;
   const raiseTo = round2(Math.min(numOf(task.input.raiseTo) ?? 0, room));
   if (!c || raiseTo <= c.dailyBudget) return { summary: 'Hausse sans objet : la campagne ou l’enveloppe a changé entre-temps.', skipReview: true, output: { skipped: true } };
@@ -451,7 +454,7 @@ export const growthHandlers: HandlerMap = {
       if (severe) return skip(`${severe} — on ne pousse pas un guide que les acheteurs n'aiment pas`, 'quality');
       const blocked = companyPaidBlock(ctx.world, ch);
       if (blocked) return skip(blocked, 'company');
-      // The founder's stop beats everything, a launch he asked for earlier included: only his word lifts it.
+      // The founder's stop beats everything, a launch they asked for earlier included: only their word lifts it.
       const held = adsHold(ctx.world, product.id, ch);
       if (held) return skip(held.reason, 'founder');
       // Cooldown / "ads-dead" are the team's own rules: a founder request or the CEO's watchdog overrides them.
@@ -473,7 +476,7 @@ export const growthHandlers: HandlerMap = {
       // When paid ads lose money overall, new campaigns start smaller (the CEO's cautious mode).
       const planned = task.input.test === true ? Math.min(envelope.budget, Math.max(TEST_CAMPAIGN_BUDGET, minBudget))
         : task.input.cautious === true ? Math.min(envelope.budget, Math.max(minBudget, Math.floor(envelope.budget * 0.6))) : envelope.budget;
-      // The founder agreed to an amount: the envelope may have grown since, his yes has not.
+      // The founder agreed to an amount: the envelope may have grown since, their yes has not.
       const daily = Math.min(planned, numOf(task.input.askedBudget) ?? planned);
       if (daily < minBudget) return skip(`enveloppe du CFO insuffisante (${eur(remaining)} restants)`, 'budget', { remaining });
       if (ctx.world.scenario.founderApproval && task.input.founderApproved !== true) {
@@ -494,7 +497,7 @@ export const growthHandlers: HandlerMap = {
       if (!ctx.world.company.campaigns.some((c) => c.id === id)) {
         ctx.world.company.campaigns.push({ id, productId: input.productId, name: input.name, creativeIds: input.creativeIds, dailyBudget: input.dailyBudget, status: 'active', targeting: input.targeting, startDay: ctx.world.day, createdBy: agent.id, ...placement });
       }
-      // The founder overrode the numbers: only he, or the stop-loss, ends this campaign.
+      // The founder overrode the numbers: only the founder, or the stop-loss, ends this campaign.
       const launched = ctx.world.company.campaigns.find((c) => c.id === id);
       if (launched && productBlock?.final && task.createdBy === 'founder') launched.founderForced = true;
       if (launched && ctx.world.scenario.founderApproval) launched.founderCap = daily;
@@ -608,7 +611,7 @@ export const growthHandlers: HandlerMap = {
         else if (recent.spend >= 20 && read < (allocation?.trimRoas ?? 1.3) && recent.roas >= STOP_LOSS_ROAS) next = round2(c.dailyBudget * 0.7);
         next = round2(Math.max(minBudget, Math.min(next, room)));
         if (room < minBudget) { pause(c, `enveloppe CFO épuisée (${eur(budget.adCap)})`); continue; }
-        // Approval mode: reductions and pauses stay free, more than the founder agreed to waits for his yes.
+        // Approval mode: reductions and pauses stay free, more than the founder agreed to waits for their yes.
         const agreed = ctx.world.scenario.founderApproval ? c.founderCap ?? c.dailyBudget : Number.POSITIVE_INFINITY;
         if (next > agreed) { askRaise(ctx, task, c, next, recent.roas); next = agreed; }
         const before = c.dailyBudget;

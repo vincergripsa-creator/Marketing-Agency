@@ -476,7 +476,7 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
         resolved = true;
         if (order) {
           // friendly fraud: a real buyer, a real payment. Paying costs real money; a refusal backed by the order's
-          // logs is cheap, and the better the reply the less likely the dispute at his bank.
+          // logs is cheap, and the better the reply the less likely the dispute at their bank.
           if (r.action === 'refund' || r.action === 'discount_code') {
             const memo = `Fausse réclamation payée : ${short(msg.subject, 50)}`;
             const paid = r.action === 'refund' ? refundOrder(world, order, memo, 'scam_loss') : partialRefund(world, order, GOODWILL_SHARE, memo, 'scam_loss');
@@ -503,7 +503,7 @@ export function createMarketTools(world: WorldState, rng: Rng): MarketTools {
           key = 'troll_fed';
           if (r.action === 'refund') refund('Remboursement accordé à un troll');
           // Only verified buyers can rate the guide in the store: a fed troll who never bought it cannot
-          // leave a store review, he comes back for more instead (the thread stays open, more support noise).
+          // leave a store review, they come back for more instead (the thread stays open, more support noise).
           if (consequence === 'none' && reviewProduct(world, rng, product, customer, 1, 'troll')) consequence = 'bad_review';
           else if (!order) resolved = false;
         }

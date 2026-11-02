@@ -164,7 +164,7 @@ class Day {
 
   /**
    * Past buyers of the niche who do not own this guide yet, newest first. Orders of the last HOT_ORDER_DAYS only, kept or
-   * compacted alike: older rows would change who gets drawn. Each one buys once a day: the caller takes him out.
+   * compacted alike: older rows would change who gets drawn. Each one buys once a day: the caller takes them out.
    */
   repeatPool(nicheId: string, p: Product): string[] {
     const key = `${nicheId}|${p.id}`;
@@ -225,7 +225,7 @@ function overprice(price: number, wtp: { max: number }): number {
 }
 
 /**
- * Chance that a buyer takes the follow-up guide right after his purchase. Both guides' quality sets the base rate;
+ * Chance that a buyer takes the follow-up guide right after their purchase. Both guides' quality sets the base rate;
  * the price acts as for any visitor, only harder (exponent): revenue per buyer peaks close to the sweet price and
  * an upsell priced above what the niche pays collapses.
  */
@@ -731,7 +731,7 @@ function runRefunds(d: Day): void {
 
 const RATING_SHIFT: Partial<Record<Customer['archetype'], number>> = { karen: -1, troll: -2, sceptique: -0.5, superfan: 0.8, chasseur_de_remboursement: -0.7 };
 
-/** The rating this buyer leans to, before his mood of the day. */
+/** The rating this buyer leans to, before their mood of the day. */
 export function reviewMean(d: Day, p: Product, c: Customer | undefined, o: Pick<Order, 'price' | 'source' | 'refunded'>): number {
   const paidTwice = o.source === 'upsell' ? d.echo(p) * REVIEWS.echoPenalty : 0;
   return REVIEWS.ratingIntercept + REVIEWS.ratingSlope * d.pdfQ(p).overall - REVIEWS.promiseGapPenalty * promiseShortfall(d, p) - paidTwice
@@ -779,7 +779,7 @@ const BUYER_INTENTS: Record<Customer['archetype'], [MessageIntent, number][]> = 
 };
 
 /**
- * Friendly fraud: a real buyer who keeps the guide and files a false claim to get his money back. The rate scales
+ * Friendly fraud: a real buyer who keeps the guide and files a false claim to get their money back. The rate scales
  * with the difficulty's scam rate; the claim reads like an honest one and only the order's logs contradict it.
  */
 function runFriendlyFraud(d: Day): void {
@@ -883,7 +883,7 @@ function badSupportReview(d: Day, msg: InboxMessage, c: Customer | undefined): b
   return true;
 }
 
-/** The customer goes to his bank. Returns the cost (0 when the order was already refunded or disputed). */
+/** The customer goes to their bank. Returns the cost (0 when the order was already refunded or disputed). */
 function dispute(d: Day, order: Order): number {
   const left = repayableLeft(order);
   const cost = chargebackOrder(d.world, order);

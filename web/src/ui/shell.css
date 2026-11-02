@@ -17,7 +17,7 @@
 /* ───────────── HUD ───────────── */
 .hud-away { font-size: 11px; color: var(--muted); font-style: italic; white-space: nowrap; }
 .hud-digest { white-space: nowrap; }
-/* one line, or the speed controls wrap under the side panel: the chips leave before anything he clicks */
+/* one line, or the speed controls wrap under the side panel: the chips leave before anything the founder clicks */
 @media (max-width: 1320px) { .hud .mind-chip:not(.hud-team) { display: none; } }
 @media (max-width: 1180px) { .hud .hud-team { display: none; } }
 

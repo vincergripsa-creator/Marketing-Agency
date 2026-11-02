@@ -1,6 +1,6 @@
 /**
  * What the object itself does to the market (pdf §12.4): the page shows the book, a superb one carries a higher price, a
- * buyer judges what he received. Reads a public report on a public artefact, draws nothing, and no report is exactly
+ * buyer judges what they received. Reads a public report on a public artefact, draws nothing, and no report is exactly
  * neutral. `ref` sits at a starting agency's level, so the mechanism does not shift the economy on day 1.
  * `thumbFactor` is cut (D30): no feed shows the cover yet.
  */

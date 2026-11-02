@@ -957,7 +957,7 @@ describe('creators: advances are investments, scams are read on public numbers (
       const paid = advanceDecision(e.world, honest, p, budget, 0.3);
       expect(paid).toMatchObject({ pay: true });
       expect(paid.expected).toBeCloseTo(4 * 2.5 * 29 * 0.7, 1);
-      // The same creator asking more than he can bring.
+      // The same creator asking more than they can bring.
       expect(advanceDecision(e.world, { ...honest, askUpfront: 300 }, p, budget, 0.3)).toMatchObject({ pay: false });
       // Above 10 % of the cash, whatever the forecast.
       expect(advanceDecision(e.world, honest, p, { ...budget, cash: 500 }, 0.3)).toMatchObject({ pay: false });

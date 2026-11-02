@@ -101,9 +101,11 @@ const BONUS_PREFIX = /^bonus\s*(?:offert\s*)?[:—–-]\s*/i;
 function chapterSpec(ch: ChapterContent, n: number | null): ChapterSpec {
   const title = S(ch?.title) || (n === null ? 'Bonus' : `Chapitre ${n}`);
   const example = exampleParts(ch?.example);
+  const rest = title.replace(BONUS_PREFIX, '');
   return {
     content: ch, title,
-    head: n === null ? `Bonus · ${title.replace(BONUS_PREFIX, '')}` : title,
+    head: n === null ? `Bonus · ${rest}` : title,
+    listed: n === null ? (rest.charAt(0).toUpperCase() + rest.slice(1) || title) : title, // the contents page prints the label « Bonus » above it
     example: example.text ? example : null,
   };
 }

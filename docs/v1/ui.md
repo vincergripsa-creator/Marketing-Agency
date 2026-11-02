@@ -46,7 +46,7 @@ Four defects in the current code that this pillar has to fix or the rest cannot 
 | D14 | Video player is a native `<video>` with custom controls. Falls back to the existing HTML preview when no video file exists | The no-ffmpeg machine still shows something real |
 | D15 | Hidden talent never sits on `AgentState` nor in `company`. `trimCompany` copies `agents` raw, so anything on an agent leaks | Same rule as `NicheTruth` |
 | D16 | Fake mastery bars in the agent card are removed, replaced by `SkillRating` where it exists | They are `level + hash`, a label with no meaning |
-| D17 | Digest data is scale's. This pillar draws it, adds the people and channel lines from the chronicle, and keeps « last seen » moving while he watches | His stated use case: he leaves for hours. Two digests would disagree |
+| D17 | Digest data is scale's. This pillar draws it, adds the people and channel lines from the chronicle, and keeps « last seen » moving while the founder watches | The founder's stated use case: they leave for hours. Two digests would disagree |
 
 ---
 
@@ -793,7 +793,7 @@ export const TABS: { id: TabId; label: string; icon: IconName; key: string; more
 ];
 ```
 
-`TopBar`: `more` tabs render in a `Plus` menu button (`aria-haspopup="menu"`, arrows, Esc). The button shows the mail badge, since the agency answers its mail alone and he only needs the count. On the phone layout (≤ 760 px) the grid shows all 14. New icon `trophy` in `icons.tsx`. `d` opens the digest. README's « touches 1 à 0 » is updated.
+`TopBar`: `more` tabs render in a `Plus` menu button (`aria-haspopup="menu"`, arrows, Esc). The button shows the mail badge, since the agency answers its mail alone and the founder only needs the count. On the phone layout (≤ 760 px) the grid shows all 14. New icon `trophy` in `icons.tsx`. `d` opens the digest. README's « touches 1 à 0 » is updated.
 
 `DEPT_ORDER` is no longer the source of truth: `deptOrder(departments)` returns known ids in that order, then any other by `openedDay`. `DeptStrip` and `TasksTab` use it, otherwise a new department sorts first (`indexOf` gives -1) or vanishes from the filter.
 
@@ -911,10 +911,10 @@ export function digestDue(lastSeenDay: number | null, day: number): boolean {
 }
 ```
 
-- While the tab is visible, the client posts `POST /api/digest/seen`, at most every 30 s. So `lastSeenDay` follows him as he watches, and a run at ×8 does not trigger a digest in his face. Hidden tab, closed tab: nothing is posted, and the gap builds up. A tab or a stream just back posts nothing until a new day has shown: the page may hold an old snapshot, and the server writes down today.
-- Checked on the first snapshot of a run, on return to visible, and on every snapshot he has in front of him, from the last day the page showed him: a return on an old snapshot decides nothing, the first fresh one does.
+- While the tab is visible, the client posts `POST /api/digest/seen`, at most every 30 s. So `lastSeenDay` follows the founder as they watch, and a run at ×8 does not trigger a digest in their face. Hidden tab, closed tab: nothing is posted, and the gap builds up. A tab or a stream just back posts nothing until a new day has shown: the page may hold an old snapshot, and the server writes down today.
+- Checked on the first snapshot of a run, on return to visible, and on every snapshot the founder has in front of them, from the last day the page showed them: a return on an old snapshot decides nothing, the first fresh one does.
 - Not in demo mode.
-- Modal, not a toast: he must read it. Close with Esc or « Reprendre », which posts `seen`.
+- Modal, not a toast: the founder must read it. Close with Esc or « Reprendre », which posts `seen`.
 
 ```
 Pendant ton absence · J12 → J47
@@ -1115,7 +1115,7 @@ Each step ships working on its own, because every view tolerates a missing pilla
 | `<iframe>` only for PDF | Works as a fallback, gives no page flip, and looks different in each browser |
 | Video.js or Plyr | A 60 KB dependency for what `<video>` and 150 lines do |
 | Founder firing or protecting agents from the tab | Not requested, the founder asked for autonomy. A mission can still do it |
-| Showing a confidence interval on talent to the UI | It would let him infer the truth; `confidence` is derived from sample size only |
+| Showing a confidence interval on talent to the UI | It would let the founder infer the truth; `confidence` is derived from sample size only |
 | Moving the camera to a firing | Steals the view from the person working in it. The toast offers « Voir » |
 | Hiding `level` | Stays while the talent pillar makes it real; if it does not, the chip goes too |
 | Persisting the digest as a brain note | Nobody reads it there, and it would add a file write to a read path |

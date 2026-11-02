@@ -161,7 +161,7 @@ export function migrateWorld(w: WorldState): WorldState     // fills new fields 
 ### 2.5 Process
 
 - `npm run agency` (repo root): builds `web/dist` if missing, then runs `scripts/forever.mjs`, which respawns `server/src/api/server.ts` with backoff from 2 s to 60 s, stops on exit code 0, logs to `runs/agency.log`. No dependency.
-- README documents how the founder can add it to Windows startup himself. The app never changes system settings.
+- README documents how the founder can add it to Windows startup by hand. The app never changes system settings.
 - CLI: `--days` up to 3 650, new `--open`, new `--no-scaling`.
 
 ---

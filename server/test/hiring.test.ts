@@ -114,7 +114,7 @@ describe('what a day leaves in the load', () => {
     const [row] = org(w).load;
     expect(row).toMatchObject({ day: w.day, wait: { post_organic: 1 }, reviewWait: { produce_ad: 1 }, work: { scan_trends: 1 }, busy: { nadia: 1 }, headcount: 8 });
     expect(row!.wait.scan_trends).toBeUndefined(); // in progress is not waiting
-    expect(row!.wait.publish_product).toBeUndefined(); // his latency is not a reason to hire
+    expect(row!.wait.publish_product).toBeUndefined(); // the founder's latency is not a reason to hire
     expect(row!.reviewWait.publish_product).toBeUndefined();
   });
 
@@ -575,7 +575,7 @@ describe('what a hire inherits (org test 16)', () => {
     const w = l.world;
     w.company.playbooks.leo!.push('Ne jamais écrire « miracle »');
     await hire(l, 'community_manager');
-    expect(w.company.playbooks.tom).toEqual(SEED_PLAYBOOKS.crm); // the founder's lesson stayed with him
+    expect(w.company.playbooks.tom).toEqual(SEED_PLAYBOOKS.crm); // the founder's lesson stayed with Leo
     expect(auditOrg(w)).toEqual([]);
   });
 

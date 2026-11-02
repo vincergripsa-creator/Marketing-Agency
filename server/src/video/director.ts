@@ -54,7 +54,7 @@ export const OFF_CAPS: VideoCaps = { level: 'storyboard_only', reason: REASON.of
 
 // ───────────────────────────── who gets rendered ─────────────────────────────
 
-/** What the founder has to decide on: the ads of a launch waiting for his yes, so he can watch before he clicks. */
+/** What the founder has to decide on: the ads of a launch waiting for their yes, so they can watch before they click. */
 function awaitingFounder(world: Readonly<WorldState>): AdCreative[] {
   const { tasks, pendingApprovals } = world.company;
   return pendingApprovals.flatMap((id) => {
@@ -220,7 +220,7 @@ export class VideoDirector {
     this.pump();
   }
 
-  /** The founder asked: his job goes first. Never renders what is already ready. */
+  /** The founder asked: their job goes first. Never renders what is already ready. */
   request(world: Readonly<WorldState>, creativeId: string, ratio?: AdRatio): CreativeVideo {
     const creative = world.company.creatives.find((c) => c.id === creativeId);
     const stage = ratio ?? (creative ? stageOf(creative) : '9:16');

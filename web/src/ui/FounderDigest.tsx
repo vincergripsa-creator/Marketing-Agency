@@ -14,7 +14,7 @@ import { routeKey } from './viewers/Lightbox';
 export const DIGEST_MIN_DAYS = 7; // scale §8
 const SEEN_EVERY_MS = 30_000;
 
-/** The digest is owed: he has been gone a week of the company's time. No value, an old save with no growth: nothing is owed. */
+/** The digest is owed: the founder has been gone a week of the company's time. No value, an old save with no growth: nothing is owed. */
 export function digestDue(lastSeenDay: number | null, day: number): boolean {
   return lastSeenDay !== null && day - lastSeenDay >= DIGEST_MIN_DAYS;
 }
@@ -22,16 +22,16 @@ export function digestDue(lastSeenDay: number | null, day: number): boolean {
 export interface DigestClock { runId: string; day: number; lastSeenDay: number | null }
 
 /**
- * When the digest opens and when « seen » goes out. The gap is counted from the day he last had in front of him, whatever the last
- * post says, so a run he watches at ×8 never opens it in his face, however far behind the posts are, and neither does a tab hidden
+ * When the digest opens and when « seen » goes out. The gap is counted from the day the founder last had in front of them, whatever the last
+ * post says, so a run they watch at ×8 never opens it in their face, however far behind the posts are, and neither does a tab hidden
  * for a moment. Nothing is posted from a hidden tab: that is how the gap builds up. Nor on the word of a page that may be behind the
- * company: a tab just back, or a stream just back, can hold an old snapshot, and the server would write down today for a day he
- * never saw. The first fresh snapshot decides, so that check is made on every snapshot he has in front of him.
+ * company: a tab just back, or a stream just back, can hold an old snapshot, and the server would write down today for a day they
+ * never saw. The first fresh snapshot decides, so that check is made on every snapshot they have in front of them.
  * Outside React, the clock and the visibility passed in, so a test can drive it. true: open the digest now.
  */
 export function digestWatch(post: () => void) {
   let runId: string | null = null;
-  let looked: number | null = null;   // the last day he had in front of him; null: this run, not yet
+  let looked: number | null = null;   // the last day the founder had in front of them; null: this run, not yet
   let behind = false;                 // the tab was away or the stream down, and no new day has shown since
   let reading = false;
   let postedAt = Number.NEGATIVE_INFINITY;
@@ -58,7 +58,7 @@ export function digestWatch(post: () => void) {
       if (!visible || !live) return false;
       if (looked === null || c.day > looked) behind = false;
       if (opens(c)) return true;
-      // the world keeps the line: a digest he has not read yet stays owed if he reloads over it
+      // the world keeps the line: a digest the founder has not read yet stays owed if they reload over it
       if (behind || reading || c.lastSeenDay === null || c.lastSeenDay >= c.day || now - postedAt < SEEN_EVERY_MS) return false;
       postedAt = now;
       post();
@@ -71,11 +71,11 @@ export function digestWatch(post: () => void) {
       behind = true;
       return false;
     },
-    /** The page goes away with him on it: what he watched since the last post counts, a digest left unread stays owed. */
+    /** The page goes away with the founder on it: what they watched since the last post counts, a digest left unread stays owed. */
     leaving(): boolean { return runId !== null && !reading && !behind; },
-    /** He asked for it (« Résumé », `d`). */
+    /** The founder asked for it (« Résumé », `d`). */
     open(): void { reading = true; },
-    /** « Reprendre », Esc, or a line that took him elsewhere. */
+    /** « Reprendre », Esc, or a line that took the founder elsewhere. */
     close(now: number): void {
       reading = false;
       postedAt = now;
@@ -87,7 +87,7 @@ export function digestWatch(post: () => void) {
 const clockOf = (s: CompanySnapshot): DigestClock => ({ runId: s.runId, day: s.day, lastSeenDay: s.company?.growth?.founder?.lastSeenDay ?? null });
 const tabVisible = (): boolean => document.visibilityState === 'visible';
 
-/** null: since the day he last looked, the server's default. A day: the last week, asked by hand. */
+/** null: since the day the founder last looked, the server's default. A day: the last week, asked by hand. */
 export type DigestWindow = { since: number | null };
 
 export function useFounderDigest(snapshot: CompanySnapshot | null, demo: boolean, live: boolean) {
@@ -119,7 +119,7 @@ export function useFounderDigest(snapshot: CompanySnapshot | null, demo: boolean
 
   useEffect(() => {
     if (demo) return undefined;
-    // at ×8 the 30 s since the last post are ten days: a reload would open the digest on a run he never left
+    // at ×8 the 30 s since the last post are ten days: a reload would open the digest on a run the founder never left
     const onLeave = () => { if (tabVisible() && watch.leaving()) navigator.sendBeacon('/api/digest/seen'); };
     window.addEventListener('pagehide', onLeave);
     return () => window.removeEventListener('pagehide', onLeave);
@@ -243,10 +243,10 @@ export function FounderDigestBody({ data, onEntry, onTasks }: { data: Digest; on
   );
 }
 
-/** Modal, not a toast: he must read it. The run goes on behind it, and only Esc or « Reprendre » closes it. */
+/** Modal, not a toast: the founder must read it. The run goes on behind it, and only Esc or « Reprendre » closes it. */
 export function FounderDigestModal({ since, onClose }: DigestWindow & { onClose(): void }) {
   const { snapshot, openAgent, openDept, setTab } = useApp();
-  const [day] = useState(snapshot?.day ?? 0); // one digest per opening: a day passing behind it does not rewrite what he is reading
+  const [day] = useState(snapshot?.day ?? 0); // one digest per opening: a day passing behind it does not rewrite what the founder is reading
   const detail = useDetail<Digest>(since === null ? '/api/digest' : `/api/digest?since=${since}`, day);
   const data = detail.data;
   const rootRef = useRef<HTMLDivElement>(null);

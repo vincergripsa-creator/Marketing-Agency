@@ -38,7 +38,7 @@ const EVIDENCE_KINDS: Record<Skill, readonly TaskKind[]> = {
 
 /**
  * The skill of the first core kind with an evidence route in this role, core or assist: the hook writer's ads are read, the
- * Head of Growth, who writes no ad, is read on his campaigns. A role no route reaches keeps its first skill, unrated, and
+ * Head of Growth, who writes no ad, is read on their campaigns. A role no route reaches keeps its first skill, unrated, and
  * still sits that test when hired (D16). Never a hat: Zoé wearing `produce_ad` is not judged on `copy` (D14).
  */
 export function primaryOf(role: RoleId): Skill | null {
@@ -58,7 +58,7 @@ export function skillsUsed(a: AgentState): Skill[] {
   return skillsIn(a.taskKinds);
 }
 
-/** Who a league can judge. No core kind has a skill for the CEO, so she is out by construction (D13), like HR or finance. */
+/** Who a league can judge. No core kind has a skill for the CEO, so the CEO is out by construction (D13), like HR or finance. */
 export function leagueSeats(w: WorldState): AgentState[] {
   return w.company.agents.filter((a) => primaryOf(a.roleId) !== null);
 }

@@ -614,7 +614,7 @@ export const CHANNEL_ROLE: Record<ChannelId, RoleId> = {
 
 The condition holds and `roleHolder(world, CHANNEL_ROLE[ch])` is empty: `requestRole(ctx, role, 'channel', detail)`, which keeps every money gate of `org.md`. No hire, no channel. Since the salary is a real ledger line, opening a channel has a real daily cost, which is what makes the decision worth taking. Until the org pillar lands, `roleHolder` falls back to Adam for TikTok plus one channel, and the agency stops at 2 channels, cleanly.
 
-One `optimize_ads` task per open channel, with `input.channel`, so `org.md`'s routing gives each buyer his own campaigns and `buyerScore` means something. `itemKey` gains `input.channel`. TikTok-only: no `channel` key, today's single task.
+One `optimize_ads` task per open channel, with `input.channel`, so `org.md`'s routing gives each buyer their own campaigns and `buyerScore` means something. `itemKey` gains `input.channel`. TikTok-only: no `channel` key, today's single task.
 
 `scenario.channelControl === 'tiktok_only'` returns before anything. **Everything below is gated by `open.length > 1`**, which is what makes D4 true.
 
@@ -855,7 +855,7 @@ Chronicle: `logDecision(world, { kind: 'channel_open' | 'channel_close', channel
 |---|---|
 | `until the first open_channel task, full and tiktok_only are the same run day by day` | D4 is broken: an id or a draw before the unlock |
 | `no holder of the channel's role, no channel, and requestRole was called` | Unlock ignores the org |
-| `founderApproval: opening a channel waits for him` | Guardrail bypassed |
+| `founderApproval: opening a channel waits for the founder` | Guardrail bypassed |
 | `the rule is the average`: line A avg 2,0 b .3 vs line B avg 1,4 b .9, each gets its share, λ null, the note gives the average | It follows the next euro |
 | `the marginal_roas control follows the next euro`, same lines, budget flows to B | The control is lost |
 | `the marginal_roas control keeps money unspent when no line earns 1,15` | The control always spends the cap |
@@ -911,7 +911,7 @@ If time runs short, cut from the bottom: organic on Meta first, then retargeting
 | Pillar | Need |
 |---|---|
 | **org** | `requestRole`, `roleHolder`, the `salary` ledger line: all in `org.md`, accepted. Final rows: `media_buyer_tiktok`, `media_buyer_meta`, `media_buyer_google` (replaces `media_buyer_youtube`), `media_buyer_pinterest` (new). Rename `growth` « Pub TikTok ». Kinds: `open_channel` growth lead, `adapt_creative` video editor, `write_search_ads` hook writer, `reconcile_channels` data analyst, `allocate_channels` CFO. **Email is not mine**: `scale.md` keeps it, so `email_marketer`'s kind is scale's, not this pillar's as `org.md` line 220 says. |
-| **talent** | `talent.md` refused a talent multiplier at `ctrRaw`, rightly: it would move the market with no decision behind it. Dropped. A buyer's talent reaches results through `pruneRead` on `updateCampaign`, and one campaign stays on one channel, so natural duels stay valid. I give `buyerScore(world, agentId, fromDay, toDay)`: reconciled profit on his lines. `KIND_SKILL`: `adapt_creative`, `write_search_ads` → `copy`. `RECON.claimWeight` stays a constant. |
+| **talent** | `talent.md` refused a talent multiplier at `ctrRaw`, rightly: it would move the market with no decision behind it. Dropped. A buyer's talent reaches results through `pruneRead` on `updateCampaign`, and one campaign stays on one channel, so natural duels stay valid. I give `buyerScore(world, agentId, fromDay, toDay)`: reconciled profit on their lines. `KIND_SKILL`: `adapt_creative`, `write_search_ads` → `copy`. `RECON.claimWeight` stays a constant. |
 | **video** | `renderAdCut({ creative, ratio, design })` for 4:5, 1:1 and static 2:3, frames at 432×540, 540×540, 400×600, plus `AdCreative.files` by ratio. MP4 per ratio if ffmpeg exists. The static output must work without ffmpeg: Pinterest and Search need no video at all. |
 | **pdf** | Cover usable as a raster for the 2:3 pin. Nothing else. |
 | **scale** | `nichePool(world, n, channel)`: I own the argument. `source` stays `'ads'`, the channel is a separate field, so it lives next to `email` and `bump`. `reconciledRoas(world, from, to)` feeds `roas14` as one number. Read `ChannelPlan.unspent`: 3 days above 0 means more budget buys nothing, a new niche or product is the next lever. `logDecision` is used for §10. |

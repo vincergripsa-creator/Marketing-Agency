@@ -2,7 +2,7 @@
  * What keeps a buyer: the guide offered for an address, the welcome sequence, the mail to the list, the kit at checkout
  * (scale §6.2, §6.3). Nothing here spends money. A reviewer has nothing to read: the market scores every mail itself, and
  * the mailing tool refuses a banned claim, whoever wrote it. In approval mode a draft waits in the task for the founder, so
- * he approves the text that goes out, not a new one.
+ * they approve the text that goes out, not a new one.
  */
 import type { EmailStep, Product, Task } from '../../shared.js';
 import { nextId } from '../../core/index.js';

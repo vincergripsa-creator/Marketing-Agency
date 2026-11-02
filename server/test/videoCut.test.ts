@@ -164,7 +164,7 @@ describe('planCut', () => {
     expect(at(0.4).beats.filter((b) => b.kind === 'pain_bubble')).toHaveLength(1);
     expect(at(0.09).beats.filter((b) => b.kind === 'page_proof')).toHaveLength(0);
     expect(at(0.1).beats.filter((b) => b.kind === 'page_proof')).toHaveLength(1);
-    expect(at(0.29).beats.find((b) => b.kind === 'page_proof')!.shots).toBe(1);   // he holds it
+    expect(at(0.29).beats.find((b) => b.kind === 'page_proof')!.shots).toBe(1);   // the editor holds it
     expect(at(0.3).beats.find((b) => b.kind === 'page_proof')!.shots).toBeGreaterThan(1);
     expect(at(0.49).beats.filter((b) => b.kind === 'page_proof')).toHaveLength(1);
     expect(at(0.9).beats.filter((b) => b.kind === 'page_proof').length).toBeGreaterThanOrEqual(1);
@@ -819,8 +819,8 @@ describe('the page a cut shows', () => {
       expect(cut.beats.filter((b) => b.kind === 'narrator').length, `skill ${skill}`).toBeGreaterThanOrEqual(2);
       expect(cut.beats.some((b) => b.kind === 'narrator' && b.proof), `skill ${skill}`).toBe(skill >= 0.4);
     }
-    expect(plan(product, script('Rien ne pousse, et l’impression d’avoir tout essayé.'), 0.2, 'ugc_avatar').beats.some((b) => b.kind === 'narrator')).toBe(true); // no quote: still his to say
-    for (const skill of [0.2, 0.9]) { // the scene after the hook is his, on what a faceless cut shows as a proof
+    expect(plan(product, script('Rien ne pousse, et l’impression d’avoir tout essayé.'), 0.2, 'ugc_avatar').beats.some((b) => b.kind === 'narrator')).toBe(true); // no quote: still the narrator's to say
+    for (const skill of [0.2, 0.9]) { // the scene after the hook is the narrator's, on what a faceless cut shows as a proof
       const unquoted = script('Rien ne pousse, et l’impression d’avoir tout essayé.').map((s, i) => (i === 1 ? { ...s, onScreenText: 'Rien ne pousse' } : s));
       expect(plan(product, unquoted, skill, 'ugc_avatar').beats.find((b) => b.scene === 1)!.kind, `skill ${skill}`).toBe('narrator');
       expect(plan(product, unquoted, skill).beats.find((b) => b.scene === 1)!.kind, `skill ${skill}`).not.toBe('narrator');

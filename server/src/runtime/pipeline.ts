@@ -207,7 +207,7 @@ export const PAID_AD_TASKS: TaskKind[] = ['write_ad_hooks', 'produce_ad', 'launc
 
 /**
  * The founder stops paid ads, on one product or on all of them, on one channel or on all of them: running campaigns pause
- * until he lifts it (a campaign off for an outage stays off), and the work leading to a launch stops. Organic posts go on.
+ * until the founder lifts it (a campaign off for an outage stays off), and the work leading to a launch stops. Organic posts go on.
  */
 export function stopPaidAds(ctx: RuntimeCtx, productId: string | null, reason: string, channel: ChannelId | null = null, spared: readonly Campaign[] = []): { paused: number; cancelled: number } {
   const w = ctx.world;
@@ -227,7 +227,7 @@ export function stopPaidAds(ctx: RuntimeCtx, productId: string | null, reason: s
 }
 
 /**
- * The founder takes a product off the shelf: off sale, out of production, nobody reworks it until he says so.
+ * The founder takes a product off the shelf: off sale, out of production, nobody reworks it until the founder says so.
  * The missions that were waiting for it end here: it will not ship by itself.
  */
 export function shelveProduct(ctx: RuntimeCtx, product: Product, reason: string, by: AgentId = officerId(ctx.world, 'ceo')): number {
@@ -279,7 +279,7 @@ export async function pauseProduct(ctx: RuntimeCtx, product: Product, reason: st
   } catch { /* the brain is best-effort */ }
 }
 
-/** Ads off, for as long as it takes. A campaign the founder forced stays: his word beats the plan. */
+/** Ads off, for as long as it takes. A campaign the founder forced stays: their word beats the plan. */
 export function stopAds(ctx: RuntimeCtx, product: Product): number {
   const running = activeCampaigns(ctx.world, product.id).filter((c) => !c.founderForced);
   for (const c of running) {

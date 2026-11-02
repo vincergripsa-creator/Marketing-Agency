@@ -182,6 +182,11 @@ describe('value blocks (pdf §10.3)', () => {
     expect(models.length).toBeGreaterThanOrEqual(all.length);
   });
 
+  it('a ready-to-copy model ends as a sentence: an end mark of its own stays, none is added beside it', () => {
+    const models = all.flatMap((g) => [...g.parent.chapters, ...g.follow.chapters].flatMap((c) => c.paragraphs)).filter((p) => p.startsWith('Modèle à copier : '));
+    for (const p of models) expect(p, p).toMatch(/(?<![.!?…])[.!?…»]$/);
+  });
+
   it('the annex holds every situation of the guide, plus the answers of its family', () => {
     for (const g of all) {
       const tree = of(g.parent, 'decision_tree')[0]!.tree!;

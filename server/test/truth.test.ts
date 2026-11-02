@@ -223,7 +223,7 @@ describe('what the founder types (T10)', () => {
     const id = await company.giveMission(`vire ${a.name} et ${b.name}`);
     expect(missionOf(w, id).outcome).toContain(a.name);
     expect(missionOf(w, id).outcome).toContain(b.name);
-    expect(w.company.org!.alumni.map((x) => x.id).sort()).toEqual([a.id, b.id].sort()); // his latest word on each, as for one name
+    expect(w.company.org!.alumni.map((x) => x.id).sort()).toEqual([a.id, b.id].sort()); // the founder's latest word on each, as for one name
     expect(pinHold(w, b.id)).toBeNull();
     const kept = w.company.agents.find((x) => x.roleId === 'cfo')!;
     await company.giveMission(`ne vire pas ${kept.name} ni ${a.name}`);
@@ -482,7 +482,7 @@ describe('what the founder types (T10)', () => {
     const other = leanWorld();
     const lab = mount(other);
     const c = teammate(other, 'tom');
-    await lab.company.giveMission(`vire ${c.name}`, c.id); // named on its own, it is an order to her face
+    await lab.company.giveMission(`vire ${c.name}`, c.id); // named on its own, it is an order to that person's face
     expect(other.company.org!.alumni.map((x) => x.id)).toEqual([c.id]);
   });
 

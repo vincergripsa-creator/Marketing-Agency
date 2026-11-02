@@ -170,7 +170,7 @@ export function PdfFlip({ url, title }: { url: string; title: string }) {
 
   useEffect(() => { cache.clear(); }, [drawnW, cache]); // before the drawing below, or it would keep pages of the old size
 
-  // Current and next spread only, in that order, one page at a time: pdf.js would otherwise draw what he already left.
+  // Current and next spread only, in that order, one page at a time: pdf.js would otherwise draw what the reader already left.
   useEffect(() => {
     if (!doc || drawnW <= 0) return;
     let stale = false;

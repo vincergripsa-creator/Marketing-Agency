@@ -1,6 +1,6 @@
 # Pixel Agency V1: the plan
 
-The single plan engineers follow while the founder is away. Decisions are final, nobody asks him anything.
+The single plan engineers follow while the founder is away. Decisions are final, nobody asks the founder anything.
 
 **Precedence:** this plan, then the pillar spec (`org.md`, `talent.md`, `channels.md`, `video.md`, `pdf.md`, `scale.md`, `ui.md`, all next to this file), then code comments. A spec section stays normative unless a decision below overrides it. Spec section references are written `org §7`.
 
@@ -53,7 +53,7 @@ Where specs disagree, or where a spec is wrong against the code, one line each. 
 |---|---|---|
 | D11 | `Skill` has 9 values: `copy, video, longform, polish, page, design, buying, research, support`. `polish` is talent's `editing`, renamed so it cannot be read as video editing. `video` is video's `edit`. `design` is pdf's. `direction` is cut. | talent §2.1, video §14, pdf §19 |
 | D12 | `KIND_SKILL`: as talent §3, plus `adapt_creative: 'video'`, `write_search_ads: 'copy'`, `design_cover: 'design'`, `render_pdf: 'design'`. `produce_ad` stays `copy`; `planCut` reads `effectiveT(w, a, 'video')`, and `cut.craft` is `video` evidence, par 80, sd 12, w 1. `visual.overall` is `design` evidence, par 75, sd 10, w 1. `MIN_SEASON_N` gains `video: 4, design: 2`. | talent §3, §5, video §14 |
-| D13 | **The CEO is out of the league.** `canLeave` is false for her, her only lever is signing a pick, and `board` evidence is the noisiest of the table. | talent §7.7 |
+| D13 | **The CEO is out of the league.** `canLeave` is false for the CEO, whose only lever is signing a pick, and `board` evidence is the noisiest of the table. | talent §7.7 |
 | D14 | **`primary` = the skill of the first core kind that has one. Never a hat.** Otherwise Zoé, wearing `produce_ad` as a hat, would be judged and fired on `copy`. Hat evidence moves the rating, it never opens a plan. | talent §5.3 (a bug on the lean team) |
 | D15 | **A hat costs quality through talent, not a formula.** Skills of a person's core and assist kinds draw at `FOUNDER_MEAN` or `MARKET_MEAN`, every other skill at `OFF_ROLE_MEAN = 0.30`. `talentSpeed` is cut. | org §6, §13 |
 | D16 | **Every hire sits the real test.** `Candidate.interview` = `testDeliverable` score. A role with no skill: 50, named candidate first. Added to talent §7.4's table: `video`: `planCut` on the best creative, `scoreCut().craft`; `design`: `pickArt` then `coverAudit` on the best product, `cover` score. `planCut` lands in S6 and `pickArt` in S7, so P3.5 leaves those two at 50 and P6.1, P7.3 fill them. No live product yet: 50. | org §9, talent §7.4 |
@@ -103,7 +103,7 @@ Where specs disagree, or where a spec is wrong against the code, one line each. 
 | # | Decision | Overrides |
 |---|---|---|
 | D47 | **A stub answers like today, it never throws on a path a default run reaches.** P2.1 flips `defaultScenario`, so every smoke run from S2 on goes through the pillars. `talentMode` `'off'`, `effectiveT` and `craftFor` `undefined`, `routeBonus` 0, `openChannels` `['tiktok']`, `multiChannel` false, `creditOf` 1, `planTarget` null, `growthOn` false, `logDecision` returns its record unsaved, `renderAdCut` `{ frames: [] }`. A flag stays dormant until the package that reads it lands. | §2.7 |
-| D48 | **A ritual never waits for the founder.** `runImmediate` reads `fail`, `output` and `summary` and drops `awaitFounder`: the task would close as done with nothing waiting, and approving it would close the season twice. A ritual that needs his yes creates a normal task of its kind, `reviewer: null`, `workLeft: 0`, `input` carrying what was decided, and the handler branches on that input. `ctx.ritual` also returns quietly when `HANDLERS[kind]` is missing, for the days between P10.1 and P11.1. | talent §7.6 |
+| D48 | **A ritual never waits for the founder.** `runImmediate` reads `fail`, `output` and `summary` and drops `awaitFounder`: the task would close as done with nothing waiting, and approving it would close the season twice. A ritual that needs the founder's yes creates a normal task of its kind, `reviewer: null`, `workLeft: 0`, `input` carrying what was decided, and the handler branches on that input. `ctx.ritual` also returns quietly when `HANDLERS[kind]` is missing, for the days between P10.1 and P11.1. | talent §7.6 |
 | D49 | **Refusals reach pillars through `Pillar.refused`.** `honourRefusal` is private to `company.ts`, which no pillar touches after S2. `approve(id, false)` calls the hook after it, synchronously, no draw. | org §9, talent §7.6, channels §7.1, scale §6.2 |
 | D50 | **A fourth compaction trap: `Campaign.seq`.** `runAds` keys each campaign's stream on its array index (`d.focus(key, index)`) and compaction removes campaigns, so every later campaign would draw another market. `compactWorld` stamps `seq ??= index` on all rows before removing any, `createCampaign` sets `seq = company.archive.campaigns + campaigns.length` once `archive` exists, `runAds` reads `camp.seq ?? index`. Absent on an uncompacted run, so golden does not move. `runSales` keys on `products.indexOf`, safe: products stay as stubs. | scale §7.2 |
 | D51 | **`/runs/<id>/` refuses every file holding truth.** Today's guard is `/^world\.json/i`, which serves `world.prev.json`, `checkpoints/*.json.gz` (whole worlds) and `archive/*.ndjson` (customers with their archetype). New guard: `/^(world[^/]*\.json\|checkpoints\/\|archive\/)/i`. | scale §2.4, §7.2, A21 |
@@ -1622,7 +1622,7 @@ Dropped so that this ships. Each is a decision, not a to-do.
 | Cut | Why |
 |---|---|
 | Stable seats, `personId`, renames | D1: they solved a problem the sweep removes |
-| CEO in the league, `direction` skill, `board` evidence | One lever, noisiest evidence, she cannot leave |
+| CEO in the league, `direction` skill, `board` evidence | One lever, noisiest evidence, the CEO cannot leave |
 | Promotion to chief | Real effects are few on a lean team, the swap logic is large |
 | `budgetPct` perk, `talentSpeed`, onboarding freeze, `HIRE_COST` | Second-order, each one more rule to prove |
 | `payrollCap` | Wrong by construction, D7 |
@@ -1725,7 +1725,7 @@ Taken by the orchestrator after reading each stage gate. They rank with §1.
 - D83. `design`, `support`, `buying` and `research` have no test that sees talent. A failed plan there ends `kept_no_test` on the spot, before the gates of talent §7.6, with a `HireReport` without candidates so that `keptLately` reads it. `video` and `polish` keep their challenge.
 - D84. A layoff takes the lowest rating among the idle, occupation then pay as ties, in the league only. On the cash-loss path idle means under `idleUtil`, and if nobody is the old order applies. A seat with no rating reads par.
 - D85. Formation continue: at a close, growth on, cash at least 3 times the start, 15 € a seat within 5 % of 14 days of revenue, lowest rating first, after replacements. It moves `t` and its ceiling (cap 0,97), draws nothing, skips forced talent and seats on notice, and books `recruiting` with ref `training:<season>`. `flat` pays it too.
-- D86. Training stops at his word: nothing is paid under his stop on spending or on every ad, and the report says why. A stop on one channel or one guide does not count. In approval mode it is skipped with the same note rather than opening a task at every close: A22 reads « waits for him », and a skipped line waits.
+- D86. Training stops at the founder's word: nothing is paid under their stop on spending or on every ad, and the report says why. A stop on one channel or one guide does not count. In approval mode it is skipped with the same note rather than opening a task at every close: A22 reads « waits for the founder », and a skipped line waits.
 - D87. `team: 'legacy31'` pays no training, whatever its talent and scaling: a control keeps its spending. L1 to L8 themselves do run on a plain legacy31 run, whose talent defaults to `league`. Golden uses `LEGACY`, talent off, and does not move; the « Legacy 31 paid » row of S14 reads that arm with the new league rules.
 - D88. A family of one reads the mean of all rated seats of that day in `swaps.familyMean`, the only field any reader uses.
 - D89. `LeagueDetail` gains `season.bar`, `season.cut`, `season.cutBlind`, `season.training`, `roles[].blindTest`, `outside[]` and `LeagueRow.underBar`. The cut line of a blind family ends at the plan. The rules give both counts of sits, because the view has no engine.
@@ -1740,7 +1740,7 @@ Taken by the orchestrator after reading each stage gate. They rank with §1.
 - D98. `trim_ads` is an executed order only beside a request, alone it stays a plain task. An order reads only its own clauses, so the subject of a request cannot become its target.
 - D99. A sentence ending in « ? » orders nothing, except a polite ask that stops spending (« tu peux couper les pubs ? »): a stop must not be lost to a question mark, a lift waits for a plain word, and `kill_product` is never polite. A verb after an auxiliary is a report. A refusal needs a real shape: « pas », « plus » and « jamais » refuse only right before an infinitive, or after « ne ».
 - D100. What an order leaves alone is read apart from what it acts on: « sauf », « hors », « excepté », « à part », « mais pas » and « sans » plus an order verb. A number there is spared, not targeted, and a guide named there spares its campaigns. The hold stands, and what is spared is `founderForced`: the buyer and the plan leave it, the stop-loss still reads it. A number nobody carries refuses. « Coupe tout » alone is still no order, only with a limit.
-- D101. A name after a bare comma is someone he speaks to: a list needs its « et ». The mission's target is never taken from a list. The test « a list goes on past two names » changed for this.
+- D101. A name after a bare comma is someone the founder speaks to: a list needs its « et ». The mission's target is never taken from a list. The test « a list goes on past two names » changed for this.
 - D102. Left as read: a question or a report can start the routine `optimize_ads` on the word « coupe », with no stop and no hold; « arrête la campagne 2 et reprends la campagne 3 » runs the resume rule on both numbers and answers the refusal.
 - D103. `HeadRow.output30d` adds compaction's folds, `taskTotals.agents[id].days`, pruned past 31 days. An old save undercounts until it fills.
 - D104. `LIVE_TIGHT_LIMITS` also takes `reviewsPerProduct` 1 and `deliverables` 20, to hold the 400 000 bytes of D70 with the larger world the league leaves.

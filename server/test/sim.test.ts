@@ -659,7 +659,7 @@ describe('inbox', () => {
     const fed = tools.replyToMessage(tm.id, argue, 'ines');
     expect(fed.consequence).toBe('bad_review');
     expect(p.stats.reviews.at(-1)!.rating).toBe(1);
-    // …while a troll who never bought it cannot rate the store (verified reviews only): he just comes back.
+    // …while a troll who never bought it cannot rate the store (verified reviews only): they just come back.
     const reviews = p.stats.reviews.length;
     const stranger = createCustomer(world, rng, 'troll');
     const sm = createMessage(world, rng, { intent: 'troll', customer: stranger, product: p, order: null, niche: n });

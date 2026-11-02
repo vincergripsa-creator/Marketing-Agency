@@ -1,4 +1,4 @@
-// Where the company stands, in place of the old red pill (ui §6.8). The popover's StageMeter stays in the Effectif chunk until he opens it.
+// Where the company stands, in place of the old red pill (ui §6.8). The popover's StageMeter stays in the Effectif chunk until the founder opens it.
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { StageId, StageView } from '../../../shared/types';
 import { cx } from './common';

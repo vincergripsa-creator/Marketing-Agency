@@ -22,7 +22,7 @@ const SUGGESTIONS = ['Qu’est-ce que tu fais en ce moment ?', 'Un point rapide 
 
 export function AgentPanel({ agentId, backDept, onBack, onClose }: { agentId: string; backDept: DeptId | null; onBack(): void; onClose(): void }) {
   const { lookups } = useApp();
-  // the tab stays when he goes from one agent to the next; each one fetches its own playbook
+  // the tab stays when the viewer goes from one agent to the next; each one fetches its own playbook
   const [tab, setTab] = useState<AgentTab>('chat');
   const agent = lookups.agents.get(agentId);
   if (!agent) return <GoneAgent key={agentId} agentId={agentId} backDept={backDept} onBack={onBack} onClose={onClose} />;

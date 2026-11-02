@@ -129,7 +129,7 @@ function checkLines(items: string[], t: PdfTheme): { dos: string[]; stops: strin
 /** What two texts are compared on: their letters and figures, whatever the capitals, the accents and the end punctuation. */
 export const textKey = (s: string): string => normalizeKey(s).replace(/[^a-z0-9]+/g, ' ').trim();
 
-/** Every line of the list is a step the reader has in front of him, whole or cut short: the box goes on the step, a list would say it twice. */
+/** Every line of the list is a step the reader has in front of them, whole or cut short: the box goes on the step, a list would say it twice. */
 function restates(checklist: string[], steps: string[], t: PdfTheme): boolean {
   const { dos, stops } = checkLines(checklist, t);
   const said = stepTexts(steps, t).map(textKey);

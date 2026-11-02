@@ -1,5 +1,5 @@
 /**
- * The founder's digest and the decision log (scale §3): what the company did while he was away, a loss stated as a loss. Money
+ * The founder's digest and the decision log (scale §3): what the company did while the founder was away, a loss stated as a loss. Money
  * comes from the ledger alone, through the weekly rollups: a window of a year reads no raw row, and compaction moves no number.
  * Pure on the world: no rng, no clock. The session log comes from outside the world, which keeps replay pure.
  */
@@ -98,7 +98,7 @@ function weeksOf(w: WorldState): WeekRollup[] {
 const keptFrom = (w: WorldState, days: number): number => Math.max(1, (w.company.archive?.throughDay ?? 0) - days + 1);
 
 /**
- * Past the raw ledger only whole weeks answer. A window that ends there takes all of its week: nothing he missed is cut, no
+ * Past the raw ledger only whole weeks answer. A window that ends there takes all of its week: nothing the founder missed is cut, no
  * number is guessed, and the digest prints the window it really covers.
  */
 function windowStart(w: WorldState, from: number): number {

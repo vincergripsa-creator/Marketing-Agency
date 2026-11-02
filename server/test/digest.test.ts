@@ -49,7 +49,7 @@ function book(w: WorldState, day: number, type: LedgerType, amount: number, ref:
   recordLedger(w, { type, amount, memo: 'test', ref });
 }
 
-/** What a reader who adds up the rows himself finds: no capital, no hold. */
+/** What a reader who adds up the rows by hand finds: no capital, no hold. */
 const profitOf = (w: WorldState, from: number, to: number): number =>
   round2(w.ledger.filter((e) => e.day >= from && e.day <= to && e.type !== 'capital' && !e.ref?.startsWith(HOLD_REF)).reduce((s, e) => s + e.amount, 0));
 

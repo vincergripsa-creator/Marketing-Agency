@@ -202,7 +202,7 @@ export class Company implements CompanyApi {
     const owner = lead ?? ceo;
     const mission: Mission = { id: nextId(w, 'mis'), day: w.day, from: 'founder', text: clean, ownerId: owner.id, taskIds: [], status: 'open' };
     w.company.missions.push(mission);
-    // His new request for a product is his latest word on new products.
+    // The founder's new request for a product is their latest word on new products.
     if (route.kind === 'new_product' || (route.kind === 'tasks' && route.wantsProduct)) {
       for (const h of liftHolds(w, (x) => x.kind === 'launches')) speak(this.ctx, 'ceo', `ton ordre du jour ${h.day} de ne plus lancer de guides est levé par cette demande.`, 'founder');
     }
@@ -210,7 +210,7 @@ export class Company implements CompanyApi {
     if (route.kind === 'order') await executeOrders(this.ctx, mission, route.orders);
     else this.answerMission(mission, route, created.length);
     if (route.kind !== 'order' && route.orders) {
-      const { status, outcome } = mission; // what he asked goes on: the order said beside it closes nothing
+      const { status, outcome } = mission; // what the founder asked goes on: the order said beside it closes nothing
       await executeOrders(this.ctx, mission, route.orders);
       mission.status = status;
       mission.outcome = [mission.outcome, outcome].filter(Boolean).join(' ');

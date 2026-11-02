@@ -99,7 +99,7 @@ function handleFor(rng: Rng, niche: NicheTruth, used: Set<string>): string {
   return fallback;
 }
 
-/** Scammer without a red flag: only his public numbers give him away, and each of them alone stays ambiguous. */
+/** Scammer without a red flag: only their public numbers give them away, and each of those numbers alone stays ambiguous. */
 function makeStealthScammer(rng: Rng, id: string, handle: string, niche: NicheTruth): CreatorProfile {
   const s = CREATORS.stealth;
   const followers = Math.round(Math.min(400000, Math.max(8000, lognormal(rng, s.followersMedian, 0.7))) / 100) * 100;

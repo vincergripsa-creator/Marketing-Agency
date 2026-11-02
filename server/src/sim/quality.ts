@@ -195,7 +195,7 @@ function isSheet(c: ChapterContent | null | undefined): boolean {
 
 export interface GuideSubstance {
   words: number;
-  /** Words the reader has not met earlier in the guide: what he really paid for. */
+  /** Words the reader has not met earlier in the guide: what they really paid for. */
   freshWords: number;
   /** Share (0..1) of the text that says again what an earlier passage said. */
   repeatedShare: number;
@@ -269,7 +269,7 @@ export function untreatedPains(content: PdfContent, voc?: VoiceOfCustomer): stri
 
 /**
  * Share (0..1) of a follow-up guide its buyer has already read in the first one. Two guides of a niche share words,
- * not sentences: a high share means he paid twice for the same text. The same promise sold again counts as half a
+ * not sentences: a high share means the buyer paid twice for the same text. The same promise sold again counts as half a
  * guide even when every sentence was rewritten.
  */
 export function guideOverlap(content: PdfContent, parent: PdfContent): number {
@@ -956,7 +956,7 @@ export function actionRule(msg: Pick<InboxMessage, 'intent' | 'body'> & { orderI
     case 'sur_mesure': return { right: ['none', 'escalate'], ok: ['discount_code'], danger: ['block'] };
     case 'partenariat': return { right: ['none', 'ignore', 'block'], ok: ['escalate'], danger: ['refund', 'discount_code'] };
     case 'arnaque':
-      // a false claim from a real buyer: answering from the order's logs is as good as blocking, the file is already his
+      // a false claim from a real buyer: answering from the order's logs is as good as blocking, the file is already theirs
       return msg.orderId
         ? { right: ['none', 'block', 'ignore'], ok: ['resend_link', 'escalate'], danger: ['refund', 'discount_code'] }
         : { right: ['block', 'ignore'], ok: ['none'], danger: ['refund', 'discount_code', 'resend_link'] };

@@ -1,6 +1,6 @@
 /**
- * The founder's standing decisions: an order (« coupe toutes les pubs ») holds until he lifts it, a refusal holds for
- * a cooldown. They stay on record once ended: a week without ads because he said so proves nothing about a guide.
+ * The founder's standing decisions: an order (« coupe toutes les pubs ») holds until the founder lifts it, a refusal holds for
+ * a cooldown. They stay on record once ended: a week without ads because the founder said so proves nothing about a guide.
  */
 import type { AgentId, ChannelId, FounderHold, WorldState } from '../shared.js';
 import { nextId } from '../core/index.js';
@@ -47,7 +47,7 @@ export function firingHold(world: WorldState): FounderHold | null {
   return holdsOf(world, 'firing').find((h) => holding(h, world.day)) ?? null;
 }
 
-/** This person stays out of plans and challenges: « garde Sarah », or a replacement he refused. */
+/** This person stays out of plans and challenges: « garde Sarah », or a replacement the founder refused. */
 export function pinHold(world: WorldState, agentId: AgentId): FounderHold | null {
   return holdsOf(world, 'pin').find((h) => holding(h, world.day) && h.agentId === agentId) ?? null;
 }

@@ -220,7 +220,7 @@ function pageEvidence(w: WorldState, rows: DailyAdStats[], since: number): void 
   }
 }
 
-/** A pick is a rank, not euros: where the product stands among all products on the same 14 days. A niche the founder named is his, and alone it ranks nothing. */
+/** A pick is a rank, not euros: where the product stands among all products on the same 14 days. A niche the founder named is theirs, and alone it ranks nothing. */
 function pickEvidence(w: WorldState, since: number, day: number): void {
   const { pickDays } = TALENT.evidence;
   for (const p of w.company.products) {

@@ -106,7 +106,7 @@ describe('who can leave', () => {
     const position = org(w).positions.at(-1)!;
     expect(position).toMatchObject({ roleId: 'art_director', reason: 'replacement', replaces: 'zoe', status: 'open' });
 
-    // Asked again, she is already on her way out: no second position.
+    // Asked again, the art director is already on the way out: no second position.
     expect(await requestDeparture(ctx, 'zoe', 'rendement', 'nora', 'fired')).toBe('notice');
     expect(org(w).positions.filter((p) => p.replaces === 'zoe')).toHaveLength(1);
 
@@ -532,7 +532,7 @@ describe('layoffs', () => {
     const { ctx } = mount(w);
     hired(w, 'lucas', 1);
     hired(w, 'fatou', 1);
-    hired(w, 'tom', 1); // alone on his role, as idle as can be
+    hired(w, 'tom', 1); // alone on that role, as idle as can be
     w.day = 15;
     for (let d = 2; d <= 15; d++) org(w).load.push(loadDay(d, { lucas: 9, fatou: 1 }));
     await layoffsEvening(ctx);

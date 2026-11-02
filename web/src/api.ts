@@ -140,7 +140,7 @@ export const api = {
     return controlResult(await post<unknown>('/api/run/extend', {}, 30_000));
   },
 
-  /** POST /api/digest/seen — the founder has the agency in front of him: his « last seen » follows the clock. */
+  /** POST /api/digest/seen — the founder has the agency in front of them: their « last seen » follows the clock. */
   async digestSeen(): Promise<void> {
     await post<unknown>('/api/digest/seen', {});
   },

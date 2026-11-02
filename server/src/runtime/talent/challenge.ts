@@ -502,7 +502,7 @@ async function swap(ctx: RuntimeCtx, plan: ProbationPlan, report: HireReport, wi
   return hire;
 }
 
-/** Approval mode stops here, before any money (D17, D48): a normal task of its kind, which waits for him and carries what was decided. */
+/** Approval mode stops here, before any money (D17, D48): a normal task of its kind, which waits for the founder and carries what was decided. */
 function askFounder(ctx: RuntimeCtx, plan: ProbationPlan, report: HireReport, winner: Candidate, candidates: Candidate[]): void {
   const w = ctx.world;
   const hr = officerId(w, 'hr');
@@ -598,7 +598,7 @@ export function pendingSwap(w: WorldState, id: AgentId): boolean {
 const planOf = (w: WorldState, d: DecidedSwap): ProbationPlan | undefined =>
   w.company.league?.plans.find((p) => p.agentId === d.plan && p.openedSeason === d.season);
 
-/** The sentence he signs, with what it costs. Nothing is booked before his yes. */
+/** The sentence the founder signs, with what it costs. Nothing is booked before their yes. */
 export function swapAsk(ctx: RuntimeCtx, d: DecidedSwap): string {
   const w = ctx.world;
   const leaver = w.company.agents.find((a) => a.id === d.plan);
@@ -606,7 +606,7 @@ export function swapAsk(ctx: RuntimeCtx, d: DecidedSwap): string {
   return `Remplacer ${nameOf(ctx, d.plan)} par ${d.winner.name} (${testText(d.winner.interview)} contre ${testText(own)} au test) : ${eur(leaver ? swapCost(w, leaver) : 0)}`;
 }
 
-/** His yes, days later maybe: the person may have left, the name may have gone to someone else, the cash may be gone. Null: nothing happened. */
+/** The founder's yes, days later maybe: the person may have left, the name may have gone to someone else, the cash may be gone. Null: nothing happened. */
 export async function confirmSwap(ctx: RuntimeCtx, d: DecidedSwap): Promise<AgentState | null> {
   const w = ctx.world;
   const plan = planOf(w, d);
@@ -616,7 +616,7 @@ export async function confirmSwap(ctx: RuntimeCtx, d: DecidedSwap): Promise<Agen
   return swap(ctx, plan, { ...d.report, day: w.day }, d.winner, d.candidates);
 }
 
-/** His no: the person is protected for 14 days and stays, no money moved, and the plan ends here (D49). No draw. */
+/** The founder's no: the person is protected for 14 days and stays, no money moved, and the plan ends here (D49). No draw. */
 export function swapRefused(ctx: RuntimeCtx, task: Task): void {
   const d = decidedSwap(task);
   const w = ctx.world;
