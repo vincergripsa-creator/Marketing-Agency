@@ -8,6 +8,8 @@ import { COVER_H, COVER_W, splitTitle } from './cover.js';
 import { cssFontStack, normalizeDesign } from './design.js';
 import { diagramFor } from './diagrams.js';
 import { isStdFont, loadVoice, woffOf, type FaceName } from './fonts.js';
+import { kitBoxes, kitSheets } from './kit.js';
+import { guidedActions } from './pages/render.js';
 import { toSvg } from './scene.js';
 import { escapeHtml as esc, formatPrice, frenchNbsp, slugify, truncate, wholeClause } from './text.js';
 import type { Voice } from './voices.js';
@@ -68,8 +70,9 @@ const ICON = {
   shield: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9 12l2.2 2.2L15.2 10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
+/** A review carries no date: a buyer has no use for the day of a game. */
 function reviewCard(r: Review): string {
-  return `<article class="review"><div class="review-head"><div><strong>Acheteur vérifié</strong><small>Jour ${h(r.day)}</small></div>${starsHtml(r.rating, 15)}</div><p>${h(r.text)}</p></article>`;
+  return `<article class="review"><div class="review-head"><div><strong>Acheteur vérifié</strong></div>${starsHtml(r.rating, 15)}</div><p>${h(r.text)}</p></article>`;
 }
 
 const inlined = new Map<FaceName, string>();
@@ -133,6 +136,7 @@ section{padding:68px 0;scroll-margin-top:60px}
 .strip{list-style:none;display:flex;flex-wrap:wrap;gap:12px 24px;margin:0 0 26px;padding:14px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font:500 14px/1.3 var(--label)}
 .strip b{display:block;font:700 26px/1 var(--display);margin-bottom:4px}
 .note{font:400 13px/1.4 var(--label);color:var(--muted);margin:12px 0 0}
+.gone{display:inline-block;border-left:3px solid var(--warm);padding:8px 14px;margin:0;font:700 17px/1.35 var(--label)}
 /* stage: a book in CSS 3D, its spine shaded, its pages stacked; two devices showing real pages */
 .stage{position:relative;width:100%;max-width:560px;margin:0 auto;aspect-ratio:1/1.04;perspective:1600px}
 .stage.alone{max-width:440px;aspect-ratio:1/1.3}
@@ -172,6 +176,7 @@ section{padding:68px 0;scroll-margin-top:60px}
 .chapters li{display:grid;grid-template-columns:54px minmax(0,1fr);gap:12px;padding:18px 0;border-top:1px solid var(--line)}
 .num{font:700 30px/1 var(--display);color:var(--a)}
 .chapters p{margin:0;color:var(--muted);font-size:16px}
+.part{font-size:21px;margin-top:34px}.part+.chapters{margin-top:14px}
 /* bonus */
 .bonus{padding-top:0}
 .bonus-card{display:flex;gap:18px;align-items:flex-start;background:var(--tint);padding:26px 24px}
@@ -187,7 +192,7 @@ section{padding:68px 0;scroll-margin-top:60px}
 .review-grid{display:grid;gap:0 36px;grid-template-columns:minmax(0,1fr)}
 .review{padding:18px 0;border-top:1px solid var(--line)}
 .review-head{display:flex;align-items:center;gap:12px;margin-bottom:10px;font:500 14px/1.3 var(--label)}
-.review-head div{flex:1;display:flex;flex-direction:column}.review-head small{color:var(--muted)}
+.review-head div{flex:1}
 .review p{margin:0}
 .no-review{color:var(--muted)}
 /* faq */
@@ -280,10 +285,26 @@ const device = (kind: 'tablet' | 'phone', page: Leaf | undefined): string =>
 
 const figureOf = (k: number, one: string, many: string): string => (k > 0 ? `<li><b>${k}</b>${k > 1 ? many : one}</li>` : '');
 
-/** Self-contained HTML store page for one product. `figureSvg` left out: the guide's own plan or loop, `null`: none. */
-export function renderSalesPageHtml(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string; previews?: { label: string; svg: string }[]; figureSvg?: string | null }): string {
+const SHORT_TITLE = 40;
+
+/** A title for the buy bar: it stops before a quotation it could not close, and closes one it opens on. */
+function shortTitle(title: string): string {
+  const cut = truncate(title, SHORT_TITLE);
+  const open = cut.lastIndexOf('«');
+  if (open < 0 || cut.includes('»', open)) return cut;
+  return open > 0 ? `${cut.slice(0, open).trimEnd()}…` : `${cut} »`;
+}
+
+interface Inside { title: string; blurb?: string }
+
+const insideList = (rows: readonly Inside[]): string => `<ol class="chapters">${rows.map((c, k) => `<li><span class="num">${String(k + 1).padStart(2, '0')}</span><div><h3>${h(c.title)}</h3>${c.blurb ? `<p>${h(c.blurb)}</p>` : ''}</div></li>`).join('')}</ol>`;
+
+/** Self-contained HTML store page for one product. `figureSvg` left out: the guide's own plan or loop, `null`: none. `offSale`: stopped from outside, the kit of a guide that left the shop. */
+export function renderSalesPageHtml(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string; previews?: { label: string; svg: string }[]; figureSvg?: string | null; offSale?: boolean }): string {
   const { product } = input;
-  const noun = product.kind === 'kit' ? 'kit' : 'guide';
+  const isKit = product.kind === 'kit';
+  const noun = isKit ? 'kit' : 'guide';
+  const onSale = !input.offSale && product.status !== 'killed' && product.status !== 'paused'; // a page stays where it is: what it cannot do any more is sell
   const sp = atPriceOfTheDay(input.salesPage ?? (product.salesPage as SalesPage), product.price);
   const d = normalizeDesign(input.design ?? product.design);
   const { voice } = loadVoice(d.voice!);
@@ -311,23 +332,29 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
     { q: `Comment je reçois le ${noun} ?`, a: 'Tout de suite après le paiement : un lien de téléchargement s’affiche et vous est aussi envoyé par e-mail. Le PDF se lit sur téléphone, tablette et ordinateur.' },
     { q: 'Est-ce un abonnement ?', a: `Non. Vous payez ${price} une seule fois et le ${noun} est à vous, y compris ses mises à jour.` },
   ].filter((f) => !objections.some((o) => o.q.toLowerCase().includes(f.q.slice(0, 12).toLowerCase())));
-  const faq = [...objections, ...practical];
+  const faq = onSale ? [...objections, ...practical] : [];
   const audience = product.audience || content?.audience || '';
   const cover = safeSvg(input.coverSvg);
-  const figure = safeSvg((input.figureSvg === undefined ? figureSvgFor(content, d) : input.figureSvg) ?? '');
+  // the plan drawn or the loop are the guide's: a kit prints neither
+  const figure = isKit ? '' : safeSvg((input.figureSvg === undefined ? figureSvgFor(content, d) : input.figureSvg) ?? '');
   const leaves = leavesOf(input.previews);
   const inner = leaves.filter((l) => l.kind !== 'couverture');
   const tablet = inner.find((l) => l.kind === 'ouverture-de-chapitre') ?? inner[0];
   const phone = inner.find((l) => l.kind === 'page-du-guide' && l !== tablet) ?? inner.find((l) => l !== tablet);
 
-  const actions = [...(content?.chapters ?? []), ...(content?.bonus ? [content.bonus] : [])].reduce((sum, c) => sum + (c?.steps?.length ?? 0), 0);
+  const sheets = figureOf(product.pdfFacts?.sheets ?? 0, 'fiche à imprimer', 'fiches à imprimer');
   // measured, or not shown: a figure the guide does not hold is never printed
-  const strip = [
+  const strip = (isKit ? [
+    sheets,
+    figureOf(content ? kitBoxes(content) : 0, 'case à cocher', 'cases à cocher'),
+    figureOf(product.pdfFacts?.pages ?? 0, 'page à imprimer', 'pages à imprimer'),
+  ] : [
     figureOf(chapterCount, 'chapitre', 'chapitres'),
-    figureOf(actions, 'action guidée', 'actions guidées'),
-    figureOf(product.pdfFacts?.sheets ?? 0, 'fiche à imprimer', 'fiches à imprimer'),
+    figureOf(guidedActions(content?.chapters), 'action guidée', 'actions guidées'),
+    sheets,
     figureOf(product.pdfFacts?.pages ?? 0, 'page illustrée', 'pages illustrées'),
-  ].join('');
+  ]).join('');
+  const printed = isKit && content ? kitSheets(content) : [];
 
   const ratingLine = reviews.length && avg > 0
     ? `<div class="rating-line">${starsHtml(avg)}<span><strong>${h(avg.toFixed(1).replace('.', ','))}</strong> · ${h(reviewTotal)} avis</span></div>`
@@ -349,22 +376,22 @@ export function renderSalesPageHtml(input: { product: Product; salesPage: SalesP
 <header class="top">
   <div class="wrap top-in">
     <a class="brand" href="#top">${h(brand)}</a>
-    <nav aria-label="Sections">${leaves.length ? '<a href="#apercu">Aperçu</a>' : ''}<a href="#dedans">Le contenu</a>${reviews.length ? '<a href="#avis">Avis</a>' : ''}<a href="#faq">Questions</a></nav>
-    <button type="button" class="buy small" data-buy>Obtenir le ${noun} · ${esc(price)}</button>
+    <nav aria-label="Sections">${leaves.length ? '<a href="#apercu">Aperçu</a>' : ''}<a href="#dedans">Le contenu</a>${reviews.length ? '<a href="#avis">Avis</a>' : ''}${faq.length ? '<a href="#faq">Questions</a>' : ''}</nav>
+    ${onSale ? `<button type="button" class="buy small" data-buy>Obtenir le ${noun} · ${esc(price)}</button>` : ''}
   </div>
 </header>
 <main id="top">
 <section class="hero">
   <div class="wrap hero-grid">
     <div class="hero-copy">
-      <span class="eyebrow">${audience ? `Pour : ${h(wholeClause(audience.replace(/\s*\([^)]*\)/g, ''), (s) => s.length <= 56))}` : product.kind === 'kit' ? 'Kit à imprimer' : 'Guide pratique'}</span>
+      <span class="eyebrow">${audience ? `Pour : ${h(wholeClause(audience.replace(/\s*\([^)]*\)/g, ''), (s) => s.length <= 56))}` : isKit ? 'Kit à imprimer' : 'Guide pratique'}</span>
       <h1>${h(head)}</h1>
       ${tail ? `<p class="deck">${h(tail)}</p>` : ''}
       ${hook ? `<p class="hook">${h(hook)}</p>` : ''}
       ${ratingLine}
       ${strip ? `<ul class="strip">${strip}</ul>` : ''}
-      <button type="button" class="buy cta" data-buy>${ctaHtml}</button>
-      <p class="note">Téléchargement immédiat · Paiement unique · Satisfait ou remboursé</p>
+      ${onSale ? `<button type="button" class="buy cta" data-buy>${ctaHtml}</button>
+      <p class="note">Téléchargement immédiat · Paiement unique · Satisfait ou remboursé</p>` : `<p class="gone">Ce ${noun} n’est plus en vente.</p>`}
     </div>
     <div class="stage${d.coverLayout === 'minimal' ? ' foot' : ''}${tablet ? '' : ' alone'}">
       <div class="book"><div class="front">${cover}</div><div class="edge"></div></div>
@@ -390,9 +417,9 @@ ${sp?.solution ? `<section class="solution">
 </section>` : ''}
 ${leaves.length ? `<section class="band" id="apercu">
   <div class="wrap">
-    <span class="kicker">Avant d’acheter</span>
-    <h2>Feuilletez-le avant de décider</h2>
-    <p class="lead">Ces pages viennent ${product.kind === 'kit' ? 'du kit' : 'du guide'}, pas d’une maquette : ce que vous voyez est ce que vous téléchargez. Seul le texte courant est masqué dans l’aperçu.</p>
+    <span class="kicker">${onSale ? 'Avant d’acheter' : 'Aperçu'}</span>
+    <h2>${onSale ? 'Feuilletez-le avant de décider' : `Quelques pages du ${noun}`}</h2>
+    <p class="lead">Ces pages viennent ${isKit ? 'du kit' : 'du guide'}, pas d’une maquette${onSale ? ' : ce que vous voyez est ce que vous téléchargez' : ''}. Seul le texte courant est masqué dans l’aperçu.</p>
     <div class="leaves">${leaves.map((l) => `<figure class="leaf"><div class="p">${l.svg}</div><figcaption>${h(l.caption)}</figcaption></figure>`).join('')}</div>
   </div>
 </section>` : ''}
@@ -405,9 +432,9 @@ ${figure ? `<section class="figure">
 </section>` : ''}
 ${chapterList.length ? `<section class="inside" id="dedans">
   <div class="wrap">
-    <span class="kicker">Chapitre par chapitre</span>
+    <span class="kicker">${isKit ? 'Fiche par fiche, étape par étape' : 'Chapitre par chapitre'}</span>
     <h2>Ce qu’il y a dedans</h2>
-    <ol class="chapters">${chapterList.map((c, k) => `<li><span class="num">${String(k + 1).padStart(2, '0')}</span><div><h3>${h(c.title)}</h3>${c.blurb ? `<p>${h(c.blurb)}</p>` : ''}</div></li>`).join('')}</ol>
+    ${isKit ? `${printed.length ? `<h3 class="part">Les fiches à remplir</h3>${insideList(printed.map((v) => ({ title: v.title })))}` : ''}<h3 class="part">Le plan à cocher, étape par étape</h3>` : ''}${insideList(chapterList)}
   </div>
 </section>` : ''}
 ${sp?.bonusBlurb || bonusTitle ? `<section class="bonus">
@@ -415,15 +442,15 @@ ${sp?.bonusBlurb || bonusTitle ? `<section class="bonus">
     <div class="bonus-card"><span class="gift">${ICON.gift}</span><div><span class="tag">BONUS OFFERT</span>${bonusTitle ? `<h3>${h(bonusTitle)}</h3>` : ''}${sp?.bonusBlurb ? `<p>${h(sp.bonusBlurb)}</p>` : ''}</div></div>
   </div>
 </section>` : ''}
-<section class="reviews" id="avis">
+${reviews.length || onSale ? `<section class="reviews" id="avis">
   <div class="wrap">
-    <span class="kicker">Avis des lecteurs</span>
-    <h2>${reviews.length ? 'Ce qu’en disent les lecteurs' : 'Les premiers avis arrivent'}</h2>
+    <span class="kicker">Avis des ${isKit ? 'acheteurs' : 'lecteurs'}</span>
+    <h2>${reviews.length ? `Ce qu’en disent les ${isKit ? 'acheteurs' : 'lecteurs'}` : 'Les premiers avis arrivent'}</h2>
     ${reviews.length
       ? `<div class="rating-big"><strong>${h(avg.toFixed(1).replace('.', ','))}</strong>${starsHtml(avg, 22)}<span>${h(reviewTotal)} avis vérifiés</span></div><div class="review-grid">${reviews.slice(0, 6).map(reviewCard).join('')}</div>`
       : `<p class="no-review">Ce ${noun} vient de sortir : aucun avis pour l’instant. Nous n’affichons jamais de faux témoignages.</p>`}
   </div>
-</section>
+</section>` : ''}
 ${faq.length ? `<section class="faq" id="faq">
   <div class="wrap narrow">
     <span class="kicker">Vos questions</span>
@@ -431,12 +458,12 @@ ${faq.length ? `<section class="faq" id="faq">
     ${faq.map((o, k) => `<details${k === 0 ? ' open' : ''}><summary>${h(o.q)}</summary><p>${h(o.a)}</p></details>`).join('')}
   </div>
 </section>` : ''}
-${sp?.guarantee ? `<section class="guarantee">
+${sp?.guarantee && onSale ? `<section class="guarantee">
   <div class="wrap narrow">
     <div class="guarantee-card"><span class="shield">${ICON.shield}</span><div><h2>Notre garantie</h2><p>${h(sp.guarantee)}</p></div></div>
   </div>
 </section>` : ''}
-<section class="final">
+${onSale ? `<section class="final">
   <div class="wrap narrow">
     <h2>${h(headline)}</h2>
     ${sub ? `<p>${h(sub)}</p>` : ''}
@@ -444,7 +471,7 @@ ${sp?.guarantee ? `<section class="guarantee">
     <button type="button" class="buy cta" data-buy>${ctaHtml}</button>
     <p class="note">PDF disponible immédiatement · Sans risque</p>
   </div>
-</section>
+</section>` : ''}
 </main>
 <footer>
   <div class="wrap">
@@ -452,14 +479,14 @@ ${sp?.guarantee ? `<section class="guarantee">
     <p>Boutique virtuelle — environnement de test Pixel Agency. Aucune donnée bancaire n’est collectée.</p>
   </div>
 </footer>
-<div class="sticky-buy"><div class="mini"><span>${h(truncate(product.title || headline, 40))}</span><strong>${esc(price)}</strong></div><button type="button" class="buy" data-buy>Obtenir le ${noun}</button></div>
+${onSale ? `<div class="sticky-buy"><div class="mini"><span>${h(shortTitle(product.title || headline))}</span><strong>${esc(price)}</strong></div><button type="button" class="buy" data-buy>Obtenir le ${noun}</button></div>
 <script>
 (function () {
   var msg = ${JSON.stringify(CHECKOUT_ALERT)};
   var buttons = document.querySelectorAll('[data-buy]');
   for (var i = 0; i < buttons.length; i++) buttons[i].addEventListener('click', function () { alert(msg); });
 })();
-</script>
+</script>` : ''}
 </body>
 </html>
 `;

@@ -11,7 +11,7 @@ Protéger la trésorerie pour que l'agence survive assez longtemps pour apprendr
 ## Règles de départ
 1. Budget pub du jour ≤ 15 % de la trésorerie (≤ 8 % si le runway passe sous 14 jours).
 2. Aucune dépense ne doit faire passer la trésorerie sous 0.
-3. Mode survie sous 30 % du budget de départ : organique et créateurs à la commission uniquement.
+3. Mode survie sous 30 % du budget de départ : organique, créateurs à la commission et un seul petit test à la fois.
 
 ## Chaque matin
 Gabriel lit le grand livre (ventes, remboursements, pub, frais, calcul Claude), calcule le runway et annonce l'enveloppe pub au stand-up. Panne de paiement annoncée pour le jour même : enveloppe à 0, les pubs restent coupées jusqu'au lendemain.

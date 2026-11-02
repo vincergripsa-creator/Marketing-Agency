@@ -5,6 +5,7 @@
 import { SETUP_REF, isHold } from '../core/index.js';
 import { CHANNEL_IDS, channelOf } from '../shared.js';
 import type { Campaign, ChannelId, DailyAdStats, Order, Product, Task, WorldState } from '../shared.js';
+import { FEES } from '../sim/balance.js';
 import { recentReviews } from '../sim/feedback.js';
 import { COMPACT } from './compaction.js';
 import { sim } from './modules.js';
@@ -253,11 +254,16 @@ export function adShare(world: WorldState, cash: number, rate: number): number {
   return Math.max(0, cash - ORG.adReserveDays * payrollToday(world)) * rate;
 }
 
+/** What a test under the line must leave in the till: that same week, of the pay still owed and of the fixed costs. */
+export function survivalFloor(world: WorldState): number {
+  return round2(ORG.adReserveDays * (FEES.boutiqueDaily + FEES.toolsDaily + payrollToday(world)));
+}
+
 /**
  * Daily ad envelope: ≤ 15 % of the cash left once a week of pay is set aside, ≤ 8 % if runway < 14 days, never into the reserve
  * once growth decides (D9), 0 when bankrupt or on an announced outage day; survival below 30 % of start. The reserve's floor is
  * that same line, so under it the reserve would read 0 for good and stop the paying ads that are all that can refill the till:
- * survival keeps its own rules instead, the control's, and nothing launches or grows until the cash is back.
+ * survival keeps its own rules instead, the control's, and nothing launches or grows until the cash is back, but the one test of `UNDER_LINE`.
  */
 export function computeBudget(world: WorldState): Budget {
   const fin = sim.financeSnapshot(world);

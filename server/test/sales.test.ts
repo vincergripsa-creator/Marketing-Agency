@@ -19,8 +19,13 @@ import type { RuntimeCtx } from '../src/runtime/ctx.js';
 import { syncSalesPages } from '../src/runtime/handlers/boutique.js';
 import { HANDLERS } from '../src/runtime/handlers/index.js';
 import { Company, createWorld, defaultScenario } from '../src/runtime/index.js';
+import { killProduct, pauseProduct } from '../src/runtime/pipeline.js';
+import { reviewTask } from '../src/runtime/review.js';
 import { createTask } from '../src/runtime/tasks.js';
+import { endLine, short } from '../src/runtime/util.js';
+import { fill } from '../src/sim/text.js';
 import type { DesignSpec, PdfContent, Product, SalesPage, Task, VisualSpec, WorldState } from '../src/shared.js';
+import { pdfPagesText } from './pdfText.js';
 
 const NICHE = 'proprete-chiot';
 const BANNER = '<div class="demo-banner">Boutique virtuelle Pixel Agency — environnement de test, aucun paiement réel</div>';
@@ -107,6 +112,14 @@ describe('the reviews of a page', () => {
   it('a product with no count yet shows what it holds', () => {
     const reviews = [review(1), review(2)] as Product['stats']['reviews'];
     expect(plain(shop({}, { stats: { ...demoProduct.stats, reviews, rating: 5 } }))).toContain('2 avis vérifiés');
+  });
+
+  it('a buyer reads no game day beside a review', () => {
+    const reviews = [review(94)] as Product['stats']['reviews'];
+    const html = plain(shop({}, { stats: { ...demoProduct.stats, reviews, rating: 5 } }));
+    expect(html).toContain('class="review"');
+    expect(html).toContain('Acheteur vérifié');
+    expect(html).not.toMatch(/Jour\s*94/);
   });
 });
 
@@ -225,10 +238,13 @@ describe('the pages it shows are the guide’s', () => {
 });
 
 describe('the figures it prints are counted', () => {
-  it('chapters, actions, sheets and pages come from the guide and its render', () => {
+  it('chapters, actions, sheets and pages come from the guide and its render, the actions being the number the PDF prints', () => {
     const html = htmlOf(page);
     const c = page.content!;
-    const actions = [...c.chapters, ...(c.bonus ? [c.bonus] : [])].reduce((sum, ch) => sum + ch.steps.length, 0);
+    const promise = plain(pdfPagesText(join(root, ...page.files.pdf!.split('/')))[1]!);
+    const actions = Number(/(\d+) actions guidées/.exec(promise)![1]);
+    expect(c.bonus.steps.length).toBeGreaterThan(0); // what the page used to add to it
+    expect(actions).toBe(c.chapters.reduce((sum, ch) => sum + ch.steps.length, 0));
     expect(page.pdfFacts!.pages).toBe(renderTask.output!.pages);
     expect(page.pdfFacts!.sheets).toBeGreaterThan(0);
     const strip = /<ul class="strip">(.*?)<\/ul>/s.exec(html)![1]!;
@@ -261,6 +277,13 @@ describe('the figures it prints are counted', () => {
     const with29 = shop({ salesPage: { ...demoSalesPage, cta: 'Je commence ce soir — 24 €' } }, { price: 29 });
     expect(with29).toMatch(/data-buy>Je commence ce soir — 29.€<\/button>/);
     expect(shop({ salesPage: { ...demoSalesPage, cta: 'Je télécharge le guide' } }, { price: 29 })).toMatch(/data-buy>Je télécharge le guide <em>29.€<\/em><\/button>/);
+  });
+
+  it('the buy bar stops before a quotation it cannot close, and closes one it opens on', () => {
+    const bar = (title: string): string => plain(/<div class="mini"><span>(.*?)<\/span>/.exec(shop({}, { title }))![1]!);
+    expect(bar('Les couples fiancés : en finir avec « on veut pas faire un crédit pour un mariage »')).toBe('Les couples fiancés : en finir avec…');
+    expect(bar('« Tout a grillé pendant la canicule, encore une fois » : le plan')).toMatch(/^« Tout a grillé.*… »$/);
+    expect(bar('Le chiot propre')).toBe('Le chiot propre');
   });
 
   it('real reviews only: no review, no fake one', () => {
@@ -384,5 +407,111 @@ describe('the page follows the guide', () => {
     expect(htmlOf(page)).toContain(`<div class="front">${file}</div>`);
     expect(existsSync(join(root, ...page.files.cover!.split('/')))).toBe(true);
     expect(renderCoverSvg({ title: page.title, subtitle: page.content!.subtitle, audience: page.audience, design: page.design!, brand: world.company.name })).toBe(file);
+  });
+});
+
+describe('a guide off sale', () => {
+  const FOR_SALE = /<button|<script|data-buy|class="sticky-buy"|class="final"|Notre garantie|Est-ce un abonnement/;
+
+  it('a stopped guide keeps its page, says it is no longer on sale, and nothing is left to click', async () => {
+    const p = addProduct('prd_stopped');
+    await onSale(p);
+    await syncSalesPages(ctx);
+    expect(htmlOf(p)).toMatch(FOR_SALE);
+    await killProduct(ctx, p, 'trop de remboursements');
+    await syncSalesPages(ctx);
+    const html = plain(htmlOf(p));
+    expect(html).toContain('Ce guide n’est plus en vente.');
+    expect(html).not.toMatch(FOR_SALE);
+    expect(html).not.toContain(CHECKOUT);
+    expect(html).toContain(BANNER);
+    expect(html).toContain('class="leaf"'); // the page stays what it was: only what sold is gone
+  });
+
+  it('a guide taken off sale for its next version says the same, and its buttons come back with it', async () => {
+    const p = addProduct('prd_paused');
+    await onSale(p);
+    await pauseProduct(ctx, p, 'trop de plaintes');
+    await syncSalesPages(ctx);
+    expect(plain(htmlOf(p))).toContain('Ce guide n’est plus en vente.');
+    expect(htmlOf(p)).not.toMatch(FOR_SALE);
+    p.status = 'live';
+    await syncSalesPages(ctx);
+    expect(plain(htmlOf(p))).not.toContain('n’est plus en vente');
+    expect(htmlOf(p)).toContain('data-buy');
+  });
+
+  it('a kit says kit', () => {
+    expect(plain(shop({}, { kind: 'kit', status: 'killed' }))).toContain('Ce kit n’est plus en vente.');
+  });
+
+  it('a kit sells at its guide\'s checkout: while the guide is off sale its page sells nothing, and it comes back with the guide', async () => {
+    const guide = addProduct('prd_parent');
+    const kit = addProduct('prd_kit', { kind: 'kit' });
+    await onSale(kit);
+    guide.bumpProductId = kit.id;
+    await syncSalesPages(ctx);
+    expect(htmlOf(kit)).toContain('data-buy');
+    await pauseProduct(ctx, guide, 'trop de plaintes');
+    await syncSalesPages(ctx);
+    expect(kit.status).toBe('live'); // only the page follows: a killed guide takes its kit with it, a paused one comes back with it
+    expect(plain(htmlOf(kit))).toContain('Ce kit n’est plus en vente.');
+    expect(htmlOf(kit)).not.toMatch(FOR_SALE);
+    guide.status = 'live';
+    await syncSalesPages(ctx);
+    expect(plain(htmlOf(kit))).not.toContain('n’est plus en vente');
+    expect(htmlOf(kit)).toContain('data-buy');
+  });
+
+  it('a killed guide takes its kit with it, and the kit\'s page says so', async () => {
+    const guide = addProduct('prd_parent2');
+    const kit = addProduct('prd_kit2', { kind: 'kit' });
+    await onSale(kit);
+    guide.bumpProductId = kit.id;
+    await killProduct(ctx, guide, 'trop de remboursements');
+    await syncSalesPages(ctx);
+    expect(kit.status).toBe('killed');
+    expect(plain(htmlOf(kit))).toContain('Ce kit n’est plus en vente.');
+    expect(htmlOf(kit)).not.toMatch(FOR_SALE);
+  });
+
+  it('a stopped page invites nobody to buy: no « before you decide », no « just out »', () => {
+    const page = plain(shop({ previews: [PAGE('page-du-guide')] }, { status: 'killed' }));
+    expect(page).toContain('Quelques pages du guide');
+    expect(page).not.toMatch(/Avant d’acheter|Feuilletez-le|ce que vous téléchargez|vient de sortir|Les premiers avis arrivent/);
+  });
+});
+
+describe('no double period anywhere', () => {
+  it('a sentence of a customer that ends on its own mark takes no period of ours', () => {
+    const body = "Bonjour, j'ai appliqué les étapes pendant une semaine et rien n'a changé : {phrase}. Je voudrais un remboursement.";
+    expect(fill(body, { phrase: 'faut du cash ou la carte passe partout ?' })).toContain('partout ? Je voudrais');
+    expect(fill(body, { phrase: 'rien ne bouge' })).toContain('rien ne bouge. Je voudrais');
+    expect(fill('Enfin, {phrase}...', { phrase: 'bof' })).toBe('Enfin, bof...');
+  });
+
+  it('a cut that falls on a period prints the ellipsis alone', () => {
+    expect(short('Arrête d’acheter un JR Pass sans faire le calcul. Puis compare les prix du jour', 50)).toBe('Arrête d’acheter un JR Pass sans faire le calcul…');
+    expect(short('Une phrase courte.', 50)).toBe('Une phrase courte.');
+  });
+
+  it('a line cut short takes no period of ours', () => {
+    const line = `Aimant en place : ${short('Les 5 erreurs à éviter pour ne plus rater la peinture d’un meuble ancien avant la première couche', 80)}`;
+    expect(endLine(line)).toMatch(/[^.]…$/);
+    expect(endLine('Aimant en place : Les 5 erreurs')).toBe('Aimant en place : Les 5 erreurs.');
+    expect(endLine('Verdict : « trop cher… »')).toBe('Verdict : « trop cher… »');
+  });
+
+  it('the verdict a founder reads ends once, cut or whole', async () => {
+    const p = addProduct('prd_verdict');
+    world.company.research.shortlist = ['une-autre-niche'];
+    const reviewer = world.company.agents[0]!;
+    const noteOf = async (reason: string): Promise<string> => {
+      const task = createTask(world, { kind: 'red_team', input: { productId: p.id } });
+      task.output = { subject: 'idea', verdict: 'kill', reasons: [reason] };
+      return (await reviewTask(ctx, task, reviewer)).notes[0]!;
+    };
+    expect(await noteOf(`Je tue « ${p.title} » en l’état : Marché trop bon marché pour « ${p.title} » : les clients citent 9 €.`)).not.toMatch(/[.…] ?»?\.$/);
+    expect(await noteOf('Je tue ce guide en l’état.')).toBe('Verdict « tuer » validé : Je tue ce guide en l’état.');
   });
 });

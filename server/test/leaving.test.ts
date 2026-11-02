@@ -803,7 +803,7 @@ describe('the policy note', () => {
       `+${Math.round(ORG.levelRaise * 100)} % par niveau`,
       `**Recrutement** : ${ORG.recruitingDays} jours de salaire`,
       `**Départ** : ${ORG.severanceDays} jours de salaire`,
-      `prennent ${percent(ORG.survivalPayCut)} de leur salaire`,
+      '**Mode survie** : les fondateurs ne se versent plus de salaire',
       `garde toujours ${ORG.adReserveDays} jours de salaires`,
       `${ORG.workTicksPerDay} ticks de travail`,
       `${fr(ORG.hatSpeed)} de la vitesse normale`,

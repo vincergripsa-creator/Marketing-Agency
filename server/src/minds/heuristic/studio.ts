@@ -10,7 +10,7 @@ import { CLICHE_TEMPLATES } from '../lexicon.js';
 import { stripNextPrefix } from '../shapes.js';
 import { conflictsWith, containsBanned, scrubDeep } from '../playbook.js';
 import {
-  allText, bare, bestLabel, cap, clauseLabel, clean, composeTitle, endsDangling, hashString, labelOf, lf, lowerFirst, norm, q, qv, sentence, splitSentences, uniqStrings, wordCount, type LocalRng,
+  allText, bare, bestLabel, cap, clauseLabel, clean, composeTitle, endsDangling, hashString, inner, labelOf, lf, lowerFirst, norm, q, qv, sentence, splitSentences, uniqStrings, wordCount, type LocalRng,
 } from '../util.js';
 import { ARCHETYPES, asStep, chaptersFor, SUITES, topicExamples, topicFillers, topicNotes, type ArchetypeDef, type ChapterDef, type Para, type Role } from './archetypes.js';
 import { belongsToFollowUp, buildNicheCtx, de, FALLBACK, firstPerson, headOf, isInfinitive, titleCaseKeyword, type NicheCtx } from './niche.js';
@@ -22,9 +22,6 @@ import type { MethodStep, MistakePair, Situation } from './knowledge.js';
 export function inline(s: string): string {
   return lf(s).replace(/\s+:\s+/g, ' — ').replace(/\s*;\s+/g, ', ');
 }
-
-/** Guillemets inside a quote become “ ”: a quote inside a quote never breaks the outer pair. */
-const inner = (s: string): string => s.replace(/«\s*/g, '“').replace(/\s*»/g, '”');
 
 /** The outcome promised on the cover: an upsell brief's goal, else the first desired outcome its follow-up guide does not keep for itself. */
 export function promiseOutcome(c: NicheCtx): string {
@@ -463,14 +460,16 @@ function visualFor(ch: ChapterDef, d: Draft, def: ArchetypeDef, plan: PlanModel,
       const labels = labelsFrom(steps, 56, 6, c.keep);
       const seen = new Set<string>();
       const pick = (items: readonly string[]): string[] => noDigit(standAlone(items)).filter((l) => !seen.has(norm(l)));
-      // the method is what a thin cell falls back on: it has to last for all four
-      const list = (items: readonly string[]): string[] => {
+      // the method is what a thin cell falls back on: it has to last for all three
+      const list = (items: readonly string[], thin: readonly string[] = c.method.map((m) => m.text)): string[] => {
         const own = pick(items).slice(0, 3);
-        const cell = own.length ? own : pick(c.method.map((m) => m.text)).slice(0, 2);
+        const cell = own.length ? own : pick(thin).slice(0, 2);
         for (const l of cell) seen.add(norm(l));
         return cell;
       };
-      const cells: [string[], string[], string[], string[]] = [list(c.keep), list(rendered(c).map((p) => p.mistake)), list(c.tips), list(c.observe)];
+      // a warning sign is what the ladder of this guide starts from: an order to go and look (`observe`) or a step of the method warns of nothing
+      const signs = (situations: readonly Situation[]): string[] => situations.map((s) => s.when);
+      const cells: [string[], string[], string[], string[]] = [list(c.keep), list(rendered(c).map((p) => p.mistake)), list(c.tips), list(signs(situationsOf(c, def)), signs(def.situationsFallback))];
       return { type: 'matrix', title: 'Vos réflexes pour la suite', labels, values: [], matrix: { heads: ['À garder', 'À arrêter', 'À tester', 'À surveiller'], cells } };
     }
   }
@@ -509,7 +508,8 @@ function stepsFor(ch: ChapterDef, d: Draft, plan: PlanModel): string[] {
     case 'situations': return framing;
     case 'diagnostic': {
       const sheet = c.topic || c.profile ? sheetFor(c) : null;
-      return sheet ? [framing[0]!, `Remplir chaque ligne : ${sheet.columns.map((x) => lf(x)).join(', ')}`, ...framing.slice(2)] : framing;
+      // the sheet prints its own columns: the step names the sheet, a list of them reads like a template
+      return sheet ? [framing[0]!, `Remplir « ${sheet.title} », ligne par ligne`, ...framing.slice(2)] : framing;
     }
   }
 }

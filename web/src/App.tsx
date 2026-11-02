@@ -10,7 +10,7 @@ import { sessionView } from './ui/derive';
 import { AppContext, type AppCtx } from './ui/context';
 import { DeptPanel } from './ui/DeptPanel';
 import { DeptStrip } from './ui/DeptStrip';
-import { EndBanner } from './ui/EndBanner';
+import { closeEndBanner, EndBanner, endBannerShown } from './ui/EndBanner';
 import { ErrorBoundary } from './ui/ErrorBoundary';
 import { FounderDigestModal, useFounderDigest } from './ui/FounderDigest';
 import { CompanyBadge, SimHud } from './ui/Hud';
@@ -228,9 +228,7 @@ export default function App() {
 
   const sideOpen = !!agentId || !!panelDept;
   const closeTab = () => setTab('bureau');
-  const status = snapshot?.status;
-  const endKey = snapshot ? `${snapshot.runId}:${status}` : null;
-  const showEnd = (status === 'bankrupt' || status === 'goal_reached' || status === 'finished') && endDismissed !== endKey;
+  const showEnd = endBannerShown(snapshot, endDismissed);
   const selectedDept = panelDept ?? backDept ?? (agentId ? lookups.agents.get(agentId)?.dept ?? null : null);
 
   return (
@@ -304,7 +302,7 @@ export default function App() {
             </ErrorBoundary>
           </div>
 
-          {showEnd ? <EndBanner onNewScenario={() => setScenarioOpen(true)} onDismiss={() => setEndDismissed(endKey)} onFinance={() => setTab('finance')} onExtend={demo ? undefined : () => void extendRun()} /> : null}
+          {showEnd ? <EndBanner onNewScenario={() => setScenarioOpen(true)} onDismiss={() => setEndDismissed(closeEndBanner(snapshot))} onFinance={() => setTab('finance')} onExtend={demo ? undefined : () => void extendRun()} /> : null}
           <Toasts toasts={toasts} onDismiss={dismiss} />
           {scenarioOpen ? <ScenarioModal onClose={() => setScenarioOpen(false)} onLoaded={onLoaded} /> : null}
           {digest.open ? <FounderDigestModal since={digest.open.since} onClose={digest.close} /> : null}

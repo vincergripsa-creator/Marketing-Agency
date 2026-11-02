@@ -623,6 +623,18 @@ describe('the gallery, one film once', () => {
     expect(page.total).toBe(2);
     expect(page.items.map((t) => t.creativeId).sort()).toEqual([a!.id, 'other'].sort());
   });
+
+  it('every page counts each kind on the whole run, whatever it asked for', () => {
+    const w = clone(world);
+    const [a] = w.company.creatives.slice(-1);
+    const videos = { [a!.id]: video(a!.id), other: video('other') };
+    const archived = Array.from({ length: 3 }, (_, i) => ({ ...w.company.deliverables[0]!, id: `old_${i}`, kind: 'pdf' as const }));
+    const guides = w.company.deliverables.filter((d) => d.kind === 'pdf').length + 3;
+    for (const kinds of [undefined, ['pdf'], ['ad_video'], ['cover']]) {
+      expect(deliverablesPage(w, { kinds }, videos, archived).counts, String(kinds)).toMatchObject({ ad_video: 2, pdf: guides });
+    }
+    expect(deliverablesPage(w, { kinds: ['ad_video'] }, videos, archived).total).toBe(2);
+  });
 });
 
 describe('the routes', () => {

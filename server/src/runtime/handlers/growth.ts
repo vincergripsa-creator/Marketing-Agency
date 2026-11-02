@@ -6,14 +6,15 @@ import { hashString } from '../../core/ids.js';
 import type { AdDraft, MindContext } from '../../contracts.js';
 import { EDIT_BASELINE, planCut, TEMPOS } from '../../deliverables/videoCut.js';
 import type { RuntimeCtx } from '../ctx.js';
-import { addDeliverable, incident, nameOf, nicheBriefOf, nicheName, productOf, say, vocOf, writeRunFile } from '../ctx.js';
+import { addDeliverable, incident, nameOf, nicheBriefOf, nicheName, productOf, say, speak, vocOf, writeRunFile } from '../ctx.js';
 import { deliverables, learning, sim } from '../modules.js';
 import { addPlaybookRule, AD_FORMATS, bannedHits, directivesOf, HOOK_STYLES } from '../playbook.js';
 import { activeCampaigns, campaignMetrics, committedAdBudget, currentBudget, type CampaignMetrics } from '../metrics.js';
-import { adHistory, companyPaidBlock, cooldownDays, launchableCreatives, MIN_CAMPAIGN_BUDGET, NO_TRACTION_ROAS, productHealth, productPaidBlock, promotionBlock, scalingRoom, STOP_LOSS_DAYS, STOP_LOSS_ROAS, TEST_CAMPAIGN_BUDGET, versionSince } from '../acquisition.js';
+import { accountPaidBlock, adHistory, companyPaidBlock, cooldownDays, launchableCreatives, MIN_CAMPAIGN_BUDGET, NO_TRACTION_ROAS, openTest, productHealth, productPaidBlock, promotionBlock, scalingRoom, STOP_LOSS_DAYS, STOP_LOSS_ROAS, SURVIVAL_ROAS, SURVIVAL_SAMPLE, TEST_CAMPAIGN_BUDGET, UNDER_LINE, underLineBlock, versionSince } from '../acquisition.js';
 import { planNote, planTarget } from '../allocator.js';
 import { adjusted, creditOf } from '../channels.js';
 import { COMPACT } from '../compaction.js';
+import { logDecision } from '../digest.js';
 import { adsHold, REFUSAL_COOLDOWN_DAYS } from '../holds.js';
 import { officerId, ownersOfAny, roleHolders } from '../org/officers.js';
 import { dropTask } from '../pipeline.js';
@@ -24,7 +25,7 @@ import { armSharp, bestDraft, effectiveT, pruneRead, shrunkRoas } from '../talen
 import { onStrike } from '../talent/evidence.js';
 import { createTask, isOpen, openTasks, taskChannel } from '../tasks.js';
 import { upsellContextOf } from '../upsell.js';
-import { clamp, dec, eur, idNum, keywords, numOf, pct, round2, short, str, sum, uniq } from '../util.js';
+import { clamp, clip, dec, eur, idNum, keywords, numOf, pct, round2, short, str, sum, uniq } from '../util.js';
 import type { HandlerMap, HandlerOutcome } from './common.js';
 import { NO_PRODUCT, requireProduct, reworkNotes, mindWith } from './common.js';
 import { COMPLIANCE_WORDS, FORMAT_LABELS, HOOK_LABELS } from './phrases.js';
@@ -240,6 +241,16 @@ function runRaise(ctx: RuntimeCtx, task: Task): HandlerOutcome {
   return { summary: `${c.name} : ${eur(before)} → ${eur(c.dailyBudget)}/jour, accord du fondateur.`, output: { actions: [`${c.name} : ${eur(before)} → ${eur(c.dailyBudget)}/jour`] } };
 }
 
+/** The test under the line goes out: what it is and why, in the journal and the digest. Its verdict comes from the morning (`settleUnderLine`). */
+function openUnderLine(ctx: RuntimeCtx, c: Campaign, product: Product, by: AgentState['id'], ch: ChannelId): void {
+  const w = ctx.world;
+  c.underLine = { endDay: null, failed: false };
+  const test = `${eur(c.dailyBudget)}/jour sur ${CHANNELS[ch].label} pendant ${UNDER_LINE.days} jours au plus, ${eur(UNDER_LINE.totalEur)} en tout`;
+  const title = clip(product.title, 60);
+  speak(ctx, 'growth', `aucune pub ne tourne et la trésorerie est sous la ligne : petit test sur « ${title} », ${test}.`, 'ad', { productId: product.id });
+  logDecision(w, { kind: 'launch', who: by, text: `Petit test sous la ligne sur « ${title} »`, why: `Trésorerie ${eur(currentBudget(w).cash)}, aucune pub en cours : ${test}.`, productId: product.id });
+}
+
 function requestCreatives(ctx: RuntimeCtx, product: Product, task: Task, opts: { produce: number; attachTo?: string; launch?: boolean; flags?: Record<string, unknown>; why: string }): boolean {
   const open = ctx.world.company.tasks.some((t) => isOpen(t) && t.input.productId === product.id && (t.kind === 'write_ad_hooks' || t.kind === 'produce_ad'));
   const mine = ctx.world.company.creatives.filter((c) => c.productId === product.id && acceptance('tiktok', c) !== null); // a cut for another channel is no TikTok creative
@@ -450,9 +461,11 @@ export const growthHandlers: HandlerMap = {
       const ch = taskChannel(task);
       const label = CHANNELS[ch].label;
       const minBudget = CHANNELS[ch].minDailyBudget;
+      const underLine = task.input.underLine === true;
       const severe = productHealth(ctx.world, product).severe;
       if (severe) return skip(`${severe} — on ne pousse pas un guide que les acheteurs n'aiment pas`, 'quality');
-      const blocked = companyPaidBlock(ctx.world, ch);
+      // Under the line neither survival nor the envelope can answer: it has its own rules, read again here, the founder may have taken days to say yes.
+      const blocked = underLine ? accountPaidBlock(ctx.world, ch) ?? underLineBlock(ctx.world) : companyPaidBlock(ctx.world, ch);
       if (blocked) return skip(blocked, 'company');
       // The founder's stop beats everything, a launch they asked for earlier included: only their word lifts it.
       const held = adsHold(ctx.world, product.id, ch);
@@ -464,6 +477,7 @@ export const growthHandlers: HandlerMap = {
       if (productBlock && !overrides) return skip(productBlock.reason, productBlock.hard ? 'blocked' : 'cooldown');
       const ready = launchableCreatives(ctx.world, product.id, ch);
       if (!ready.length && ch !== 'tiktok') return skip(`aucune créa validée par ${label} (les adaptations passent par le plan du jour)`, 'no_creative');
+      if (!ready.length && underLine) return skip('plus de créa validée à tester', 'no_creative');
       if (!ready.length) {
         const writer = roleHolders(ctx.world, 'hook_writer')[0]?.id ?? officerId(ctx.world, 'growth');
         const asked = requestCreatives(ctx, product, task, { produce: 2, launch: true, flags: { ...launchFlags(task.input), ...(overrides ? { force: true } : {}) }, why: 'aucune créa fraîche validée par TikTok' });
@@ -474,14 +488,16 @@ export const growthHandlers: HandlerMap = {
       const remaining = envelope.remaining;
       // The CEO's watchdog test on an "ads-dead" version runs at the minimum budget.
       // When paid ads lose money overall, new campaigns start smaller (the CEO's cautious mode).
-      const planned = task.input.test === true ? Math.min(envelope.budget, Math.max(TEST_CAMPAIGN_BUDGET, minBudget))
+      const planned = underLine ? UNDER_LINE.dailyEur
+        : task.input.test === true ? Math.min(envelope.budget, Math.max(TEST_CAMPAIGN_BUDGET, minBudget))
         : task.input.cautious === true ? Math.min(envelope.budget, Math.max(minBudget, Math.floor(envelope.budget * 0.6))) : envelope.budget;
       // The founder agreed to an amount: the envelope may have grown since, their yes has not.
       const daily = Math.min(planned, numOf(task.input.askedBudget) ?? planned);
       if (daily < minBudget) return skip(`enveloppe du CFO insuffisante (${eur(remaining)} restants)`, 'budget', { remaining });
       if (ctx.world.scenario.founderApproval && task.input.founderApproved !== true) {
         task.input.askedBudget = daily;
-        return { summary: `Campagne prête (${eur(daily)}/jour, ${ready.length} créas) : en attente du fondateur.`, awaitFounder: `Lancer une campagne ${label} à ${eur(daily)}/jour pour « ${product.title} »` };
+        const ask = underLine ? `Lancer un petit test sous la ligne sur ${label}, ${eur(daily)}/jour pendant ${UNDER_LINE.days} jours au plus, ${eur(UNDER_LINE.totalEur)} en tout, pour « ${product.title} »` : `Lancer une campagne ${label} à ${eur(daily)}/jour pour « ${product.title} »`;
+        return { summary: `Campagne prête (${eur(daily)}/jour, ${ready.length} créas) : en attente du fondateur.`, awaitFounder: ask };
       }
       const creatives = ready.slice(0, policyOf(ctx.world).creativesPerCampaign);
       const n = (product.campaignCount ?? 0) + ctx.world.company.campaigns.filter((c) => c.productId === product.id).length + 1;
@@ -502,6 +518,7 @@ export const growthHandlers: HandlerMap = {
       if (launched && productBlock?.final && task.createdBy === 'founder') launched.founderForced = true;
       if (launched && ctx.world.scenario.founderApproval) launched.founderCap = daily;
       say(ctx, agent.id, `${agent.name} lance « ${input.name} » : ${eur(daily)}/jour, ${creatives.length} créas, ${input.targeting.ageMin}-${input.targeting.ageMax} ans`, 'ad', { productId: product.id });
+      if (launched && underLine) openUnderLine(ctx, launched, product, agent.id, ch);
       return { summary: `Campagne lancée à ${eur(daily)}/jour avec ${creatives.length} créas.`, output: { campaignId: id, dailyBudget: daily, creativeIds: input.creativeIds } };
     },
   },
@@ -556,8 +573,11 @@ export const growthHandlers: HandlerMap = {
           }
           continue;
         }
+        // A test under the line keeps its budget until its verdict, in the morning: at this size the rules below would only read noise.
+        // A winner then lives by the next rule like any paying ad, on its last 4 days (D117): nothing here spares it, and a cut waits no 14 days.
+        if (openTest(c)) continue;
         // 2. Survival mode: only clearly profitable campaigns keep running.
-        if (budget.survival && recent.spend >= 10 && recent.roas < 1.2) { pause(c, `mode survie, ROAS ${dec(recent.roas)}`); continue; }
+        if (budget.survival && recent.spend >= SURVIVAL_SAMPLE && recent.roas < SURVIVAL_ROAS) { pause(c, `mode survie, ROAS ${dec(recent.roas)}`); continue; }
         // 3. The losing creatives this buyer can read in the last 4 days go (talent §4.5): a reduction, so free in approval
         //    mode, and each stays approved for another campaign. Then fatigue / weak creatives (the last one stays until its
         //    replacement is approved).

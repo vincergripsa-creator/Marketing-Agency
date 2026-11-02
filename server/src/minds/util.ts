@@ -329,9 +329,12 @@ export function subjectNoun(texts: readonly string[]): { noun: string; fem: bool
   return { noun: 'situation', fem: true };
 }
 
-/** A title without its own guillemets, to print inside ours (« « La peur… » : … » is never right). */
+/** Guillemets inside a quote become “ ”: a quote inside a quote never breaks the outer pair. */
+export const inner = (s: string): string => s.replace(/«\s*/g, '“').replace(/\s*»/g, '”');
+
+/** A title to print inside our guillemets: « « La peur… » : … » is never right, and neither is « en finir avec on veut pas », which lost its own. */
 export function plainTitle(s: string): string {
-  return clean(s).replace(/«\s*/g, '').replace(/\s*»/g, '');
+  return inner(clean(s));
 }
 
 /** Whole short label for diagrams / checklists (never cut mid-phrase, no ellipsis). */
@@ -417,7 +420,7 @@ const REASON_CUTS: ReadonlySet<string> = new Set([' et ', ' ou ', ' mais ', ' pa
 function labelOk(s: string, min: number, max: number): boolean {
   const t = s.trim();
   return t.length >= min && t.length <= max && !endsDangling(t) && !brokenNegation(t) && !/[«“(]$/.test(t)
-    && (t.match(/«/g) ?? []).length === (t.match(/»/g) ?? []).length;
+    && (t.match(/[«“]/g) ?? []).length === (t.match(/[»”]/g) ?? []).length;
 }
 
 /** A cut head must still say something: two words at least. */
@@ -498,7 +501,7 @@ function trimCut(s: string): string {
   let out = s;
   for (;;) {
     out = bare(out);
-    const open = (out.match(/«/g) ?? []).length > (out.match(/»/g) ?? []).length;
+    const open = (out.match(/[«“]/g) ?? []).length > (out.match(/[»”]/g) ?? []).length;
     if (!out || !(endsDangling(out) || CUT_QUANTITY.test(norm(out)) || brokenNegation(out) || open)) return out;
     out = out.split(/\s+/).slice(0, -1).join(' ');
   }

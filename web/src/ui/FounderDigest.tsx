@@ -90,6 +90,14 @@ const tabVisible = (): boolean => document.visibilityState === 'visible';
 /** null: since the day the founder last looked, the server's default. A day: the last week, asked by hand. */
 export type DigestWindow = { since: number | null };
 
+/** What the window covers, not what was asked: a run on its third day has no last 7 days. */
+export function digestTitle(since: number | null, fromDay: number, toDay: number): string {
+  if (since === null) return 'Pendant ton absence';
+  if (fromDay <= 1) return 'Depuis le début';
+  const days = toDay - fromDay + 1;
+  return days > 1 ? `Les ${days} derniers jours` : 'Le dernier jour';
+}
+
 export function useFounderDigest(snapshot: CompanySnapshot | null, demo: boolean, live: boolean) {
   const [open, setOpen] = useState<DigestWindow | null>(null);
   const watch = useMemo(() => digestWatch(() => { void api.digestSeen().catch(() => undefined); }), []);
@@ -270,7 +278,7 @@ export function FounderDigestModal({ since, onClose }: DigestWindow & { onClose(
     else openDept(target.dept);
   };
 
-  const title = since === null ? 'Pendant ton absence' : `Les ${DIGEST_MIN_DAYS} derniers jours`;
+  const title = digestTitle(since, data?.fromDay ?? since ?? 1, data?.toDay ?? day);
   return (
     <div className="modal-backdrop">
       <div className="modal glass digest" role="dialog" aria-modal="true" aria-label={title} ref={rootRef}>

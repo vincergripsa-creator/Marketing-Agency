@@ -6,7 +6,7 @@ import { speak, type RuntimeCtx } from '../ctx.js';
 import { sim } from '../modules.js';
 import { eur, sum } from '../util.js';
 import { buildTeam } from './catalog.js';
-import { LEGACY_ORG, ORG } from './constants.js';
+import { LEGACY_ORG, ORG, survivalInsured } from './constants.js';
 import { logOrgDecision } from './hiring.js';
 import { officerId } from './officers.js';
 
@@ -21,10 +21,11 @@ function payrollOn(w: WorldState): boolean {
   return (w.scenario.org ?? LEGACY_ORG).payroll;
 }
 
-/** What the founders take of their pay today: half in survival, nothing while bankrupt. Hires keep their contract. */
+/** What the founders take of their pay today: nothing in survival, `ORG.survivalPayCut` without the insurance, nothing while bankrupt. Hires keep their contract. */
 function founderShare(w: WorldState): number {
   if (w.status === 'bankrupt') return 0;
-  return sim.financeSnapshot(w).cash < SURVIVAL_CASH * Math.max(1, w.scenario.startingCash) ? ORG.survivalPayCut : 1;
+  if (sim.financeSnapshot(w).cash >= SURVIVAL_CASH * Math.max(1, w.scenario.startingCash)) return 1;
+  return survivalInsured(w) ? 0 : ORG.survivalPayCut;
 }
 
 function payrollAt(w: WorldState, share: number): number {
@@ -44,8 +45,9 @@ function notePayCut(ctx: RuntimeCtx, share: number, payroll: number): void {
   if (share === last) return;
   const cash = sim.financeSnapshot(w).cash;
   const floor = round2(SURVIVAL_CASH * Math.max(1, w.scenario.startingCash));
-  const text = share === 0 ? 'faillite, les fondateurs ne se versent plus de salaire'
+  const text = w.status === 'bankrupt' ? 'faillite, les fondateurs ne se versent plus de salaire'
     : share === 1 ? `trésorerie revenue à ${eur(cash)}, les fondateurs reprennent leur plein salaire`
+    : share === 0 ? `trésorerie à ${eur(cash)}, sous le seuil de ${eur(floor)} : les fondateurs ne se versent plus de salaire`
     : `trésorerie à ${eur(cash)}, sous le seuil de ${eur(floor)} : les fondateurs passent à ${Math.round(share * 100)} % de leur salaire`;
   logOrgDecision(w, { kind: 'pay_cut', roleId: null, agentId: officerId(w, 'cfo'), text, numbers: { share, cash, floor, payroll } });
   speak(ctx, 'cfo', text, 'org');

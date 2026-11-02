@@ -25,6 +25,7 @@ Brancher la **recherche** sur le vrai monde, sans rien publier ni dépenser :
 ## Phase 3 — Réel avec validation fondateur
 `founderApproval: true` obligatoire : chaque publication, chaque euro dépensé, chaque remboursement > 50 € attend un clic du fondateur dans l'UI.
 - Boutique : Stripe / Lemon Squeezy / Shopify (produit numérique, livraison automatique du PDF)
+- Lien de la dernière page d'un guide : il reste relatif à la partie (`/runs/<id>/files/…`) tant qu'il n'y a pas de boutique sur internet, et c'est le passage à la vraie boutique qui fixera son adresse
 - Pubs : TikTok Ads API (création de campagne, budgets, statistiques, revue de conformité réelle), puis les autres régies. L'allocateur marginal se rejoue alors sur de vraies données
 - Organique : publication TikTok des MP4 que l'agence rend déjà
 - Support : Gmail (lecture + brouillons de réponse, envoi après validation)

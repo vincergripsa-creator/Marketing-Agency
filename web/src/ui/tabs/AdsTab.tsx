@@ -205,7 +205,7 @@ export function AdsTab({ onClose }: { onClose(): void }) {
                       <Pill tone={c.status === 'active' ? 'green' : c.status === 'rejected' ? 'red' : c.pausedFor === 'outage' ? 'amber' : 'neutral'} title={c.pausedFor === 'outage' ? 'Coupée le temps de la panne annoncée, elle reprend le lendemain matin.' : undefined}>
                         {c.pausedFor === 'outage' ? 'Pause panne' : { active: 'Active', paused: 'En pause', rejected: 'Refusée', ended: 'Terminée' }[c.status]}
                       </Pill>
-                      {c.founderForced ? <div className="muted small">Lancée à la demande du fondateur</div> : null}
+                      {c.founderForced ? <div className="muted small">Sur ordre du fondateur</div> : null}
                     </td>
                     <td className="num">{fmtEur(c.dailyBudget, 0)}</td>
                     <td className="num">{c.creativeIds.length}</td>

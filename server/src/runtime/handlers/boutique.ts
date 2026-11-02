@@ -12,7 +12,7 @@ import { officerId } from '../org/officers.js';
 import { followUpLimit, parentOf, priceCeiling } from '../metrics.js';
 import { armSharp, bestDraft } from '../talent/craft.js';
 import { linkUpsell, nicheCollision, pickUpsellSubject, upsellContextOf } from '../upsell.js';
-import { eur, median, numOf, round2, short, str } from '../util.js';
+import { endLine, eur, median, numOf, round2, short, str } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { NO_PRODUCT, requireProduct, studioMind } from './common.js';
 import { coverSvgFor, ensureCoverFile, ensureDesign } from './creation.js';
@@ -39,10 +39,18 @@ function runningExperiment(ctx: RuntimeCtx, dimension: string) {
   return ctx.world.company.experiments.find((e) => e.status === 'running' && e.dimension === dimension) ?? null;
 }
 
-/** What the page prints of the live shop: when this changes, the file on disk is out of date. */
-function pagePrintOf(product: Product): string {
+const stopped = (p: Product): boolean => p.status === 'killed' || p.status === 'paused';
+
+/** A kit sells at its guide's checkout and nowhere else: once the guide stops, its page has nothing left to sell, whatever the kit's own status says. */
+function offSale(ctx: RuntimeCtx, product: Product): boolean {
+  const guide = product.kind === 'kit' ? ctx.world.company.products.find((p) => p.bumpProductId === product.id) : undefined;
+  return stopped(product) || (!!guide && stopped(guide));
+}
+
+/** What the page prints of the live shop: when this changes, the file on disk is out of date. A stopped guide loses its buttons this way, and its kit with it. */
+function pagePrintOf(ctx: RuntimeCtx, product: Product): string {
   const { reviews, rating } = product.stats;
-  return [product.price, reviews.length, rating, reviews[reviews.length - 1]?.id ?? ''].join('|');
+  return [product.price, reviews.length, rating, reviews[reviews.length - 1]?.id ?? '', ...(offSale(ctx, product) ? ['hors vente'] : [])].join('|');
 }
 
 /** The real pages `render_pdf` left next to the guide, named after their kind. An old save has none: its page skips the section. */
@@ -56,15 +64,15 @@ async function previewsOf(ctx: RuntimeCtx, product: Product): Promise<{ label: s
 }
 
 async function renderSalesPage(ctx: RuntimeCtx, product: Product, rel: string, coverSvg: string): Promise<void> {
-  const html = deliverables.renderSalesPageHtml({ product, salesPage: product.salesPage!, coverSvg, design: ensureDesign(ctx, product), brand: ctx.world.company.name, previews: await previewsOf(ctx, product) });
+  const html = deliverables.renderSalesPageHtml({ product, salesPage: product.salesPage!, coverSvg, design: ensureDesign(ctx, product), brand: ctx.world.company.name, previews: await previewsOf(ctx, product), offSale: offSale(ctx, product) });
   await writeRunFile(ctx, rel, html);
   product.files.salesPage = rel;
-  product.pagePrint = pagePrintOf(product);
+  product.pagePrint = pagePrintOf(ctx, product);
 }
 
 /** Puts the page back in line with the price and the reviews of the moment (in place: a v2 in progress has its own). */
 export async function refreshSalesPage(ctx: RuntimeCtx, product: Product): Promise<void> {
-  if (!product.salesPage || !product.files.salesPage || product.status === 'killed' || product.pagePrint === pagePrintOf(product)) return;
+  if (!product.salesPage || !product.files.salesPage || product.pagePrint === pagePrintOf(ctx, product)) return;
   await renderSalesPage(ctx, product, product.files.salesPage, coverSvgFor(ctx, product));
 }
 
@@ -271,7 +279,7 @@ export const boutiqueHandlers: HandlerMap = {
       parent.upsellProductId = upsell.id;
       await productNote(ctx, parent, agent.id, 'Upsell', `- PDF suivant pour le même public : **${upsell.title}** — problème : ${problem}`);
       say(ctx, agent.id, `${agent.name} : les acheteurs de « ${short(parent.title, 40)} » veulent la suite → « ${short(problem, 60)} »`, 'thought', { productId: parent.id });
-      return { summary: `Upsell conçu : ${short(problem, 80)}.`, output: { upsellProductId: upsell.id, problem } };
+      return { summary: endLine(`Upsell conçu : ${short(problem, 80)}`), output: { upsellProductId: upsell.id, problem } };
     },
     async onDone(ctx, task) {
       if (task.output?.existing === true || task.output?.noSubject === true) return;

@@ -149,21 +149,62 @@ describe('one salary line per closed day (org test 6)', () => {
   });
 });
 
+/** The paired arm of the insurance (D117): founders at half pay in survival, as before it. */
+const NO_INSURANCE: Partial<ScenarioConfig> = { control: { noSurvivalTest: true } };
+
 describe('the founders give up their pay first', () => {
-  it('founders take half under 30 % of the starting cash, a hire keeps the contract', () => {
+  it('founders take nothing under 30 % of the starting cash, a hire keeps the contract (D117)', () => {
     const world = worldOf();
     hire(world, 'recrue', 'sonnet');
     expect(payrollToday(world)).toBe(6.3);
     setCash(world, 150);
     expect(payrollToday(world)).toBe(6.3); // the line itself is not under it
     setCash(world, 149.99);
-    expect(payrollToday(world)).toBe(round2(2.85 + ORG.payPerDay.sonnet));
+    expect(payrollToday(world)).toBe(ORG.payPerDay.sonnet);
     world.status = 'bankrupt';
     expect(payrollToday(world)).toBe(ORG.payPerDay.sonnet);
   });
 
-  it('logs a pay cut on the transition only, and the way back', () => {
+  it('the control and the old company take half under the same line, a hire keeps the contract', () => {
+    for (const over of [NO_INSURANCE, { scaling: false }]) {
+      const world = worldOf(over);
+      hire(world, 'recrue', 'sonnet');
+      setCash(world, 149.99);
+      expect(payrollToday(world)).toBe(round2(2.85 + ORG.payPerDay.sonnet));
+      world.status = 'bankrupt';
+      expect(payrollToday(world)).toBe(ORG.payPerDay.sonnet);
+    }
+  });
+
+  it('says so in one line, on the way down and on the way back, in the words of survival and not of a bankruptcy', () => {
     const world = worldOf();
+    const ctx = ctxOf(world);
+    world.day += 1;
+    setCash(world, 100);
+    bookPayroll(ctx);
+    expect(payCuts(world)).toHaveLength(1);
+    expect(payCuts(world)[0]).toMatchObject({ day: world.day, numbers: { share: 0, cash: 100, floor: 150, payroll: 0 } });
+    expect(payCuts(world)[0]!.text).toContain('sous le seuil de 150 € : les fondateurs ne se versent plus de salaire');
+    expect(payCuts(world)[0]!.text).not.toContain('faillite');
+    expect(salaries(world).at(-1)).toMatchObject({ amount: 0, ref: `payroll:${world.day}` });
+
+    world.day += 1;
+    setCash(world, 400);
+    bookPayroll(ctx);
+    expect(payCuts(world)).toHaveLength(2);
+    expect(payCuts(world)[1]!.numbers.share).toBe(1);
+    expect(salaries(world).at(-1)!.amount).toBe(-5.7);
+  });
+
+  it('a bankruptcy from full pay still says bankruptcy', () => {
+    const world = worldOf();
+    world.status = 'bankrupt';
+    bookPayroll(ctxOf(world));
+    expect(payCuts(world)[0]!.text).toContain('faillite');
+  });
+
+  it('logs a pay cut on the transition only, and the way back', () => {
+    const world = worldOf(NO_INSURANCE);
     const ctx = ctxOf(world);
     bookPayroll(ctx);
     expect(payCuts(world)).toEqual([]);
@@ -218,8 +259,17 @@ function closeEmptyDay(world: WorldState, ctx: RuntimeCtx): void {
 }
 
 describe('a market that never buys, 500 €, no ads (org test 9)', () => {
-  it('the lean team is still there on day 76, thanks to the founders', () => {
+  it('the insurance leaves 102 € on day 76, the founders stopped their pay on day 42 (D117)', () => {
     const world = worldOf({ startingCash: 500 });
+    const ctx = ctxOf(world);
+    for (let d = 1; d <= 76; d++) closeEmptyDay(world, ctx);
+    expect(payCuts(world).map((d) => [d.day, d.numbers.share])).toEqual([[42, 0]]);
+    expect(summarizeLedger(world.ledger, 76).payroll).toBeCloseTo(41 * 5.7, 2);
+    expect(ledgerSum(world)).toBe(102.18); // 440 - 76 × 1,37 - 41 × 5,70 €
+  });
+
+  it('the lean team is still there on day 76, thanks to the founders', () => {
+    const world = worldOf({ startingCash: 500, ...NO_INSURANCE });
     const ctx = ctxOf(world);
     for (let d = 1; d <= 76; d++) closeEmptyDay(world, ctx);
     const { cash, revenue, adSpend, payroll } = summarizeLedger(world.ledger, 76);
@@ -316,7 +366,10 @@ describe('the CFO keeps a week of pay out of the ads (D9)', () => {
   it('counts the pay the founders really take in survival', () => {
     const world = worldOf({ startingCash: 1000 });
     setCash(world, 200);
-    expect(computeBudget(world)).toMatchObject({ survival: true, rate: 0.08, adCap: round2((200 - 7 * 2.85) * 0.08) }); // setCash burned the rest: the runway is short
+    expect(computeBudget(world)).toMatchObject({ survival: true, rate: 0.08, adCap: 16 }); // setCash burned the rest: the runway is short
+    const control = worldOf({ startingCash: 1000, ...NO_INSURANCE });
+    setCash(control, 200);
+    expect(computeBudget(control)).toMatchObject({ survival: true, rate: 0.08, adCap: round2((200 - 7 * 2.85) * 0.08) });
   });
 
   it('moves nothing on a team nobody pays', () => {

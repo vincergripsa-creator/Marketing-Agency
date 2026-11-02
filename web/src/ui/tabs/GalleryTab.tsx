@@ -15,7 +15,7 @@ import { VideoLightbox } from '../viewers/VideoPlayer';
 /** `ad_video` is no `Deliverable.kind` (D27): the server merges those tiles from the video manifest. */
 export type TileKind = Deliverable['kind'] | 'ad_video';
 export interface GalleryItem extends Omit<Deliverable, 'kind'> { kind: TileKind; poster?: string | null }
-export interface GalleryPage { items: GalleryItem[]; total: number | null }
+export interface GalleryPage { items: GalleryItem[]; total: number | null; counts: Partial<Record<TileKind, number>> | null }
 
 type Filter = 'all' | TileKind;
 type Viewer = { kind: 'pdf'; url: string; title: string } | { kind: 'video'; creativeId: string; title: string };
@@ -32,10 +32,10 @@ const pathOf = (kinds: readonly TileKind[], page: number) => `/api/deliverables?
 
 /** One answer of /api/deliverables. Null: not a page, and the tab stays on what the snapshot holds. */
 export function pageOf(data: unknown): GalleryPage | null {
-  if (Array.isArray(data)) return { items: data as GalleryItem[], total: null };
-  const o = data as { items?: unknown; total?: unknown } | null;
+  if (Array.isArray(data)) return { items: data as GalleryItem[], total: null, counts: null };
+  const o = data as { items?: unknown; total?: unknown; counts?: GalleryPage['counts'] } | null;
   if (!o || !Array.isArray(o.items)) return null;
-  return { items: o.items as GalleryItem[], total: typeof o.total === 'number' ? o.total : null };
+  return { items: o.items as GalleryItem[], total: typeof o.total === 'number' ? o.total : null, counts: o.counts ?? null };
 }
 
 /** Tiles of the videos the snapshot knows: the same rows the server merges, for a server that cannot page yet. */
@@ -68,12 +68,15 @@ export function GalleryTab({ onClose }: { onClose(): void }) {
   const local = useMemo(() => [...(snapshot?.company?.deliverables ?? []), ...videoTiles(snapshot)] as GalleryItem[], [snapshot]);
   // the snapshot keeps the latest ad frames only: the counts are the run's, the subtitle says what the page holds
   const counts = snapshot?.deliverableCounts as Partial<Record<TileKind, number>> | undefined;
-  const kinds = useMemo(() => [...new Set([...local.map((d) => d.kind), ...Object.keys(counts ?? {}) as TileKind[]])], [local, counts]);
+  const servedVideos = served?.counts?.ad_video;
+  const kinds = useMemo(() => [...new Set([...local.map((d) => d.kind), ...Object.keys(counts ?? {}) as TileKind[], ...(servedVideos ? ['ad_video' as const] : [])])], [local, counts, servedVideos]);
   const localVideos = local.filter((d) => d.kind === 'ad_video').length;
   const countOf = (k: TileKind) => {
     if (k !== 'ad_video') return counts?.[k] ?? local.filter((d) => d.kind === k).length;
-    return (filter === 'ad_video' ? served?.total : null) ?? localVideos; // the stream holds the latest videos only
+    return servedVideos ?? localVideos; // the stream holds the latest videos only: the run's number is the server's
   };
+  // no number rather than the stream's, which the server's would replace a moment later
+  const videosKnown = demo || served !== null;
   const runTotal = Math.max(kinds.reduce((n, k) => n + countOf(k), 0), snapshot?.counts?.deliverables ?? 0);
 
   const list = useMemo(() => {
@@ -118,7 +121,7 @@ export function GalleryTab({ onClose }: { onClose(): void }) {
       <div className="filters-row">
         <Segmented<Filter> size="sm" value={filter} onChange={pick} options={[
           { id: 'all', label: 'Tout', count: allCount },
-          ...kinds.map((k) => ({ id: k, label: labelOf(k), count: countOf(k) })),
+          ...kinds.map((k) => ({ id: k, label: labelOf(k), ...(k === 'ad_video' && !videosKnown ? {} : { count: countOf(k) }) })),
         ]} />
       </div>
       {shown.length === 0 ? <Empty icon="image">Aucun livrable pour l’instant : les premiers guides, couvertures et pubs apparaîtront ici.</Empty> : (

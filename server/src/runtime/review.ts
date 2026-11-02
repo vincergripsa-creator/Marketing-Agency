@@ -14,7 +14,7 @@ import { bannedHits, directivesOf } from './playbook.js';
 import { excludedNiches, killProduct, pauseProduct } from './pipeline.js';
 import { productPnls } from './accounting.js';
 import { taskChannel } from './tasks.js';
-import { eur, short, strArr, sum, uniq } from './util.js';
+import { clip, endLine, eur, short, strArr, sum, uniq } from './util.js';
 import { creativeText } from './handlers/growth.js';
 import { scoreContent } from './handlers/studio.js';
 
@@ -189,7 +189,7 @@ export async function reviewTask(ctx: RuntimeCtx, task: Task, reviewer: AgentSta
           task.output = { ...out, finalVerdict: 'fix' };
           return approve(["Pas d'alternative solide dans la shortlist : on corrige l'angle plutôt que de tuer l'idée."]);
         }
-        return approve([`Verdict « tuer » validé : ${short(strArr(out.reasons)[0] ?? 'risque trop élevé', 80)}.`]);
+        return approve([endLine(`Verdict « tuer » validé : ${clip(strArr(out.reasons)[0] ?? 'risque trop élevé', 80)}`)]);
       }
       // The CEO confirms the Red Team and never softens it: its verdict on a guide is what the gate reads.
       if (out.subject !== 'idea' && verdict === 'kill') return approve(['Verdict « tuer » validé : on repart du plan avant toute mise en ligne.']);

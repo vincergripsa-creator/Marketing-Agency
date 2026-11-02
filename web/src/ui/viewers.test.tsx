@@ -170,7 +170,25 @@ describe('Galerie: what the server pages', () => {
     expect(html).toContain('1 sur 67 livrables');
     expect(html).toMatch(/Tout<span class="seg-count">67</);
   });
+  it('« Vidéo pub » reads one number: the stream\'s films never show, before or after the click', () => {
+    const films = { cre_1: ready(), cre_2: ready({ poster: 'video/cre_2/poster.png', videos: [{ ratio: '9:16', path: 'video/cre_2/9x16.mp4', durationSec: 26, bytes: 5_000_000 }] }), cre_3: ready({ poster: 'video/cre_3/poster.png', videos: [{ ratio: '9:16', path: 'video/cre_3/9x16.mp4', durationSec: 26, bytes: 5_000_000 }] }) };
+    const count = (html: string) => /Vidéo pub<span class="seg-count">([\d\s ]+)</.exec(html)?.[1] ?? null;
+    expect(count(asked(() => render(gallery([], films), <GalleryTab onClose={noop} />)).html)).toBeNull();
+    answer({ items: [tile], page: 1, pages: 1, pageSize: 60, total: 40, counts: { ad_video: 11, pdf: 29 } });
+    expect(count(asked(() => render(gallery([], films), <GalleryTab onClose={noop} />)).html)).toBe('11');
+    answer({ items: [tile], page: 1, pages: 1, pageSize: 60, total: 11, counts: { ad_video: 11, pdf: 29 } });
+    const segment = /Vidéo pub<span class="seg-count">11</;
+    expect(asked(() => render(gallery([], films), <GalleryTab onClose={noop} />)).html).toMatch(segment);
+    // the demo has no server: what the snapshot holds is all there is
+    expect(count(asked(() => render(gallery([], films), <GalleryTab onClose={noop} />, true)).html)).toBe('3');
+  });
+  it('« Vidéo pub » is there when the stream holds none of the run\'s films', () => {
+    answer({ items: [tile], page: 1, pages: 1, pageSize: 60, total: 11, counts: { ad_video: 11 } });
+    expect(asked(() => render(gallery([]), <GalleryTab onClose={noop} />)).html).toMatch(/Vidéo pub<span class="seg-count">11</);
+  });
   it('reads a page, a list too, and nothing else', () => {
+    expect(pageOf({ items: [row({})], total: 301, counts: { ad_video: 3 } })).toMatchObject({ total: 301, counts: { ad_video: 3 } });
+    expect(pageOf([row({})])).toMatchObject({ counts: null });
     expect(pageOf({ items: [row({})], total: 301 })).toMatchObject({ total: 301 });
     expect(pageOf([row({})])).toMatchObject({ total: null });
     expect(pageOf(null)).toBeNull();

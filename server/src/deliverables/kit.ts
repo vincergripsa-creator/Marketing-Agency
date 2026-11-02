@@ -9,13 +9,13 @@ import { dirname } from 'node:path';
 import PDFDocument from 'pdfkit';
 import type { ChapterContent, DesignSpec, EmailStep, PdfContent, Product, SalesPage, VisualSpec } from '../shared.js';
 import { field } from './art/field.js';
-import { coverScene, splitTitle } from './cover.js';
+import { coverScene, KIT_TITLE, splitTitle } from './cover.js';
 import { familyOfText, normalizeDesign, professionalFor } from './design.js';
 import { fitDisplay, loadVoice, registerVoice, sanitizeFor } from './fonts.js';
 import { arr, CHECK_INDENT, CHECK_LINE, MIN_SHEET_NOTES, SHEET_BAND, SHEET_NOTES_GAP, sheetBlock, sheetTop, STEP_INDENT, textKey } from './layout/blocks.js';
 import { BODY_BOTTOM, GRID } from './layout/grid.js';
 import { drawNotes } from './pages/render.js';
-import { linesOf, setLines, themeFor, tickBox, type PdfTheme } from './pdfVisuals.js';
+import { linesOf, setLines, sheetBoxes, themeFor, tickBox, type PdfTheme } from './pdfVisuals.js';
 import { Scene, toPdf, toSvg } from './scene.js';
 import { escapeHtml, frenchNbsp, sanitizePdfText } from './text.js';
 import type { Voice } from './voices.js';
@@ -321,18 +321,21 @@ function planParts(content: PdfContent, sheets: readonly VisualSpec[]): { ch: Ch
     .map((part, k) => ({ ...part, kicker: part.kicker === 'Bonus' ? part.kicker : `Étape ${k + 1}` }));
 }
 
-/** The boxes the plan prints: the steps, then what their checklists add. */
-const ticksOf = (content: PdfContent): number => planParts(content, kitSheets(content)).reduce((n, { ch }) => {
-  const steps = arr(ch.steps).map(stepText);
-  return n + steps.length + unsaid(arr(ch.checklist), steps).length;
-}, 0);
+/** The boxes the kit prints: on its sheets, then in its plan, the steps and what their checklists add. */
+export function kitBoxes(content: PdfContent): number {
+  const sheets = kitSheets(content);
+  return sheets.reduce((n, sheet) => n + sheetBoxes(sheet), 0) + planParts(content, sheets).reduce((n, { ch }) => {
+    const steps = arr(ch.steps).map(stepText);
+    return n + steps.length + unsaid(arr(ch.checklist), steps).length;
+  }, 0);
+}
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n > 1 ? many : one}`;
 
 const headOf = (title: string): string => splitTitle(S(title)).head;
 
-/** « Titre » between guillemets, once: a head that quotes a customer holds its own. */
-const named = (head: string): string => (head.includes('«') ? head : `« ${head} »`);
+/** « Titre » between guillemets, once: those of a head that quotes a customer become “ ”. */
+const named = (head: string): string => `« ${head.replace(/«\s*/g, '“').replace(/\s*»/g, '”')} »`;
 
 /** A kit has no chapters: its parts are « Étape 1 », and the guide's lines follow. */
 const inKit = (line: string): string => line.replace(/\bce chapitre\b/g, 'cette étape').replace(/\bCe chapitre\b/g, 'Cette étape');
@@ -351,24 +354,30 @@ export function kitContent(parent: Pick<Product, 'title' | 'audience' | 'content
   const head = headOf(parent.title);
   return {
     ...guide,
-    title: `Le kit à imprimer : ${head}`,
-    subtitle: `${plural(sheets.length, 'fiche', 'fiches')} et ${plural(ticksOf(guide), 'case à cocher', 'cases à cocher')} pour ${withArticleOf(guide.audience || parent.audience)}`,
+    title: `${KIT_TITLE} : ${head}`,
+    subtitle: `${plural(sheets.length, 'fiche', 'fiches')} et ${plural(kitBoxes(guide), 'case à cocher', 'cases à cocher')} pour ${withArticleOf(guide.audience || parent.audience)}`,
     promise: `Tout ce qu’il faut imprimer pour appliquer ${named(head)} : ${plural(sheets.length, 'fiche à remplir', 'fiches à remplir')} et le plan à cocher, étape par étape.`,
     introduction: [`Le guide explique, ce kit se remplit. ${plural(sheets.length, 'fiche', 'fiches')} à imprimer, le plan découpé étape par étape, une checklist par étape : imprimez, remplissez, cochez.`],
     nextStep: { title: S(parent.title), text: 'Tout ce que ce kit fait appliquer est expliqué dans le guide, chapitre par chapitre.', upsellProductId: null },
   };
 }
 
+/** The line of a step of the plan on the kit's page: its first box, the step's own period left out. */
+function firstBox(ch: ChapterContent): string {
+  const step = arr(ch.steps)[0];
+  return step ? `Première case : ${inKit(stepText(step)).replace(/[\s.!?…]+$/, '').replace(/^./, (x) => x.toLowerCase())}.` : '';
+}
+
 /** A kit is bought in one click at checkout: its page says what is in the box and stops there. */
 export function kitOffer(kit: Pick<Product, 'content'>, parent: Pick<Product, 'title' | 'salesPage'>): SalesPage {
   const content = kit.content!;
-  const sheets = kitSheets(content);
   return {
     headline: S(content.title), subheadline: S(content.subtitle),
     painBullets: arr((parent.salesPage as SalesPage | null | undefined)?.painBullets),
     solution: `Toutes les fiches, tous les plans et toutes les checklists de ${named(headOf(parent.title))}, réunis pour l’imprimante.`,
-    chapterBlurbs: arr(content.chapters).map((ch) => ({ title: S(ch.title), blurb: arr(ch.steps).length ? `Première case : ${inKit(stepText(arr(ch.steps)[0]!)).replace(/^./, (x) => x.toLowerCase())}.` : '' })),
-    bonusBlurb: `Avec le bonus du guide : ${S(content.bonus?.title).replace(/^bonus\s*:\s*/i, '')}.`,
+    // the steps the plan prints: a chapter that stands on a sheet is not one of them, and the bonus has its own card
+    chapterBlurbs: planParts(content, kitSheets(content)).filter(({ kicker }) => kicker !== 'Bonus').map(({ ch }) => ({ title: S(ch.title), blurb: firstBox(ch) })),
+    bonusBlurb: `Avec le bonus du guide : ${S(content.bonus?.title).replace(/^bonus\s*:\s*/i, '').replace(/[\s.!?…]+$/, '')}.`,
     objections: [{ q: 'Faut-il avoir le guide ?', a: 'Oui : le guide explique, le kit se remplit. Il vous est proposé à la commande du guide.' }],
     guarantee: 'Satisfait ou remboursé pendant 14 jours, sans justification.', cta: 'Ajouter le kit à ma commande', hypeLevel: 0.2,
   };

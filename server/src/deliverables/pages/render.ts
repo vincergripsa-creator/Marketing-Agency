@@ -343,6 +343,9 @@ function pageTitle(c: Ctx, s: Scene, kicker: string, title: string, y: number): 
   return cy;
 }
 
+/** The one count of a guide's actions: the steps of its chapters, the bonus apart. The promise page prints it, the sales page says it again. */
+export const guidedActions = (chapters: Pick<ChapterContent, 'steps'>[] | null | undefined): number => arr(chapters).reduce((a, ch) => a + arr(ch?.steps).length, 0);
+
 function promisePage(counts: { chapters: number; actions: number; sheets: number }) {
   return (c: Ctx, no: number): Scene => {
     const { v, inks, aText } = c.t;
@@ -609,7 +612,7 @@ export function layoutGuide(spec: GuideSpec, t: PdfTheme, effort: DesignEffort):
 
   front('promise', plain, promisePage({
     chapters: chapters.length,
-    actions: chapters.reduce((a, ch) => a + arr(ch.content.steps).length, 0),
+    actions: guidedActions(chapters.map((ch) => ch.content)),
     sheets: [...chapters, ...(bonus ? [bonus] : [])].filter((ch) => ch.content.visual?.type === 'grid').length,
   }));
   front('toc', plain, contentsPage);

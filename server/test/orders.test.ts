@@ -3,19 +3,19 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { AgentState, Campaign, Lesson, PdfContent, Product, SalesPage, Task, VoiceOfCustomer, WorldState } from '../src/shared.js';
+import type { AgentState, Allocation, Campaign, Lesson, PdfContent, Product, SalesPage, Task, VoiceOfCustomer, WorldState } from '../src/shared.js';
 import type { BrainVault, ContentEngine, MindContext, RunPaths } from '../src/contracts.js';
 import { heuristicHumanize } from '../src/minds/heuristic/editing.js';
 import { seededRng } from '../src/minds/util.js';
 import { companyPaidBlock, productPaidBlock } from '../src/runtime/acquisition.js';
 import { HANDLERS } from '../src/runtime/handlers/index.js';
 import { activeHolds, adsHold, launchHold, productHold, REFUSAL_COOLDOWN_DAYS } from '../src/runtime/holds.js';
-import { asksForProduct, daysIn, orderAction } from '../src/runtime/missions.js';
+import { asksForProduct, daysIn, loweringIn, orderAction, ordersIn, requestBeside } from '../src/runtime/missions.js';
 import { endTimedStops } from '../src/runtime/orders.js';
 import { guideGaps, MAX_REWORK_CYCLES, settleRedTeam } from '../src/runtime/redteam.js';
 import { closeLoop, reviewTask } from '../src/runtime/review.js';
 import { situationFor } from '../src/runtime/situation.js';
-import { buildHeuristicPlan } from '../src/runtime/strategy.js';
+import { buildHeuristicPlan, reactToOutage } from '../src/runtime/strategy.js';
 import { createTask } from '../src/runtime/tasks.js';
 import { currentBudget } from '../src/runtime/metrics.js';
 import { killProduct } from '../src/runtime/pipeline.js';
@@ -328,6 +328,499 @@ describe('founder orders', () => {
     const id = await company.giveMission('coupe les pubs non rentables');
     expect(tasksOf(world, id).map((t) => t.kind)).toEqual(['optimize_ads']);
     expect(activeHolds(world)).toEqual([]);
+  }));
+});
+
+describe('« baisse le budget de pub »', () => {
+  /** What a founder really types, slips and missing accents included. */
+  const LOWERING = [
+    'Baisse le budget de pub', 'baisse le budget pub', 'baisse le budjet pub', 'baise le budget de pub', 'bisse le bugdet pub', 'baisser le budget pub', 'on baisse le buget pub',
+    'reduis le budget publicitaire', 'Réduis les dépenses de pub', 'reduit le budget ads', 'réduction du budget pub', 'diminue le budget des pubs', 'dimunue le budget pub', 'Divise le budget pub par deux',
+    'coupe le budget pub de moitié', 'on dépense trop en pub', 'depense moins en pub', 'on depence trop en pub', 'moins de pub', 'fais moins de pubs', 'trop de pub', 'lève le pied sur la pub', 'calme le jeu sur les pubs',
+    'Enlève 10 € au budget pub', 'Retire 20 % du budget pub', 'Coupe 20 % du budget pub', 'Coupe 20 % sur TikTok', 'Baisse de 20 % sur TikTok', 'Redescends le budget pub', 'Descends le budget pub', 'Ramène le budget pub à 20 €', 'Divise par trois le budget pub',
+    'Mets la pédale douce sur les pubs', 'Va doucement sur les pubs', 'Serre le budget pub', 'Resserre le budget pub', 'Rogne sur la pub', 'Économise sur la pub', 'Fais des économies sur les pubs', 'Arrête de dépenser autant', 'Ne dépense pas autant',
+    'Peux-tu baisser le budget pub ?', 'Pourrais-tu réduire le budget pub ?', 'Pouvez-vous baisser le budget pub ?', 'Pourriez-vous baisser le budget pub ?', 'Vous pourriez baisser le budget pub ?',
+    'mets moins d\'argent dans la pub', 'le budget pub est trop élevé', 'baisse la pub', 'tu peux baisser le budget pub ?', 'il faudrait baisser le budget pub', 'je veux que tu baisses le budget pub', 'plafonne la pub à 20 € par jour', 'ne dépense pas trop en pub', 'réduis Meta',
+  ];
+
+  it('reads a lowering however the founder types it', () => {
+    expect(LOWERING.length).toBeGreaterThanOrEqual(12);
+    for (const text of LOWERING) expect(orderAction(text), text).toBe('lower_budget');
+  });
+
+  it('what only looks like it is no lowering', () => {
+    for (const text of ['Baisse le prix du guide', 'Baisse le prix du guide sur le sommeil à 14 €', 'le CA baisse et la pub coûte cher', 'laisse le budget pub', 'laisse la pub tranquille', 'faut-il baisser le budget pub ?', "j'ai baissé le budget pub", 'on a dépensé trop en pub', 'redis-moi le budget pub', 'fais plus de pubs', 'Lance une nouvelle pub TikTok', 'Fais un guide pour dépenser moins', 'Lance un guide pour réduire ses dépenses', 'on a trop de pubs refusées', 'Baisse le prix du guide budget']) {
+      expect(orderAction(text), text).toBe(null);
+    }
+    expect(orderAction('double le budget pub')).toBe('raise_budget');
+    expect(orderAction('coupe le budget pub')).toBe('stop_ads');
+    expect(orderAction('coupe la pub, on dépense trop')).toBe('stop_spending');
+    expect(orderAction('baisse le budget des pubs non rentables')).toBe('trim_ads');
+    expect(orderAction('ne baisse pas le budget pub')).toBe('negated');
+    expect(orderAction('ne baise pas le budjet pub')).toBe('negated');
+  });
+
+  it('another budget, or where and not how much, moves nothing', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    const c = addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 20);
+    for (const text of ['Limite les pubs à TikTok', 'Limite les dépenses en outils', 'Réduis le budget recrutement', 'Dépense autant que tu veux sur TikTok', 'Dépense autant qu\'hier']) {
+      expect(orderAction(text), text).toBe(null);
+      await company.giveMission(text);
+      expect(c.dailyBudget, text).toBe(20);
+      expect(activeHolds(world), text).toEqual([]);
+    }
+  }));
+
+  it('a lowering refused stops nothing, whatever the verb', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    const c = addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 20);
+    for (const text of ['Ne descends pas le budget pub', 'Ne redescends pas la pub', 'Ne ramène pas le budget pub à 20 €', 'Ne resserre pas le budget pub', 'Ne rogne pas sur la pub', "N'économise pas sur la pub", 'Évite de descendre le budget pub', 'Il ne faut pas descendre le budget pub', 'Il ne faut pas ramener le budget pub à 20 €']) {
+      expect(orderAction(text) ?? 'negated', text).toBe('negated');
+      const id = await company.giveMission(text);
+      expect(c, text).toMatchObject({ status: 'active', dailyBudget: 20 });
+      expect(activeHolds(world), text).toEqual([]);
+      expect(tasksOf(world, id), text).toEqual([]);
+    }
+  }));
+
+  it('how much is read in the clause that lowers, a comment beside it is no amount', () => {
+    expect(loweringIn('Baisse le budget pub, le panier moyen est à 12 euros')).toEqual({});
+    expect(loweringIn('Baisse le budget à 12,50 € par jour')).toEqual({ amount: 12.5 });
+    expect(loweringIn('Coupe 20 % du budget pub')).toEqual({ share: 0.8 });
+    expect(loweringIn('Retire 20 % du budget pub')).toEqual({ share: 0.8 });
+    expect(loweringIn('Baisse de 20 % sur TikTok')).toEqual({ share: 0.8 });
+    expect(loweringIn('Enlève 10 € au budget pub')).toEqual({ less: 10 });
+    expect(loweringIn('Divise par trois le budget pub').share).toBeCloseTo(1 / 3);
+    expect(loweringIn('Divise par 4 le budget pub').share).toBe(0.25);
+  });
+
+  it('a stop on one channel leaves the other running, and the lowering said beside it comes back to the founder', async () => {
+    for (const text of ['Coupe les pubs sur Meta et baisse le budget sur TikTok', 'Baisse le budget sur TikTok et coupe Meta']) {
+      const s = await setup();
+      try {
+        const { world, company } = s;
+        world.day = 20;
+        const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+        const tiktok = addCampaign(world, 'cmp_t', p.id, 20);
+        const meta = addCampaign(world, 'cmp_m', p.id, 40, { channel: 'meta' });
+        const id = await company.giveMission(text);
+        expect(meta.status, text).toBe('paused');
+        expect(tiktok, text).toMatchObject({ status: 'active', dailyBudget: 20 });
+        expect(adsHold(world, null, 'tiktok'), text).toBeNull();
+        expect(adsHold(world, null, 'meta'), text).not.toBeNull();
+        expect(missionOf(world, id).outcome, text).toMatch(/Pas fait : « .*baisse le budget sur TikTok/i);
+      } finally { rmSync(s.root, { recursive: true, force: true }); }
+    }
+  });
+
+  it('work asked in so many words stays work, whatever it is about', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 20);
+    const hooks = await company.giveMission('Écris des hooks pour réduire les dépenses');
+    expect(tasksOf(world, hooks).map((t) => t.kind)).toEqual(['write_ad_hooks']);
+    const launch = await company.giveMission('Lance une campagne avec un budget pub de 20 €');
+    expect(tasksOf(world, launch).map((t) => t.kind)).toContain('launch_campaign');
+    // Each on its own morning: the tasks above would answer for them.
+    for (const text of ['Écris 5 accroches sur comment diminuer ses dépenses', 'Fais une pub pour le guide sur la réduction des dépenses', 'Produis une pub sur le thème réduire ses dépenses']) {
+      const s = await setup();
+      try {
+        s.world.day = 20;
+        addCampaign(s.world, 'cmp_a', addProduct(s.world, 'prd_a', 'sommeil-bebe').id, 20);
+        const id = await s.company.giveMission(text);
+        expect(missionOf(s.world, id).outcome ?? '', text).not.toMatch(/Je n'ai rien changé/);
+        expect(tasksOf(s.world, id).map((t) => t.kind), text).toContain('write_ad_hooks');
+      } finally { rmSync(s.root, { recursive: true, force: true }); }
+    }
+  }));
+
+  it('every phrasing lowers what runs, launches nothing and says what it leaves alone', async () => {
+    for (const text of LOWERING.filter((t) => !/Meta/.test(t))) {
+      const s = await setup();
+      try {
+        const { world, company } = s;
+        world.day = 20;
+        const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+        const running = addCampaign(world, 'cmp_a', p.id, 40);
+        const id = await company.giveMission(text);
+        expect(missionOf(world, id).status, text).toBe('done');
+        expect(tasksOf(world, id), text).toEqual([]);
+        expect(running.status, text).toBe('active');
+        expect(running.dailyBudget, text).toBeLessThan(40);
+        expect(adsHold(world), text).not.toBeNull();
+        expect(world.company.tasks.filter((t) => PAID.includes(t.kind)), text).toEqual([]);
+        expect(missionOf(world, id).outcome, text).toMatch(/Je ne touche pas à l'enveloppe du CFO/);
+      } finally { rmSync(s.root, { recursive: true, force: true }); }
+    }
+  });
+
+  it('what is on its way stops, the plan starts nothing, and a kept campaign runs under the hold', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const c = addCampaign(world, 'cmp_a', p.id, 20, { startDay: 15 });
+    adDays(world, c.id, p.id, [17, 18, 19], 20, 2.4);
+    const launch = createTask(world, { kind: 'launch_campaign', input: { productId: p.id, nicheId: p.nicheId }, createdBy: 'founder' });
+    const id = await company.giveMission('Baisse le budget de pub');
+    expect(c.dailyBudget).toBe(14);
+    expect(launch.status).toBe('cancelled');
+    expect(missionOf(world, id).outcome).toMatch(/1 campagne\(s\) baissée\(s\), de 20 € à 14 €\/jour.*jusqu'au jour 26 inclus, 1 tâche\(s\) de pub annulée\(s\)/);
+    await HANDLERS.optimize_ads.run(ctx, createTask(world, { kind: 'optimize_ads', input: {} }), agent(world, 'adam'), mind(agent(world, 'adam')));
+    expect(c.status).toBe('active');
+    const ask = await company.giveMission('Fais une pub pour le guide sur le sommeil');
+    expect(missionOf(world, ask).status).toBe('failed');
+    expect(missionOf(world, ask).outcome).toMatch(/nouvelles pubs gelées, budget baissé sur ordre du fondateur \(jour 20\).*reprends les pubs/);
+    const plan = await buildHeuristicPlan(ctx);
+    expect(plan.items.filter((i) => PAID.includes(i.kind))).toEqual([]);
+  }));
+
+  it('the stop-loss still reads a kept campaign', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const c = addCampaign(world, 'cmp_a', p.id, 20, { startDay: 15 });
+    adDays(world, c.id, p.id, [16, 17, 18, 19], 20, 0);
+    await company.giveMission('Baisse le budget de pub');
+    await HANDLERS.optimize_ads.run(ctx, createTask(world, { kind: 'optimize_ads', input: {} }), agent(world, 'adam'), mind(agent(world, 'adam')));
+    expect(c.status).toBe('paused');
+  }));
+
+  it('ends on its day: new ads can start, and the campaigns kept under it are the company\'s again', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const c = addCampaign(world, 'cmp_a', p.id, 20);
+    const forced = addCampaign(world, 'cmp_f', p.id, 20, { founderForced: true });
+    await company.giveMission('Baisse le budget de pub pendant 3 jours');
+    expect(activeHolds(world).find((h) => h.kind === 'ads')).toMatchObject({ until: 22, kept: ['cmp_a'], resumes: [] });
+    expect(c.founderForced).toBe(true);
+    world.day = 23;
+    endTimedStops(ctx);
+    expect(adsHold(world)).toBeNull();
+    expect(c.founderForced).toBeUndefined();
+    expect(c.status).toBe('active');
+    expect(forced.founderForced).toBe(true);
+  }));
+
+  it('on an outage day a lowering lowers: what is off for the day stays off for the day, and comes back at what they said', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const c = addCampaign(world, 'cmp_a', p.id, 20, { status: 'paused', pausedFor: 'outage' });
+    const id = await company.giveMission('Baisse le budget de pub pendant 2 jours');
+    expect(missionOf(world, id).outcome).toMatch(/1 campagne\(s\) baissée\(s\), de 20 € à 14 €\/jour/);
+    expect(c).toMatchObject({ status: 'paused', pausedFor: 'outage', dailyBudget: 14 });
+    world.day = 21;
+    expect(reactToOutage(ctx)).toBe(false);
+    expect(c).toMatchObject({ status: 'active', dailyBudget: 14 });
+  }));
+
+  it('on an outage day the week\'s ceiling counts what is off for the day', withCompany({ scaling: true }, async ({ world, company }) => {
+    world.day = 31;
+    const allocation = { week: 5, day: 29, adTarget: 120, testWeek: 0, scaleRoas: 1.8, trimRoas: 1.3, reserve: 0, note: '' } as Allocation;
+    world.company.growth!.allocation = allocation;
+    addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 20, { status: 'paused', pausedFor: 'outage' });
+    const id = await company.giveMission('Baisse le budget de pub');
+    expect(allocation.adTarget).toBe(14);
+    expect(missionOf(world, id).outcome).toMatch(/Plafond de la semaine ramené à 14 €\/jour/);
+  }));
+
+  it('an outage inside the hold gives back what the hold kept, at the budget they said', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const c = addCampaign(world, 'cmp_a', p.id, 20);
+    await company.giveMission('Baisse le budget de pub');
+    world.day = 21;
+    world.market.events.push({ id: 'evt_x', day: 20, kind: 'platform_outage', title: 'Panne', description: '', severity: 'danger', refs: { day: 21 } });
+    expect(reactToOutage(ctx)).toBe(true);
+    expect(c).toMatchObject({ status: 'paused', pausedFor: 'outage' });
+    world.day = 22;
+    expect(reactToOutage(ctx)).toBe(false);
+    expect(c).toMatchObject({ status: 'active', dailyBudget: 14 });
+    expect(c.pausedFor).toBeUndefined();
+  }));
+
+  it('a stop inside a lowering: once the last order over a campaign ends, nothing keeps it forced', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const c = addCampaign(world, 'cmp_a', p.id, 20);
+    await company.giveMission('Baisse le budget de pub');
+    await company.giveMission('Coupe les pubs');
+    expect(c).toMatchObject({ status: 'paused', pausedFor: 'founder', founderForced: true });
+    world.day = 27;
+    endTimedStops(ctx); // the lowering is over, the stop still stands
+    expect(c.founderForced).toBe(true);
+    await company.giveMission('Reprends les pubs');
+    expect(c.status).toBe('active');
+    expect(c.founderForced).toBeUndefined();
+  }));
+
+  it('a stop with a length inside a lowering: the campaign comes back with the last order, and free', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const c = addCampaign(world, 'cmp_a', p.id, 20);
+    await company.giveMission('Baisse le budget de pub');
+    await company.giveMission('Coupe les pubs pendant 2 jours');
+    world.day = 22;
+    endTimedStops(ctx);
+    expect(c).toMatchObject({ status: 'paused', pausedFor: 'founder' });
+    world.day = 27;
+    endTimedStops(ctx);
+    expect(c.status).toBe('active');
+    expect(c.founderForced).toBeUndefined();
+  }));
+
+  it('two stops with a length: the one that ends last gives back what the first paused', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 20;
+    const c = addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 20);
+    await company.giveMission('Coupe les pubs pendant 2 jours');
+    await company.giveMission('Coupe TikTok pendant 5 jours');
+    world.day = 22;
+    endTimedStops(ctx);
+    expect(c.status).toBe('paused');
+    world.day = 25;
+    endTimedStops(ctx);
+    expect(c.status).toBe('active');
+  }));
+
+  it('a campaign stopped by its number stays stopped when the lowering ends', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 20;
+    const c = addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 20);
+    await company.giveMission('Baisse le budget de pub');
+    await company.giveMission('Coupe la campagne 1');
+    world.day = 27;
+    endTimedStops(ctx);
+    expect(c).toMatchObject({ status: 'paused', pausedFor: 'founder' });
+    expect(c.founderForced).toBeUndefined();
+  }));
+
+  it('once the stop-loss took all it kept, the hold ends and says so: a lowering is no stop, and the week\'s ceiling stays', withCompany({ scaling: true }, async ({ world, company, ctx }) => {
+    world.day = 31;
+    const allocation = { week: 5, day: 29, adTarget: 120, testWeek: 0, scaleRoas: 1.8, trimRoas: 1.3, reserve: 0, note: '' } as Allocation;
+    world.company.growth!.allocation = allocation;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const c = addCampaign(world, 'cmp_a', p.id, 20, { startDay: 25 });
+    adDays(world, c.id, p.id, [27, 28, 29, 30], 20, 0);
+    await company.giveMission('Baisse le budget de pub');
+    expect(adsHold(world)).not.toBeNull();
+    world.day = 32;
+    endTimedStops(ctx);
+    expect(adsHold(world)).not.toBeNull(); // it still runs: the hold stands
+    await HANDLERS.optimize_ads.run(ctx, createTask(world, { kind: 'optimize_ads', input: {} }), agent(world, 'adam'), mind(agent(world, 'adam')));
+    expect(c.status).toBe('paused');
+    world.day = 33;
+    endTimedStops(ctx);
+    expect(adsHold(world)).toBeNull();
+    expect(world.activity.at(-1)!.text).toContain('plus aucune des campagnes gardées le jour 31 ne tourne : le gel des nouvelles pubs s\'arrête ce matin');
+    expect(c.founderForced).toBeUndefined();
+    expect(allocation.adTarget).toBe(14);
+  }));
+
+  it('what it says of a guide keeps its title whole: no word cut, no quote left open', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe', { title: 'Les couples fiancés : en finir avec « on ne se parle plus » avant le mariage' });
+    addCampaign(world, 'cmp_a', p.id, 20);
+    const id = await company.giveMission('Baisse le budget du guide sur le sommeil de bébé');
+    for (const line of [missionOf(world, id).outcome!, adsHold(world, p.id)!.reason]) {
+      expect(line.split('«').length, line).toBe(line.split('»').length);
+      expect(line, line).toContain('« Les couples fiancés : en finir avec « on ne se… » »');
+    }
+  }));
+
+  it('with nothing on the air nothing freezes: a stop nobody ordered is no answer', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const launch = createTask(world, { kind: 'launch_campaign', input: { productId: p.id, nicheId: p.nicheId }, createdBy: 'founder' });
+    const id = await company.giveMission('Baisse le budget de pub');
+    expect(missionOf(world, id).outcome).toBe('Rien à baisser : aucune campagne ne tourne.');
+    expect(activeHolds(world)).toEqual([]);
+    expect(launch.status).not.toBe('cancelled');
+  }));
+
+  it('a second lowering carries what the first one kept', withCompany({}, async ({ world, company, ctx }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const c = addCampaign(world, 'cmp_a', p.id, 40);
+    await company.giveMission('Baisse le budget de pub pendant 2 jours');
+    await company.giveMission('Baisse encore le budget de pub pendant 5 jours');
+    expect(c.dailyBudget).toBe(19.6);
+    world.day = 22;
+    endTimedStops(ctx);
+    expect(c.founderForced).toBe(true);
+    world.day = 25;
+    endTimedStops(ctx);
+    expect(c.founderForced).toBeUndefined();
+  }));
+
+  it('« reprends les pubs » lifts it early, and frees what it kept', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const c = addCampaign(world, 'cmp_a', p.id, 20);
+    await company.giveMission('Baisse le budget de pub');
+    const back = await company.giveMission('reprends les pubs');
+    expect(missionOf(world, back).status).toBe('done');
+    expect(adsHold(world)).toBeNull();
+    expect(c).toMatchObject({ status: 'active', dailyBudget: 14 });
+    expect(c.founderForced).toBeUndefined();
+  }));
+
+  it('stays on what the founder named: a channel, a guide, one campaign', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    const chiot = addProduct(world, 'prd_c', 'proprete-chiot');
+    const bebe = addProduct(world, 'prd_b', 'sommeil-bebe');
+    const tiktok = addCampaign(world, 'cmp_t', chiot.id, 20);
+    const meta = addCampaign(world, 'cmp_m', bebe.id, 40, { channel: 'meta' });
+    const sur = await company.giveMission('Baisse le budget de pub sur TikTok');
+    expect(missionOf(world, sur).outcome).toMatch(/C'est fait sur TikTok/);
+    expect([tiktok.dailyBudget, meta.dailyBudget]).toEqual([14, 40]);
+    expect(adsHold(world, null, 'tiktok')).not.toBeNull();
+    expect(adsHold(world, null, 'meta')).toBeNull();
+    await company.giveMission('reprends les pubs');
+    await company.giveMission('Baisse le budget du guide sur le sommeil');
+    expect([tiktok.dailyBudget, meta.dailyBudget]).toEqual([14, 28]);
+    expect(adsHold(world, bebe.id, 'meta')).not.toBeNull();
+    expect(adsHold(world, chiot.id, 'tiktok')).toBeNull();
+    await company.giveMission('reprends les pubs');
+    await company.giveMission('Baisse le budget de la campagne 1');
+    expect(tiktok.dailyBudget).toBe(9.8);
+    expect(meta.dailyBudget).toBe(28);
+    expect(activeHolds(world).filter((h) => h.kind === 'ads')).toEqual([]);
+    const none = await company.giveMission('Baisse le budget de la campagne 9');
+    expect(missionOf(world, none).status).toBe('failed');
+    expect(missionOf(world, none).outcome).toMatch(/Je n’ai baissé aucun budget : aucune campagne ne porte le n° 9/);
+    const nobody = await company.giveMission('Baisse le budget du guide sur le TOEIC');
+    expect(missionOf(world, nobody).outcome).toMatch(/Je n’ai baissé aucun budget : je ne trouve aucun guide sur « TOEIC »/);
+  }));
+
+  it('goes as far as they say, and never under what the platform takes', async () => {
+    const lowered = (over: number, text: string) => withCompany({}, async ({ world, company }) => {
+      world.day = 20;
+      const c = addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 40);
+      const id = await company.giveMission(text);
+      expect(c.dailyBudget, text).toBe(over);
+      if (text.includes('2 €')) expect(missionOf(world, id).outcome).toMatch(/Plus bas que 2 €\/jour, les minimums des canaux refusent/);
+    });
+    for (const [over, text] of [[20, 'Baisse le budget pub de moitié'], [32, 'Baisse le budget pub de 20 %'], [10, 'Baisse le budget pub à 10 € par jour'], [25, 'Baisse le budget pub de 15 €'], [5, 'Baisse le budget pub à 2 € par jour'], [40, 'Baisse le budget pub à 60 € par jour']] as const) await lowered(over, text)();
+  });
+
+  it('in approval mode, what goes back up asks them first', withCompany({ founderApproval: true }, async ({ world, company, ctx }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe', { stats: { views: 0, sales: 10, revenue: 190, refunds: 0, refundAmount: 0, rating: 0, reviews: [], upsellSales: 0 } });
+    const c = addCampaign(world, 'cmp_a', p.id, 20, { founderCap: 20, startDay: 15 });
+    adDays(world, c.id, p.id, [17, 18, 19], 14, 2.4);
+    const id = await company.giveMission('Baisse le budget de pub');
+    expect(c).toMatchObject({ dailyBudget: 14, founderCap: 14 });
+    expect(missionOf(world, id).outcome).toMatch(/une hausse passera par toi/);
+    await HANDLERS.optimize_ads.run(ctx, createTask(world, { kind: 'optimize_ads', input: {} }), agent(world, 'adam'), mind(agent(world, 'adam')));
+    expect(c.dailyBudget).toBe(14);
+  }));
+
+  it('with the CFO\'s week written, a winner stays down until their next Monday, and the week says so', withCompany({ scaling: true }, async ({ world, company, ctx }) => {
+    world.day = 31;
+    const allocation = { week: 5, day: 29, adTarget: 120, testWeek: 0, scaleRoas: 1.8, trimRoas: 1.3, reserve: 0, note: 'La pub peut monter jusqu’à 120 €/jour cette semaine.' } as Allocation;
+    world.company.growth!.allocation = allocation;
+    const p = addProduct(world, 'prd_a', 'sommeil-bebe');
+    const c = addCampaign(world, 'cmp_a', p.id, 20, { startDay: 15 });
+    adDays(world, c.id, p.id, [28, 29, 30], 20, 3);
+    const id = await company.giveMission('Baisse le budget de pub');
+    expect(missionOf(world, id).outcome).toMatch(/Plafond de la semaine ramené à 14 €\/jour, tous canaux confondus : rien ne monte avant la revue du CFO du jour 36/);
+    expect(allocation.adTarget).toBe(14);
+    expect(allocation.note).toMatch(/sur ordre du fondateur \(jour 31\)/);
+    await HANDLERS.optimize_ads.run(ctx, createTask(world, { kind: 'optimize_ads', input: {} }), agent(world, 'adam'), mind(agent(world, 'adam')));
+    expect(c).toMatchObject({ status: 'active', dailyBudget: 14 });
+    // One campaign is no week: the ceiling stays where the CFO left it.
+    allocation.adTarget = 120;
+    await company.giveMission('reprends les pubs');
+    await company.giveMission('Baisse le budget de la campagne 1');
+    expect(allocation.adTarget).toBe(120);
+    expect(c.dailyBudget).toBe(9.8);
+  }));
+
+  it('a question gets the numbers, moves nothing and orders no ad', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    const c = addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 20);
+    for (const text of ['faut-il baisser le budget pub ?', "j'ai baissé le budget pub", 'le budget pub baisse', 'Budget pub à 20 € par jour', 'Passe le budget pub à 20 € par jour', 'Mets le budget pub à 20 €', 'Fixe le budget pub à 20 €', 'Quel est le budget pub ?']) {
+      const id = await company.giveMission(text);
+      expect(missionOf(world, id).status, text).toBe('done');
+      expect(missionOf(world, id).outcome, text).toMatch(/Je n'ai rien changé : l'enveloppe pub du jour est de .*, 20 € engagés sur 1 campagne\(s\)/);
+      expect(tasksOf(world, id), text).toEqual([]);
+    }
+    expect(c.dailyBudget).toBe(20);
+    expect(activeHolds(world)).toEqual([]);
+    // A guide about money is a request for a guide: the numbers of the ads answer nothing there.
+    const guide = await company.giveMission('Lance un guide pour réduire ses dépenses');
+    expect(missionOf(world, guide).outcome ?? '').not.toMatch(/l'enveloppe pub du jour/);
+    expect(c.dailyBudget).toBe(20);
+  }));
+
+  it('nothing lowered, no ceiling: a channel with nothing on it leaves the week as the CFO wrote it', withCompany({ scaling: true }, async ({ world, company }) => {
+    world.day = 31;
+    const allocation = { week: 5, day: 29, adTarget: 120, testWeek: 0, scaleRoas: 1.8, trimRoas: 1.3, reserve: 0, note: '' } as Allocation;
+    world.company.growth!.allocation = allocation;
+    addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 20);
+    const id = await company.giveMission('Baisse le budget de pub sur Meta');
+    expect(missionOf(world, id).outcome).toMatch(/Rien à baisser sur Facebook & Instagram : aucune campagne ne tourne/);
+    expect(allocation.adTarget).toBe(120);
+    expect(adsHold(world, null, 'meta')).toBeNull();
+  }));
+});
+
+describe('a sentence that asks for two things', () => {
+  it('the sentence of the defect: the budget goes down and the guide starts on its own niche', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    const c = addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 20);
+    const id = await company.giveMission('Baisse le budget de pub sur TikTok et prépare un nouveau guide sur le jardinage en balcon');
+    expect(missionOf(world, id)).toMatchObject({ status: 'open', wantsProduct: true, nicheId: 'potager-balcon' });
+    expect(c.dailyBudget).toBe(14);
+    expect(adsHold(world, null, 'tiktok')).not.toBeNull();
+    expect(tasksOf(world, id).map((t) => t.kind)).toContain('pick_opportunity');
+    expect(tasksOf(world, id).filter((t) => PAID.includes(t.kind))).toEqual([]);
+    expect(missionOf(world, id).outcome).toMatch(/C'est fait sur TikTok/);
+  }));
+
+  it('a subject nobody covers fails alone: the order stands, and both are said', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    const c = addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 20);
+    const id = await company.giveMission('Baisse le budget pub, fais un guide sur la fête des voisins');
+    expect(c.dailyBudget).toBe(14);
+    expect(missionOf(world, id).outcome).toMatch(/C'est fait : 1 campagne/);
+    expect(missionOf(world, id).outcome).toMatch(/Je ne lance rien sur « fête voisins »/);
+  }));
+
+  it('two requests, one of them a guide: the first goes, the other is said back', withCompany({}, async ({ world, company }) => {
+    const first = await company.giveMission('Prépare un guide sur le TOEIC et écris des hooks TikTok');
+    expect(missionOf(world, first)).toMatchObject({ status: 'open', nicheId: 'toeic-800' });
+    expect(tasksOf(world, first).filter((t) => PAID.includes(t.kind))).toEqual([]);
+    expect(missionOf(world, first).outcome).toMatch(/Pas fait : « écris des hooks TikTok »/);
+    const second = await company.giveMission('Réponds aux clients et lance un guide sur le chiot');
+    expect(tasksOf(world, second).map((t) => t.kind)).toEqual(['reply_inbox']);
+    expect(missionOf(world, second).outcome).toMatch(/Pas fait : « lance un guide sur le chiot »/);
+    // A word that adds nothing is no second request, and requests that go together stay together.
+    expect(requestBeside('Lance un guide sur le chiot et publie-le')).toBe('Lance un guide sur le chiot');
+    const whole = await company.giveMission('Lance un guide sur le mariage et publie-le');
+    expect(missionOf(world, whole).outcome ?? '').not.toMatch(/Pas fait/);
+    addProduct(world, 'prd_a', 'sommeil-bebe');
+    const both = await company.giveMission('Écris des hooks TikTok et produis une pub');
+    expect(tasksOf(world, both).map((t) => t.kind)).toContain('write_ad_hooks');
+    expect(missionOf(world, both).outcome ?? '').not.toMatch(/Pas fait/);
+  }));
+
+  it('a second money order is said back, not lost', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    const p = addProduct(world, 'prd_c', 'proprete-chiot');
+    const c = addCampaign(world, 'cmp_c', p.id, 20);
+    const id = await company.giveMission('Baisse le budget de pub et retire le guide sur le chiot');
+    expect(c.dailyBudget).toBe(14);
+    expect(p.status).toBe('live');
+    expect(adsHold(world)).not.toBeNull(); // the guide of the other clause is not the target of this one
+    expect(missionOf(world, id).outcome).toMatch(/Pas fait : « retire le guide sur le chiot »/);
+    const price = await company.giveMission('Baisse le budget de pub et augmente le prix du guide');
+    expect(tasksOf(world, price).map((t) => t.kind)).toEqual(['set_price']);
+    // What an order already does is no second order.
+    expect(ordersIn('coupe les pubs, ne dépense plus rien').map((o) => o.action)).toEqual(['stop_spending']);
+  }));
+
+  it('a vague clause beside an order is said back too', withCompany({}, async ({ world, company }) => {
+    world.day = 20;
+    addCampaign(world, 'cmp_a', addProduct(world, 'prd_a', 'sommeil-bebe').id, 20);
+    const id = await company.giveMission('Baisse le budget de pub et regarde ça');
+    expect(tasksOf(world, id)).toEqual([]);
+    expect(missionOf(world, id).outcome).toMatch(/Pas fait : « regarde ça »/);
   }));
 });
 

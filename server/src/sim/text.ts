@@ -83,7 +83,8 @@ export function countWords(s: string): number {
 
 /** "{prenom} a acheté {produit}" + vars → text. Unknown keys are left empty. */
 export function fill(tpl: string, vars: Record<string, string | number>): string {
-  return tpl.replace(/\{(\w+)\}/g, (_, k: string) => (vars[k] === undefined ? '' : String(vars[k])));
+  // a customer's sentence may end on its own mark, and the template's period after it would read « ?. »
+  return tpl.replace(/\{(\w+)\}/g, (_, k: string) => (vars[k] === undefined ? '' : String(vars[k]))).replace(/([?!…])\.(?=\s|$)/g, '$1');
 }
 
 function groupThousands(intPart: string): string {

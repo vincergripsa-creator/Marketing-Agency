@@ -414,7 +414,7 @@ export interface ChapterContent {
 | erreurs | `before_after` | `rendered(c)`, `fixFor` | Replaces `do_dont`: each mistake stays beside its fix. At finish 2 it is not printed when its mistakes stand in the chapter's text, and a box « À arrêter » prints only what that text has not said (D152, D156) |
 | situations | `decision_tree` | `situationsOf`: `when`, `what` | « Si … alors … » ladder |
 | programme | `plan_path` as `figure`, plan grid as `visual` | `PlanModel`, needs `from` and `to` kept in `rows` | One bar per track |
-| durer | `matrix` | `c.keep`, `c.tips`, `pairs`, `observe` | Heads: À garder, À arrêter, À tester, À surveiller. Words, no axis |
+| durer | `matrix` | `c.keep`, `pairs`, `c.tips`, the situations' `when` | Heads: À garder, À arrêter, À tester, À surveiller. Words, no axis |
 
 **Never invent a number.** `bar_chart` remains "measured values only". A test asserts that every digit in a diagram exists in the content.
 

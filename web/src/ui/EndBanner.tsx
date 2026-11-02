@@ -1,9 +1,33 @@
 // Run milestone banner: bankrupt and goal reached (the agency keeps working) / horizon finished (the run is over, unless the founder lets it go on).
+import type { CompanySnapshot } from '../../../shared/types';
 import { cx } from './common';
 import { useApp } from './context';
 import { endedBankrupt, goalLate, goalTitle } from './derive';
 import { fmtEur, fmtEurSigned, fmtInt, sum } from './format';
 import { Icon } from './icons';
+
+const goalKey = (runId: string): string => `agency.goal-banner.${runId}`;
+const endKey = (s: Pick<CompanySnapshot, 'runId' | 'status'>): string => `${s.runId}:${s.status}`;
+
+function goalClosed(runId: string): boolean {
+  try { return localStorage.getItem(goalKey(runId)) === '1'; } catch { return false; }
+}
+
+/**
+ * The banner has something to say and this viewer did not close it. `closed` holds for the page; the goal's closing outlives a reload.
+ * Only that one: « Faillite » is a state to keep in sight, and the end of a run carries « Continuer sans fin ».
+ */
+export function endBannerShown(s: CompanySnapshot | null, closed: string | null): boolean {
+  if (!s || (s.status !== 'bankrupt' && s.status !== 'goal_reached' && s.status !== 'finished')) return false;
+  return closed !== endKey(s) && !(s.status === 'goal_reached' && goalClosed(s.runId));
+}
+
+/** What `endBannerShown` reads next. A browser that keeps nothing shows the goal again on the next load, no more. */
+export function closeEndBanner(s: CompanySnapshot | null): string | null {
+  if (!s) return null;
+  if (s.status === 'goal_reached') try { localStorage.setItem(goalKey(s.runId), '1'); } catch { /* private mode */ }
+  return endKey(s);
+}
 
 export function EndBanner({ onNewScenario, onDismiss, onFinance, onExtend }: { onNewScenario(): void; onDismiss(): void; onFinance(): void; onExtend?(): void }) {
   const { snapshot } = useApp();

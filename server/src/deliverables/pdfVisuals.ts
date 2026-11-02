@@ -314,6 +314,15 @@ const GRID_BOX = 13;
 
 const TICK_COLUMN = /^(?:fait|fait \?|ok|coché|cochée|à cocher)$/iu;
 
+/** The columns a reader ticks: named for it, and with nothing printed in them. */
+const tickColumns = (columns: readonly string[], printed: (column: number) => boolean): boolean[] => columns.map((c, i) => i > 0 && TICK_COLUMN.test(c) && !printed(i));
+
+/** The boxes a sheet prints: one a row in each column to tick. */
+export function sheetBoxes(v: VisualSpec): number {
+  const { columns = [], rows = [], cells = [] } = v.grid ?? {};
+  return rows.length * tickColumns(columns, (i) => rows.some((_, r) => !!cells[r]?.[i - 1])).filter(Boolean).length;
+}
+
 interface GridRow { label: string[]; cells: (string[] | null)[]; h: number; writable: boolean; opensGroup: boolean }
 
 export interface GridModel {
@@ -371,7 +380,7 @@ export function gridModel(v: VisualSpec, width: number, t: PdfTheme): GridModel 
   });
   const grid = rawRows.map((_, r) => cellsOf(r));
   const filled = columns.map((_, i) => i > 0 && grid.some((row) => row[i - 1] !== null));
-  const boxes = columns.map((c, i) => i > 0 && TICK_COLUMN.test(c) && !filled[i]);
+  const boxes = tickColumns(columns, (i) => filled[i]!);
   const widths = gridWidths(columns, labels, boxes, filled, width, voice.labelB, voice.textB);
   const textW = (i: number) => widths[i]! - GRID_PAD_X * 2;
 

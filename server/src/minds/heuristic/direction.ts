@@ -4,7 +4,7 @@
  */
 import type { AgentState, DailyKpi, DeptId, TaskKind } from '../../shared.js';
 import type { DayPlanItem } from '../../contracts.js';
-import { cap, clean, fit, fmtEur, fmtNum, fmtPct, lf, norm, splitSentences, type LocalRng } from '../util.js';
+import { cap, clean, fit, fmtEur, fmtNum, fmtPct, lf, norm, sentence, splitSentences, type LocalRng } from '../util.js';
 
 export const KIND_DEPT: Record<TaskKind, DeptId> = {
   plan_day: 'direction', scan_trends: 'recherche', mine_pains: 'recherche', scan_competitors: 'recherche',
@@ -263,7 +263,7 @@ export function heuristicMemo(input: { day: number; kpi: DailyKpi; notes: string
   else if (k.openTickets > 5) priority = 'vider la boîte mail avant toute nouvelle dépense : un message ignoré devient un mauvais avis.';
   else if (k.profit > 0 && k.roas >= 1.5) priority = 'augmenter progressivement (+20-30 %) le budget des créas gagnantes.';
   else priority = 'tester une nouvelle accroche et continuer l’organique pour trouver le prochain levier.';
-  return [head, funnel, ops, notes.length ? `Points clés : ${notes.map((x) => x.replace(/[.;]$/, '')).join(' ; ')}.` : '', `Priorité de demain : ${priority}`]
+  return [head, funnel, ops, notes.length ? sentence(`Points clés : ${notes.map((x) => x.replace(/[.;]$/, '')).join(' ; ')}`) : '', `Priorité de demain : ${priority}`]
     .filter(Boolean).join('\n');
 }
 

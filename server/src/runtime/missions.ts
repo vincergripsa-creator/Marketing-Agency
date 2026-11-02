@@ -206,18 +206,21 @@ function tasksRoute(ctx: RuntimeCtx, items: DayPlanItem[], wantsProduct: boolean
 /** Orders about one person: they need a name the company knows. */
 export type PersonOrder = 'pin_agent' | 'unpin_agent' | 'fire_agent';
 
-export type OrderAction = 'stop_ads' | 'trim_ads' | 'stop_spending' | 'stop_launches' | 'pause_product' | 'kill_product' | 'resume_ads' | 'resume_launches' | 'resume_product' | 'resume_all' | 'raise_budget'
-  | 'stop_firing' | 'allow_firing' | 'stop_hiring' | 'resume_hiring' | PersonOrder | 'negated';
+export type OrderAction = 'stop_ads' | 'trim_ads' | 'stop_spending' | 'stop_launches' | 'pause_product' | 'kill_product' | 'resume_ads' | 'resume_launches' | 'resume_product' | 'resume_all' | 'raise_budget' | 'lower_budget'
+  | 'stop_firing' | 'allow_firing' | 'stop_hiring' | 'resume_hiring' | PersonOrder | 'negated' | 'left_out';
 
 export type FounderOrder =
-  | { action: Exclude<OrderAction, 'trim_ads' | 'negated' | PersonOrder>; product: Product | null; channels?: ChannelId[]; spared?: Campaign[]; days?: number } // channels: the ones the founder named, absent = all of them. spared: what « sauf » leaves alone. days: « pendant 3 jours »
+  | { action: Exclude<OrderAction, 'trim_ads' | 'negated' | 'left_out' | 'lower_budget' | PersonOrder>; product: Product | null; channels?: ChannelId[]; spared?: Campaign[]; days?: number } // channels: the ones the founder named, absent = all of them. spared: what « sauf » leaves alone. days: « pendant 3 jours »
   | { action: PersonOrder; agent: AgentState }
   | { action: 'no_target'; asked: OrderAction; topic: string }
   | { action: 'no_agent'; asked: PersonOrder; name: string; left: Alumnus | null }
   | { action: 'trim_ads'; channel: ChannelId | null } // beside a request: on its own a trim is a plain task
   | { action: 'negated'; text: string }               // the founder said what must not happen: nothing happens, and they are told
+  | { action: 'left_out'; text: string }              // said in the same sentence, not done: they are told, and they say it again
+  | { action: 'budget_asked' }                        // less ad money spoken of, not ordered: the numbers, nothing moves
+  | ({ action: 'lower_budget'; product: Product | null; channels?: ChannelId[]; campaigns?: { campaign: Campaign; number: number }[]; days?: number } & Lowering)
   | { action: 'stop_campaign' | 'resume_campaign'; campaign: Campaign; number: number }
-  | { action: 'no_campaign'; asked: 'stop_ads' | 'resume_ads'; number: number };
+  | { action: 'no_campaign'; asked: 'stop_ads' | 'resume_ads' | 'lower_budget'; number: number };
 
 const ADS_WORD = '(?:pubs?|publicites?|campagnes?|ads|acquisition payante)';
 /** The founder's words for a channel: « Facebook » is the account Meta runs (D59), « Google » alone is Search, YouTube has its own name. */
@@ -230,7 +233,7 @@ const CHANNEL_NAMED = new RegExp(`\\b${CHANNEL_WORD}\\b`);
 /** The verb's object is the channel, nothing else: « coupe tout sur Meta », « arrête les pubs Facebook », not « coupe les hooks trop longs sur Meta ». */
 const ON_CHANNEL = `(?:[\\s-]+(?:moi|nous|tout|tous|toutes?|le|la|les|nos|mes|sur|de|du|des|en|${ADS_WORD}))*[\\s-]+${CHANNEL_WORD}\\b`;
 /** Every verb of an order but the firing ones, in the infinitive a refusal and a limit take: « ne pas couper », « sans toucher ». */
-const UNDONE_INFINITIVE = '(?:couper|arreter|stopper|suspendre|geler|desactiver|eteindre|bloquer|tuer|supprimer|abandonner|enterrer|retirer|enlever|reprendre|relancer|reactiver|remettre|redemarrer|rallumer|degeler|debloquer|lever|annuler|doubler|tripler|multiplier|augmenter|monter|booster|toucher|bouger|changer|modifier|baisser|reduire)';
+const UNDONE_INFINITIVE = '(?:couper|arreter|stopper|suspendre|geler|desactiver|eteindre|bloquer|tuer|supprimer|abandonner|enterrer|retirer|enlever|reprendre|relancer|reactiver|remettre|redemarrer|rallumer|degeler|debloquer|lever|annuler|doubler|tripler|multiplier|augmenter|monter|booster|toucher|bouger|changer|modifier|baisser|reduire|diminuer|diviser|limiter|plafonner|freiner|ralentir|descendre|redescendre|ramener|serrer|resserrer|rogner|economiser)';
 const FIRE_INFINITIVE = '(?:virer|licencier)';
 /** « sans toucher au reste », « sans annuler les lancements »: a limit on the order before it, never a refusal of it. */
 const LIMIT = `sans\\s+(?:(?:rien|y|le|la|les|l'|leur|lui|me|nous)\\s*)?(?:${UNDONE_INFINITIVE}|${FIRE_INFINITIVE})`;
@@ -309,7 +312,7 @@ const THAT_YOU = "(?:que\\s+(?:tu|vous|l'on)|qu'on)\\s+";
 /** « ne vire pas Sarah » protects Sarah: the same order as « garde Sarah ». */
 const SPARE_PERSON = anyOf(`\\bpas\\s+${THAT_YOU}${FIRE_VERB}\\b${PERSON}`, `\\b(?:ne\\s+)?${FIRE_VERB}\\s+(?:pas|plus|jamais|ni)${PERSON}`, `${REFUSAL}${FIRE_VERB}\\b${PERSON}`, `${NOT_BEFORE(FIRE_INFINITIVE)}${PERSON}`);
 /** Every verb of an order, « touche » and « bouge », which are how the founder says to leave things alone. Not « publie »: « ne publie plus de pubs » is a stop. Not the firing verbs: their refusal is a pin. */
-const UNDONE_VERB = `(?:${STOP_VERB}|eteindre|tue[rz]?|kill|supprime[rz]?|abandonne[rz]?|enterre[rz]?|retire[rz]?|enleve[rz]?|reprends?|reprenez|reprendre|relance[rz]?|reactive[rz]?|remets?|remettez|remettre|redemarre[rz]?|rallume[rz]?|degele[rz]?|debloque[rz]?|leve[rz]?|annule[rz]?|double[rz]?|triple[rz]?|multiplie[rz]?|augmente[rz]?|monte[rz]?|booste[rz]?|touche[rz]?|bouge[rz]?|change[rz]?|modifie[rz]?|baisse[rz]?|reduis|reduisez|reduire)`;
+const UNDONE_VERB = `(?:${STOP_VERB}|eteindre|tue[rz]?|kill|supprime[rz]?|abandonne[rz]?|enterre[rz]?|retire[rz]?|enleve[rz]?|reprends?|reprenez|reprendre|relance[rz]?|reactive[rz]?|remets?|remettez|remettre|redemarre[rz]?|rallume[rz]?|degele[rz]?|debloque[rz]?|leve[rz]?|annule[rz]?|double[rz]?|triple[rz]?|multiplie[rz]?|augmente[rz]?|monte[rz]?|booste[rz]?|touche[rz]?|bouge[rz]?|change[rz]?|modifie[rz]?|baisse[rz]?|reduis|reduisez|reduire|diminue[rz]?|divise[rz]?|limite[rz]?|plafonne[rz]?|freine[rz]?|ralentis|ralentissez|ralentir|descends?|descendez|redescends?|redescendez|ramene[rz]?|serre[rz]?|resserre[rz]?|rogne[rz]?|economise[rz]?)`;
 /** « ne coupe pas les pubs », « ne coupe absolument pas », « ne coupe ni… », « n'arrête rien », « pas besoin de couper », « arrête de couper », « je ne veux pas que tu coupes »: what the founder refuses is the verb of the order itself. */
 const NEGATED = anyOf(
   `(?:\\bne\\s+|\\bn')(?:les?\\s+|la\\s+|l'|y\\s+|me\\s+|nous\\s+)?${UNDONE_VERB}\\s+(?:\\S+\\s+){0,2}?(?:pas|plus|jamais|rien|aucune?|ni)\\b`,
@@ -329,6 +332,67 @@ const STOP_HIRING = anyOf(
   `^(?:plus|pas|aucune?)\\s+(?:de\\s+|d'|aucune?\\s+)?(?:nouvelles?\\s+)?${STAFF_WORD}\\b`,
 );
 const RESUME_HIRING = anyOf(`\\b(?:${BACK_VERB}|degele[rz]?|debloque[rz]?)\\b${NEAR}${STAFF_WORD}\\b`, `(?<!\\bsi\\s)\\b${CAN}(?:embaucher|recruter)\\b`, `\\b(?:leve[rz]?|annule[rz]?)\\b.*\\b${STAFF_WORD}\\b`);
+
+/** Every way of saying less, the imperative, the infinitive and the noun: what opens « baisse le budget pub ». */
+const LOWER_VERB = '(?:baisse[rsz]?|baissons|reduis|reduit|reduire|reduisez|reduisons|reduction|diminue[rsz]?|diminuons|diminution|divise[rsz]?|divisons|limite[rsz]?|limitons|plafonne[rsz]?|plafonnons|freine[rsz]?|freinons|ralentis|ralentissez|ralentir|allege[rsz]?|rabote[rsz]?|descends?|descendez|descendre|redescends?|redescendez|redescendre|ramene[rz]?|serre[rz]?|resserre[rz]?|rogne[rz]?|economise[rz]?|economisons)';
+/** What goes down. Never the price: its words can sit between the verb and the budget. And no other budget: « réduis le budget recrutement » is no word on the ads. */
+const LOWERED = `(?:budgets?|enveloppes?|depenses?|depences?|${ADS_WORD})(?!\\s+(?:(?:de|du|des|en)\\s+)?(?:recrutements?|outils?|salaires?|embauches?|frais|personnel|support|logiciels?)\\b)`;
+const NEAR_NOT_PRICE = '(?:[\\s-]+(?!prix\\b|tarifs?\\b)\\S+){0,4}?[\\s-]+';
+/** What opens an order: a clause, or a wish. « le CA baisse et la pub coûte cher » speaks of the turnover. */
+const ORDER_LEAD = `(?:^|[,;:!.\\n—–]\\s*|\\b(?:et|puis|mais|alors|donc|ok|bon|aussi|stp|svp)\\s+|\\b(?:il\\s+faut|il\\s+faudrait|faut|faudrait|je\\s+veux|je\\s+voudrais|j'aimerais|on\\s+doit|on\\s+va|on\\s+peut|on\\s+pourrait|tu\\s+dois|tu\\s+peux|tu\\s+pourrais|peux[\\s-]tu|pourrais[\\s-]tu|vous\\s+devez|vous\\s+pouvez|vous\\s+pourriez|pouvez[\\s-]vous|pourriez[\\s-]vous|on)\\s+(?:${THAT_YOU})?)`;
+/** How much, in words a stop has none of: « coupe le budget pub de moitié » keeps what is left running. */
+const BY_HALF = '\\b(?:de\\s+moitie|par\\s+deux|en\\s+deux|la\\s+moitie)\\b';
+const PERCENT = '\\d{1,2}\\s*(?:%|pour\\s*cent)';
+const BY_PERCENT = '\\b(?:de|coupe[rz]?|enleve[rz]?|retire[rz]?)\\s+(\\d{1,2})\\s*(?:%|pour\\s*cent)';
+const LESS_OF = `(?:${ADS_WORD}|budgets?|depenses?|depences?|${CHANNEL_WORD})`;
+const LOWER_BUDGET = anyOf(
+  `${ORDER_LEAD}${LOWER_VERB}\\b(?:${NEAR_NOT_PRICE}${LOWERED}\\b|${ON_CHANNEL})`, `\\b${STOP_VERB}\\b${NEAR_NOT_PRICE}${LOWERED}\\b.*(?:${BY_HALF}|${BY_PERCENT})`,
+  `${ORDER_LEAD}${LOWER_VERB}\\s+de\\s+${PERCENT}${ON_CHANNEL}`, `\\b${STOP_VERB}\\s+${PERCENT}(?:${NEAR}${LOWERED}\\b|${ON_CHANNEL})`,
+  `\\b(?:enleve[rz]?|retire[rz]?)\\s+(?:${PERCENT}|\\d{1,4}(?:[.,]\\d{1,2})?\\s*(?:€|euros?))${NEAR}${LOWERED}\\b`,
+  `${ORDER_LEAD}(?:(?:fais|faites|faisons|on\\s+fait)\\s+des\\s+economies|vas?\\s+(?:plus\\s+)?(?:doucement|mollo)|allez\\s+(?:plus\\s+)?(?:doucement|mollo)|(?:mets?|mettez|mettre)\\s+la\\s+pedale\\s+douce)${NEAR_NOT_PRICE}${LOWERED}\\b`,
+  `(?:^|\\b(?:fais|faites|faisons|mets?|mettez|mettre|on\\s+fait|on\\s+met)\\s+)moins\\s+(?:de\\s+|d')${LESS_OF}\\b`, `\\b(?:mets?|mettez|mettre|investis|investissez|mise[rz]?)\\s+moins\\s+(?:d'argent|d'euros)\\b`,
+  `\\bdepen[cs]e[rsz]?\\s+(?:moins|trop)\\b`, `\\b${STOP_VERB}\\s+de\\s+depen[cs]er\\s+autant\\b`, `\\bdepensons\\s+moins\\b`, `\\bne\\s+depense[rz]?\\s+pas\\s+(?:trop|autant)\\b`, `\\btrop\\s+(?:de\\s+|d')${LESS_OF}(?:\\s+(?:sur|en|dans|pour)\\b|\\s*$)`,
+  `\\b${LOWERED}\\b(?:\\s+\\S+){0,3}?\\s+trop\\s+(?:hauts?|eleves?|gros|chers?)\\b`, `\\b(?:leve[rz]?\\s+le\\s+pied|calme[rz]?\\s+le\\s+jeu)\\b.*\\b${LOWERED}\\b`,
+);
+/** Less money spoken of without an order, or the ad budget named: a question, a report, a remark. The keywords read « pub » and would order ads. */
+const WORK_OPENS = /^(?:ecris|ecrire|redige[rz]?|produis|produire|lance[rz]?|fais\s+une\s+pub|cree[rz]?\s+une\s+pub)\b/; // what a sentence about saving money can open on and still be work
+const LESS_TALK = anyOf(`\\bbudgets?\\s+(?:de\\s+|de\\s+la\\s+|des\\s+|du\\s+)?${ADS_WORD}\\b`, `\\b${LOWER_VERB}\\b${NEAR_NOT_PRICE}${LOWERED}\\b`, `\\b${LOWERED}\\b${NEAR}(?:baisse|diminue)\\b`, LOWER_BUDGET.source);
+
+/** What a slip of the keyboard must not hide. Each form counts as itself: only what reads orders sees this, a guide's subject stays as typed. */
+const MENDED = ['baisse', 'baisser', 'baissez', 'budget', 'budgets', 'diminue', 'diminuer', 'publicite', 'publicites'];
+
+/** One slip: a letter wrong, missing or added, or two swapped. The first letter is taken as typed: « laisse » is no « baisse ». */
+function oneSlip(word: string, right: string): boolean {
+  if (word[0] !== right[0] || Math.abs(word.length - right.length) > 1) return false;
+  let at = 0;
+  while (at < word.length && word[at] === right[at]) at++;
+  const [a, b] = [word.slice(at), right.slice(at)];
+  return a.slice(1) === b.slice(1) || a.slice(1) === b || a === b.slice(1) || (a[0] === b[1] && a[1] === b[0] && a.slice(2) === b.slice(2));
+}
+
+/** Folded text with the words of a lowering spelled right: « baise le budjet ». */
+const mended = (t: string): string => t.replace(/[a-z]{5,}/g, (w) => (MENDED.includes(w) ? w : MENDED.find((right) => oneSlip(w, right)) ?? w));
+
+export interface Lowering { share?: number; amount?: number; less?: number }
+
+/** « divise par trois »: 1/3 is what is left. « par deux » is `BY_HALF`. */
+const BY_PARTS = /\bpar\s+(trois|quatre|cinq|[345])\b/;
+
+/** How far the founder says, in the clause that lowers: « de moitié », « de 20 % », « à 10 € par jour », « de 15 € ». « le panier moyen est à 12 € » beside it is no amount. Nothing said: {}, the usual cut. */
+export function loweringIn(text: string): Lowering {
+  const said = mended(fold(text)).replace(/(\d),(\d)/g, '$1.$2');
+  const t = said.split(CLAUSE_BREAK).find((c) => LOWER_BUDGET.test(c)) ?? said;
+  const percent = new RegExp(BY_PERCENT).exec(t);
+  const money = (re: RegExp): number | null => { const m = re.exec(t); return m ? Number(m[1]!.replace(',', '.')) : null; };
+  const amount = money(/\b(?:a|sous)\s+(\d{1,4}(?:[.,]\d{1,2})?)\s*(?:€|euros?)/);
+  const less = money(/\b(?:de|enleve[rz]?|retire[rz]?)\s+(\d{1,4}(?:[.,]\d{1,2})?)\s*(?:€|euros?)/);
+  if (amount !== null) return { amount };
+  if (less !== null) return { less };
+  if (percent) return { share: 1 - Number(percent[1]) / 100 };
+  const parts = BY_PARTS.exec(t)?.[1];
+  if (parts) return { share: 1 / (COUNT_WORDS[parts] ?? Number(parts)) };
+  return new RegExp(BY_HALF).test(t) ? { share: 0.5 } : {};
+}
 
 const COUNT_WORDS: Readonly<Record<string, number>> = { un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10, quinze: 15 };
 const LASTS = new RegExp(`\\b(?:pendant|durant|pour)\\s+(\\d{1,3}|${Object.keys(COUNT_WORDS).join('|')})\\s+(jours?|semaines?)\\b`);
@@ -367,9 +431,22 @@ function allBut(t: string, full: string): boolean {
   return !!kept && new RegExp(`\\b${STOP_VERB}\\s+tout$`).test(t) && (!new RegExp(`\\b${ADS_WORD}\\b`).test(kept) || numbersIn(kept).length > 0);
 }
 
+/** « limite les pubs à TikTok » says where, not how much. */
+const ONLY_THERE = new RegExp(`\\blimite[rz]?\\b.*\\ba\\s+${CHANNEL_WORD}\\b`);
+
+/**
+ * Read clause by clause. Less, unless a clause of its own stops them: « coupe la pub, on dépense trop » is a stop, « coupe le budget
+ * pub de moitié » is not. A guide about money is no order about ours: « fais un guide pour dépenser moins ».
+ */
+function lowers(t: string): boolean {
+  const clauses = t.split(CLAUSE_BREAK);
+  return clauses.some((c) => LOWER_BUDGET.test(c) && !asksForProduct(c) && !ONLY_THERE.test(c)) && !clauses.some((c) => STOP_ADS.test(c) && !LOWER_BUDGET.test(c));
+}
+
 /** Money and products. */
 function moneyOrder(full: string): OrderAction | null {
-  const t = headOf(full);
+  const t = mended(headOf(full));
+  if (lowers(t)) return ONLY_LOSERS.test(t) ? 'trim_ads' : 'lower_budget';
   if (STOP_SPENDING.test(t) && !/inutiles?|superflues?/.test(t)) return CHANNEL_NAMED.test(full) ? 'stop_ads' : 'stop_spending';
   if (RESUME_ANY.test(t)) return new RegExp(ADS_WORD).test(t) || CHANNEL_NAMED.test(t) ? 'resume_ads' : /lancement|guide/.test(t) ? 'resume_launches' : 'resume_all';
   if (RESUME_ADS.test(t) && !NOT_PUBLISHED.test(t)) return 'resume_ads';
@@ -417,6 +494,17 @@ function inList(whole: string, name: string): boolean {
   return at >= 0 && (/(?:^|\s)(?:et|ni)\s+$/i.test(whole.slice(0, at)) || LIST_CLOSES.test(whole.slice(at + name.length)));
 }
 
+/** What an order already does of another one, said beside it. */
+const COVERS: Partial<Record<OrderAction, readonly OrderAction[]>> = {
+  stop_spending: ['stop_ads', 'lower_budget', 'trim_ads'], stop_ads: ['lower_budget', 'trim_ads'], lower_budget: ['trim_ads'], resume_all: ['resume_ads', 'resume_launches', 'resume_product'],
+};
+
+/** One money order runs per sentence, read over all of it: another clause that orders something else is said back, not lost. What a clause names a channel for is its own: « coupe Meta et baisse TikTok » leaves TikTok running. */
+function otherMoney(clauses: readonly string[], money: OrderAction): SaidOrder[] {
+  if (clauses.length < 2) return [];
+  return clauses.filter((c) => { const own = moneyOrder(fold(c).trim()); return !!own && own !== money && !(COVERS[money]?.includes(own) && !channelWordsIn(fold(c)).length); }).map((text) => ({ action: 'left_out', text }));
+}
+
 /** The orders of one sentence's clauses that nobody refused. `whole` is what the rules that span clauses read. */
 function liveOrders(clauses: readonly string[], whole: string, asking: boolean): SaidOrder[] {
   const t = fold(whole).trim();
@@ -436,8 +524,10 @@ function liveOrders(clauses: readonly string[], whole: string, asking: boolean):
   // No clause speaks of staff alone: « coupe les pubs et les embauches », « lève le gel des pubs et des embauches ».
   const staff = teamOrder(t, asking);
   const money = moneyOrder(t);
-  if (!staff) return money ? [{ action: money, text: whole }] : [];
-  return money && money !== 'resume_all' ? [{ action: money, text: whole }, { action: staff, text: whole }] : [{ action: staff, text: whole }]; // what names its target never lifts every hold
+  const others = money ? otherMoney(clauses, money) : [];
+  const own = others.length ? clauses.filter((c) => !others.some((o) => o.text === c)).join(', ') : whole; // what is said back names no target for what runs
+  if (!staff) return money ? [{ action: money, text: own }, ...others] : [];
+  return money && money !== 'resume_all' ? [{ action: money, text: own }, { action: staff, text: whole }, ...others] : [{ action: staff, text: whole }]; // what names its target never lifts every hold
 }
 
 /**
@@ -454,7 +544,7 @@ export function ordersIn(text: string): SaidOrder[] {
 
 /** The polite way of giving an order, its verb right after: « tu peux couper les pubs ? », not « tu peux me dire si on coupe les pubs ? ». Only a stop reads it so: a stop must not be lost to a question mark, a lift waits for a plain word. */
 const POLITE_ASK = new RegExp(`^(?:(?:bon|ok|alors|donc|stp|svp)[\\s,]+)*(?:tu\\s+peux|peux[\\s-]tu|tu\\s+pourrais|pourrais[\\s-]tu|vous\\s+pouvez|pouvez[\\s-]vous|vous\\s+pourriez|pourriez[\\s-]vous)\\s+(?:(?:me|nous|juste|vite|stp|svp|\\S+ment)\\s+)*(?:${UNDONE_INFINITIVE}|mettre|ne\\s+plus)\\b`);
-const POLITE_STOPS: readonly OrderAction[] = ['stop_ads', 'stop_spending', 'stop_launches', 'trim_ads'];
+const POLITE_STOPS: readonly OrderAction[] = ['stop_ads', 'stop_spending', 'stop_launches', 'trim_ads', 'lower_budget'];
 
 /** The founder's sentences less their questions: « faut-il reprendre les pubs ? » lifts nothing, « tu as coupé les pubs ? » stops nothing. */
 function stated(text: string): string {
@@ -467,7 +557,7 @@ function stated(text: string): string {
 }
 
 /** The forms of the order verbs that fold like the imperative. Only an auxiliary tells them apart: « à couper » keeps its r, « j'ai coupé » has lost its accent. */
-const PARTICIPLE = '(?:coupe|arrete|stoppe|gele|desactive|bloque|tue|supprime|abandonne|enterre|retire|enleve|relance|reactive|redemarre|rallume|republie|publie|degele|debloque|leve|annule|double|triple|multiplie|augmente|monte|booste|vire|licencie|garde|protege|epingle)';
+const PARTICIPLE = '(?:coupe|arrete|stoppe|gele|desactive|bloque|tue|supprime|abandonne|enterre|retire|enleve|relance|reactive|redemarre|rallume|republie|publie|degele|debloque|leve|annule|double|triple|multiplie|augmente|monte|booste|baisse|diminue|reduit|divise|depense|vire|licencie|garde|protege|epingle)';
 /** What the founder reports: « j'ai coupé les pubs », « hier on a coupé les pubs ». */
 const TOLD = new RegExp(`\\b(?:ai|as|a|avons|avez|ont|avais|avait|avions|aviez|avaient)(?:[\\s-]+(?:tu|il|elle|on|nous|vous|ils|elles))?(?:\\s+(?:deja|bien|encore|aussi|donc|pas|jamais|plus|tout|\\S+ment))*\\s+${PARTICIPLE}\\b`);
 
@@ -481,7 +571,7 @@ function spoken(text: string): { clauses: string[]; whole: string; asking: boole
 
 function saidOrders(clauses: readonly string[], whole: string, asking: boolean): SaidOrder[] {
   const refused = clauses.filter((c) => {
-    const said = fold(c).trim();
+    const said = mended(fold(c).trim());
     return NEGATED.test(said) && !!(moneyOrder(said) ?? teamOrder(said, asking));
   });
   const live = clauses.filter((c) => !refused.includes(c));
@@ -491,7 +581,7 @@ function saidOrders(clauses: readonly string[], whole: string, asking: boolean):
 export const orderAction = (text: string): OrderAction | null => ordersIn(text)[0]?.action ?? null;
 
 /** How a clause opens when it asks for work. Anything else beside an order is a comment on it: « coupe la pub, ça coûte trop cher ». */
-const REQUEST_OPENS = new RegExp(`^(?:(?:ensuite|aussi|alors|apres|et)\\s+)?(?:(?:je\\s+veux|je\\s+voudrais|j'aimerais|il\\s+faut|tu\\s+peux|on\\s+va)\\s+)?(?:${ASK_VERB}|analyse[rz]?|reponds?|repondre|baisse[rz]?|change[rz]?|optimise[rz]?|ameliore[rz]?|corrige[rz]?|reecris|teste[rz]?|verifie[rz]?|regarde[rz]?|cherche[rz]?|trouve[rz]?|rembourse[rz]?|negocie[rz]?|contacte[rz]?|poste[rz]?)\\b`);
+const REQUEST_OPENS = new RegExp(`^(?:(?:ensuite|aussi|alors|apres|et)\\s+)?(?:(?:je\\s+veux|je\\s+voudrais|j'aimerais|il\\s+faut|tu\\s+peux|on\\s+va)\\s+)?(?:${ASK_VERB}|analyse[rz]?|reponds?|repondre|baisse[rz]?|augmente[rz]?|ajoute[rz]?|fixe[rz]?|change[rz]?|optimise[rz]?|ameliore[rz]?|corrige[rz]?|reecris|teste[rz]?|verifie[rz]?|regarde[rz]?|cherche[rz]?|trouve[rz]?|rembourse[rz]?|negocie[rz]?|contacte[rz]?|poste[rz]?)\\b`);
 
 /**
  * The clauses that ask for work, and the orders of the others: an order reads its own clauses, or the subject of the request would
@@ -513,11 +603,32 @@ function withoutLimit(text: string): string {
   return `${t.slice(0, at)}${rest < 0 ? '' : t.slice(at + 1 + rest)}`.trim();
 }
 
+/** Clauses that ask for work when nothing is ordered: more than one, and a guide among them. */
+function plainAsks(clauses: readonly string[], whole: string, asking: boolean): string[] {
+  if (saidOrders(clauses, whole, asking).length) return [];
+  const asks = clauses.filter((c) => REQUEST_OPENS.test(fold(c).trim()));
+  return asks.length > 1 && asks.some(asksForProduct) ? asks : [];
+}
+
+/** A clause says something when it names more than its verb: « publie-le » goes with the guide before it. */
+const saysMore = (clause: string): boolean => words(clause).length > 1;
+
+/**
+ * What one sentence asks for. Requests that stand together stay together (« écris des hooks et produis une pub »), but a guide's
+ * subject is read over all the words it gets: beside another request, the first goes alone and the rest is said back.
+ */
+function requestsIn(text: string): { asks: string[]; left: string[] } {
+  const { clauses, whole, asking } = spoken(text);
+  const said = splitRequest(clauses, asking).asks;
+  const asks = (said.length ? said : plainAsks(clauses, whole, asking)).map(withoutLimit);
+  return asks.length > 1 && asks.some(asksForProduct) ? { asks: asks.slice(0, 1), left: asks.slice(1).filter(saysMore) } : { asks, left: [] };
+}
+
 /** The request said beside an order, or under a limit alone, '' when there is none: « coupe les pubs et lance un guide sur le sommeil ». */
 export function requestBeside(text: string): string {
+  const { asks } = requestsIn(text);
+  if (asks.length) return asks.join(', ');
   const { clauses, whole, asking } = spoken(text);
-  const { asks } = splitRequest(clauses, asking);
-  if (asks.length) return asks.map(withoutLimit).join(', ');
   const plain = withoutLimit(text);
   return plain === text || saidOrders(clauses, whole, asking).length ? '' : plain;
 }
@@ -526,7 +637,9 @@ export function requestBeside(text: string): string {
 const ORDER_WORDS = new Set(`arrete arreter arretez stoppe stopper stop coupe couper coupez suspends suspendre suspendez gele geler desactive eteins bloque mets met mettez mettre
   pause ordre nouvel jusqu tue tuer kill supprime supprimer abandonne abandonner enterre retire retirer enleve enlever sors sortez vendre vends vendez vente proposer boutique
   catalogue ligne hors remets remettre remettez reprends reprendre reprenez relance relancer reactive redemarre rallume republie publie publier leve annule definitivement
-  depense depenser lancer lance lancement double triple multiplie augmente monte booste budget`.split(/\s+/).map((w) => canon(stemOf(w))));
+  depense depenser lancer lance lancement double triple multiplie augmente monte booste budget
+  reduis reduire reduit reduction diminue diminuer diminution divise diviser limite limiter plafonne plafonner freine freiner ralentis ralentir allege rabote
+  enveloppe trop moitie pied jeu calme autant descends descendre redescends redescendre ramene serre resserre rogne economise economiser economies doucement mollo pedale douce`.split(/\s+/).map((w) => canon(stemOf(w))));
 
 const CHANNEL_STEMS = new Set(Object.keys(CHANNEL_WORDS).map(stemOf));
 
@@ -613,8 +726,17 @@ function readOrder(ctx: RuntimeCtx, { action, text: full, person }: SaidOrder, t
   const lasting = days ? { days } : {};
   switch (action) {
     case 'trim_ads': return 'trim_ads';
-    case 'negated': return { action, text: full };
+    case 'negated': case 'left_out': return { action, text: full };
     case 'raise_budget': case 'allow_firing': return { action, product: null };
+    case 'lower_budget': {
+      const numbers = numbersIn(text);
+      const known = numbers.flatMap((number) => w.company.campaigns.flatMap((campaign, i) => (campaignNumber(campaign, i) === number ? [{ campaign, number }] : [])));
+      if (known.length < numbers.length) return numbers.filter((n) => !known.some((k) => k.number === n)).map((number) => ({ action: 'no_campaign', asked: action, number }));
+      const { product, topic } = orderTarget(ctx, mended(text));
+      if (topic) return { action: 'no_target', asked: action, topic };
+      const channels = channelsIn(full);
+      return { action, product, ...(known.length ? { campaigns: known } : {}), ...(channels.length ? { channels } : {}), ...loweringIn(full), ...lasting };
+    }
     case 'stop_spending': case 'stop_launches': case 'stop_firing': case 'stop_hiring': return { action, product: null, ...lasting };
     case 'pin_agent': case 'unpin_agent': case 'fire_agent': return orderPerson(ctx, text, action, person, target);
     case 'resume_hiring': return hiringHold(w) ? { action, product: null } : null;
@@ -659,8 +781,11 @@ export function routeMission(ctx: RuntimeCtx, text: string, items: DayPlanItem[]
   const orders = read.filter((o): o is FounderOrder => !!o && o !== 'trim_ads');
   const trim = read.includes('trim_ads');
   const beside = requestBeside(text);
-  // A vague clause beside an order asks nothing: the order is what the founder said.
+  // A vague clause beside an order asks nothing: the order is what the founder said, and they are told the clause went nowhere.
   const request = beside && (asksForProduct(beside) || !items.every((it) => it.input.vague === true)) ? beside : '';
+  const left = [...requestsIn(text).left, ...(beside && !request && orders.length ? [beside] : [])];
+  orders.push(...left.map((said): FounderOrder => ({ action: 'left_out', text: said })));
+  if (!orders.length && !trim && !request && !asksForProduct(text) && !WORK_OPENS.test(fold(text).trim()) && LESS_TALK.test(mended(fold(text)))) return { kind: 'order', orders: [{ action: 'budget_asked' }] };
   if (trim && !request) {
     const [channel] = channelsIn(text);
     const route = tasksRoute(ctx, [{ kind: 'optimize_ads', title: KIND_META.optimize_ads.label, dept: KIND_META.optimize_ads.dept, priority: 1, input: channel ? { channel } : {}, why: `Le fondateur a demandé : « ${short(text, 120)} »` }], false, null);

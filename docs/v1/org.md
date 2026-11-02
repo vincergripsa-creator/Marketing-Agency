@@ -345,7 +345,7 @@ sim.recordLedger(w, { type: 'salary', amount: -payrollToday(w), memo: `Salaires 
 
 **One-offs.** Type `recruiting`, ref `hire:<id>` (7 days of pay) and `leave:<id>` (7 days of pay). `summarizeLedger` treats them as one-offs like `SETUP_REF`, so they do not inflate `burn7d`.
 
-**Survival.** While `cash < 0.3 × startingCash`, founders take `survivalPayCut`. While `status === 'bankrupt'`, founders take 0. An `OrgDecision { kind: 'pay_cut' }` fires on the transition only.
+**Survival.** While `cash < 0.3 × startingCash`, founders take 0 (D117, `survivalInsured`); `survivalPayCut` is their share in the control, `control.noSurvivalTest`, and with `scaling` off. While `status === 'bankrupt'`, founders take 0. An `OrgDecision { kind: 'pay_cut' }` fires on the transition only.
 
 **Ledger consumers to update**
 

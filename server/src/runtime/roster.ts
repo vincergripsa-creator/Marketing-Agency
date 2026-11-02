@@ -129,7 +129,7 @@ export const SEED_PLAYBOOKS: Record<DeptId, string[]> = {
   finance: [
     'Budget pub du jour ≤ 15 % de la trésorerie (≤ 8 % si le runway passe sous 14 jours).',
     'Aucune dépense ne doit faire passer la trésorerie sous 0.',
-    'Mode survie sous 30 % du budget de départ : organique et créateurs à la commission uniquement.',
+    'Mode survie sous 30 % du budget de départ : organique, créateurs à la commission et un seul petit test à la fois.',
   ],
   rh: [
     "Essayer de tuer chaque idée avant qu'elle coûte de l'argent.",

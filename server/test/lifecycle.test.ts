@@ -28,7 +28,7 @@ import { findBannedClaims } from '../src/sim/compliance.js';
 import { kitPrice } from '../src/sim/growth.js';
 import type { AgentState, Broadcast, Lesson, PdfContent, Product, ScenarioConfig, StageId, Task, TaskKind, WorldState } from '../src/shared.js';
 import { LEGACY } from './legacy.js';
-import { pdfPagesText } from './pdfText.js';
+import { pdfPagesText, pdfPageStreams } from './pdfText.js';
 
 vi.setConfig({ testTimeout: 120_000 });
 
@@ -308,7 +308,7 @@ describe('the files', () => {
     expect(all).toContain('Une étape à part');
     expect(all).toContain('ÉTAPE 1');
     const { p } = await fixture();
-    expect(kitContent({ ...p, content: edit(p.content!) })!.subtitle).toContain('1 case à cocher');
+    expect(kitContent({ ...p, content: edit(p.content!) })!.subtitle).toContain('3 cases à cocher'); // the 2 of the sheet and the step left in the plan
   });
 
   it('a kit has steps, not chapters', async () => {
@@ -466,6 +466,47 @@ describe('each task leaves its file or its state', () => {
     expect(kit.launchedDay).toBe(l.world.day);
     expect(l.world.company.tasks.filter((t) => t.kind === 'publish_product' && t.input.productId === kit.id)).toHaveLength(1);
     expect(l.world.company.tasks.filter((t) => t.kind === 'send_broadcast')).toEqual([]); // a kit is no launch
+  });
+
+  it('its page says what a kit is: its sheets, its boxes and its pages as counted in the file, and no chapter', async () => {
+    const l = await lab();
+    const p = await guide(l);
+    await run(l, 'design_bump', p);
+    const kit = l.world.company.products.find((x) => x.kind === 'kit')!;
+    const file = absPath(l.ctx, kit.files.pdf!);
+    const pages = pdfPagesText(file);
+    const all = pages.join(' ');
+    const drawn = pdfPageStreams(file).reduce((n, s) => n + (s.match(/\b0\.8 w\b/g) ?? []).length, 0); // nothing else is stroked at this weight
+    const sheets = new Set(all.match(/Fiche \d+ sur \d+/g)).size;
+    const steps = new Set(all.match(/ÉTAPE \d+/g)).size;
+    expect(drawn).toBeGreaterThan(sheets + steps);
+    const shop = readFileSync(absPath(l.ctx, kit.files.salesPage!), 'utf8');
+    const strip = /<ul class="strip">(.*?)<\/ul>/s.exec(shop)![1]!;
+    expect(strip).toContain(`<b>${sheets}</b>fiches à imprimer`);
+    expect(strip).toContain(`<b>${drawn}</b>cases à cocher`);
+    expect(strip).toContain(`<b>${pages.length}</b>pages à imprimer`);
+    expect(kit.subtitle).toContain(`${drawn} cases à cocher`);
+    expect(shop).not.toMatch(/Chapitre par chapitre|actions? guidées?|pages illustrées|<\/b>chapitres?|class="fig"/);
+    const inside = /<section class="inside"[\s\S]*?<\/section>/.exec(shop)![0];
+    expect(inside.match(/<li>/g)).toHaveLength(sheets + steps);
+    for (const sheet of kitSheets(kit.content!)) expect(inside).toContain(sheet.title.replace(/\s+/g, ' ').slice(0, 10));
+    expect(pages[0]).toContain('KIT À IMPRIMER');
+    expect(pages[0]).not.toContain('GUIDE PRATIQUE');
+  });
+
+  it('no line of a kit\'s page ends twice', async () => {
+    const p = await guide(await lab());
+    const content = kitContent(p)!;
+    const titled: PdfContent = { ...content, bonus: { ...content.bonus, title: 'Bonus : le carnet à imprimer.' } };
+    const offer = kitOffer({ content: titled }, p);
+    expect(offer.chapterBlurbs.length).toBeGreaterThan(0);
+    for (const line of [...offer.chapterBlurbs.map((b) => b.blurb), offer.bonusBlurb]) expect(line).toMatch(/[^.]\.$/);
+  });
+
+  it('a title that quotes a customer is named once, its own guillemets inside ours', async () => {
+    const p = await guide(await lab());
+    const quoting = { ...p, title: '8 mois pour en finir avec « tout a grillé pendant la canicule » — les citadins débutants' };
+    expect(kitContent(quoting)!.promise.replace(/[\u00a0\u202f]/g, ' ')).toContain('« 8 mois pour en finir avec “tout a grillé pendant la canicule” »');
   });
 
   it('a kit is never a second guide: no cold ads, no organic, no price of its own, no clash in its niche', async () => {

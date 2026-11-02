@@ -26,7 +26,7 @@ import { archetypeDef, heuristicPdfContent } from '../src/minds/heuristic/studio
 import { CLICHE_TEMPLATES } from '../src/minds/lexicon.js';
 import { ensurePdf } from '../src/minds/shapes.js';
 import { speakable } from '../src/minds/heuristic/voice.js';
-import { allText, bare, endsDangling, lf, mapStrings, norm, q, seededRng } from '../src/minds/util.js';
+import { allText, bare, clauseLabel, endsDangling, lf, mapStrings, norm, plainTitle, q, seededRng } from '../src/minds/util.js';
 import { createWorld, defaultScenario } from '../src/runtime/index.js';
 import type { RuntimeCtx } from '../src/runtime/ctx.js';
 import { studioHandlers } from '../src/runtime/handlers/studio.js';
@@ -442,6 +442,43 @@ describe('each role has its diagram (pdf §9.2)', () => {
         expect(k.then.length, g.nicheId).toBeGreaterThan(10);
       }
     }
+  });
+
+  it('« À surveiller » names what can go wrong: a warning sign of this guide, never an order or a step of the method', () => {
+    for (const g of all) {
+      const c = buildNicheCtx(g.brief, g.voc);
+      const said = [...c.situations, ...archetypeDef(c).situationsFallback].map((s) => norm(s.when));
+      const method = c.method.map((m) => norm(m.text));
+      const signs = of(g.parent, 'matrix')[0]!.matrix!.cells[3];
+      expect(signs.length, g.nicheId).toBeGreaterThan(0);
+      for (const l of signs) {
+        expect(l, g.nicheId).not.toMatch(/^\p{L}+ez\b/u);
+        expect(said, `${g.nicheId} : ${l}`).toContain(norm(l));
+        expect(method, `${g.nicheId} : ${l}`).not.toContain(norm(l));
+      }
+    }
+  });
+
+  it('the step that opens a sheet names it: the sheet prints its own columns', () => {
+    for (const g of all) for (const guide of [g.parent, g.follow]) expect(allText(guide), g.nicheId).not.toContain('Remplir chaque ligne');
+    const steps = all.find((g) => g.nicheId === 'sommeil-bebe')!.parent.chapters.flatMap((c) => c.steps);
+    expect(steps).toContain('Remplir « Votre journal de sommeil (5 nuits) », ligne par ligne.');
+  });
+
+  it('a title that quotes keeps its quote inside ours: « en finir avec on veut pas » has lost it', async () => {
+    const g = all.find((x) => x.nicheId === 'mariage-moins-10k')!;
+    const title = 'Les couples fiancés : en finir avec « on veut pas faire un crédit pour un mariage »';
+    const kept = '« Les couples fiancés : en finir avec “on veut pas faire un crédit pour un mariage” »';
+    const content = { ...g.parent, title };
+    const product = { id: 'prd_q', nicheId: g.nicheId, title, subtitle: '', audience: g.brief.audience, problem: g.brief.problem, price: 19, content } as unknown as Product;
+    const page = await engineOf(SEED).writeSalesPage({ product, content, voc: g.voc, hype: 0.3 }, mindOn());
+    expect(page.solution).toContain(kept);
+    const mail = await engineOf(SEED).writeBroadcast({ product, voc: g.voc, angle: 'lancement', audience: 'launch', bannedClaims: [] }, mindOn());
+    expect(mail.body).toContain(kept);
+    // a label keeps the quote whole, or there is no label: the subject of a mail never stops inside it
+    const quoting = plainTitle('8 mois pour en finir avec « tout a grillé pendant la canicule » — les citadins débutants');
+    expect(clauseLabel(quoting, 70)).toBe('8 mois pour en finir avec “tout a grillé pendant la canicule”');
+    expect(clauseLabel(quoting, 40)).toBeNull();
   });
 
   it('a last chapter is four lists of words, under its four heads', () => {

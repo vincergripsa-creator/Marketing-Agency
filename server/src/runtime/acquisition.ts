@@ -6,13 +6,14 @@
  *   - why paid acquisition is blocked today (ad ban, negative cash, survival, CFO envelope);
  *   - the ranking of the candidates, so ads and posts always go to the best products first.
  */
-import type { AdCreative, ChannelId, Lesson, Product, Review, WorldState } from '../shared.js';
+import type { AdCreative, Campaign, ChannelId, Lesson, Product, Review, WorldState } from '../shared.js';
 import { acceptance, CHANNELS, channelOf } from '../shared.js';
 import { productPnls } from './accounting.js';
 import { CHANNEL_POLICY } from './channelPolicy.js';
 import { adsHold } from './holds.js';
-import { activeCampaigns, averageRating, campaignMetrics, committedAdBudget, currentBudget, isUpsellProduct, productMetrics, recentReviews, reviewCount } from './metrics.js';
+import { activeCampaigns, averageRating, campaignMetrics, committedAdBudget, currentBudget, isUpsellProduct, productMetrics, recentReviews, reviewCount, survivalFloor } from './metrics.js';
 import { learning, sim } from './modules.js';
+import { survivalInsured } from './org/constants.js';
 import { growthOn } from './stages.js';
 import { isOpen } from './tasks.js';
 import { clamp, dec, eur, pct, sum } from './util.js';
@@ -56,6 +57,11 @@ export const ADS_DEAD_RETRY_DAYS = 7;
 export const EXPLORATION_SHARE = 0.25;
 /** Max days without paid acquisition while a promotable product and cash exist (the CEO's watchdog). */
 export const MAX_IDLE_DAYS = 2;
+/** Survival mode: only a campaign above this ROAS runs on, read once it spent this much. */
+export const SURVIVAL_ROAS = 1.2;
+export const SURVIVAL_SAMPLE = 10;
+/** The insurance of D117: one small test at a time under the survival line, what it costs at most, and the wait after a failure. */
+export const UNDER_LINE = { dailyEur: 5, days: 6, totalEur: 30, gapDays: 14 } as const;
 
 /** Kinds that promote a product (ads or organic): never for a product that fails the quality gates. */
 export const ACQUISITION_KINDS = ['write_ad_hooks', 'produce_ad', 'launch_campaign', 'post_organic', 'find_creators', 'negotiate_deal'] as const;
@@ -312,11 +318,8 @@ export function channelPaused(world: WorldState, ch: ChannelId): boolean {
   return day !== undefined && day > world.day && !world.company.channels!.open.includes(ch);
 }
 
-/**
- * Company-level reason why no paid campaign can start today, or null. With a channel it speaks for that account alone.
- * Without one, a ban blocks only once every open account is banned.
- */
-export function companyPaidBlock(world: WorldState, ch?: ChannelId): string | null {
+/** What stops paid ads whatever the envelope says: the founder, a channel's pause, an outage, a ban, a negative till. */
+export function accountPaidBlock(world: WorldState, ch?: ChannelId): string | null {
   const held = adsHold(world, null, ch);
   if (held) return held.reason;
   if (ch && channelPaused(world, ch)) return `${CHANNELS[ch].label} en pause après ses pertes : pas de campagne avant le jour ${world.company.channels!.requested[ch]}`;
@@ -324,10 +327,63 @@ export function companyPaidBlock(world: WorldState, ch?: ChannelId): string | nu
   const accounts = ch ? [ch] : world.company.channels?.open ?? ['tiktok'];
   if (accounts.every((c) => adBanActive(world, c))) return `compte publicitaire ${CHANNELS[accounts[0]!].label} suspendu jusqu'au jour ${adAccountOf(world, accounts[0]!)!.bannedUntilDay}`;
   const b = currentBudget(world);
-  if (b.bankrupt || world.status === 'bankrupt') return 'trésorerie négative : aucune dépense pub';
+  return b.bankrupt || world.status === 'bankrupt' ? 'trésorerie négative : aucune dépense pub' : null;
+}
+
+/**
+ * Company-level reason why no paid campaign can start today, or null. With a channel it speaks for that account alone.
+ * Without one, a ban blocks only once every open account is banned.
+ */
+export function companyPaidBlock(world: WorldState, ch?: ChannelId): string | null {
+  const blocked = accountPaidBlock(world, ch);
+  if (blocked) return blocked;
+  const b = currentBudget(world);
   if (b.survival) return `mode survie (trésorerie ${eur(b.cash)} < 30 % du départ)`;
   const room = b.adCap - committedAdBudget(world);
   if (room < (ch ? CHANNELS[ch].minDailyBudget : MIN_CAMPAIGN_BUDGET)) return `enveloppe pub du CFO déjà engagée (${eur(Math.max(0, room))} libres sur ${eur(b.adCap)})`;
+  return null;
+}
+
+// ───────────────────────────── the test under the line ─────────────────────────────
+
+export const openTest = (c: Campaign): boolean => c.underLine?.endDay === null;
+
+/** A test under the line read on this guide since `from`: too small a sample to say anything of it. */
+export function testedUnderLine(world: WorldState, productId: string, from: number): boolean {
+  return world.company.campaigns.some((c) => c.productId === productId && !!c.underLine && (c.underLine.endDay ?? world.day) >= from);
+}
+
+/**
+ * Why no test under the line can start today, company-wide, or null. Survival has no envelope to speak of: the cash answers for it, what
+ * the test costs at most and a week of costs left behind. An ad ban on any open account is enough here: this is no time to try another one.
+ */
+export function underLineBlock(world: WorldState): string | null {
+  if (!survivalInsured(world)) return 'pas de test sous la ligne dans ce scénario';
+  const b = currentBudget(world);
+  if (!b.survival) return `trésorerie repassée au-dessus de la ligne (${eur(b.cash)})`;
+  if (activeCampaigns(world).length || world.company.campaigns.some(openTest)) return 'une campagne tourne déjà';
+  const banned = (world.company.channels?.open ?? ['tiktok']).find((ch) => adBanActive(world, ch));
+  if (banned) return `compte publicitaire ${CHANNELS[banned].label} suspendu`;
+  const need = UNDER_LINE.totalEur + survivalFloor(world);
+  if (b.cash < need) return `trésorerie ${eur(b.cash)}, il faut ${eur(need)} pour un test et une semaine de frais`;
+  const failed = Math.max(0, ...world.company.campaigns.map((c) => (c.underLine?.failed ? c.underLine.endDay ?? 0 : 0)));
+  if (failed && world.day < failed + UNDER_LINE.gapDays) return `test raté le jour ${failed} : pas de nouveau test avant le jour ${failed + UNDER_LINE.gapDays}`;
+  return null;
+}
+
+/**
+ * Today's test, if any: the best guide free of every paid block, with a validated creative that was not judged a failure, on the cheapest open
+ * channel that takes the test's daily budget. It draws nothing and writes nothing: the test needs no stream of its own.
+ */
+export function underLinePick(world: WorldState): { product: Product; channel: ChannelId } | null {
+  if (underLineBlock(world) || world.company.tasks.some((t) => isOpen(t) && t.input.underLine === true)) return null;
+  const channels = (world.company.channels?.open ?? ['tiktok'])
+    .filter((ch) => CHANNELS[ch].minDailyBudget <= UNDER_LINE.dailyEur && !accountPaidBlock(world, ch))
+    .sort((a, b) => CHANNELS[a].minDailyBudget - CHANNELS[b].minDailyBudget);
+  for (const { product } of acquisitionCandidates(world)) {
+    const channel = channels.find((ch) => !productPaidBlock(world, product, ch) && launchableCreatives(world, product.id, ch).length);
+    if (channel) return { product, channel };
+  }
   return null;
 }
 

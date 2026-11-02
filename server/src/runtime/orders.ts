@@ -2,28 +2,35 @@
  * The founder's orders, executed on the spot: a stop is a standing hold the plan and the handlers respect until the founder lifts
  * it, not a task that may or may not reach its goal. An order that cannot be carried out is said so, never closed as done.
  */
-import type { AgentState, Campaign, ChannelId, Mission, Task, WorldState } from '../shared.js';
+import type { AgentState, Campaign, ChannelId, Mission, Product, Task, WorldState } from '../shared.js';
 import { CHANNELS, channelOf } from '../shared.js';
 import type { RuntimeCtx } from './ctx.js';
 import { nicheName, productOf, speak } from './ctx.js';
-import { addHold, adsHold, firingHold, liftHolds } from './holds.js';
-import { committedAdBudget, currentBudget } from './metrics.js';
-import type { FounderOrder, OrderAction, PersonOrder } from './missions.js';
+import { activeHolds, addHold, adsHold, firingHold, liftHolds } from './holds.js';
+import { activeCampaigns, committedAdBudget, currentBudget } from './metrics.js';
+import type { FounderOrder, Lowering, OrderAction, PersonOrder } from './missions.js';
 import { campaignNumber, tellFounder } from './missions.js';
 import { isLegacyOrg } from './org/constants.js';
 import { requestDeparture } from './org/departure.js';
 import { officerId } from './org/officers.js';
 import { closeProductMissions, dropTask, killProduct, shelveProduct, stopPaidAds } from './pipeline.js';
 import { redTeamGate } from './redteam.js';
+import { growthOn } from './stages.js';
 import { resumeCampaigns } from './strategy.js';
 import { createTask, KIND_META, openTasks, taskById } from './tasks.js';
-import { eur, short } from './util.js';
+import { clip, eur, round2, short, sum } from './util.js';
 
 /** How long a stop holds, in the founder's words. */
 const untilText = (w: WorldState, days: number | undefined, lift: string): string => (days ? `jusqu'au jour ${w.day + days - 1} inclus` : `tant que tu ne me dis pas « ${lift} »`);
 
+/** What is left of a campaign after « baisse le budget » with no amount: the buyer's own trim. */
+const LOWER_SHARE = 0.7;
+/** How long a lowering stops what is new when they give no length: a week shows on the cash, and a word said once does not starve the company. */
+const LOWER_DAYS = 7;
+
 const ASKED_FR: Partial<Record<OrderAction, string>> = {
   stop_ads: 'Je n’ai coupé aucune pub',
+  lower_budget: 'Je n’ai baissé aucun budget',
   resume_ads: 'Je n’ai relancé aucune pub',
   pause_product: 'Je n’ai rien retiré de la vente',
   kill_product: 'Je n’ai rien arrêté',
@@ -49,14 +56,11 @@ async function fireAgent(ctx: RuntimeCtx, agent: AgentState): Promise<{ text: st
 const channelNames = (order: { channels?: readonly ChannelId[] }): string => (order.channels ?? []).map((ch) => CHANNELS[ch].label).join(', ');
 
 /**
- * What « sauf » spares keeps running under the hold, on the founder's word: the hold stops what is new, and a campaign they kept is
- * not cut by the plan or the buyer. The stop-loss still reads it.
+ * The hold of an order on ads, one per channel named: what runs stops unless it is spared, and the work leading to a launch goes. A hold
+ * with an end lists what it paused, a lowering what it let run on the founder's word.
  */
-function stopAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'stop_ads' }, when: string): string {
-  const { product, channels, spared = [] } = order;
+function holdAds(ctx: RuntimeCtx, { product, channels }: { product: Product | null; channels?: readonly ChannelId[] }, spared: readonly Campaign[], until: number | null, reason: (channel: ChannelId | null) => string, kept: readonly Campaign[] = []): { paused: number; cancelled: number } {
   const w = ctx.world;
-  const names = channelNames(order);
-  const until = lastDay(w, order.days);
   let paused = 0, cancelled = 0;
   for (const channel of channels?.length ? channels : [null]) {
     const stoppedBefore = new Set(w.company.campaigns.filter((c) => c.pausedFor === 'founder').map((c) => c.id));
@@ -64,13 +68,101 @@ function stopAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'stop_ads' }, 
     paused += stopped.paused;
     cancelled += stopped.cancelled;
     const resumes = until === null ? {} : { resumes: w.company.campaigns.filter((c) => c.pausedFor === 'founder' && !stoppedBefore.has(c.id)).map((c) => c.id) };
-    addHold(w, { kind: 'ads', productId: product?.id ?? null, until, ...(channel ? { channel } : {}), ...resumes, reason: `les pubs${channel ? ` ${CHANNELS[channel].label}` : ''}${product ? ` de « ${short(product.title, 50)} »` : ''} sont coupées sur ordre du fondateur (jour ${w.day})` });
+    const left = kept.filter((c) => !channel || channelOf(c) === channel).map((c) => c.id);
+    addHold(w, { kind: 'ads', productId: product?.id ?? null, until, ...(channel ? { channel } : {}), ...resumes, ...(left.length ? { kept: left } : {}), reason: reason(channel) });
   }
+  return { paused, cancelled };
+}
+
+/**
+ * What « sauf » spares keeps running under the hold, on the founder's word: the hold stops what is new, and a campaign they kept is
+ * not cut by the plan or the buyer. The stop-loss still reads it.
+ */
+function stopAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'stop_ads' }, when: string): string {
+  const { product, spared = [] } = order;
+  const w = ctx.world;
+  const names = channelNames(order);
+  const until = lastDay(w, order.days);
+  const { paused, cancelled } = holdAds(ctx, order, spared, until, (channel) => `les pubs${channel ? ` ${CHANNELS[channel].label}` : ''}${product ? ` de « ${short(product.title, 50)} »` : ''} sont coupées sur ordre du fondateur (jour ${w.day})`);
   const running = spared.filter((c) => c.status === 'active');
   for (const c of running) c.founderForced = true;
   const kept = running.length ? ` Restent en cours sur ton ordre : ${running.map((c) => campaignLabel(c, numberOf(ctx, c))).join(', ')}.` : '';
   const stopped = `C'est fait${when} : ${paused} campagne(s) en pause, ${cancelled} tâche(s) de pub annulée(s).${kept} Aucune ${running.length ? 'autre ' : ''}pub ne repartira${names ? ` sur ${names}` : ''}${product ? ` sur « ${short(product.title, 50)} »` : ''}`;
   return until === null ? `${stopped} tant que tu ne me dis pas « reprends ${names || 'les pubs'} ».` : `${stopped} avant le jour ${until + 1} : ce matin-là, elles repartent seules, dans l'enveloppe du CFO. Dis « reprends ${names || 'les pubs'} » pour avancer ce retour.`;
+}
+
+/** The share of what runs that the founder's words leave: an amount reads against what runs, and what cannot be lower stays where it is. */
+function shareLeft(order: Lowering, running: number): number {
+  if (order.amount !== undefined) return Math.min(1, order.amount / Math.max(1, running));
+  if (order.less !== undefined) return Math.max(0, 1 - order.less / Math.max(1, running));
+  return order.share ?? LOWER_SHARE;
+}
+
+/** On the air, or off for today's outage alone: a day off is no campaign stopped, and it comes back at what they said. */
+const onAir = (c: Campaign): boolean => c.status === 'active' || c.pausedFor === 'outage';
+
+/** The week's ceiling, which the buyer and the plan read through `scalingRoom`: down to what runs, nothing grows until the CFO's next Monday. Null before their first one. */
+function capTheWeek(w: WorldState): { cap: number; review: number } | null {
+  const allocation = growthOn(w) ? w.company.growth?.allocation : null;
+  if (!allocation) return null;
+  const cap = round2(sum(w.company.campaigns.filter(onAir).map((c) => c.dailyBudget)));
+  allocation.adTarget = Math.min(allocation.adTarget, cap);
+  allocation.note = `Plafond ramené à ${eur(cap)}/jour sur ordre du fondateur (jour ${w.day}) : rien ne monte avant la prochaine revue.`;
+  return { cap, review: allocation.day + 7 };
+}
+
+/**
+ * Less money on ads, on the founder's word: what runs goes down now and stays on, nothing new starts while the hold stands, nothing
+ * grows until the CFO's next Monday, and what they did not ask to touch is said so. It takes no task: a review could scale a winner,
+ * and hooks would lead to a launch. The hold is the one « sauf » uses, so the kept campaigns run under it on their word.
+ */
+function lowerBudget(ctx: RuntimeCtx, order: FounderOrder & { action: 'lower_budget' }): string {
+  const w = ctx.world;
+  const { product, channels, campaigns } = order;
+  const running = campaigns?.map((c) => c.campaign).filter(onAir) ?? w.company.campaigns.filter((c) => onAir(c) && (!product || c.productId === product.id) && (!channels?.length || channels.includes(channelOf(c))));
+  const before = sum(running.map((c) => c.dailyBudget));
+  const left = shareLeft(order, before);
+  const lowered = running.filter((c) => {
+    const next = round2(Math.max(CHANNELS[channelOf(c)].minDailyBudget, c.dailyBudget * left));
+    if (next >= c.dailyBudget || !ctx.tools.updateCampaign(c.id, { dailyBudget: next }).ok) return false;
+    c.founderCap = next; // approval mode: more than this asks them first
+    return true;
+  });
+  const after = sum(running.map((c) => c.dailyBudget));
+  const names = channelNames(order);
+  const where = `${names ? ` sur ${names}` : ''}${product ? ` sur « ${clip(product.title, 50)} »` : ''}`;
+  const floor = order.amount !== undefined && after > order.amount ? ` Plus bas que ${eur(order.amount)}/jour, les minimums des canaux refusent.` : '';
+  const said = lowered.length ? `C'est fait${where} : ${lowered.length} campagne(s) baissée(s), de ${eur(before)} à ${eur(after)}/jour.${lowered.length < running.length ? ` ${running.length - lowered.length} autre(s) déjà au minimum du canal.` : ''}${floor}`
+    : running.length ? `Je n'ai rien baissé${where} : ${running.length} campagne(s) déjà au niveau demandé ou au minimum du canal (${eur(before)}/jour).` : `Rien à baisser${where} : aucune campagne ne tourne.`;
+  const back = w.scenario.founderApproval ? 'une hausse passera par toi' : 'une campagne qui gagne peut remonter de 30 % par jour au plus';
+  const week = campaigns || !lowered.length ? null : capTheWeek(w);
+  const envelope = eur(currentBudget(w).adCap);
+  const kept = week ? `Plafond de la semaine ramené à ${eur(week.cap)}/jour, tous canaux confondus : rien ne monte avant la revue du CFO du jour ${week.review}. L'enveloppe du jour (${envelope}) suit la trésorerie, je n'y touche pas.` : `Je ne touche pas à l'enveloppe du CFO (${envelope}/jour) : ${back}.`;
+  if (campaigns) return `${said} ${kept} Les autres campagnes continuent.`;
+  if (!running.length) return said; // nothing went down: a freeze here would be a stop nobody ordered
+  const until = lastDay(w, order.days ?? LOWER_DAYS)!;
+  const carried = new Set(activeHolds(w).flatMap((h) => h.kept ?? []));
+  const { cancelled } = holdAds(ctx, order, running, until, (channel) => `nouvelles pubs${channel ? ` ${CHANNELS[channel].label}` : ''}${product ? ` de « ${clip(product.title, 50)} »` : ''} gelées, budget baissé sur ordre du fondateur (jour ${w.day})`, running.filter((c) => !c.founderForced || carried.has(c.id)));
+  for (const c of running) c.founderForced = true;
+  return `${said} Aucune nouvelle pub ne démarre${where} jusqu'au jour ${until} inclus${cancelled ? `, ${cancelled} tâche(s) de pub annulée(s)` : ''}. ${kept} Dis « reprends ${names || 'les pubs'} » pour que les nouvelles pubs repartent plus tôt, « coupe ${names || 'les pubs'} » pour tout arrêter.`;
+}
+
+/** What a lowering kept is the company's again once nothing the founder said stands over it, whatever stopped it meanwhile. Read over every hold: a stop can outlive the lowering. */
+function freeKept(w: WorldState): void {
+  for (const id of (w.company.holds ?? []).flatMap((h) => h.kept ?? [])) {
+    const c = w.company.campaigns.find((x) => x.id === id);
+    if (c && !adsHold(w, c.productId, channelOf(c))) delete c.founderForced;
+  }
+}
+
+/** A lowering keeps what runs: once the stop-loss has taken all of it, its hold would be a stop nobody ordered. New ads start again, under the week's cap. */
+function endEmptyLowerings(ctx: RuntimeCtx): void {
+  const w = ctx.world;
+  const alive = (id: string): boolean => w.company.campaigns.some((c) => c.id === id && (c.status === 'active' || !!c.pausedFor));
+  for (const h of activeHolds(w).filter((x) => x.kept && ![...x.kept, ...x.resumes ?? []].some(alive))) {
+    liftHolds(w, (x) => x.id === h.id);
+    speak(ctx, 'growth', `plus aucune des campagnes gardées le jour ${h.day} ne tourne : le gel des nouvelles pubs s'arrête ce matin, le plafond du CFO tient jusqu'à sa revue.`, 'founder');
+  }
 }
 
 /** The last day of an order given a length, today counted. Null: until it is lifted. */
@@ -79,10 +171,15 @@ const lastDay = (w: WorldState, days: number | undefined): number | null => (day
 /** The morning after a stop with an end: what it paused starts again, unless another founder order still stands over it. */
 export function endTimedStops(ctx: RuntimeCtx): void {
   const w = ctx.world;
+  endEmptyLowerings(ctx);
+  freeKept(w);
   for (const h of (w.company.holds ?? []).filter((x) => x.resumes && x.until === w.day - 1 && x.liftedDay === undefined)) {
     const free = h.resumes!.filter((id) => {
       const c = w.company.campaigns.find((x) => x.id === id);
-      return c?.pausedFor === 'founder' && !adsHold(w, c.productId, channelOf(c));
+      if (c?.pausedFor !== 'founder') return false;
+      const stands = adsHold(w, c.productId, channelOf(c)); // what still holds it brings it back in turn: « reprends » reads every pause, a length only its list
+      if (stands?.resumes && !stands.resumes.includes(id)) stands.resumes.push(id);
+      return !stands;
     });
     if (!free.length) continue;
     let back = 0;
@@ -96,6 +193,7 @@ function resumeAds(ctx: RuntimeCtx, order: FounderOrder & { action: 'resume_ads'
   const w = ctx.world;
   const { product, channels, spared } = order;
   const lifted = liftHolds(w, (h) => h.kind === 'ads' && (!product || h.productId === null || h.productId === product.id) && (!channels || (!!h.channel && channels.includes(h.channel))));
+  freeKept(w);
   const stands = (channels ?? []).map((ch) => adsHold(w, product?.id ?? null, ch)).find(Boolean);
   if (stands) return { text: `Je n'ai rien relancé : ${stands.reason}. Dis « reprends les pubs » pour lever cet ordre.`, resumed: false };
   const { resumed, left } = resumeCampaigns(ctx, 'founder', { productId: product?.id, channels, spared });
@@ -163,6 +261,15 @@ async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): P
     }
     case 'negated':
       done(`Compris (« ${short(order.text.trim(), 80)} ») : je ne change rien.`);
+      return;
+    case 'left_out':
+      done(`Pas fait : « ${short(order.text.trim(), 80)} ». Une demande à la fois : redis-la-moi et je m'y mets.`);
+      return;
+    case 'budget_asked':
+      done(`Je n'ai rien changé : l'enveloppe pub du jour est de ${eur(currentBudget(w).adCap)}, ${eur(committedAdBudget(w))} engagés sur ${activeCampaigns(w).length} campagne(s). Dis « baisse le budget pub » pour que je le fasse.`);
+      return;
+    case 'lower_budget':
+      done(lowerBudget(ctx, order));
       return;
     case 'trim_ads':
       m.taskIds.push(createTask(w, { kind: 'optimize_ads', title: KIND_META.optimize_ads.label, input: order.channel ? { channel: order.channel } : {}, createdBy: 'founder', missionId: m.id, priority: 1 }).id);
@@ -258,6 +365,7 @@ async function executeOrder(ctx: RuntimeCtx, m: Mission, order: FounderOrder): P
       return;
     case 'resume_all': {
       const lifted = liftHolds(w, (h) => h.kind !== 'product');
+      freeKept(w);
       resumeCampaigns(ctx, 'founder');
       done(`C'est noté : ${lifted.length} ordre(s) levé(s).`);
       return;

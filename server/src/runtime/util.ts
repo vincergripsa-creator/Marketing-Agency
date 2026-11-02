@@ -45,7 +45,7 @@ export function pad3(n: number): string {
 
 export function short(text: string, max = 48): string {
   const t = (text ?? '').trim();
-  return t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`;
+  return t.length <= max ? t : `${t.slice(0, max - 1).replace(/[\s.,;:]+$/, '')}…`; // a cut that falls on a period never prints « .… »
 }
 
 /** `short` for a line the founder reads to its end: never inside a word, and a quote it leaves open is closed. */
@@ -54,6 +54,11 @@ export function clip(text: string, max = 48): string {
   if (t.length <= max) return t;
   const head = t.slice(0, max - 3).replace(/\s+\S*$/, '').replace(/[\s,;:(«]+$/, '');
   return `${head}…${head.lastIndexOf('«') > head.lastIndexOf('»') ? ' »' : ''}`;
+}
+
+/** A line closed by its period, once: a cut already ends on its ellipsis, a sentence on its mark. */
+export function endLine(text: string): string {
+  return /[.!?…] ?»?$/.test(text) ? text : `${text}.`;
 }
 
 export function capitalize(text: string): string {

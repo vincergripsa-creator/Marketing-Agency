@@ -7,11 +7,12 @@
 import type { DayPlanItem, DayPlan } from '../contracts.js';
 import type { Campaign, ChannelId, Lesson, Product, Task, TaskKind, WorldState } from '../shared.js';
 import { CHANNELS, channelOf } from '../shared.js';
-import { multiChannel, openChannels, planChannels } from './channels.js';
+import { adjusted, creditOf, multiChannel, openChannels, planChannels } from './channels.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, latestOutput, nameOf, productOf, speak, vocOf } from './ctx.js';
+import { logDecision } from './digest.js';
 import { learning, sim } from './modules.js';
-import { activeCampaigns, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, feedbackOf, isProductFeedback, isUpsellProduct, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO, recentReviews, referenceChannel } from './metrics.js';
+import { activeCampaigns, campaignMetrics, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, feedbackOf, isProductFeedback, isUpsellProduct, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO, recentReviews, referenceChannel } from './metrics.js';
 import { reviewBasis } from '../sim/feedback.js';
 import { adsHeldSince, launchHold, productHold } from './holds.js';
 import { officerId, ownersOfAny } from './org/officers.js';
@@ -24,7 +25,8 @@ import { openMessages, urgency } from './handlers/support.js';
 import { experimentCandidate } from './handlers/ops.js';
 import {
   ACQUISITION_KINDS, acquisitionCandidates, adBanActive, bestCandidate, channelPaused, companyPaidBlock, daysWithoutAds, harvesting, isReworking, launchableCreatives,
-  lessonDay, LOSS_WINDOW_DAYS, MAX_IDLE_DAYS, MIN_CAMPAIGN_BUDGET, productHealth, productPaidBlock, promotionBlock, recentLoss, recentProfits, refundsWorthRework, versionSince as versionSinceOf,
+  lessonDay, LOSS_WINDOW_DAYS, MAX_IDLE_DAYS, MIN_CAMPAIGN_BUDGET, openTest, productHealth, productPaidBlock, promotionBlock, recentLoss, recentProfits, refundsWorthRework, SURVIVAL_ROAS, SURVIVAL_SAMPLE,
+  testedUnderLine, UNDER_LINE, underLinePick, versionSince as versionSinceOf,
 } from './acquisition.js';
 
 /**
@@ -41,7 +43,7 @@ export const KILL_MIN_POSTS = 5;
 /** Cautious mode of paid acquisition: company-wide ad ROAS over 10 days below this (with enough spend). */
 const CAUTIOUS_ROAS = 0.9;
 const CAUTIOUS_MIN_SPEND = 150;
-import { clamp, dec, eur, includesCI, numOf, pct, short, str, strArr, uniq } from './util.js';
+import { clamp, clip, dec, eur, includesCI, numOf, pct, short, str, strArr, uniq } from './util.js';
 
 /** Organic TikTok posts per day across all products (the platform throttles reach above 5). */
 export const ORGANIC_POSTS_PER_DAY = 4;
@@ -161,7 +163,8 @@ async function ceoDecisions(ctx: RuntimeCtx, notes: string[], items: DayPlanItem
     // Neither has one the founder kept off the ads: their refusal is not the market's.
     // Under growth nothing is judged before its paid test, what the portfolio harvested it judges itself, this morning's verdict stands,
     // and a guide its buyers like waits for Monday: the review harvests it, this rule would stop it (Budget et garde-fous, rule 12).
-    const tested = !growth || (!reviewedToday && !p.harvest && paidOn(w, p.id, h.since) >= paidTestEur && !buyersLike(buyersRead(w, p)));
+    // Nor does a test under the line judge its guide here: 5 € a day says nothing of it, and the next test may well be this guide again. Monday's review still reads the spend, an ordinary rule.
+    const tested = !growth || (!reviewedToday && !p.harvest && paidOn(w, p.id, h.since) >= paidTestEur && !buyersLike(buyersRead(w, p)) && !testedUnderLine(w, p.id, w.day - KILL_WINDOW_DAYS));
     const failing = tested && !unjudged && !isReworking(w, p.id) && m.sales < KILL_MAX_SALES && (m.spend > 0 ? m.roas < KILL_MAX_ROAS : !adsOff && posts >= KILL_MIN_POSTS && !adsHeldSince(w, p.id, w.day - KILL_WINDOW_DAYS))
       && (m.landingViews >= KILL_MIN_VIEWS || online >= KILL_NO_TRACTION_DAYS);
     // Quality dead-end: even the v3 is rated badly by its own buyers → stop selling it, it hurts the brand.
@@ -351,8 +354,8 @@ export function resumeCampaigns(ctx: RuntimeCtx, reason: 'outage' | 'founder', o
   for (const c of w.company.campaigns.filter((x) => x.pausedFor === reason && (!productId || x.productId === productId) && (!channels || channels.includes(channelOf(x))) && (!campaignId || x.id === campaignId) && !spared?.some((s) => s.id === x.id))) {
     delete c.pausedFor;
     const p = productOf(ctx, c.productId);
-    const daily = Math.min(c.dailyBudget, Math.floor(room));
-    if (!p || p.status !== 'live' || channelPaused(w, channelOf(c)) || productPaidBlock(w, p, channelOf(c))?.final || daily < CHANNELS[channelOf(c)].minDailyBudget) { left.push(c.name); continue; }
+    const daily = openTest(c) ? c.dailyBudget : Math.min(c.dailyBudget, Math.floor(room)); // a test under the line has no envelope to fit in
+    if (!p || p.status !== 'live' || channelPaused(w, channelOf(c)) || (!c.founderForced && productPaidBlock(w, p, channelOf(c))?.final) || daily < CHANNELS[channelOf(c)].minDailyBudget) { left.push(c.name); continue; }
     if (daily < c.dailyBudget && ctx.tools.updateCampaign(c.id, { dailyBudget: daily }).ok) c.dailyBudget = daily;
     if (!ctx.tools.updateCampaign(c.id, { status: 'active' }).ok) { left.push(c.name); continue; }
     c.status = 'active';
@@ -360,6 +363,30 @@ export function resumeCampaigns(ctx: RuntimeCtx, reason: 'outage' | 'founder', o
     resumed.push(c.name);
   }
   return { resumed, left };
+}
+
+/**
+ * Each morning, the test under the line (D117). It runs its days and gets one verdict, wherever the cash went meanwhile, or one morning over
+ * the line would spare a loser its wait: on a real sample at the survival ROAS it is a campaign like the others and lives by the rule that
+ * keeps paying ads in survival, otherwise it stops and the next one waits. Whatever else stopped it failed it too, but a day off for an outage.
+ */
+function settleUnderLine(ctx: RuntimeCtx): void {
+  const w = ctx.world;
+  for (const c of w.company.campaigns.filter(openTest)) {
+    if (c.pausedFor === 'outage') continue;
+    const stopped = c.status !== 'active';
+    if (!stopped && w.day - c.startDay < UNDER_LINE.days) continue;
+    const p = productOf(ctx, c.productId);
+    const m = adjusted(campaignMetrics(w.market.adStats, c.id, c.startDay), creditOf(w, channelOf(c), p?.nicheId ?? ''));
+    const failed = stopped || m.spend < SURVIVAL_SAMPLE || m.roas < SURVIVAL_ROAS;
+    if (failed && !stopped && ctx.tools.updateCampaign(c.id, { status: 'paused' }).ok) c.status = 'paused';
+    c.underLine = { endDay: w.day, failed };
+    const title = `« ${clip(p?.title ?? c.name, 60)} »`;
+    const read = `ROAS ${dec(m.roas)} pour ${eur(m.spend)}`;
+    const next = failed ? `pas de nouveau test avant le jour ${w.day + UNDER_LINE.gapDays}` : `la campagne continue tant que ses 4 derniers jours tiennent un ROAS de ${dec(SURVIVAL_ROAS)}`;
+    speak(ctx, 'growth', `test sous la ligne sur ${title} ${stopped ? 'arrêté avant sa fin' : failed ? 'raté' : 'réussi'} : ${read}, ${next}.`, 'ad', p ? { productId: p.id } : undefined);
+    logDecision(w, { kind: 'budget', who: officerId(w, 'growth'), text: `Test sous la ligne ${failed ? 'raté' : 'réussi'} sur ${title}`, why: `${read}, ${next}.`, ...(p ? { productId: p.id } : {}) });
+  }
 }
 
 interface AcquisitionPlan { launchedFor: Product | null; blocked: string | null }
@@ -446,6 +473,16 @@ function planPaidAcquisition(ctx: RuntimeCtx, items: DayPlanItem[], notes: strin
       notes.push(`Garde-fou : ${idle} jours sans pub, test à petit budget sur « ${short(p.title, 40)} ».`);
       launchedFor = p;
     }
+  }
+  // Survival, last of all: nothing else can launch, and one small test can still find what refills the till (D117).
+  const pick = launchedFor ? null : underLinePick(w);
+  if (pick) {
+    const { product: p, channel } = pick;
+    const { label } = CHANNELS[channel];
+    const input = { productId: p.id, underLine: true, ...(channel === 'tiktok' ? {} : { channel }) };
+    items.push(planItem('launch_campaign', input, `Mode survie et aucune pub ne tourne : petit test à ${eur(UNDER_LINE.dailyEur)}/jour sur ${label}, ${eur(UNDER_LINE.totalEur)} au plus.`, 1, `Test sous la ligne — « ${clip(p.title, 42)} »`));
+    notes.push(`Mode survie : petit test sous la ligne sur « ${clip(p.title, 40)} ».`);
+    launchedFor = p;
   }
   let blocked: string | null = null;
   if (!launchedFor && !running && waiting.length) blocked = companyBlock ?? reasons[0] ?? null;
@@ -562,6 +599,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
     }
   }
 
+  settleUnderLine(ctx);
   const acquisition = planPaidAcquisition(ctx, items, notes);
   planChannels(ctx, items, notes);
 
@@ -661,7 +699,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   let focus: string;
   if (w.status === 'bankrupt') focus = 'Trésorerie négative : zéro dépense, support et organique uniquement';
   else if (budget.outage) focus = 'Panne de paiement annoncée : pubs en pause, on avance sur le support et la production';
-  else if (budget.survival) focus = 'Mode survie : organique, créateurs à la commission, aucune pub non rentable';
+  else if (budget.survival) focus = acquisition.launchedFor || w.company.campaigns.some(openTest) ? 'Mode survie : organique, créateurs à la commission, un petit test sous la ligne' : 'Mode survie : organique, créateurs à la commission, aucune pub non rentable';
   else if (!live.length && !building.length) focus = 'Trouver une niche rentable (règle du un)';
   else if (!live.length && lead) focus = awaited(lead) ? `« ${short(lead.title, 50)} » attend la décision du fondateur` : `Sortir « ${short(lead.title, 50)} » : la chaîne de production tourne`;
   else if (live.some((p) => activeCampaigns(w, p.id).length)) focus = fin.roas7d >= 1.5 ? 'Scaler ce qui marche et préparer la suite' : 'Rendre les pubs rentables : couper, tester, itérer';

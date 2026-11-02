@@ -364,7 +364,8 @@ export function FicheTab({ agent }: { agent: AgentState }) {
       {current ? <TaskLine task={current} /> : <div className="muted small">Aucune tâche en cours{agent.status === 'coffee' ? ' — pause café.' : '.'}</div>}
 
       <SectionTitle>Tâches récentes</SectionTitle>
-      {tasks.length === 0 ? <div className="muted small center-text">Pas encore de tâche pour {firstName(agent.name)}.</div> : tasks.map((t) => <TaskLine key={t.id} task={t} />)}
+      {/* the counter is the whole run, the list what the snapshot still holds: an empty list says « nothing yet » only of someone who never worked */}
+      {tasks.length === 0 ? <div className="muted small center-text">{perf.done + perf.failed > 0 ? `Aucune tâche récente : ${plural(perf.done + perf.failed, 'tâche', 'tâches')} plus tôt dans la partie.` : `Pas encore de tâche pour ${firstName(agent.name)}.`}</div> : tasks.map((t) => <TaskLine key={t.id} task={t} />)}
 
       <SectionTitle>Livrables</SectionTitle>
       {deliverables.length === 0 ? <div className="muted small center-text">Aucun livrable pour l’instant.</div> : (

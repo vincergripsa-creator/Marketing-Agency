@@ -10,6 +10,11 @@ export function isLegacyOrg(w: WorldState): boolean {
   return (w.scenario.org ?? LEGACY_ORG).team === 'legacy31';
 }
 
+/** The insurance of D117: founders at 0 and one small test under the line. `scaling` off is the old company, `control.noSurvivalTest` the paired arm. */
+export function survivalInsured(w: WorldState): boolean {
+  return w.scenario.scaling === true && w.scenario.control?.noSurvivalTest !== true;
+}
+
 export const ORG = {
   workTicksPerDay: 9, maxHeadcount: 60,
   payPerDay: { haiku: 0.375, sonnet: 0.6, opus: 0.9 } as Record<ModelTier, number>,

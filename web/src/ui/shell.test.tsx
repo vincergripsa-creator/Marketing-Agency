@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Activity, AgentState, AlumnusView, ChronicleEntry, CompanySnapshot, FounderDigest, HeadRow, LeagueDetail, OrgDetail, PersonChip, SessionInfo, StageView, Task } from '../../../shared/types';
 import { PIER_CELL } from '../../../shared/worldgrid';
 import { Minimap } from '../world/Minimap';
@@ -13,8 +13,8 @@ import { AgentPanel, AlumnusCard, CareerBody, FicheTab } from './AgentPanel';
 import { AppContext, type AppCtx } from './context';
 import { DeptPanel, DeptTasks, seatsLine } from './DeptPanel';
 import { sessionView } from './derive';
-import { EndBanner } from './EndBanner';
-import { digestDue, digestWatch, FounderDigestBody, FounderDigestModal, type DigestClock } from './FounderDigest';
+import { closeEndBanner, EndBanner, endBannerShown } from './EndBanner';
+import { DIGEST_MIN_DAYS, digestDue, digestTitle, digestWatch, FounderDigestBody, FounderDigestModal, type DigestClock } from './FounderDigest';
 import { CompanyBadge, SimHud } from './Hud';
 import { agentName, buildLookups } from './labels';
 import { ScenarioModal } from './ScenarioModal';
@@ -124,8 +124,25 @@ describe('founder digest', () => {
     expect(html).toContain('aria-modal="true"');
     expect(html).toContain('Pendant ton absence');
     expect(html).toContain('Reprendre');
-    expect(render(<FounderDigestModal since={40} onClose={noop} />)).toContain('Les 7 derniers jours');
+    const asked = mockSnapshot().day - DIGEST_MIN_DAYS + 1;
+    expect(render(<FounderDigestModal since={asked} onClose={noop} />)).toContain(asked > 1 ? 'Les 7 derniers jours' : 'Depuis le début');
     expect(readFileSync(new URL('./FounderDigest.tsx', import.meta.url), 'utf8')).not.toContain('onMouseDown');
+  });
+
+  it('the title says what the window covers, not what was asked', () => {
+    expect(digestTitle(null, 12, 20)).toBe('Pendant ton absence');
+    expect(digestTitle(1, 1, 3)).toBe('Depuis le début');
+    expect(digestTitle(1, 1, 7)).toBe('Depuis le début');
+    expect(digestTitle(14, 14, 20)).toBe('Les 7 derniers jours');
+    expect(digestTitle(19, 19, 20)).toBe('Les 2 derniers jours');
+    expect(digestTitle(20, 20, 20)).toBe('Le dernier jour');
+  });
+
+  it('on the third day, the modal does not read « Les 7 derniers jours »', () => {
+    const s = { ...mockSnapshot(), day: 3 };
+    const page = render(<FounderDigestModal since={1} onClose={noop} />, { snapshot: s });
+    expect(page).toContain('Depuis le début');
+    expect(page).not.toContain('Les 7 derniers jours');
   });
 });
 
@@ -353,6 +370,16 @@ describe('the card reads what the world holds (T3, T4)', () => {
   };
   const prior = { done: 9, approved: 0, rejected: 0, failed: 0, score: 70 };
 
+  it('an empty list of tasks never contradicts the counter beside it', () => {
+    const worked = card({ id: 'agt_gone_tasks', perf: { ...prior, done: 7 } });
+    expect(worked).toContain('<strong>7</strong><span>tâches faites</span>');
+    expect(worked).toContain('Aucune tâche récente : 7 tâches plus tôt dans la partie.');
+    expect(worked).not.toContain('Pas encore de tâche');
+    const lost = card({ id: 'agt_gone_tasks', perf: { ...prior, done: 0, failed: 1 } });
+    expect(lost).toContain('Aucune tâche récente : 1 tâche plus tôt dans la partie.');
+    expect(card({ id: 'agt_gone_tasks', name: 'Nadia B.', perf: { ...prior, done: 0 } })).toContain('Pas encore de tâche pour Nadia.');
+  });
+
   it('seniority and the league, never an xp counter read as merit', () => {
     const page = card({ perf: prior });
     expect(page).toContain('Ancienneté 48 jours');
@@ -390,6 +417,44 @@ describe('end of a run', () => {
     expect(page).not.toContain('Fin de la simulation');
     expect(page).toContain('Continuer sans fin');
     expect(banner({ ...base, status: 'finished', finance: { ...base.finance!, bankrupt: false } })).toContain('Fin de la simulation');
+  });
+
+  describe('the goal banner, for one viewer of one run', () => {
+    const goal = { ...mockSnapshot(), runId: 'run_goal', status: 'goal_reached' as const };
+    afterEach(() => { vi.unstubAllGlobals(); });
+    const browser = () => {
+      const kept = new Map<string, string>();
+      return { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => { kept.set(k, v); } };
+    };
+
+    it('stays closed through a reload, and only for that run', () => {
+      vi.stubGlobal('localStorage', browser());
+      expect(endBannerShown(goal, null)).toBe(true);
+      expect(closeEndBanner(goal)).toBe('run_goal:goal_reached');
+      expect(endBannerShown(goal, null)).toBe(false); // a reload: the page forgot, the browser did not
+      expect(endBannerShown({ ...goal, runId: 'run_other' }, null)).toBe(true);
+    });
+
+    it('a browser that refuses storage still closes it for the page', () => {
+      const refused = () => { throw new Error('denied'); };
+      vi.stubGlobal('localStorage', { getItem: refused, setItem: refused });
+      expect(endBannerShown(goal, null)).toBe(true);
+      const closed = closeEndBanner(goal);
+      expect(endBannerShown(goal, closed)).toBe(false);
+      expect(endBannerShown(goal, null)).toBe(true);
+    });
+
+    it('a bankruptcy and the end of a run come back: one is a state, the other carries « Continuer sans fin »', () => {
+      vi.stubGlobal('localStorage', browser());
+      for (const status of ['bankrupt', 'finished'] as const) {
+        const s = { ...goal, status };
+        const closed = closeEndBanner(s);
+        expect(endBannerShown(s, closed)).toBe(false);
+        expect(endBannerShown(s, null)).toBe(true);
+      }
+      expect(endBannerShown({ ...goal, status: 'running' }, null)).toBe(false);
+      expect(endBannerShown(null, null)).toBe(false);
+    });
   });
 
   it('a goal reached on a run without an end assumes no end', () => {

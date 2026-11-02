@@ -421,6 +421,8 @@ describe('heuristic support & direction', () => {
     expect(splitSentences(answer).length).toBeGreaterThanOrEqual(2);
     expect(splitSentences(answer).length).toBeLessThanOrEqual(4);
     const memo = await eng.dailyMemo({ day: 4, kpi: { day: 4, cash: 431.2, revenue: 57, adSpend: 40, profit: 17, cumulativeProfit: -68.8, sales: 3, refunds: 0, impressions: 5000, clicks: 60, ctr: 0.012, cvr: 0.05, roas: 1.42, cac: 13.3, openTickets: 2, avgReplyScore: 80, liveProducts: 1, tasksDone: 9, lessonsLearned: 1 }, notes: ['Le hook « erreur » performe'] }, ctx());
+    const cut = await eng.dailyMemo({ day: 4, kpi: { day: 4, cash: 431.2, revenue: 57, adSpend: 40, profit: 17, cumulativeProfit: -68.8, sales: 3, refunds: 0, impressions: 5000, clicks: 60, ctr: 0.012, cvr: 0.05, roas: 1.42, cac: 13.3, openTickets: 2, avgReplyScore: 80, liveProducts: 1, tasksDone: 9, lessonsLearned: 1 }, notes: ['La Red Team renvoie le guide : 3 douleurs absentes de « Peur de se tromper…'] }, ctx());
+    expect(cut).toContain('absentes de « Peur de se tromper…\n'); // a note cut short takes no period of ours
     expect(memo).toMatch(/^Jour 4/);
     expect(memo).toContain('57 €');
     expect(memo).toContain('Priorité de demain');

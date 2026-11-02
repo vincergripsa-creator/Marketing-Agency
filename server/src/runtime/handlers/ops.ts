@@ -11,6 +11,7 @@ import { versionSince } from '../acquisition.js';
 import { activeCampaigns, computeBudget, paidConversion, priceCeiling, productMetrics } from '../metrics.js';
 import { createTask, isOpen } from '../tasks.js';
 import { followFounderMissions, unblockStaleTasks } from '../missions.js';
+import { survivalInsured } from '../org/constants.js';
 import { officerId } from '../org/officers.js';
 import { PRICE_ARMS } from '../playbook.js';
 import { portfolioCounts, reviewPortfolio } from '../portfolio.js';
@@ -219,7 +220,7 @@ export const opsHandlers: HandlerMap = {
         : `${agent.name} fixe l'enveloppe pub du jour : ${eur(b.adCap)} (${Math.round(b.rate * 100)} % de ${eur(b.cash)}, ${runway})`, 'finance');
       if (b.survival && prev?.survival !== true) {
         incident(ctx, `Mode survie déclenché : trésorerie ${eur(b.cash)} < 30 % du budget de départ`);
-        say(ctx, agent.id, `${agent.name} déclenche le MODE SURVIE : pubs non rentables coupées, organique et commission uniquement`, 'finance');
+        say(ctx, agent.id, `${agent.name} déclenche le MODE SURVIE : pubs non rentables coupées, ${survivalInsured(ctx.world) ? 'organique, commission et un seul petit test quand aucune pub ne tourne, plus de salaire pour les fondateurs' : 'organique et commission uniquement'}`, 'finance');
       } else if (!b.survival && prev?.survival === true) {
         say(ctx, agent.id, `${agent.name} lève le mode survie : la trésorerie est remontée à ${eur(b.cash)}`, 'finance');
       }

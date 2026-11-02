@@ -9,7 +9,7 @@ L'agence démarre à **8 fondateurs** et n'embauche que quand les chiffres le de
 - **Salaire par jour** : haiku 0,38 €, sonnet 0,60 €, opus 0,90 €, plus **+3 % par niveau**. Une seule ligne de salaires par jour au grand livre, à la clôture du marché.
 - **Recrutement** : 7 jours de salaire à l'embauche.
 - **Départ** : 7 jours de salaire, jamais plus.
-- **Mode survie** : les fondateurs prennent 50 % de leur salaire ; en faillite, rien.
+- **Mode survie** : les fondateurs ne se versent plus de salaire, en faillite non plus. Les recrues gardent le leur.
 - **Budget pub** : le CFO garde toujours 7 jours de salaires hors de l'enveloppe.
 
 ## Ce que rapporte un agent

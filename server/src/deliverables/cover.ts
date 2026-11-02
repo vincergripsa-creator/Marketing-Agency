@@ -20,6 +20,9 @@ export const COVER_H = 848;
 /** Beyond this length a cover title is cut (at a word boundary); below it the FULL title is always shown. */
 export const COVER_TITLE_MAX_CHARS = 140;
 
+/** How the title of a kit starts: its cover says what it holds, not « GUIDE PRATIQUE ». */
+export const KIT_TITLE = 'Le kit à imprimer';
+
 const UNIT = COVER_W / 6;
 const MARGIN = 40;
 const MEASURE = COVER_W - 2 * MARGIN;
@@ -112,12 +115,12 @@ class Layout {
     return lines;
   }
 
-  /** « GUIDE PRATIQUE » left, the brand right. A brand too long for the line loses whole words from its end. */
+  /** What the book is, left, the brand right. A brand too long for the line loses whole words from its end. */
   labels(y: number): void {
     const { v, inks } = this;
     const face = v.labelB;
     const line = (s: string) => advance(face, s, LABEL.size, LABEL.track);
-    const label = sanitizeFor(face, 'GUIDE PRATIQUE');
+    const label = sanitizeFor(face, this.words.title.startsWith(KIT_TITLE) ? 'KIT À IMPRIMER' : 'GUIDE PRATIQUE');
     this.put(label, MARGIN, y, line(label), face, LABEL.size, inks.ink, { track: LABEL.track });
     const room = MEASURE - line(label) - UNIT / 2;
     const brand = wholeClause(sanitizeFor(face, this.words.brand.toUpperCase()), (s) => line(s) <= room);

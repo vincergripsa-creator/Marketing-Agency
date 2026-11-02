@@ -16,7 +16,7 @@ import { productNote } from '../notes.js';
 import { officerId } from '../org/officers.js';
 import { directivesOf } from '../playbook.js';
 import { createTask } from '../tasks.js';
-import { mean, round2, short, str, uniq } from '../util.js';
+import { endLine, mean, round2, short, str, uniq } from '../util.js';
 import { refreshSalesPage } from './boutique.js';
 import type { HandlerMap, HandlerOutcome } from './common.js';
 import { NO_PRODUCT, requireProduct, studioMind } from './common.js';
@@ -71,7 +71,7 @@ export const lifecycleHandlers: HandlerMap = {
       product.leadMagnet = { title, file: rel, day: ctx.world.day };
       await productNote(ctx, product, agent.id, 'Aimant à prospects', `- **${title}** : \`${rel}\`. La page de vente prend désormais les adresses.`);
       say(ctx, agent.id, `${agent.name} : « ${short(title, 60)} » est offert sur la page de « ${short(product.title, 40)} »`, 'deliverable', { productId: product.id });
-      return { summary: `Aimant en place : ${short(title, 80)}.`, output: { path: rel, title } };
+      return { summary: endLine(`Aimant en place : ${short(title, 80)}`), output: { path: rel, title } };
     },
   },
 

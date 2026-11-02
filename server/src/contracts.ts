@@ -183,7 +183,7 @@ export interface DeliverablesModule {
    *  example callouts, checklists, VisualSpec infographics, bonus, "La suite est ici" CTA page, page numbers. */
   renderPdf(input: { product: Product; content: PdfContent; design: DesignSpec; brand: string; outFile: string; upsell?: { title: string; url: string } | null; effort?: DesignEffort }): Promise<{ pages: number; bytes: number; audit: PdfAudit; previews: { label: string; svg: string }[] }>;
   /** Self-contained HTML storefront page (inline CSS, inline cover SVG, fake checkout button). */
-  renderSalesPageHtml(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string; previews?: { label: string; svg: string }[]; figureSvg?: string | null }): string;
+  renderSalesPageHtml(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string; previews?: { label: string; svg: string }[]; figureSvg?: string | null; offSale?: boolean }): string;
   /** 9:16 storyboard frames (SVG strings, 360x640 viewBox) + a self-contained HTML "TikTok" preview that plays the scenes. */
   renderAdStoryboard(input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string }): { frames: string[]; previewHtml: string };
   pickArt(design: DesignSpec, effort: DesignEffort): { seed: number; score: number; explored: number };

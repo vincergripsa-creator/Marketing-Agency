@@ -552,7 +552,7 @@ export function digestPeopleOf(world: WorldState, fromDay: number, toDay: number
 
 /** A tile of the gallery. `ad_video` never is a `Deliverable` (D27): its tiles come from the manifest, through the session. */
 export type DeliverableTile = Omit<Deliverable, 'kind'> & { kind: Deliverable['kind'] | 'ad_video'; poster?: string | null };
-export interface DeliverablePage { items: DeliverableTile[]; page: number; pages: number; pageSize: number; total: number }
+export interface DeliverablePage { items: DeliverableTile[]; page: number; pages: number; pageSize: number; total: number; counts: Partial<Record<DeliverableTile['kind'], number>> } // counts: each kind on the whole run, whatever `kinds` asked
 
 /** An evicted video keeps its poster, and its tile: the player asks for a new render. */
 function videoTile(id: string, v: CreativeVideo, creative: AdCreative | undefined): DeliverableTile[] {
@@ -572,9 +572,11 @@ export function deliverablesPage(world: WorldState, query: { page?: number; kind
   const works: DeliverableTile[] = [...archived.filter((d) => !held.has(d.id)), ...(world.company.deliverables ?? [])].map((d) => (d.kind === 'pdf' && d.productId ? { ...d, poster: covers.get(d.productId) ?? null } : d));
   const films = new Set<string>(); // two ads with the same spec are one film: it shows once
   const tiles = [...works, ...Object.entries(videos).flatMap(([id, v]) => videoTile(id, v, creatives.get(id)).filter((t) => !films.has(filmOf(t.path)) && films.add(filmOf(t.path))))];
+  const counts: DeliverablePage['counts'] = {};
+  for (const { kind } of tiles) counts[kind] = (counts[kind] ?? 0) + 1;
   const wanted = query.kinds?.length ? new Set<string>(query.kinds) : null;
   const shown = tiles.map((tile, i) => ({ tile, i })).filter(({ tile }) => !wanted || wanted.has(tile.kind)).sort((a, b) => b.tile.day - a.tile.day || b.i - a.i).map(({ tile }) => tile);
   const pages = Math.max(1, Math.ceil(shown.length / GALLERY_PAGE));
   const page = Math.min(pages, Math.max(1, query.page ?? 1));
-  return { items: shown.slice((page - 1) * GALLERY_PAGE, page * GALLERY_PAGE), page, pages, pageSize: GALLERY_PAGE, total: shown.length };
+  return { items: shown.slice((page - 1) * GALLERY_PAGE, page * GALLERY_PAGE), page, pages, pageSize: GALLERY_PAGE, total: shown.length, counts };
 }

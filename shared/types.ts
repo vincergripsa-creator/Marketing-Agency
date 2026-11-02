@@ -410,7 +410,13 @@ export interface Campaign {
   channel?: ChannelId;         // absent = 'tiktok'
   learning?: { events: number; exitedDay: number | null; days?: number }; // channels with a learning phase. days: delivered since it (re)started
   test?: boolean;              // paid by the test envelope, left alone by the allocator until its verdict
+  underLine?: UnderLineTest;   // launched as the small test under the survival line (D117)
   seq?: number;                // D50: stable stream key, survives compaction. Absent = array index
+}
+
+export interface UnderLineTest {
+  endDay: number | null;       // null while it runs
+  failed: boolean;             // the next test waits: `UNDER_LINE.gapDays` from `endDay`
 }
 
 export interface CampaignInputShape {
@@ -772,6 +778,7 @@ export interface FounderHold {
   channel?: ChannelId | null;  // « coupe Meta »
   agentId?: AgentId;           // kind 'pin'
   resumes?: string[];          // an order with a length: the campaigns it paused, which start again the morning after `until`
+  kept?: string[];             // a lowering: the campaigns it left running on the founder's word, `founderForced` until nothing the founder said stands over them
 }
 
 /** What an agent read in the brain before starting a task. Lessons by id: the retro keeps rewriting them. */
@@ -944,6 +951,7 @@ export interface ScenarioControls {
   videoSkill?: number;         // forces the editor's skill, 0..1
   videoTempo?: VideoTempo;     // forces the tempo, no bandit
   talentOverride?: TalentOverride | TalentOverride[]; // lever test: every agent's t on these skills, later entries win
+  noSurvivalTest?: boolean;    // no insurance (D117): founders keep ORG.survivalPayCut of their pay in survival, nothing runs under the line
 }
 
 // ───────────────────────────── Organisation: roles, hires, departures ─────────────────────────────
