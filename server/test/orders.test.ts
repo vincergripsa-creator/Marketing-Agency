@@ -285,7 +285,7 @@ describe('founder orders', () => {
     expect(tasksOf(world, id).find((t) => t.kind === 'set_price')!.input).toMatchObject({ productId: p.id, price: 49, reason: 'fondateur' });
   }));
 
-  it('no new guide starts under his order, what is in production goes on, and his next request lifts it', withCompany({}, async ({ world, company, ctx }) => {
+  it('no new guide starts under their order, what is in production goes on, and their next request lifts it', withCompany({}, async ({ world, company, ctx }) => {
     world.day = 20;
     const wip = addProduct(world, 'prd_w', 'toeic-800', { status: 'writing', launchedDay: null });
     const write = createTask(world, { kind: 'write_pdf', input: { productId: wip.id } });
@@ -458,7 +458,7 @@ describe('founder refusals', () => {
     expect(plain.status).toBe('killed');
   }));
 
-  it('a guide waiting for his word does not stop the next one, within reason', withCompany({ founderApproval: true }, async ({ world, ctx }) => {
+  it('a guide waiting for their word does not stop the next one, within reason', withCompany({ founderApproval: true }, async ({ world, ctx }) => {
     world.day = 8;
     const first = addProduct(world, 'prd_a', 'toeic-800', { status: 'ready', launchedDay: null });
     awaiting(world, 'publish_product', first, 'Mettre en ligne');
@@ -521,7 +521,7 @@ describe('budget raises in approval mode', () => {
     expect(world.company.tasks.filter((t) => t.input.campaignId === c.id).length).toBe(2);
   }));
 
-  it('his yes does not widen the CFO\'s envelope, and a question on a stopped campaign goes away', withCompany({ founderApproval: true }, async ({ world, ctx }) => {
+  it('their yes does not widen the CFO\'s envelope, and a question on a stopped campaign goes away', withCompany({ founderApproval: true }, async ({ world, ctx }) => {
     world.day = 20;
     const p = addProduct(world, 'prd_c', 'proprete-chiot');
     const c = addCampaign(world, 'cmp_c', p.id, 18, { founderCap: 18 });
@@ -538,7 +538,7 @@ describe('budget raises in approval mode', () => {
     expect(world.company.pendingApprovals).toEqual([]);
   }));
 
-  it('a launch runs at the amount he agreed to, even if the envelope grew since', withCompany({ founderApproval: true }, async ({ world, ctx }) => {
+  it('a launch runs at the amount they agreed to, even if the envelope grew since', withCompany({ founderApproval: true }, async ({ world, ctx }) => {
     world.day = 10;
     const p = addProduct(world, 'prd_c', 'proprete-chiot');
     world.company.creatives.push({ id: 'cre_1', productId: p.id, hook: 'h', hookStyle: 'question', format: 'carousel', scenes: [], caption: '', hashtags: [], cta: '', files: { storyboard: [], preview: null }, quality: null, review: { status: 'approved', reason: null, day: 5 }, createdDay: 5, createdBy: 'leo' });
@@ -590,7 +590,7 @@ describe('the Red Team\'s last word', () => {
     expect(next.input.cycle).toBe(MAX_REWORK_CYCLES + 1);
   }));
 
-  it('a guide even the rebuild left as it was is held and the founder is told; his word ships it', withCompany({}, async ({ world, company, ctx }) => {
+  it('a guide even the rebuild left as it was is held and the founder is told; their word ships it', withCompany({}, async ({ world, company, ctx }) => {
     const p = addProduct(world, 'prd_u', 'urssaf-micro', { status: 'qa', launchedDay: null });
     const t = review(world, p, MAX_REWORK_CYCLES + 1, true);
     await settleRedTeam(ctx, t, p);

@@ -500,7 +500,7 @@ describe('incidents', () => {
 });
 
 describe('what comes next', () => {
-  it('waiting: approvals first, then his open requests and the orders only he can lift', () => {
+  it('waiting: approvals first, then their open requests and the orders only they can lift', () => {
     const w = world();
     w.company.missions.push({ id: 'mis_a', day: 2, from: 'founder', text: 'Lancer un guide sur le sommeil', ownerId: 'nora', taskIds: [], status: 'open' }, { id: 'mis_b', day: 2, from: 'founder', text: 'Finie', ownerId: 'nora', taskIds: [], status: 'done' });
     w.company.holds = [{ id: 'hold_a', kind: 'ads', productId: null, day: 3, until: null, reason: 'plus de pub' }, { id: 'hold_b', kind: 'ads', productId: null, day: 3, until: 40, reason: 'refus' }];

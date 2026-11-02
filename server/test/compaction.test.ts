@@ -515,7 +515,7 @@ describe('creatives and campaigns', () => {
     expect(w.company.campaigns[0]!.seq).toBeUndefined();
   });
 
-  it('keeps a campaign the founder holds, whatever its age: his word brings it back', () => {
+  it('keeps a campaign the founder holds, whatever its age: their word brings it back', () => {
     const w = world();
     const p = addProduct(w, 'prd_1');
     w.company.campaigns.push(campaign('cpg_1', p.id, 10, { pausedFor: 'founder' }));

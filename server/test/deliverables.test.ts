@@ -382,6 +382,15 @@ describe('PDF pages read like the founder reads them', () => {
     // bar values are a 0..100 index, not percentages
     expect(all).not.toMatch(/\b68 %/);
   });
+
+  it('the contents page says Bonus once: under its label the bonus chapter has lost its « Bonus : » and keeps a capital', async () => {
+    const file = join(dir, 'contents-bonus.pdf');
+    await renderPdf({ product, content, design, brand: 'Pixel Agency', outFile: file });
+    const contents = (await pdfPagesText(file)).find((p) => /Sommaire/i.test(p))!;
+    expect(contents).toMatch(/bonus/i);
+    expect(contents).not.toMatch(/bonus\s*:/i);
+    expect(contents).toContain('La semaine de vacances');
+  });
 });
 
 // ───────────────────────────── printable sheets, last page, niche fit ─────────────────────────────

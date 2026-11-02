@@ -554,7 +554,7 @@ describe('the end of a season', () => {
     expect(v.path.length).toBeGreaterThan(0);
   });
 
-  it('a rebuild of the map on the way puts the champion on the spot: she cheers her 4 s and goes back', () => {
+  it('a rebuild of the map on the way puts the champion on the spot: they cheer their 4 s and go back', () => {
     const team = crew();
     const { engine, sim, run, clock } = stage(snapshotOf(team, [], {}, { growth: 6 }));
     const recent = [season('lea')];

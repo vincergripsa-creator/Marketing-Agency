@@ -1,6 +1,6 @@
 /**
  * What the market reads of a cut (video §3.5). Craft reaches CTR through `scoreCreative` and `adQ`, with no term of its own,
- * so the league sees it. Tempo reads nowhere: a niche has no taste, and a cut opens no arm (D149).
+ * so the league sees it. The market has no tempo term: a niche has no taste, and a cut opens no arm (D149).
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { AdCreative, AdScene, Campaign, CutMetrics, DailyAdStats, NicheTruth, PdfContent, Product, ScenarioConfig, VideoBeat, VideoCut, VideoTempo, VoiceOfCustomer, WorldState } from '../src/shared.js';
@@ -280,7 +280,7 @@ describe('the market', () => {
     expect(run(world, 5).map((r) => [r.impressions, r.clicks])).toEqual(run(off.world, 5).map((r) => [r.impressions, r.clicks]));
   });
 
-  it('the tempo of a cut moves no click: tempo is cosmetic (D149)', () => {
+  it('the market has no tempo term: one cut with one set of metrics gets the same clicks under all three tempos (D149)', () => {
     const rows = (tempo: VideoTempo) => run(market({ ...cut(), tempo }, { videoModel: 'on' }).world, 10).map((r) => [r.impressions, r.clicks]);
     const [first, ...rest] = TEMPOS.map(rows);
     for (const other of rest) expect(other).toEqual(first);

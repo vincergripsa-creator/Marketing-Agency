@@ -810,7 +810,7 @@ describe('the page a cut shows', () => {
     expect(cut.beats.some((b) => b.kind === 'narrator' && b.proof)).toBe(false);
   });
 
-  it('a narrator stands in every narrated cut, at every skill, with a page beside him only past a plain editor', () => {
+  it('a narrator stands in every narrated cut, at every skill, with a page beside them only past a plain editor', () => {
     const pain = 'Si toi aussi tu te dis « rien ne pousse », reste deux secondes.';
     const product = guideOf([chapter({ steps: ['Mesurer le soleil du balcon chaque matin', 'Le terreau du pot s’épuise vite en été'] })]);
     const script = (first: string): AdCreative['scenes'] => { const s = scenes(STEP, 'Un repère à garder : le terreau du pot s’épuise vite en été.'); return [s[0]!, { visual: '', onScreenText: '« rien ne pousse »', voiceover: first, durationSec: 3 }, ...s.slice(1)]; };
@@ -867,7 +867,7 @@ describe('the page a cut shows', () => {
     expect(saidSpan('L’ensoleillement du balcon', 'Il faut mesurer l’ensoleillement du balcon.'.split(' '))).toEqual({ from: 3, to: 5 });
   });
 
-  it('a card that reads a buyer stays up long enough to read him, on a silent format', () => {
+  it('a card that reads a buyer stays up long enough to read them, on a silent format', () => {
     const product = guideOf([chapter({ steps: ['Mesurer le soleil du balcon chaque matin'] })]);
     const quote = 'J’avais tout lu sur internet sans résultat, ici il y a une vraie méthode et des checklists que je peux suivre';
     const short = plan(product, scenes(STEP, 'Un repère à garder.'), 0.9, 'text_slideshow').beats[2]!;

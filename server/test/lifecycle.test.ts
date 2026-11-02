@@ -512,7 +512,7 @@ describe('approval mode', () => {
     return task;
   }
 
-  it('each broadcast waits, and the text he approved is the text that goes out', async () => {
+  it('each broadcast waits, and the text they approved is the text that goes out', async () => {
     const l = await lab({ founderApproval: true });
     const p = await guide(l);
     const task = await waiting(l, 'send_broadcast', p, { audience: 'niche' });
@@ -527,7 +527,7 @@ describe('approval mode', () => {
     expect(sent.map((b) => b.subject)).toEqual([draft.subject]);
   });
 
-  it('the sequence waits too, and the lead magnet does not open the page before his yes', async () => {
+  it('the sequence waits too, and the lead magnet does not open the page before their yes', async () => {
     const l = await lab({ founderApproval: true });
     const p = await guide(l);
     const seq = await waiting(l, 'write_email_sequence', p);

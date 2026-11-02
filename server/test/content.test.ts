@@ -18,7 +18,7 @@ import { themeFor } from '../src/deliverables/pdfVisuals.js';
 import { VOICES } from '../src/deliverables/voices.js';
 import { createContentEngine, upsellTopics } from '../src/minds/index.js';
 import { findCliches, heuristicHumanize } from '../src/minds/heuristic/editing.js';
-import { parseKnowledge, type MethodStep } from '../src/minds/heuristic/knowledge.js';
+import { parseKnowledge, parseStep, type MethodStep } from '../src/minds/heuristic/knowledge.js';
 import { buildPlan } from '../src/minds/heuristic/plan.js';
 import { buildNicheCtx } from '../src/minds/heuristic/niche.js';
 import { topicNotes } from '../src/minds/heuristic/archetypes.js';
@@ -572,6 +572,12 @@ describe('what a proofreader would circle', () => {
         if (rest.length) expect(norm(rest.join(' : ')), label).not.toContain(norm(head!));
       }
     }
+  });
+
+  it('a step says its moment once, in its tag: « Suivre les paiements … jusqu’au jour J » printed the wedding\'s jour J twice', () => {
+    const steps = NICHE_CATALOG.flatMap((n) => n.voc.knowledge.steps).map((raw, i) => parseStep(raw.replace(/^\[[a-z0-9-]+\]\s*/, ''), i)).filter((s) => s.when !== null);
+    expect(steps.length).toBeGreaterThan(200);
+    for (const s of steps) expect(norm(s.text), s.text).not.toContain(norm(s.when!));
   });
 
   it('a follow-up\'s subtitle holds one relative clause and points at nothing outside it', () => {

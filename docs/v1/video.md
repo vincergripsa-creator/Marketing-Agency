@@ -277,9 +277,9 @@ The market's `adQ` already calls `scoreCreative`, so CTR follows through `ADS.qu
 
 So best against weak is +19 % CTR, best against a mean hire +7 %. The curve is flat from about x = 0,85: past that, more talent changes nothing in the file. The baseline lowers CTR by about 3 %: left to the single final calibration, no constant moved before it.
 
-### 3.6 Tempo, cosmetic since D149
+### 3.6 Tempo, almost cosmetic since D149
 
-Step 4 read learned CTR over days 31-60 above fixed on 14 of 28 seeds for 18 asked, so by its rule tempo left the market and the bandit: no `tempoFit`, no `VIDEO_MARKET`, no `NicheTruth.videoTempo`, no `video_tempo` arm, and an old save drops those arms on load. It stays in the file: shot length, BPM (88, 112, 128), caption speed. What follows is what was tried.
+Step 4 read learned CTR over days 31-60 above fixed on 14 of 28 seeds for 18 asked, so by its rule tempo left the market and the bandit: no `tempoFit`, no `VIDEO_MARKET`, no `NicheTruth.videoTempo`, no `video_tempo` arm, and an old save drops those arms on load. It stays in the file: shot length, BPM (88, 112, 128), caption speed. Shot length still reaches the score: `TEMPO_SHOT` moves `avgShotSec`, then pace, struct, overall and CTR, by at most ±1,6 % on a minority of films (D161). What follows is what was tried.
 
 ```ts
 // sim/videoCraft.ts: market only, own constants

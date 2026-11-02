@@ -95,7 +95,7 @@ describe('what the founder types (T10)', () => {
     expect(orderAction('ne vire pas Sarah')).toBe('pin_agent');
   });
 
-  it('a refused resume keeps his standing order', async () => {
+  it('a refused resume keeps their standing order', async () => {
     const w = legacyWorld();
     const { company } = mount(w);
     const c = campaign(w, 'cmp_a', liveProduct(w, 'prd_a', 'sommeil-bebe').id);
@@ -130,7 +130,7 @@ describe('what the founder types (T10)', () => {
     expect(missionOf(w, id).outcome).toMatch(/aucune campagne ne porte le n° 9.*En cours : n° 1/);
   });
 
-  it('his order on every ad stands over one campaign', async () => {
+  it('their order on every ad stands over one campaign', async () => {
     const w = legacyWorld();
     const { company } = mount(w);
     const c = campaign(w, 'cmp_1', liveProduct(w, 'prd_a', 'sommeil-bebe').id);
@@ -278,7 +278,7 @@ describe('what the founder types (T10)', () => {
     expect(d2.status).toBe('paused');
   });
 
-  it('a number nobody carries after « sauf » stops nothing: he is shown what runs', async () => {
+  it('a number nobody carries after « sauf » stops nothing: they are shown what runs', async () => {
     const w = legacyWorld();
     const { company } = mount(w);
     const a = campaign(w, 'cmp_1', liveProduct(w, 'prd_a', 'sommeil-bebe').id);
@@ -360,7 +360,7 @@ describe('what the founder types (T10)', () => {
     }
   });
 
-  it('a refusal reads through an adverb, a ni, a que: nothing is paused and he is told', async () => {
+  it('a refusal reads through an adverb, a ni, a que: nothing is paused and they are told', async () => {
     for (const text of ['ne coupe absolument pas les pubs', 'ne coupe vraiment pas les pubs', 'ne coupe ni les pubs ni les lancements', "je ne veux pas que tu coupes les pubs", "je ne veux plus qu'on coupe les pubs", 'ne bouge pas les pubs', 'ne change pas les pubs', 'il ne faut surtout pas couper les pubs', 'il ne faut pas du tout couper les pubs', 'hors de question de couper les pubs']) {
       const w = legacyWorld();
       const { company } = mount(w);
@@ -413,7 +413,7 @@ describe('what the founder types (T10)', () => {
     expect(orderAction('vire Sarah. Tu as vu ses chiffres ?')).toBeNull();
   });
 
-  it('what he reports is no order: the past tense stops nothing', async () => {
+  it('what they report is no order: the past tense stops nothing', async () => {
     for (const text of ["j'ai coupé les pubs", 'hier on a coupé les pubs', "on n'a pas coupé les pubs", 'tu as déjà arrêté les pubs', 'nous avons repris les pubs', 'ils ont relancé les pubs']) expect(ordersIn(text), text).toEqual([]);
     for (const text of ['il reste à couper les pubs', "je t'ai dit de couper les pubs", 'tu as à couper les pubs']) expect(orderAction(text), text).toBe('stop_ads');
     const w = legacyWorld();
@@ -463,7 +463,7 @@ describe('what the founder types (T10)', () => {
     expect(ordersIn('vire Tom, Sarah et Léa B.').filter((o) => o.action === 'fire_agent')).toHaveLength(3);
   });
 
-  it('a name after a bare comma is who he speaks to, never a second firing', async () => {
+  it('a name after a bare comma is who they speak to, never a second firing', async () => {
     const w = leanWorld();
     const { company } = mount(w);
     const [a, b] = [teammate(w, 'tom'), teammate(w, 'sarah')];
@@ -473,7 +473,7 @@ describe('what the founder types (T10)', () => {
     expect(b.notice ?? null).toBeNull();
   });
 
-  it('in a list too, the person he is talking to is not on it', async () => {
+  it('in a list too, the person they are talking to is not on it', async () => {
     const w = leanWorld();
     const { company } = mount(w);
     const [a, b] = [teammate(w, 'tom'), teammate(w, 'sarah')];
@@ -493,7 +493,7 @@ describe('what the founder types (T10)', () => {
     expect(orderAction("n'hésite pas à virer Tom")).toBeNull(); // no pin, and a push is not a firing
   });
 
-  it('a refused resume keeps his stop, and the next try goes through', async () => {
+  it('a refused resume keeps their stop, and the next try goes through', async () => {
     const w = legacyWorld();
     const { company } = mount(w);
     sim.recordLedger(w, { type: 'revenue', amount: 5000, memo: 'Ventes', ref: null });
@@ -512,7 +512,7 @@ describe('what the founder types (T10)', () => {
     expect(two.pausedFor).toBeUndefined();
   });
 
-  it('a campaign that nothing of his stopped is said to be that', async () => {
+  it('a campaign that nothing of theirs stopped is said to be that', async () => {
     const w = legacyWorld();
     const { company } = mount(w);
     const c = campaign(w, 'cmp_1', liveProduct(w, 'prd_a', 'sommeil-bebe').id, { status: 'paused' });

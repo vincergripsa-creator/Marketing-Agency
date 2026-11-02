@@ -729,7 +729,7 @@ describe('the routes', () => {
     expect((await get('/api/inconnue')).status).toBe(404);
   });
 
-  it('the digest starts where he left, and « vu » moves that day, on the world and in the save', async () => {
+  it('the digest starts where they left, and « vu » moves that day, on the world and in the save', async () => {
     served.company.growth!.founder = { lastSeenDay: 20, lastSeenAt: null };
     const digest = await json<FounderDigest>('/api/digest');
     expect(digest.fromDay).toBe(20);

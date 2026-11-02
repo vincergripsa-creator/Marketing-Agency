@@ -205,7 +205,7 @@ describe('capture (scale 13)', () => {
     expect(world.market.audience!.totals.buyers).toBe(300);
   });
 
-  it('an e-mail buyer is already on the list: he does not join it twice', () => {
+  it('an e-mail buyer is already on the list: they do not join it twice', () => {
     const { world, n, p } = shop();
     p.leadMagnet = { title: 'Les 5 erreurs', file: 'magnet.pdf', day: 1 };
     addBuyers(world, n.id, 40_000);

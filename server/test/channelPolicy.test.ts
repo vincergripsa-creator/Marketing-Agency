@@ -385,7 +385,7 @@ describe('founder approval (D49)', () => {
     return { ...l, task: w.company.tasks.find((t) => t.kind === 'open_channel' && t.input.channel === 'meta')! };
   }
 
-  it('founderApproval: opening a channel waits for him, and nothing moves before his yes', async () => {
+  it('founderApproval: opening a channel waits for them, and nothing moves before their yes', async () => {
     const { world: w, company, task, ctx } = await waiting();
     expect(task.status).toBe('awaiting_founder');
     expect(task.input.founderAsk).toBe('Ouvrir le canal Facebook & Instagram');
@@ -400,7 +400,7 @@ describe('founder approval (D49)', () => {
     expect(ctx.tools.channelStatus().find((s) => s.id === 'meta')!.state).toBe('verifying');
   }, 60_000);
 
-  it('his no holds that channel for a week, TikTok keeps running, and the ask comes back after', async () => {
+  it('their no holds that channel for a week, TikTok keeps running, and the ask comes back after', async () => {
     const l = await waiting();
     const { world: w, company, task } = l;
     const day = w.day;

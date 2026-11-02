@@ -203,7 +203,7 @@ describe('task counts — the task list of a snapshot is trimmed, the counts are
   });
 });
 
-describe('approval card — the founder reads what he approves', () => {
+describe('approval card — the founder reads what they approve', () => {
   const task: Task = { ...mockSnapshot().company.tasks[0]!, id: 'tsk_9', title: 'Lancer la campagne', input: { productId: 'prd_91', nicheId: 'chiot' } };
   const act = (o: Partial<Activity>): Activity => ({ id: 'a', day: 5, tick: 3, at: 0, agentId: 'leo', kind: 'founder', text: 'En attente du fondateur : Rembourser 24,00 € (commande ord_1)', refs: { taskId: 'tsk_9' }, ...o });
 

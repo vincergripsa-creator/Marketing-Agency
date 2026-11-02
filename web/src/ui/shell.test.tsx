@@ -145,7 +145,7 @@ describe('when the digest opens', () => {
     expect(watcher().w.snapshot(clock(16), true, 0)).toBe(false);
   });
 
-  it('a run he watches never opens it, however fast, and « seen » goes out at most every 30 s', () => {
+  it('a run they watch never opens it, however fast, and « seen » goes out at most every 30 s', () => {
     const { w, posts, at } = watcher();
     let opened = false;
     let lastSeen = 40;
@@ -177,14 +177,14 @@ describe('when the digest opens', () => {
     expect(w.visibility(clock(60, 50), true)).toBe(false);
   });
 
-  it('a tab opened in the background waits for him', () => {
+  it('a tab opened in the background waits for them', () => {
     const { w, posts } = watcher();
     expect(w.snapshot(clock(30, 10), false, 0)).toBe(false);
     expect(posts).toEqual([]);
     expect(w.visibility(clock(31, 10), true)).toBe(true);
   });
 
-  it('while he reads, nothing moves his « last seen »; closing it does', () => {
+  it('while they read, nothing moves their « last seen »; closing it does', () => {
     const { w, posts, at } = watcher();
     expect(w.snapshot(clock(30, 10), true, 0)).toBe(true);
     at(90_000);
@@ -196,7 +196,7 @@ describe('when the digest opens', () => {
     expect(w.visibility(clock(31, 10), true)).toBe(false); // already read, the post only has not come back yet
   });
 
-  it('leaving the page counts what he watched, but never reads a digest for him', () => {
+  it('leaving the page counts what they watched, but never reads a digest for them', () => {
     const { w } = watcher();
     expect(w.leaving()).toBe(false); // nothing seen yet
     w.snapshot(clock(40, 40), true, 0);
@@ -208,7 +208,7 @@ describe('when the digest opens', () => {
     expect(unread.w.leaving()).toBe(false);
   });
 
-  it('reopened by hand, it waits for him the same way', () => {
+  it('reopened by hand, it waits for them the same way', () => {
     const { w, posts, at } = watcher();
     w.snapshot(clock(30, 30), true, 0);
     w.open();
@@ -269,7 +269,7 @@ describe('when the digest opens', () => {
     expect(posts).toEqual([]);
   });
 
-  it('a stream that drops and comes back with no day lost: « seen » follows him again on the next day', () => {
+  it('a stream that drops and comes back with no day lost: « seen » follows them again on the next day', () => {
     const { w, posts, at } = watcher();
     w.snapshot(clock(11, 10), true, 0);
     posts.length = 0;
@@ -280,7 +280,7 @@ describe('when the digest opens', () => {
     expect(w.leaving()).toBe(true);
   });
 
-  it('after a return, leaving the page reads nothing for him until a fresh day has shown', () => {
+  it('after a return, leaving the page reads nothing for them until a fresh day has shown', () => {
     const { w, posts, at } = watcher();
     w.snapshot(clock(10), true, 0);
     w.visibility(clock(10), false);
@@ -489,7 +489,7 @@ describe('chronicle toasts', () => {
     expect(st.keys).toEqual(new Set(['other-run']));
   });
 
-  it('only the six kinds that matter to him', () => {
+  it('only the six kinds that matter to them', () => {
     const st = fresh();
     takeToasts(st, 'r1', []);
     const worthy = (['hire', 'fire', 'layoff', 'season_end', 'channel_open', 'dept_open', 'stage_up'] as const).map((k) => entry(k, k));

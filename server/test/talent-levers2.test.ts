@@ -145,7 +145,7 @@ describe('research lever (talent §4.6)', () => {
     expect(strong.mined).toBeGreaterThan(off.mined);
   });
 
-  it('the CEO signs the pick: the bandit is read with her sharpness, not the researcher\'s', async () => {
+  it('the CEO signs the pick: the bandit is read with their sharpness, not the researcher\'s', async () => {
     const { world, ctx } = await lab();
     world.company.research.trends = ctx.tools.searchTrends();
     for (const s of world.company.research.trends) learning.rewardArm(world, 'niche', s.nicheId, 0.5);

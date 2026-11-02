@@ -522,7 +522,7 @@ describe.skipIf(!modulesPresent)('acquisition policy, organic posts and mind con
     }
   });
 
-  it('watchdog: a launch the founder just approved is not « stuck », whatever the hour of his yes', async () => {
+  it('watchdog: a launch the founder just approved is not « stuck », whatever the hour of their yes', async () => {
     const { world, ctx, root, sim } = await setup();
     try {
       const { buildHeuristicPlan } = await import('../src/runtime/strategy.js');
@@ -1042,7 +1042,7 @@ describe.skipIf(!modulesPresent)('the company obeys the founder and reacts to in
     }
   }, 60_000);
 
-  it('Alice finds what does not add up, and her weekly P&L ties to the books', async () => {
+  it('Alice finds what does not add up, and their weekly P&L ties to the books', async () => {
     const { world, ctx, root, sim } = await setup();
     try {
       const { HANDLERS } = await import('../src/runtime/handlers/index.js');

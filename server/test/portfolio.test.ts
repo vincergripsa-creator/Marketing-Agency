@@ -423,7 +423,7 @@ describe('a paid loser', () => {
     expect(world.company.campaigns[0]!.status).toBe('paused');
   });
 
-  it('a founder\'s forced campaign stays on: his word beats the plan', async () => {
+  it('a founder\'s forced campaign stays on: their word beats the plan', async () => {
     const { world, ctx } = await lab();
     const p = main(world, 'prd_a', { ...LOSER, ratings: HAPPY });
     world.company.campaigns[0]!.founderForced = true;
@@ -692,7 +692,7 @@ describe('niches reopen', () => {
   const founderKill = (world: WorldState, ctx: RuntimeCtx, p: Product) =>
     executeOrders(ctx, { id: 'mis_kill', day: world.day, from: 'founder', text: 'Arrête ce guide', ownerId: world.company.agents[0]!.id, taskIds: [], status: 'open' }, [{ action: 'kill_product', product: p } as FounderOrder]);
 
-  it('the founder\'s kill has no timer: what he stopped never comes back by itself', async () => {
+  it('the founder\'s kill has no timer: what they stopped never comes back by itself', async () => {
     const { world, ctx } = await lab();
     const p = main(world, 'prd_a');
     await founderKill(world, ctx, p);
@@ -704,7 +704,7 @@ describe('niches reopen', () => {
     expect(closed(ctx, p.nicheId)).toBe(true);
   });
 
-  it('his kill of a follow-up leaves the niche where it was: it was not the niche he stopped', async () => {
+  it('their kill of a follow-up leaves the niche where it was: it was not the niche they stopped', async () => {
     const { world, ctx } = await lab();
     await ended('no_test', world, ctx, 'prd_a');
     world.day = MONDAY + 14;

@@ -329,7 +329,7 @@ describe('who enters a plan (talent 15)', () => {
     expect(league(w).plans).toHaveLength(TALENT.plan.perFamily);
   }, 30_000);
 
-  it('never the CEO, who is out of the league (D13), whatever a hat brought her', async () => {
+  it('never the CEO, who is out of the league (D13), whatever a hat brought them', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 42);
     const ceo = holder(w, 'ceo');
@@ -340,7 +340,7 @@ describe('who enters a plan (talent 15)', () => {
     expect(league(w).plans).toEqual([]);
   });
 
-  it('never on a hat: the art director is judged on design, not on the ads she wears (D14)', async () => {
+  it('never on a hat: the art director is judged on design, not on the ads they wear (D14)', async () => {
     const { world: w, ctx } = await lab();
     atClose(w, 42);
     const zoe = holder(w, 'art_director');
@@ -1197,7 +1197,7 @@ describe('the founder signs (D17, D48, D49)', () => {
     expect(outcome.awaitFounder).toMatch(/\d.* €$/);
   }, 30_000);
 
-  it('runs through the real gate: the task waits, his yes makes the swap, once, and the season stays closed', async () => {
+  it('runs through the real gate: the task waits, their yes makes the swap, once, and the season stays closed', async () => {
     const l = await decided();
     const { world: w, company, old, task } = l;
     const seasons = league(w).seasons.length;
@@ -1212,7 +1212,7 @@ describe('the founder signs (D17, D48, D49)', () => {
     expect(w.company.org!.alumni).toHaveLength(1);
   }, 30_000);
 
-  it('his no pins the person for 14 days, books nothing, and the plan ends there', async () => {
+  it('their no pins the person for 14 days, books nothing, and the plan ends there', async () => {
     const l = await decided();
     const { world: w, company, old, plan, task } = l;
     await until(company, () => task.status === 'awaiting_founder');
@@ -1236,7 +1236,7 @@ describe('the founder signs (D17, D48, D49)', () => {
     expect(w.company.tasks.filter((t) => t.kind === 'league_review' && decidedSwap(t))).toHaveLength(1);
   }, 30_000);
 
-  it('his yes comes too late when the person left meanwhile', async () => {
+  it('their yes comes too late when the person left meanwhile', async () => {
     const l = await decided();
     const { world: w, company, ctx, old, task } = l;
     await until(company, () => task.status === 'awaiting_founder');
@@ -1248,7 +1248,7 @@ describe('the founder signs (D17, D48, D49)', () => {
     expect(w.ledger.filter((e) => e.ref === `hire:${decidedSwap(task)!.winner.id}`)).toEqual([]);
   }, 30_000);
 
-  it('his yes hires nobody once the cash is gone: no hire in survival, whoever signed', async () => {
+  it('their yes hires nobody once the cash is gone: no hire in survival, whoever signed', async () => {
     const l = await decided();
     const { world: w, company, old, task } = l;
     await until(company, () => task.status === 'awaiting_founder');
@@ -1582,7 +1582,7 @@ describe('formation continue (L7)', () => {
     expect(poor.world.ledger.filter((e) => e.ref?.startsWith('training:'))).toEqual([]);
   }, 30_000);
 
-  it('never past the founder: his stop on spending or on every ad holds, and the report says why', async () => {
+  it('never past the founder: their stop on spending or on every ad holds, and the report says why', async () => {
     for (const [hold, read] of [
       [{ kind: 'advances', reason: 'plus aucune avance' }, 'plus aucune avance'],
       [{ kind: 'ads', reason: 'les pubs sont coupées' }, 'les pubs sont coupées'],
@@ -1606,7 +1606,7 @@ describe('formation continue (L7)', () => {
     }
   }, 60_000);
 
-  it('in approval mode nothing goes out without his yes', async () => {
+  it('in approval mode nothing goes out without their yes', async () => {
     const { world: w, ctx } = await close({ founderApproval: true });
     const report = await closeSeason(ctx);
     expect(report.training).toBeUndefined();

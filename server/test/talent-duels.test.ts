@@ -608,7 +608,7 @@ describe('the founder decides', () => {
     expect(mission(w, id).taskIds.map((t) => w.company.tasks.find((x) => x.id === t)?.kind)).toEqual(['optimize_ads']);
   });
 
-  it('lifting the freeze on departures lifts that one: his stop on ads stands', async () => {
+  it('lifting the freeze on departures lifts that one: their stop on ads stands', async () => {
     const w = leanWorld();
     const { company } = mount(w);
     const campaign = runningAds(w);
@@ -626,7 +626,7 @@ describe('the founder decides', () => {
     expect(orderAction('annule le départ de Tom')).toBeNull();
   });
 
-  it('« garde Sarah » pins a name the company knows, listed with the holds, until he says otherwise', async () => {
+  it('« garde Sarah » pins a name the company knows, listed with the holds, until they say otherwise', async () => {
     const w = leanWorld();
     const { company } = mount(w);
     const agent = w.company.agents.find((a) => a.roleId !== 'ceo')!;
@@ -675,7 +675,7 @@ describe('the founder decides', () => {
     expect(mission(w, id).outcome ?? '').not.toMatch(/Personne ne s'appelle/);
   });
 
-  it('« vire X » goes through requestDeparture, and beats his own pin', async () => {
+  it('« vire X » goes through requestDeparture, and beats their own pin', async () => {
     const w = leanWorld();
     const { company } = mount(w);
     const agent = teammate(w, Object.keys(CANDIDATES).find((id) => !CANDIDATES[id]!.founder && CANDIDATES[id]!.roleId === 'cover_designer' ) ?? 'kenji');
@@ -754,7 +754,7 @@ describe('the founder and a challenge', () => {
 
   const recruiting = (w: WorldState) => w.ledger.filter((l) => l.type === 'recruiting');
 
-  it('the control: without a word from him, the weak writer is replaced', async () => {
+  it('the control: without a word from them, the weak writer is replaced', async () => {
     const { w, ctx, plan, agent } = await forced();
     const report = await runChallenge(ctx, plan);
     expect(report.hired).not.toBeNull();
@@ -780,7 +780,7 @@ describe('the founder and a challenge', () => {
     expect(w.company.agents.some((a) => a.id === agent.id)).toBe(true);
   }, 60_000);
 
-  it('approval mode: the swap waits for him, his no pins for 14 days and books nothing (talent 19)', async () => {
+  it('approval mode: the swap waits for them, their no pins for 14 days and books nothing (talent 19)', async () => {
     const { w, company, ctx, plan, agent } = await forced();
     w.scenario.founderApproval = true;
     await runChallenge(ctx, plan);
@@ -802,7 +802,7 @@ describe('the founder and a challenge', () => {
     w.day = day;
   }, 60_000);
 
-  it('approval mode: his yes does the swap, booked once', async () => {
+  it('approval mode: their yes does the swap, booked once', async () => {
     const { w, company, ctx, plan, agent } = await forced({ org: { team: 'lean', autoHire: false, payroll: true } });
     w.scenario.founderApproval = true;
     await runChallenge(ctx, plan);

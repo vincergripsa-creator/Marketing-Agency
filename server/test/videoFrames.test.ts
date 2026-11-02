@@ -157,7 +157,7 @@ describe('the timeline', () => {
     expect(groups('anticonstitutionnellement est long')).toEqual(['anticonstitutionnellement', 'est long']);
   });
 
-  it('gives a weak editor his 6-word line and no pill: it changes the picture', () => {
+  it('gives a weak editor their 6-word line and no pill: it changes the picture', () => {
     const weak = timelineOf(cutOf({ captionWords: 6 }));
     expect(weak.pill).toBe(false);
     expect(Math.max(...weak.beats[2]!.groups.map((g) => g.length))).toBeGreaterThan(3);
@@ -931,7 +931,7 @@ describe.skipIf(!compose)('the frames', { timeout: 30_000 }, () => {
     expect(comp.drawFrame(6).filter((b) => !insideSafe(stage, b))).toEqual([]);
   });
 
-  it('a plain editor sets his caption on one line, a good one on two big ones', async () => {
+  it('a plain editor sets their caption on one line, a good one on two big ones', async () => {
     const text = 'Un mot de plus ici';
     const beats: VideoBeat[] = [BEATS[1]!, { ...BEATS[4]!, spoken: text }, BEATS[6]!];
     const rows = async (captionWords: number) => {

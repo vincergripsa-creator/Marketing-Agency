@@ -200,7 +200,7 @@ describe('the founder\'s missions', () => {
   const mine = { ...dept(0), id: 'mis_me', day: 3, from: 'founder' as const, text: 'Lance un guide sur le sommeil du bébé', taskIds: ['tsk_gone1', 'tsk_gone2', 'tsk_gone3'], doneTasks: 2, status: 'done' as const, outcome: 'En ligne depuis le jour 9.' };
   const html = render({ ...base, company: { ...base.company, missions: [dept(1), dept(2), dept(3), dept(4), dept(5), mine] } }, <TasksTab onClose={noop} />);
 
-  it('his own mission is in the first four, even closed, behind a wall of department missions', () => {
+  it('their own mission is in the first four, even closed, behind a wall of department missions', () => {
     expect(html).toContain('Lance un guide sur le sommeil du bébé');
     expect(html).toContain('En ligne depuis le jour 9.');
     expect(html).not.toContain('Studio : mission 5');

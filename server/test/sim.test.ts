@@ -924,7 +924,7 @@ describe('the market reads what the buyer really gets', () => {
     return { refunds: world.market.orders.filter((o) => o.refunded).length, rating: p.stats.rating };
   };
 
-  it('an upsell that repeats its parent: its buyer asks for his money back and rates it badly', () => {
+  it('an upsell that repeats its parent: its buyer asks for their money back and rates it badly', () => {
     const copy = honest();
     const same = afterSales(copy, 'upsell', honest());
     const other = afterSales(copy, 'upsell', goodContent(NICHE_CATALOG.find((x) => x.id === 'relooker-meuble')!));

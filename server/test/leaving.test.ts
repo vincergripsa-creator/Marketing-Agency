@@ -82,7 +82,7 @@ afterEach(() => {
 });
 
 describe('who can leave', () => {
-  it('the CEO is refused, and stays exactly as she was (org 15, D13)', async () => {
+  it('the CEO is refused, and stays exactly as they were (org 15, D13)', async () => {
     const w = leanWorld();
     const { ctx } = mount(w);
     expect(canLeave(w, 'camille')).toEqual({ ok: false, blockers: ROLES.ceo.core });

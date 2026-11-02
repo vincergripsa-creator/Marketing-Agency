@@ -190,7 +190,7 @@ describe('the pressure of a role', () => {
     expect(pickRole(w)?.roleId).toBe('accountant');
   });
 
-  it('leaves out a media buyer whose channel is closed: he would have no task to serve (D25)', async () => {
+  it('leaves out a media buyer whose channel is closed: they would have no task to serve (D25)', async () => {
     const { world: w } = await lab();
     pressureOn(w, 'optimize_ads', 'leo', RELIEF * 2, 9);
     refreshPressure(w);
@@ -490,7 +490,7 @@ describe('the recruit', () => {
     expect(position.status).toBe('cancelled');
   });
 
-  it('asks the founder first: nothing moves until his yes', async () => {
+  it('asks the founder first: nothing moves until their yes', async () => {
     const l = await green({ founderApproval: true });
     const w = l.world;
     const { task, position } = await recruitTask(l);
@@ -507,7 +507,7 @@ describe('the recruit', () => {
     expect(w.ledger.filter((e) => e.ref === 'hire:tom')).toHaveLength(1);
   });
 
-  it('his no closes the position and stands as a hold, with its numbers (D49)', async () => {
+  it('their no closes the position and stands as a hold, with its numbers (D49)', async () => {
     const l = await green({ founderApproval: true });
     const w = l.world;
     const { task, position } = await recruitTask(l);

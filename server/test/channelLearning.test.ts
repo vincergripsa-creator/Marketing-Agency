@@ -162,7 +162,7 @@ const report = (rows: AttributionReport['rows'], niches: AttributionReport['nich
 // ───────────────────────────── the tests ─────────────────────────────
 
 describe('« coupe Meta »', () => {
-  it('reads a channel in his words, and only as the thing being stopped', () => {
+  it('reads a channel in their words, and only as the thing being stopped', () => {
     for (const text of ['coupe Meta', 'coupe Facebook', 'arrête Instagram', 'stoppe tout sur Pinterest', 'arrête les pubs sur YouTube', 'mets Meta en pause', 'mets en pause Pinterest', 'plus de pub sur Google', 'plus de Pinterest', 'ne dépense plus sur Meta', 'coupe TikTok']) {
       expect(orderAction(text), text).toBe('stop_ads');
     }
@@ -229,7 +229,7 @@ describe('« coupe Meta »', () => {
     expect(activeHolds(world).map((h) => h.channel)).toEqual(['pinterest']);
   }));
 
-  it('« coupe tout sauf TikTok » keeps what he kept', withCompany(async ({ world, company }) => {
+  it('« coupe tout sauf TikTok » keeps what they kept', withCompany(async ({ world, company }) => {
     world.day = 15;
     const p = addProduct(world, 'prd_a', 'sommeil-bebe');
     const meta = addCampaign(world, 'cmp_meta', p.id, 'meta');
