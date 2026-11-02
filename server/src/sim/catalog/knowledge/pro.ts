@@ -137,7 +137,7 @@ export const URSSAF_KNOWLEDGE: Knowledge = {
     'Programmer les rappels d’échéance. Deux rappels : sept jours avant, puis la veille. (étape 5 ; jour 3 ; 10 min)',
     'Préparer sa déclaration pas à pas sur le site officiel, en séparant les catégories. Reportez le total encaissé de la période, jamais le total facturé, et notez la date limite de cette période. (étape 6 ; jour 5 ; 10 min)',
     'Programmer un point chaque trimestre : seuils, ACRE, versement libératoire, CFE. Quinze minutes suffisent, avec un seul fichier sous les yeux. (étape 7 ; jour 7 ; 15 min)',
-    'Déposer sa déclaration à l’échéance, payer et télécharger l’attestation. Elle prouve que la déclaration a bien été prise en compte : gardez-la avec votre livre des recettes. (étape 8 ; à l’échéance ; 5 min)',
+    'Déposer sa déclaration, payer et télécharger l’attestation. Elle prouve que la déclaration a bien été prise en compte : gardez-la avec votre livre des recettes. (étape 8 ; à l’échéance ; 5 min)',
     '[impots] Réunir les trois chiffres de référence. Chiffre d’affaires de l’année, revenu fiscal du foyer et date de création de l’activité. (étape 1 ; janvier)',
     '[impots] Faire le point sur l’ACRE. Vérifiez si vous en bénéficiez, sa date de fin et le taux qui s’appliquera ensuite. (étape 2 ; janvier)',
     '[impots] Remplir la déclaration de revenus annuelle. Le chiffre d’affaires se reporte aussi dans votre déclaration personnelle, sur le formulaire 2042-C-PRO, aux dates publiées chaque printemps sur impots.gouv.fr. (étape 3 ; avril à juin)',
