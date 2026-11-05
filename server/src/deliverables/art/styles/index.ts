@@ -9,13 +9,18 @@ import { bauhaus } from './bauhaus.js';
 import { typo } from './typo.js';
 import type { ArtStyleDef, PlateSpec } from './types.js';
 
-// styles A: grille, pop, trait
+import { grille } from './grille.js';
+import { pop } from './pop.js';
+import { trait } from './trait.js';
 
 // styles B: collage, aura, riso
 
 const BUILT: Partial<Record<ArtStyle, ArtStyleDef>> = {
   bauhaus,
   typo,
+  grille,
+  pop,
+  trait,
 };
 
 /** The styles that draw their own art, Bauhaus first. */
