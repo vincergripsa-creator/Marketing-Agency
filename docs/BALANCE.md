@@ -612,3 +612,178 @@ Ce qui reste vrai sur `fff9634`, lu dans le code ou à l'écran. Un nombre sans 
 - La compaction peut laisser partir le premier signataire d'une carte d'avis, qu'un film montre encore (D131, D137).
 - L'échelle de coupes du plan n'a pas servi (D65).
 - `docs/v1/talent.md` n'a pas été réécrit là où les décisions l'ont dépassé : `docs/v1/PLAN.md` §8 fait foi.
+
+## 8. Chantier design
+
+Le chantier design (`docs/design/PLAN.md`, D200 à D209) donne aux agents huit styles de couverture, six gabarits de page et cinq visuels, un goût caché du marché pour ces looks, neutre en moyenne (D201), des bandits, des tests A/B de page et des refontes (D203, D204). Deux témoins existent : `control.designV1`, les looks de la V1 sur un marché qui ne les lit pas, et `control.noDesignLearning`, les looks tirés au hasard sans test, leçon, règle ni refonte (D205). Tout ce qui suit est lu sur `8355c93`, cerveau heuristique, 500 € de départ. Le goût caché n'est lu que par les scripts de mesure, jamais par un agent.
+
+### 8.1 La lecture de contrôle qui inquiétait, et ce qu'elle était
+
+**Ce qu'elle disait.** Graines 1 à 3, `normal`, 120 jours : le bras par défaut finit à 20 175, 15 694 et 20 657 €, le bras `noDesignLearning` à 24 859, 22 608 et 41 557 €. Apprendre les looks perdait contre les looks au hasard, de 4 684, 6 914 et 20 900 €. Ces six runs ont été refaits avec un pilote qui note tout chaque soir : mêmes nombres à l'euro près.
+
+**Ce que les deux bras font de différent, graine par graine.**
+
+| Lecture (défaut / `noDesignLearning`) | Graine 1 | Graine 2 | Graine 3 |
+|---|---:|---:|---:|
+| Profit cumulé à J60 | 7 664 / 9 180 € | 1 761 / 4 691 € | 2 131 / 9 068 € |
+| Profit cumulé à J120 | 20 175 / 24 859 € | 15 694 / 22 608 € | 20 657 / 41 557 € |
+| Guides lancés à J60 | 11 / 16 | 13 / 14 | 11 / 16 |
+| Chiffre d'affaires sur 120 jours | 60 567 / 67 774 € | 40 404 / 58 984 € | 54 767 / 101 022 € |
+| Pub sur 120 jours | 31 201 / 33 248 € | 18 465 / 27 962 € | 25 245 / 46 119 € |
+| Visiteurs payés | 91 375 / 92 270 | 47 484 / 80 585 | 64 474 / 115 485 |
+| Facteur de conversion des looks portés, pondéré par les visiteurs (vérité) | 1,007 / 1,052 | 0,958 / 1,007 | 1,007 / 1,050 |
+| Facteur de clic des looks, pubs dont l'image est la couverture (vérité) | 1,039 / 1,040 | 0,967 / 1,031 | 1,008 / 0,969 |
+| Guide-jours sur le meilleur style de la niche | 29 / 19 % | 12 / 11 % | 20 / 11 % |
+| Guide-jours sur le meilleur gabarit de la niche | 9 / 14 % | 11 / 28 % | 17 / 27 % |
+| Tests de prix | 4 / 11 | 4 / 9 | 4 / 11 |
+| Tests de format | 13 / 17 | 10 / 20 | 9 / 17 |
+| Tests de page, gagnés | 7, 0 | 6, 0 | 4, 0 |
+| Jours avec un test de page en cours | 90 | 81 | 50 |
+| Jours où les deux places de test sont prises | 102 / 59 | 98 / 85 | 103 / 71 |
+| Refontes | 4 | 3 | 0 |
+
+- **Les refontes ne retirent rien.** 7 refontes sur les trois graines : 0 jour hors vente, 2 jours sans pub en tout, aucun guide arrêté ni mis en pause dans les 14 jours qui suivent, les avis gardés (un guide passe de 36 à 39 puis 56 avis à travers la sienne). Elles coûtent 21 créneaux d'agents sur 7 554 (0,3 %). Leur look valait 1,033 en conversion la veille et 0,967 le lendemain, 1,016 et 1,006 sur les 24 refontes des graines 1 à 10 : elles se déclenchent sur du bruit (15 % d'écart sur 400 visiteurs, environ 8 ventes) et ne gagnent rien en look. Une refonte est pourtant une version, comme une v2 : elle relance les fenêtres de la version (ses propres avis, 7 jours avant qu'un guide puisse être arrêté, 14 jours avant la règle de perte, un test payant à refaire avant tout verdict), et la remise en ligne coupe la pression des copieurs de la niche (`refreshRivals`). Rien ne mesure ce que pèse chacun de ces effets.
+- **Les tests de page prennent une place.** `run_experiment` n'ouvre rien quand deux tests tournent, et un test de page dure 14 jours, puis le suivant s'ouvre : il occupe une des deux places 42 à 75 % des jours, les tests de prix tombent de 9 à 11 à 4 par graine. Sur la variante la moins bonne (vérité), les tests de page ont perdu 66 ventes en tout. 3 des 17 ont partagé leur guide avec un test de prix, 7 jours : deux alternances par jour sur le même guide, chacune lit l'autre.
+- **Ce qui creuse l'écart, ce sont les premiers looks tirés.** Les deux bras tirent sur `STREAM.design` : au premier guide, le bandit n'a rien mesuré, son tirage vaut un tirage au hasard, mais ce n'est pas le même. Graine 2, premier guide (oral d'aide-soignante, en ligne à J4 des deux côtés) : collage, `inside`, `devices` côté défaut, facteur 0,848 en conversion et 0,886 en clic ; bauhaus, `editorial`, `devices` côté témoin, 0,949 et 1,013. De J1 à J60 : 128 € de pub, 203 visiteurs, 3 ventes, contre 746 €, 1 642 visiteurs et 41 ventes. Graine 3, premier guide (propreté du chiot, J4) : grille, facteur de clic 0,916, contre pop, 1,067 ; de J1 à J45, 446 € de pub et 23 ventes contre 1 714 € et 175, et le premier test de prix monte (24 contre 29 €) d'un côté, descend de l'autre (24 contre 19 €, gagné par 19 €). Le reste suit : moins de caisse, moins de guides lancés, moins de pub.
+
+**Les bras de démontage.** Sur une copie de l'arbre, hors dépôt, un interrupteur à la fois : sans test de page (`nopage`), sans refonte (`norefresh`), looks tirés au hasard mais tout le reste en marche (`randomlook`), tests de page hors des deux places et jamais sur un guide dont le prix est en test (`freepage`). La copie sans interrupteur refait la graine 1 à l'euro près. Graines 1 à 10, 120 jours, profit cumulé à J120 :
+
+| Graine | `noDesignLearning` | Défaut | `nopage` | `norefresh` | `randomlook` | `freepage` |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 24 859 € | 20 175 € | 17 521 € | 24 270 € | 18 614 € | 24 163 € |
+| 2 | 22 608 € | 15 694 € | 14 007 € | 11 355 € | 19 326 € | 12 179 € |
+| 3 | 41 557 € | 20 657 € | 19 456 € | 20 657 € | 28 438 € | 19 695 € |
+| 4 | 13 758 € | 23 861 € | 16 490 € | 17 747 € | 30 937 € | 22 248 € |
+| 5 | 2 236 € | 56 € | 56 € | 56 € | 2 194 € | 56 € |
+| 6 | 17 046 € | 21 822 € | 21 036 € | 16 275 € | 18 496 € | 25 568 € |
+| 7 | 26 911 € | 36 307 € | 29 641 € | 27 813 € | 26 988 € | 33 277 € |
+| 8 | 16 951 € | 16 322 € | 14 543 € | 13 863 € | 24 538 € | 11 685 € |
+| 9 | -328 € | 290 € | 1 194 € | 308 € | -328 € | 843 € |
+| 10 | 7 438 € | 30 887 € | 16 330 € | 23 533 € | 7 117 € | 26 358 € |
+| Écart apparié au témoin, médiane | — | -5 € | -329 € | -680 € | -21 € | +237 € |
+| Positif sur | — | 5/10 | 5/10 | 4/10 | 4/10 | 5/10 |
+| Écart apparié au défaut, médiane | — | — | -1 733 € | -3 399 € | +760 € | -1 288 € |
+
+- **Sur dix graines, l'écart disparaît** : -5 € de médiane à J120, 5 graines sur 10 en faveur du défaut, +1 304 € en moyenne. Les graines 4 à 10 vont au défaut 5 fois sur 7 (+10 103, +4 776, +9 396, +618, +23 449 €, puis -2 180 et -629 €). La lecture de contrôle avait tiré les trois pires graines sur les dix.
+- **Aucun interrupteur ne referme l'écart des graines 1 à 3.** Sans test de page, 17 521, 14 007 et 19 456 € ; sans refonte, 24 270, 11 355 et 20 657 €. Les looks au hasard, qui reprennent les premiers tirages du témoin, rattrapent l'essentiel de J60 sur les graines 2 et 3 (4 919 et 7 925 € contre 4 691 et 9 068 €) : c'est la chance des premiers looks, pas un mécanisme.
+- **Retirer les tests de page ou les refontes ne rapporte rien** : sans test de page, 8 graines sur 9 qui changent finissent sous le défaut ; sans refonte, 6 sur 8. Sur les dix graines, le défaut fait 54 tests de prix et 113 tests de format, le témoin 86 et 158, le bras sans test de page 74 et 165 : les tests de page en prennent la place, et l'argent ne le montre pas.
+- **Le bandit choisit à peine mieux que le hasard.** Graines 4 à 10, lus contre le goût caché : styles choisis par le bandit 1,016 en moyenne, le meilleur de la niche 23 % du temps ; au hasard 1,004 et 11 %. Gabarits : 1,008 et 20 % contre 0,989 et 16 %. Le classement du bandit en fin de run suit la vérité à 0,00 pour les styles (7 niches) et à 0,19 pour les gabarits (17 niches), en corrélation de rang. Au lancement, sur dix graines, les looks valent 0,999 en conversion côté défaut et 1,004 côté témoin.
+
+**Verdict de la phase 1 : pas de défaut à l'origine de l'écart, rien n'est corrigé pour lui.** L'écart des trois graines est la dépendance au chemin : un premier look un peu moins bon, un premier guide qui vend moins, moins de caisse, moins de guides. Trois défauts réels sont apparus en chemin, et aucun n'explique l'écart (D210, D211) :
+
+1. **Les conventions de gabarit n'atteignent jamais les agents.** D203 lève les gabarits de la convention du genre de 12 %, par archétype de guide (§5 du plan). `shelfOf` lit l'archétype dans la recherche de l'entreprise, que l'outil de recherche ne remplit jamais : sur les 78 niches des graines 4 à 10, il est vide partout, alors que l'agence écrit chaque guide dans un archétype qu'elle connaît. Côté style la convention vaut cher : style de convention 1,077 en moyenne, neutre 0,983, opposé 0,910, et le meilleur style de la niche est une convention sur 75 niches sur 78.
+2. **Un test de page prend une des deux places de test pendant 14 jours**, et les tests de prix tombent de 37 % (54 contre 86 sur dix graines).
+3. **Un test de page et un test de prix peuvent tourner sur le même guide** : 14 des 47 tests de page, 27 jours, et 13 des 54 tests de prix. Les deux alternent chaque jour, chacun mesure aussi l'autre.
+
+Les deux derniers ne coûtent rien de mesurable (bras `freepage`, -1 288 € de médiane contre le défaut, 3 graines sur 9 en hausse). Les refontes se déclenchent sur du bruit sans retirer quoi que ce soit.
+
+### 8.2 La lecture formelle : E8, E9 et E10 sur `8355c93`
+
+Une seule lecture, par la règle du §6 du plan, écrite avant tout résultat : graines 1 à 30, 500 €, sans fin, `runOne` avec `scenario.control`, au plus 14 processus en parallèle. `normal` sur 182 jours pour les trois bras (défaut, `noDesignLearning`, `designV1`), `facile` et `cauchemar` sur 60 jours pour le défaut, soit 150 runs, tous terminés sans erreur. Le bras `designV1` retrouve la référence de la V1 à l'euro près : 2 629 € de médiane à J60, 24 865 € à J180 (§4.2).
+
+| Ligne | Demandé | Lu | Passe |
+|---|---|---|---|
+| E8, J60 | `noDesignLearning` moins `designV1`, écart apparié médian dans le bruit, au plus 1 176 € | +657 € (Q1 -183, Q3 3 716 €), positif 21/30 | oui |
+| E8, J180 | au plus 6 341 € | +2 543 € (Q1 -8 192, Q3 10 203 €), positif 16/30 | oui |
+| E9, argent | défaut moins `noDesignLearning`, gain apparié médian à J180 au-dessus de 0, positif sur au moins 19 sur 30 | +6 189 € (Q1 -6 022, Q3 17 881 €), positif 20/30 | oui |
+| E9, meilleur style | part des guides en ligne sur le meilleur style de leur niche, en hausse de J60 à J180 | 19,6 % (61 sur 312) → 16,3 % (115 sur 706), en hausse sur 13 graines sur 30 | **NON** |
+| E9, meilleur gabarit | même part, gabarits | 17,9 % (56 sur 312) → 20,1 % (142 sur 706), en hausse sur 18 graines sur 30 | oui |
+| E10, K1 | `normal` : objectif à J60, 15 à 27 sur 30 | 22/30 | oui |
+| E10, K2 | `normal` : médiane à J60, 1 000 à 4 000 € | 3 065 € | oui |
+| E10, K3 | `normal` : faillites à J60 et à J180, au plus 2 à chacun | 0 et 0 | oui |
+| E10, K4 | `facile` : objectif au moins 24 sur 30, aucune faillite | 29/30, 0 | oui |
+| E10, K5 | `cauchemar` : au plus 8 faillites, trésorerie médiane au moins 250 € | 0, 801 € | oui |
+| E10, K6 | violations, écarts au grand livre, NaN | 0, 0, 0 sur 90 runs | oui |
+| E10, faillites | à J180, défaut au plus `designV1` + 1 | 0 contre 0 | oui |
+
+**E8 passe, E10 passe, E9 échoue** sur une de ses trois conditions : la part de guides sur le meilleur style baisse.
+
+**Les mêmes runs, en clair.**
+
+| Profit cumulé, médiane (Q1 / Q3) | J60 | J120 | J180 |
+|---|---:|---:|---:|
+| Défaut | 3 065 € (271 / 5 755 €) | 19 158 € (13 946 / 27 259 €) | 33 234 € (28 220 / 50 723 €) |
+| `noDesignLearning` | 4 423 € (605 / 6 867 €) | 20 853 € (13 758 / 27 158 €) | 30 750 € (22 328 / 41 756 €) |
+| `designV1` | 2 629 € (181 / 5 224 €) | 13 906 € (7 282 / 23 925 €) | 24 865 € (18 556 / 36 316 €) |
+
+| Écart apparié médian (positif sur 30) | J30 | J60 | J90 | J120 | J150 | J180 |
+|---|---:|---:|---:|---:|---:|---:|
+| Défaut moins `noDesignLearning` | -93 € (9) | -910 € (10) | -710 € (12) | -649 € (14) | +2 196 € (17) | +6 189 € (20) |
+| `noDesignLearning` moins `designV1` | +77 € (19) | +657 € (21) | +2 006 € (19) | +4 020 € (19) | +3 819 € (17) | +2 543 € (16) |
+| Défaut moins `designV1` | -10 € (14) | +588 € (19) | +2 722 € (18) | +8 621 € (20) | +8 469 € (21) | +10 379 € (23) |
+
+Profit cumulé graine par graine, avec la colonne de l'essai borné du §8.3 (le défaut avec ses deux changements) :
+
+| Graine | Défaut J60 | Témoin J60 | `designV1` J60 | Défaut J180 | Témoin J180 | `designV1` J180 | Essai J60 | Essai J180 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 7 664 € | 9 180 € | 5 464 € | 28 294 € | 30 645 € | 12 686 € | 7 445 € | 29 691 € |
+| 2 | 1 761 € | 4 691 € | 4 625 € | 25 224 € | 31 245 € | 22 303 € | 2 282 € | 27 580 € |
+| 3 | 2 131 € | 9 068 € | 1 € | 47 849 € | 63 589 € | 22 256 € | 2 131 € | 56 737 € |
+| 4 | 7 064 € | 5 938 € | 4 060 € | 35 832 € | 17 370 € | 20 753 € | 7 119 € | 34 702 € |
+| 5 | -359 € | -356 € | -360 € | 3 093 € | 13 581 € | 3 377 € | -359 € | 2 104 € |
+| 6 | 5 692 € | 6 209 € | 4 792 € | 30 779 € | 23 819 € | 25 641 € | 5 447 € | 35 834 € |
+| 7 | 9 230 € | 6 867 € | 5 814 € | 56 043 € | 37 122 € | 46 300 € | 10 317 € | 48 465 € |
+| 8 | 2 803 € | 3 727 € | 3 584 € | 32 682 € | 30 343 € | 21 665 € | 2 709 € | 26 016 € |
+| 9 | -302 € | -315 € | 1 884 € | 6 683 € | 655 € | 12 451 € | -302 € | 14 840 € |
+| 10 | 3 328 € | -130 € | 457 € | 58 518 € | 25 883 € | 29 917 € | 2 859 € | 63 793 € |
+| 11 | 4 048 € | 605 € | 3 224 € | 54 301 € | 22 328 € | 49 585 € | 5 195 € | 44 884 € |
+| 12 | 6 655 € | 12 069 € | 9 490 € | 33 844 € | 30 856 € | 29 240 € | 8 919 € | 54 478 € |
+| 13 | 8 606 € | -353 € | -170 € | 29 976 € | 10 187 € | 21 507 € | 4 979 € | 24 620 € |
+| 14 | -247 € | 132 € | 3 € | 50 723 € | 41 756 € | 36 316 € | -247 € | 53 938 € |
+| 15 | 5 402 € | 4 087 € | 1 989 € | 28 519 € | 18 637 € | 9 312 € | 7 608 € | 30 553 € |
+| 16 | 7 819 € | 15 113 € | 8 905 € | 69 629 € | 54 088 € | 47 134 € | 6 638 € | 53 849 € |
+| 17 | 1 158 € | 4 992 € | 5 224 € | 26 037 € | 32 616 € | 52 640 € | 2 185 € | 30 612 € |
+| 18 | 1 114 € | 1 861 € | 952 € | 23 962 € | 37 964 € | 45 345 € | 4 412 € | 50 679 € |
+| 19 | 3 865 € | -203 € | 1 043 € | 28 220 € | 20 463 € | 28 655 € | 6 171 € | 32 087 € |
+| 20 | 1 564 € | 5 586 € | -348 € | 45 953 € | 39 604 € | -279 € | 4 784 € | 57 426 € |
+| 21 | 5 755 € | 8 714 € | 2 034 € | 46 816 € | 47 279 € | 8 678 € | 7 954 € | 39 257 € |
+| 22 | 10 007 € | 3 238 € | 8 392 € | 55 701 € | 23 814 € | 35 552 € | 10 007 € | 55 299 € |
+| 23 | 3 517 € | 4 414 € | 483 € | 51 820 € | 33 939 € | 20 415 € | 4 487 € | 50 649 € |
+| 24 | -8 € | 5 934 € | 5 771 € | 33 138 € | 49 038 € | 50 763 € | -8 € | 34 941 € |
+| 25 | 5 390 € | 9 380 € | 7 044 € | 102 063 € | 58 443 € | 54 973 € | 6 148 € | 84 414 € |
+| 26 | 271 € | 1 869 € | 5 020 € | 30 850 € | 14 483 € | 30 781 € | 271 € | 29 269 € |
+| 27 | -164 € | -234 € | -196 € | 33 330 € | 27 988 € | 29 823 € | -164 € | 29 772 € |
+| 28 | -307 € | 4 241 € | 3 835 € | 5 639 € | 24 682 € | 18 556 € | 95 € | 40 163 € |
+| 29 | -16 € | 9 621 € | -370 € | 27 520 € | 43 595 € | 2 199 € | 2 888 € | 37 155 € |
+| 30 | 2 121 € | 4 433 € | 181 € | 43 816 € | 43 210 € | 24 089 € | 2 121 € | 48 081 € |
+
+| Looks des guides en ligne, lus contre le goût caché | J60 | J120 | J180 |
+|---|---|---|---|
+| Défaut | meilleur style 20 %, meilleur gabarit 18 % ; goût moyen 1,022 et 0,999 | 17 %, 19 % ; 1,016 et 1,007 | 16 %, 20 % ; 1,013 et 1,007 |
+| `noDesignLearning` | 12 %, 21 % ; 0,995 et 1,005 | 13 %, 19 % ; 1,002 et 1,004 | 13 %, 20 % ; 1,003 et 1,003 |
+
+- **Le défaut finit devant le hasard, et ce n'est pas par ses looks.** Il est derrière jusqu'à J120 (-649 €, 14 graines sur 30), devant à J150 et nettement à J180 (+6 189 €, 20 sur 30), alors que ses looks valent à peine plus : style 1,013 contre 1,003 à J180, gabarit 1,007 contre 1,003. Un style meilleur de 1 % vaut environ 0,8 % de clics sur les pubs à couverture et 0,35 % de conversion. Ce que le défaut a de plus que le témoin, à côté de ses bandits, ce sont les tests de page, les leçons, les règles et les refontes, et la phase 1 a vu que retirer les tests de page ou les refontes coûte (§8.1) ; aucun run ne dit par quel effet.
+- **Le style se défait avec le temps.** À J60, les premiers guides de chaque niche portent des styles tirés surtout par l'a priori, qui lève les conventions : 20 % sur le meilleur style, contre 12 % au hasard. Ensuite le bandit apprend aussi de la conversion des pages, où le style ne pèse que style^0,35 et où chaque guide convertit à sa façon : la part tombe à 16 %. Les gabarits n'ont aucun a priori (§8.1, défaut 1), et ils ne font que suivre le hasard : 18 → 20 %, contre 21 → 20 %.
+- **`noDesignLearning` contre `designV1` reste dans le bruit** à J60 comme à J180 : un marché neutre en moyenne vend autant avec des looks au hasard qu'avec ceux de la V1. Le bras défaut, lui, gagne +10 379 € de médiane sur `designV1` à J180, 23 graines sur 30.
+- **Ce qu'aucune ligne ne lit** : la règle n'a pas de seuil sur l'écart de J60, où le défaut est derrière le témoin de 910 € (10 graines sur 30). K1 à K6 sont lus sur le défaut seul : le témoin et `designV1` n'ont pas de run `facile` ni `cauchemar`.
+
+**Verdict :** E9 échoue, ses nombres sont ici et les réglages par défaut restent. Le plan permet un seul essai borné, sous une règle écrite d'abord : D212, écrite avant que E9 soit lu.
+
+### 8.3 L'essai borné (D212) : pas adopté
+
+**La règle, écrite avant la lecture de E9.** Deux changements du chemin d'apprentissage, rien d'autre : (a) l'étagère lit l'archétype dans lequel le rédacteur écrit le guide quand la recherche n'en nomme pas, et les conventions de gabarit du §5 du plan atteignent enfin les agents (défaut 1 du §8.1) ; (b) le bandit des styles n'apprend plus que des clics des pubs dont l'image est la couverture : la conversion du jour d'un guide ne récompense plus que son gabarit et son visuel, puisque le style ne pèse que style^0,35 sur la conversion (D201). Lu une fois, sur le bras par défaut avec l'essai, contre les runs `noDesignLearning` et `designV1` de la lecture formelle, `normal` 30 graines 182 jours, `facile` et `cauchemar` 30 graines 60 jours. Adopté seulement si E9 passe entier et si E10 tient.
+
+**Les témoins ne lisent pas l'essai** : `noDesignLearning` graines 5 et 9 et `designV1` graine 5, relancés sur l'arbre de l'essai, sont identiques ligne pour ligne à ceux de la lecture formelle.
+
+| Ligne | Demandé | Lecture formelle (`8355c93`) | Essai | L'essai passe |
+|---|---|---|---|---|
+| E9, argent | gain médian à J180 au-dessus de 0, positif sur au moins 19 sur 30 | +6 189 €, 20/30 | +11 965 € (Q1 -2 003, Q3 16 710 €), 20/30 | oui |
+| E9, meilleur style | en hausse de J60 à J180 | 19,6 % → 16,3 % | 17,0 % (55 sur 323) → 16,9 % (121 sur 716), en hausse sur 14 graines | **NON** |
+| E9, meilleur gabarit | en hausse de J60 à J180 | 17,9 % → 20,1 % | 22,9 % (74 sur 323) → 22,9 % (164 sur 716), en hausse sur 16 graines | **NON** |
+| E10, K1 | 15 à 27 sur 30 | 22/30 | 23/30 | oui |
+| E10, K2 | médiane à J60 de 1 000 à 4 000 € | 3 065 € | **4 449 €** | **NON** |
+| E10, K3 | au plus 2 faillites à J60 et à J180 | 0 et 0 | 0 et 0 | oui |
+| E10, K4 | `facile` : au moins 24 sur 30, aucune faillite | 29/30, 0 | 29/30, 0 | oui |
+| E10, K5 | `cauchemar` : au plus 8 faillites, au moins 250 € | 0, 801 € | 0, 1 076 € | oui |
+| E10, K6 | tout à 0 | 0, 0, 0 sur 90 runs | 0, 0, 0 sur 90 runs | oui |
+| E10, faillites | à J180, au plus `designV1` + 1 | 0 contre 0 | 0 contre 0 | oui |
+
+| Avec l'essai | J60 | J90 | J120 | J150 | J180 |
+|---|---:|---:|---:|---:|---:|
+| Défaut moins `noDesignLearning`, médiane (positif sur 30) | -761 € (12) | -203 € (13) | +1 568 € (16) | +7 015 € (20) | +11 965 € (20) |
+| Défaut moins `designV1` | +1 778 € (19) | +4 901 € (20) | +8 226 € (24) | +10 670 € (23) | +12 071 € (24) |
+| Profit cumulé du défaut, médiane | 4 449 € | — | 22 262 € | — | 38 206 € |
+
+- **L'essai rapporte, et il échoue quand même**, sur trois conditions : la part sur le meilleur style ne monte pas (17,0 → 16,9 %), celle sur le meilleur gabarit non plus (22,9 → 22,9 %, 74 sur 323 puis 164 sur 716), et K2 dépasse sa borne haute à J60, 4 449 € pour 4 000 € au plus. La règle ne lit pas l'argent seul : **il n'est pas adopté**, le code garde le chemin d'apprentissage de `8355c93`.
+- **Ce qu'il change, en clair** : les looks valent plus dès J60 (style 1,022, gabarit 1,011, contre 1,022 et 0,999 sans l'essai) et le restent (1,019 et 1,015 à J180, contre 1,013 et 1,007), le profit médian monte de 33 234 à 38 206 € à J180 et de 3 065 à 4 449 € à J60. Les conventions placent mieux les premiers guides de chaque niche, mais l'essai n'apprend pas ensuite à placer mieux les suivants : ses parts restent plates. C'est la condition « en hausse » qui échoue, pas le niveau, et K2 qui lit une entreprise trop à l'aise à J60.
+- **Ce qui reste ouvert** : le défaut 1 du §8.1 (les conventions de gabarit n'atteignent pas les agents) reste dans le code, avec les défauts 2 et 3 ; l'essai montre ce que le premier coûte, et D212 ferme tout deuxième essai.
