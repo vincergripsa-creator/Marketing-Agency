@@ -53,4 +53,4 @@ C'est la règle de [[Budget et garde-fous]], sans autre seuil : une seule journ�
 
 Les styles de hook et les formats sont choisis par des **bandits** qui apprennent du CTR réel.
 
-Liens : [[Canaux d'acquisition]] · [[Conformité pub TikTok]] · [[Budget et garde-fous]] · [[Playbook Analyse]]
+Liens : [[Canaux d'acquisition]] · [[Playbook Visuels et formats pub|Playbook Visuels pub]] · [[Conformité pub TikTok]] · [[Budget et garde-fous]] · [[Playbook Analyse]]

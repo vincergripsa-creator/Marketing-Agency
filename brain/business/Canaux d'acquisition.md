@@ -15,5 +15,6 @@ tags: [business, acquisition, tiktok]
 - Un audience qui lit = on peut faire des pubs **texte à l'écran** sans tourner de vidéo.
 - La **fatigue créative** existe : un même hook s'use, il faut renouveler.
 - Couper vite ce qui ne marche pas, augmenter progressivement ce qui marche (+20-30 %/jour max).
+- **Le mix de hooks**, sur TikTok comme sur les autres canaux : jamais d'attribut personnel (« Vous êtes endetté ? ») ; environ 40 % promotionnels, seulement sur un vrai prix ou une vraie date, 40 % de rupture (confession, curiosité, affirmation forte), 20 % d'autres ; le guide se voit avant 3 secondes [inférence].
 
-Liens : [[Conformité pub TikTok]] · [[Playbook Growth]] · [[Playbook Partenariats]]
+Liens : [[Conformité pub TikTok]] · [[Playbook Growth]] · [[Playbook Visuels et formats pub|Playbook Visuels pub]] · [[Playbook Partenariats]]

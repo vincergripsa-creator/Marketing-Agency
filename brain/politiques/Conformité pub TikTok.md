@@ -16,4 +16,4 @@ Une pub refusée coûte du temps ; trois refus et le compte publicitaire peut ê
 - Raconter le problème avec les mots du client, montrer la méthode, inviter à télécharger le guide.
 - Chiffres issus de nos recherches, formulés honnêtement.
 
-Liens : [[Canaux d'acquisition]] · [[Playbook Growth]] · [[Page de vente]]
+Liens : [[Canaux d'acquisition]] · [[Playbook Growth]] · [[Page de vente]] · [[Conformité vente et pub]]

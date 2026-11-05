@@ -22,4 +22,4 @@ Transformer un script validé par [[Playbook Growth]] en pub qu'on regarde jusqu
 ## Quand
 Dès qu'une campagne a besoin de créas fraîches : une créa fatiguée ne se relance pas, on en monte une autre.
 
-Liens : [[Playbook Growth]] · [[Conformité pub TikTok]] · [[Budget et garde-fous]]
+Liens : [[Playbook Growth]] · [[Playbook Visuels et formats pub|Playbook Visuels pub]] · [[Conformité pub TikTok]] · [[Budget et garde-fous]]

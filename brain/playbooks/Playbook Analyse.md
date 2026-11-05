@@ -22,4 +22,4 @@ Dès que deux variantes d'une même dimension (hook, format, prix, ton du suppor
 - **Une variante sans aucune donnée après 2 jours** : le test est annulé, il ne prouvait rien.
 - **Une question tranchée le reste** : on ne reteste que sur une nouvelle version du guide ou si le gagnant a perdu plus de 40 % de sa valeur sur la dernière semaine.
 
-Liens : [[Objectifs]] · [[Prix]] · [[Canaux d'acquisition]] · [[Playbook Growth]]
+Liens : [[Objectifs]] · [[Playbook Tests]] · [[Prix]] · [[Canaux d'acquisition]] · [[Playbook Growth]]

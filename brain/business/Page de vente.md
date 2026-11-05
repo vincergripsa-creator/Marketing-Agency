@@ -9,11 +9,11 @@ On vend sur **notre propre boutique**, pas sur Amazon/Etsy où l'on est noyé da
 1. Appuyer sur la douleur avec **les mots exacts des clients**.
 2. Présenter le guide comme **la solution**.
 3. Détailler le contenu **chapitre par chapitre** en maximisant la curiosité.
-4. Mentionner le **bonus offert**.
+4. Mentionner le **bonus offert** : un bonus fort vaut mieux que plusieurs petits.
 5. **Traiter les objections à l'avance** (« j'ai déjà tout essayé », « c'est encore un PDF ChatGPT », « je n'ai pas le temps »…).
-6. Une garantie claire et honnête, un appel à l'action simple.
+6. Une garantie claire et honnête, écrite comme une garantie commerciale, jamais le droit légal de rétractation présenté en cadeau ; un appel à l'action simple.
 
 ## Le piège de la survente
 Promettre plus que le contenu = plus de ventes à court terme, mais **remboursements, mauvais avis et pubs refusées**. La promesse doit correspondre au contenu réel du PDF.
 
-Liens : [[Prix]] · [[Playbook Boutique]] · [[Conformité pub TikTok]]
+Liens : [[Prix]] · [[Playbook Boutique]] · [[Playbook Page de vente]] · [[Conformité pub TikTok]] · [[Conformité vente et pub]]

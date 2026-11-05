@@ -28,4 +28,4 @@ Un seul compte pour les deux : deux avertissements, et les deux s'arrêtent.
 ## Formats
 Une plateforme refuse ce qu'elle ne diffuse pas, sans avertissement : pas d'image fixe sur YouTube, rien d'autre que du texte sur Google, du 2:3 d'abord sur Pinterest.
 
-Liens : [[Conformité pub TikTok]] · [[Canaux d'acquisition]] · [[Playbook Growth]]
+Liens : [[Conformité pub TikTok]] · [[Conformité vente et pub]] · [[Canaux d'acquisition]] · [[Playbook Growth]]

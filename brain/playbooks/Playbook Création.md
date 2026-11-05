@@ -14,11 +14,11 @@ La [[Couverture]] est la seule chose que l'acheteur voit avant de payer ; le PDF
 3. Une infographie par chapitre quand elle aide : frise, étapes, à faire / à éviter.
 
 ## Contrôles de Zoé
-- La couverture se lit-elle sur un téléphone en une demi-seconde ?
+- La couverture se lit-elle sur un téléphone en une demi-seconde, réduite à 150 px de large ?
 - Le titre fait-il moins de 80 caractères ?
 - La palette reste-t-elle cohérente entre la couverture, le PDF et la page de vente ?
 
 ## Livrables
 `files/<produit>/v<version>/cover.svg` · `files/<produit>/v<version>/guide.pdf`
 
-Liens : [[Couverture]] · [[Structure d'un PDF qui vend]] · [[Page de vente]] · [[Playbook Studio]]
+Liens : [[Couverture]] · [[Playbook Couverture]] · [[Structure d'un PDF qui vend]] · [[Page de vente]] · [[Playbook Studio]]
