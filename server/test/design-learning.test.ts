@@ -357,7 +357,7 @@ function openPageTest(w: WorldState, p: Product, taste?: { control: number; chal
 describe('a page test (D204)', () => {
   it('opens, alternates by day, re-renders the page, and concludes into a lesson and a rule', async () => {
     // a road of the market: the first guide on sale must keep its traffic for two weeks. Since the integration, seed 1's falls to
-    // 8 sales, under the 10 a winner needs; seeds 2 to 9 all conclude for the challenger, seed 4 with the widest lead.
+    // 8 sales, under the 10 a winner needs; seed 4's concludes for the challenger with a wide lead.
     const l = await lab({ seed: 4 });
     const w = l.world;
     for (let i = 0; i < 40 * 12 && !testable(w); i++) await l.company.step();

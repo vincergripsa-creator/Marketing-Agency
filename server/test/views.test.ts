@@ -34,8 +34,9 @@ const DAYS = 30;
 interface Lab { world: WorldState; company: Company; paths: RunPaths; reopen(w: WorldState): Company }
 
 /**
- * The sample run. Its 30th day, blown up, is the big company of the live limit: across seeds that one weighs 340 to 405 kB, and seed 7
- * crossed 400 kB once the design build's integration moved its road, so the sample is seed 3 (358 kB), which every test here reads alike.
+ * The sample run. Its 30th day, blown up, is the big company of the live limit: across seeds that one weighed 340 to 405 kB, and seed 7
+ * crossed 400 kB (402 kB) once the design build's integration moved its road, so the sample is seed 3 (376 kB), which every test here
+ * reads alike. The limit itself is trim.ts's to keep.
  */
 async function lab(): Promise<Lab> {
   const world = createWorld(defaultScenario({ seed: 3, mindMode: 'heuristic', maxComputeEur: 0, horizonDays: 90 }), 'test-views');
