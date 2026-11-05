@@ -46,7 +46,7 @@ function colorsOf(ops: Op[], out = new Set<string>(), flat = { ok: true }): { co
   for (const o of ops) {
     if (o.k === 'clip') colorsOf(o.ops, out, flat);
     else if (o.k === 'path') {
-      if (o.fill) out.add(o.fill);
+      if (o.fill) out.add(typeof o.fill === 'string' ? o.fill : JSON.stringify(o.fill));
       if (o.stroke) out.add(o.stroke);
       if (o.op !== undefined) flat.ok = false;
     }

@@ -5,8 +5,9 @@
  */
 import type { PdfAudit } from '../../contracts.js';
 import type { ChapterContent, DesignEffort, DesignSpec } from '../../shared.js';
-import { field, type HeroPlace } from '../art/field.js';
+import type { HeroPlace } from '../art/field.js';
 import { closesOf, poseGround, posesOf, type Pose } from '../art/poses.js';
+import { drawPlate } from '../art/styles/index.js';
 import { readableOn } from '../color.js';
 import { advance, fitDisplay, sanitizeFor, type FaceName } from '../fonts.js';
 import { arr, calloutBlocks, chapterBlocks, CHECK_INDENT, CHECK_LINE, DROP_SIZE, lineOf, NOTE_TEXT, paraBlock, QUOTE_TEXT, quoteBlock, SHEET_BAND, sheetTop, STEP_BOX, STEP_GAP, STEP_INDENT, type Block, type ChecklistBlock, type ExampleBlock, type HeadingBlock, type NoteBlock, type ParaBlock, type QuoteBlock, type SheetBlock, type StepsBlock } from '../layout/blocks.js';
@@ -77,8 +78,9 @@ function pageOf(paper: string): Scene {
   return new Scene(W, H).rect(0, 0, W, H, paper);
 }
 
+/** The band at the head of a page in the guide's style: an opener has its hero, the first and last pages none. */
 function art(c: Ctx, s: Scene, rows: number, seed: number, hero: HeroPlace | null): void {
-  field(s, { x: 0, y: 0, u: U, cols: 6, rows, inks: c.t.inks, motif: c.spec.design.motif, seed, hero });
+  drawPlate(c.spec.design, s, { x: 0, y: 0, u: U, cols: 6, rows, inks: c.t.inks, motif: c.spec.design.motif, seed, hero, role: hero ? 'opener' : 'band' });
 }
 
 /** The last thing drawn on a page: a text extraction reads the body first, this line after it. */
@@ -197,7 +199,7 @@ function drawEnd(c: Ctx, s: Scene, y: number, rows: number, cols: number, { seed
   const size = Math.min(rows, Math.round((cols * (rows > 4 ? 2 : 1.5)) / 3));
   const ground = poseGround(pose, pick, seed);
   const hero: HeroPlace | null = rows >= 2 ? { c: seed % 2 ? cols - size : 0, r: rows - size, s: size, pose, pick, ...(ground ? { ground } : {}) } : null;
-  field(s, { x: L, y, u: FULL / cols, cols, rows, inks: c.t.inks, motif: c.spec.design.motif, seed, hero });
+  drawPlate(c.spec.design, s, { x: L, y, u: FULL / cols, cols, rows, inks: c.t.inks, motif: c.spec.design.motif, seed, hero, role: 'close' });
 }
 
 function drawItems(c: Ctx, s: Scene, plan: PagePlan, close: Close): void {

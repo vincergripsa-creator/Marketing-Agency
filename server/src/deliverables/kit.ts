@@ -8,7 +8,7 @@ import { mkdir, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import PDFDocument from 'pdfkit';
 import type { ChapterContent, DesignSpec, EmailStep, PdfContent, Product, SalesPage, VisualSpec } from '../shared.js';
-import { field } from './art/field.js';
+import { drawPlate } from './art/styles/index.js';
 import { coverScene, KIT_TITLE, splitTitle } from './cover.js';
 import { familyOfText, normalizeDesign, professionalFor } from './design.js';
 import { fitDisplay, loadVoice, registerVoice, sanitizeFor } from './fonts.js';
@@ -176,7 +176,7 @@ function sheetPages(visual: VisualSpec, t: PdfTheme, order: number, total: numbe
 function bandedPage(t: PdfTheme, design: DesignSpec, seed: number, kicker: string, title: string): { s: Scene; y: number } {
   const { v, inks } = t;
   const s = new Scene(W, H).rect(0, 0, W, H, t.page);
-  field(s, { x: 0, y: 0, u: U, cols: 6, rows: 2, inks, motif: design.motif, seed, hero: null });
+  drawPlate(design, s, { x: 0, y: 0, u: U, cols: 6, rows: 2, inks, motif: design.motif, seed, hero: null, role: 'kit' });
   s.text(sanitizeFor(v.labelB, kicker).toUpperCase(), L, TOP_BAND + 34, v.labelB, 8.6, t.bText, { track: 1.8 });
   const fit = fitDisplay(title, v.deck, { width: FULL, max: 27, min: 17, maxLines: 3, leading: 1.1 });
   const leading = fit.size * 1.1;
