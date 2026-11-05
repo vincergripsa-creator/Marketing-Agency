@@ -33,6 +33,7 @@ export const KIND_META: Record<TaskKind, KindMeta> = {
   humanize_pdf: { dept: 'studio', work: 2, label: 'Humaniser le texte', bubble: "Je chasse les phrases d'IA", keywords: 'humanisation phrases génériques', topics: ['product'] },
   fact_check: { dept: 'studio', work: 1, label: 'Vérifier les faits', bubble: 'Je vérifie chaque affirmation', keywords: 'conformité promesse chiffres', topics: ['product'] },
   design_cover: { dept: 'creation', work: 2, label: 'Dessiner la couverture', bubble: 'Je dessine la couverture', keywords: 'couverture design miniature', topics: ['product'] },
+  refresh_design: { dept: 'creation', work: 2, label: 'Refaire le look du guide', bubble: 'Je refais le look du guide', keywords: 'refonte style couverture page de vente', topics: ['product'] },
   render_pdf: { dept: 'creation', work: 2, label: 'Mettre en page le PDF', bubble: 'Je mets le PDF en page', keywords: 'mise en page infographie visuels', topics: ['product'] },
   write_sales_page: { dept: 'boutique', work: 2, label: 'Écrire la page de vente', bubble: "J'écris la page de vente", keywords: 'page de vente objections promesse', topics: ['product', 'pricing'] },
   set_price: { dept: 'boutique', work: 1, label: 'Fixer le prix', bubble: 'Je cherche le bon prix', keywords: 'prix ancres commencer bas', topics: ['pricing'] },

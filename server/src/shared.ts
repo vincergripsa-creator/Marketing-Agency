@@ -4,3 +4,4 @@ export * from '../../shared/channels.js';
 export * from '../../shared/safeZones.js';
 export * from '../../shared/trends.js';
 export * from '../../shared/worldgrid.js';
+export * from '../../shared/design.js';

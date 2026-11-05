@@ -230,6 +230,7 @@ export const TASK_LABELS: Record<TaskKind, string> = {
   humanize_pdf: 'humanisation',
   fact_check: 'fact-check',
   design_cover: 'couverture',
+  refresh_design: 'refonte visuelle',
   render_pdf: 'mise en page PDF',
   write_sales_page: 'page de vente',
   set_price: 'fixation du prix',

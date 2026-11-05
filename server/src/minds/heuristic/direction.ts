@@ -9,7 +9,7 @@ import { cap, clean, fit, fmtEur, fmtNum, fmtPct, lf, norm, sentence, splitSente
 export const KIND_DEPT: Record<TaskKind, DeptId> = {
   plan_day: 'direction', scan_trends: 'recherche', mine_pains: 'recherche', scan_competitors: 'recherche',
   pick_opportunity: 'direction', red_team: 'rh', write_titles: 'studio', write_outline: 'studio', write_pdf: 'studio',
-  humanize_pdf: 'studio', fact_check: 'studio', design_cover: 'creation', render_pdf: 'creation',
+  humanize_pdf: 'studio', fact_check: 'studio', design_cover: 'creation', refresh_design: 'creation', render_pdf: 'creation',
   write_sales_page: 'boutique', set_price: 'boutique', publish_product: 'boutique', design_upsell: 'boutique',
   write_ad_hooks: 'growth', produce_ad: 'growth', launch_campaign: 'growth', optimize_ads: 'growth', post_organic: 'growth',
   reply_inbox: 'support', handle_refund: 'support', find_creators: 'partenariats', negotiate_deal: 'partenariats',
@@ -24,7 +24,7 @@ export const KIND_TITLE: Record<TaskKind, string> = {
   plan_day: 'Stand-up et plan du jour', scan_trends: 'Scanner les tendances et les niches', mine_pains: 'Récolter les douleurs et les mots des clients',
   scan_competitors: 'Analyser les concurrents', pick_opportunity: 'Choisir la prochaine opportunité (règle du un)', red_team: 'Red Team : essayer de tuer l’idée',
   write_titles: 'Écrire 10 titres', write_outline: 'Écrire le plan qui vend', write_pdf: 'Rédiger le guide', humanize_pdf: 'Humaniser le guide',
-  fact_check: 'Fact-checker le guide', design_cover: 'Créer la couverture', render_pdf: 'Mettre en page le PDF final',
+  fact_check: 'Fact-checker le guide', design_cover: 'Créer la couverture', refresh_design: 'Refaire le look d’un guide en vente', render_pdf: 'Mettre en page le PDF final',
   write_sales_page: 'Écrire la page de vente', set_price: 'Ajuster le prix', publish_product: 'Publier le produit', design_upsell: 'Préparer l’upsell « La suite est ici »',
   write_ad_hooks: 'Écrire des hooks TikTok', produce_ad: 'Produire une pub TikTok', launch_campaign: 'Lancer une campagne', optimize_ads: 'Optimiser les pubs (couper / scaler)',
   post_organic: 'Publier un TikTok organique', reply_inbox: 'Répondre à la boîte mail', handle_refund: 'Traiter les remboursements',

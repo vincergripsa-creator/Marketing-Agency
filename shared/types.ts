@@ -151,7 +151,8 @@ export type TaskKind =
   | 'performance_review'  // RH: weekly agent reviews
   | 'headcount_review' | 'recruit' | 'league_review'
   | 'open_channel' | 'adapt_creative' | 'write_search_ads' | 'reconcile_channels' | 'allocate_channels'
-  | 'write_lead_magnet' | 'write_email_sequence' | 'send_broadcast' | 'design_bump' | 'portfolio_review';
+  | 'write_lead_magnet' | 'write_email_sequence' | 'send_broadcast' | 'design_bump' | 'portfolio_review'
+  | 'refresh_design';     // Création: a new look for a live guide whose style or page lags its niche's best (D204)
 
 export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'done' | 'failed' | 'cancelled' | 'awaiting_founder';
 
@@ -268,6 +269,13 @@ export interface GridSpec {
 /** Kind of guide a niche calls for: drives chapter kinds, plan logic and bonus types of the writer. */
 export type GuideArchetype = 'habitude' | 'projet' | 'demarche' | 'examen' | 'evenement' | 'systeme' | 'paliers';
 
+/** Art direction of a guide (design plan D200): one look on the cover, the inside pages, the sales page, the ads and the films. */
+export type ArtStyle = 'bauhaus' | 'typo' | 'grille' | 'pop' | 'trait' | 'collage' | 'aura' | 'riso';
+/** Layout family of a sales page (D202). Absent = the V1 page, drawn as it always was. */
+export type PageTemplate = 'express' | 'editorial' | 'inside' | 'creator' | 'proof' | 'value';
+/** What the first screen of a sales page shows next to the title (D202). */
+export type PageHero = 'book' | 'devices' | 'spread' | 'bundle' | 'desk';
+
 export interface DesignSpec {
   palette: { bg: string; primary: string; secondary: string; accent: string; ink: string; soft: string };
   motif: 'moon' | 'sun' | 'leaf' | 'coin' | 'heart' | 'bolt' | 'book' | 'chart' | 'home' | 'paw' | 'dumbbell' | 'sparkle' | 'brush' | 'pot';
@@ -279,6 +287,8 @@ export interface DesignSpec {
   voice?: TypeVoice;
   inks?: InkSet;
   artSeed?: number;            // the art candidate kept by the designer; absent = design.seed
+  style?: ArtStyle;            // absent = 'bauhaus', the V1 look (old saves, legacy)
+  composition?: number;        // index among the style's cover compositions; absent = chosen from the seed as in V1
 }
 
 export interface SalesPage {
@@ -293,6 +303,13 @@ export interface SalesPage {
   cta: string;
   hypeLevel: number;          // 0..1 — overpromising raises conversion but also refunds & ad rejections
   priceWritten?: number;      // price of the product when this copy was written: the page prints the price of the day instead
+  template?: PageTemplate;    // absent = the V1 page (D202)
+  hero?: PageHero;            // absent = the V1 stage, book and screens
+  benefits?: string[];        // 3 to 5 short outcomes, the reader's words where possible
+  forWho?: string[];          // who it is for, 2 to 4 lines
+  notFor?: string[];          // who should not buy it, 1 to 3 lines: honest, and it raises trust
+  story?: string;             // why the brand wrote it, first person plural, no invented biography
+  comparison?: { label: string; guide: string; other: string }[]; // the guide against what the reader would do otherwise
 }
 
 export interface QualityReport {
@@ -354,6 +371,7 @@ export interface Product {
   bumpProductId?: string | null;
   leadMagnet?: { title: string; file: string; day: number } | null;
   versionDay?: number;         // compaction: replaces versionSince on tasks
+  designLog?: DesignLogEntry[]; // every look the guide wore, newest last, at most 12 (D204): the founder sees the agency change its mind
   publishedVersion?: number;   // last version that went on sale, absent = 1: a re-listing is not a new version
   feedback?: { day: number; text: string; quality: boolean }[]; // cap 30
   hooks?: { hook: string; hookStyle: HookStyle }[];             // cap 60
@@ -631,7 +649,7 @@ export interface BanditArm { key: string; alpha: number; beta: number; pulls: nu
 export interface Experiment {
   nicheId?: string | null;    // scope (null = global)
   id: string; day: number; owner: AgentId; hypothesis: string;
-  dimension: 'hook_style' | 'ad_format' | 'price' | 'sales_hype' | 'support_tone' | 'niche' | 'agent_duel';
+  dimension: 'hook_style' | 'ad_format' | 'price' | 'sales_hype' | 'support_tone' | 'niche' | 'agent_duel' | 'page_template';
   variants: string[]; metric: 'ctr' | 'cvr' | 'roas' | 'refund_rate' | 'resolution';
   productId?: string | null;  // the product whose traffic carries the test
   status: 'running' | 'concluded' | 'cancelled'; // cancelled = a variant never got traffic: nothing was learned
@@ -707,6 +725,20 @@ export interface NicheTruth {
   competitors: CompetitorProduct[];
   scamCreatorIds?: string[];  // creators of this niche who take an advance and vanish, explicit red flag or not
   channels?: Partial<Record<Exclude<ChannelId, 'tiktok'>, ChannelCell>>; // TikTok keeps tiktokAffinity and cpmBase
+  visualTaste?: VisualTaste;  // absent = indifferent to looks (legacy, old saves): every factor reads 1
+}
+
+/**
+ * What a niche's buyers really prefer to look at (D201). Hidden like hookAffinity: agents learn it only through clicks and sales.
+ * Each record averages exactly 1 over its arms, so an agency that picks at random sells as much as one that ignores looks.
+ */
+/** One look a guide wore (D204): what changed, from which day, and the reason as the agent gave it, in French. */
+export interface DesignLogEntry { day: number; version: number; style: ArtStyle; template?: PageTemplate; hero?: PageHero; why: string }
+
+export interface VisualTaste {
+  style: Record<ArtStyle, number>;   // cover and art direction, read by conversion and by clicks on ads that show the cover
+  page: Record<PageTemplate, number>; // sales page template, read by conversion
+  hero: Record<PageHero, number>;     // first screen of the page, read by conversion
 }
 
 export interface MarketState {
@@ -843,7 +875,7 @@ export interface CompanySnapshot {
   activity: Activity[];             // last 200
   godMode?: {
     talent?: Record<AgentId, TalentTruthView>;
-    niches: Pick<NicheTruth, 'id' | 'name' | 'demand' | 'wtp' | 'competition' | 'tiktokAffinity' | 'hookAffinity' | 'channels'>[];
+    niches: Pick<NicheTruth, 'id' | 'name' | 'demand' | 'wtp' | 'competition' | 'tiktokAffinity' | 'hookAffinity' | 'channels' | 'visualTaste'>[];
     intents: Record<string, MessageIntent>;   // message id → ground truth, for the messages of this snapshot
   };
   taskStats?: TaskStats;            // counted on every task, whatever company.tasks keeps
@@ -952,6 +984,8 @@ export interface ScenarioControls {
   videoTempo?: VideoTempo;     // forces the tempo, no bandit
   talentOverride?: TalentOverride | TalentOverride[]; // lever test: every agent's t on these skills, later entries win
   noSurvivalTest?: boolean;    // no insurance (D117): founders keep ORG.survivalPayCut of their pay in survival, nothing runs under the line
+  noDesignLearning?: boolean;  // D205: styles, page templates and heroes are drawn at random, no design test, lesson or rule
+  designV1?: boolean;          // D205: the V1 looks, one style and one page, and a market indifferent to looks
 }
 
 // ───────────────────────────── Organisation: roles, hires, departures ─────────────────────────────

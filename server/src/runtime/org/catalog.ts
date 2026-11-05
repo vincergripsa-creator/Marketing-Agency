@@ -74,7 +74,7 @@ export const KIND_HATS: Record<TaskKind, readonly RoleId[]> = {
   plan_day: ['ceo'], portfolio_review: ['ceo'],
   pick_opportunity: ['research_lead'], scan_trends: ['research_lead'], mine_pains: ['research_lead'],
   write_titles: ['editor_in_chief'], write_outline: ['editor_in_chief'], write_pdf: ['editor_in_chief'],
-  design_cover: ['art_director'], render_pdf: ['art_director'],
+  design_cover: ['art_director'], render_pdf: ['art_director'], refresh_design: ['art_director'],
   write_ad_hooks: ['growth_lead'], launch_campaign: ['growth_lead'], optimize_ads: ['growth_lead'], open_channel: ['growth_lead'],
   publish_product: ['shop_lead'], write_sales_page: ['shop_lead'],
   budget_review: ['cfo'], allocate_channels: ['cfo'],
