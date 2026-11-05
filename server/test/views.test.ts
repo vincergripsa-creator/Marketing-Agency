@@ -34,12 +34,11 @@ const DAYS = 30;
 interface Lab { world: WorldState; company: Company; paths: RunPaths; reopen(w: WorldState): Company }
 
 /**
- * The sample run. Its 30th day, blown up, is the big company of the live limit: across seeds that one weighed 340 to 405 kB, and seed 7
- * crossed 400 kB (402 kB) once the design build's integration moved its road, so the sample is seed 3 (376 kB), which every test here
- * reads alike. The limit itself is trim.ts's to keep.
+ * The sample run, seed 7. Its 30th day, blown up, is the big company of the live limit: across seeds 1 to 10 it weighs 333 to 389 kB,
+ * seed 7 389 kB. On the design build's merged tree seeds 1, 7 and 8 weighed 401 to 402 kB, until trim.ts made room for the looks (D207).
  */
 async function lab(): Promise<Lab> {
-  const world = createWorld(defaultScenario({ seed: 3, mindMode: 'heuristic', maxComputeEur: 0, horizonDays: 90 }), 'test-views');
+  const world = createWorld(defaultScenario({ seed: 7, mindMode: 'heuristic', maxComputeEur: 0, horizonDays: 90 }), 'test-views');
   const root = await mkdtemp(join(tmpdir(), 'pixel-views-'));
   roots.push(root);
   const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
@@ -121,6 +120,15 @@ describe('the live stream', () => {
     expect(snapshot.company.products.filter((p) => p.status === 'paused' || p.status === 'killed')).toHaveLength(12); // ui §3.1
     expect(snapshot.company.products.filter((p) => p.status === 'live')).toHaveLength(w.company.products.filter((p) => p.status === 'live').length);
     expect(snapshot.company.playbooks).toEqual({});
+    // what the founder sees of looks rides along whole: each card's chips, every arm of every bandit with its posterior and days (D207)
+    for (const p of w.company.products.filter((x) => x.status === 'live')) {
+      const card = snapshot.company.products.find((x) => x.id === p.id)!;
+      expect([card.design?.style, card.salesPage?.template, card.salesPage?.hero]).toEqual([p.design?.style, p.salesPage?.template, p.salesPage?.hero]);
+    }
+    expect(Object.keys(w.company.bandits).some((k) => k.startsWith('cover_style:'))).toBe(true);
+    for (const [dim, arms] of Object.entries(w.company.bandits)) {
+      expect(snapshot.company.bandits[dim]!.map((a) => [a.key, a.alpha, a.beta, a.pulls]), dim).toEqual(arms.map((a) => [a.key, a.alpha, a.beta, a.pulls]));
+    }
   });
 
   it('counts bytes, not characters: an accent weighs two on the wire', () => {
@@ -314,7 +322,7 @@ describe('the chronicle', () => {
     expect(entries.map((e) => e.day)).toEqual([...entries.map((e) => e.day)].sort((a, b) => a - b));
   }, 120_000);
 
-  /** Every source of the table of ui §2.1 bis, by hand: seed 3 fires nobody in 30 days. */
+  /** Every source of the table of ui §2.1 bis, by hand: seed 7 fires nobody in 30 days. */
   function eventful(): WorldState {
     const w = clone(world);
     const { org, league, growth } = w.company;

@@ -112,7 +112,7 @@ describe('the gallery says what each tile wore', () => {
 describe('what a card keeps of a guide\'s looks', () => {
   const twelve = (): DesignLogEntry[] => Array.from({ length: 12 }, (_, i) => ({ day: 1 + i, version: 1 + Math.floor(i / 4), style: ART_STYLES[i % 8]!, template: PAGE_TEMPLATES[i % 6]!, hero: PAGE_HEROES[i % 5]!, why: `${i} ${WHY}` }));
 
-  it('the stream: its look, its last three looks with a reason cut to a line; the product view all of them', () => {
+  it('the stream: its look, the last look it printed with a reason cut to a line; the product view all of them', () => {
     const { w, guide } = dressed();
     guide.designLog = twelve();
     const f = safeFinance(w);
@@ -120,7 +120,7 @@ describe('what a card keeps of a guide\'s looks', () => {
     const live = card(LIVE_LIMITS);
     expect(live.design).toEqual({ palette: guide.design!.palette, style: 'typo' });
     expect(live.salesPage).toEqual({ template: 'proof', hero: 'bundle' });
-    expect(live.designLog!.map((e) => e.day)).toEqual([10, 11, 12]);
+    expect(live.designLog!.map((e) => e.day)).toEqual([12]); // Produits prints the last look: the viewer reads them all from GET /api/product
     for (const e of live.designLog!) expect(e.why.length).toBeLessThanOrEqual(LIGHT_LOOK_WHY);
     expect(live.designLog!.at(-1)!.why).toMatch(/^11 Refonte v2 : style « Typo XXL »/);
     expect(live).not.toHaveProperty('leadMagnet');
@@ -142,7 +142,8 @@ describe('what a card keeps of a guide\'s looks', () => {
     const stub = stubProduct({ ...guide, status: 'killed' });
     expect(stub.design).toEqual({ style: 'typo' });
     expect(stub.salesPage).toEqual({ template: 'proof', hero: 'bundle' });
-    expect(stub.designLog).toHaveLength(3);
+    expect(stub.designLog!.map((e) => [e.day, e.style, e.template])).toEqual([[20, 'typo', 'proof']]);
+    expect(stub.designLog![0]!.why.length).toBeLessThanOrEqual(LIGHT_LOOK_WHY);
     expect(stub).not.toHaveProperty('leadMagnet');
     const old = w.company.products.find((p) => !p.designLog && p.salesPage && p.design)!;
     const oldStub = stubProduct({ ...old, status: 'killed' });
@@ -161,7 +162,30 @@ describe('what a card keeps of a guide\'s looks', () => {
     expect(card).not.toHaveProperty('designLog');
   });
 
-  it('every guide of a hundred at its 12 looks of 300 characters: the stream keeps its budget, each card three looks at most', () => {
+  it('light views pay for the looks with what no panel reads: an arm\'s sum of rewards, a card\'s page count, kit and empty text', () => {
+    const { w, guide } = dressed();
+    const dim = `cover_style:${guide.nicheId}`;
+    w.company.bandits[dim] = ART_STYLES.map((key, i) => ({ key, alpha: 1 + i / 4, beta: 3, pulls: i, reward: i / 2 }));
+    Object.assign(guide, { pdfFacts: { pages: 31, sheets: 3 }, bumpProductId: 'prd_kit' });
+    expect(guide.content?.nextStep).toBeTruthy();
+    const f = safeFinance(w);
+    for (const limits of [TIGHT_LIMITS, LIVE_LIMITS, LIVE_TIGHT_LIMITS]) {
+      const s = buildSnapshot(w, f, false, limits);
+      for (const arms of Object.values(s.company.bandits)) for (const a of arms) expect(a).not.toHaveProperty('reward');
+      // every look the bandit holds, with what Apprentissage prints of it: its posterior and its days
+      expect(s.company.bandits[dim]).toEqual(w.company.bandits[dim]!.map(({ reward: _reward, ...a }) => a));
+      const card = s.company.products.find((p) => p.id === guide.id)!;
+      expect(card).not.toHaveProperty('pdfFacts');
+      expect(card).not.toHaveProperty('bumpProductId');
+      expect(card.content).toEqual({ nextStep: guide.content!.nextStep });
+    }
+    const whole = buildSnapshot(w, f, false, DEFAULT_LIMITS);
+    expect(whole.company.bandits[dim]).toEqual(w.company.bandits[dim]);
+    const kept = whole.company.products.find((p) => p.id === guide.id)!;
+    expect([kept.pdfFacts, kept.bumpProductId]).toEqual([{ pages: 31, sheets: 3 }, 'prd_kit']);
+  });
+
+  it('every guide of a hundred at its 12 looks of 300 characters: the stream keeps its budget, each card its last look', () => {
     const w = clone(v1);
     const guide = w.company.products.find((p) => p.status === 'live')!;
     w.company.products = Array.from({ length: 100 }, (_, i) => ({ ...clone(guide), id: `prd_look${i}`, status: i % 3 ? 'live' as const : 'killed' as const, designLog: twelve().map((e) => ({ ...e, why: WHY.repeat(2).slice(0, 300) })) }));

@@ -4,7 +4,7 @@
  */
 import { summarizeLedger } from '../core/index.js';
 import type {
-  AdCreative, AdTotals, AdWeekRow, ArchiveCounters, Campaign, CatalogueTotals, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DailyKpi, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, DesignLogEntry, DesignSpec, FinanceSnapshot,
+  AdCreative, AdTotals, AdWeekRow, ArchiveCounters, BanditArm, Campaign, CatalogueTotals, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DailyKpi, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, DesignLogEntry, DesignSpec, FinanceSnapshot,
   GrowthState, InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, QualityReport, Review, SalesPage, Task, TaskKind, TaskStats, TaskTotals, VisualReport, WorldState,
 } from '../shared.js';
 import { channelOf, kpiBaselineOf } from '../shared.js';
@@ -68,7 +68,7 @@ export const TIGHT_LIMITS: SnapshotLimits = {
   creatives: 30, campaigns: 40, pnl: 2, experiments: 25, kpis: 60, reviewsPerProduct: 8, inbox: 30, threadPerMessage: 6, adStatsDays: 5,
   commentsPerStat: 2, adComments: Number.POSITIVE_INFINITY, organicPosts: 20, creators: 40, partnerships: 50, events: 25, orders: 60, ledger: 100, activity: 60,
   stringMax: 160, growthWeeks: 52, growthDecisions: 30, light: true, live: false,
-  looks: 0, // a year-old company: 707 KB with three looks a card, 698 KB without (seed 7, day 360). The stream brings them a second later
+  looks: 0, // a year-old company: 667 KB, 673 KB with the last look a card (seed 7, day 360). The stream brings it a second later
 };
 
 /**
@@ -79,13 +79,13 @@ export const LIVE_LIMITS: SnapshotLimits = {
   ...TIGHT_LIMITS, activity: 60, reviewsPerProduct: 5, live: true,
   creatives: 30, campaigns: 20, pnl: 1, doneTasks: 40, deliverables: 60, lessons: 30, inbox: 30, commentsPerStat: 1, adStatsDays: 3, kpis: 60,
   growthWeeks: 12, growthDecisions: 10,
-  looks: 3, // what the cards of Produits print: the last look and its reason, and the two before it
+  looks: 1, // what a card of Produits prints, its last look and reason: two more weighed 7 KB on 50 cards, and the product view reads all
 };
 export const LIVE_TIGHT_LIMITS: SnapshotLimits = {
   ...LIVE_LIMITS, creatives: 15, campaigns: 10, doneTasks: 15, deliverables: 20, lessons: 15, inbox: 15, activity: 40, growthWeeks: 4, growthDecisions: 5,
   adStatsDays: 2, adComments: 14, reviewsPerProduct: 1, threadPerMessage: 3, ledger: 50, orders: 30, creators: 20, missions: 15,
   experiments: 10, organicPosts: 10, events: 15, partnerships: 20, taskLog: 2,
-  looks: 0, // three looks on 50 cards weigh 25 KB: the tightest stream leaves the history to the product view
+  looks: 0, // the last look on 50 cards weighs 7 KB: the tightest stream leaves the reasons to the product view
 };
 
 export const SNAPSHOT_BUDGET_BYTES = 700_000;
@@ -163,18 +163,24 @@ function trimChapter(ch: ChapterContent | null | undefined, full: boolean): Chap
   };
 }
 
-/** Content light enough for the UI: titles + intros, full text only for the first chapter (light limits: only what the card reads, its next step). */
+const NO_NEXT_STEP: PdfContent['nextStep'] = { title: '', text: '', upsellProductId: null };
+
+/**
+ * Content light enough for the UI: titles + intros, full text only for the first chapter. Light limits keep only what the card reads,
+ * its next step: the empty shape around it weighed 8 KB on 50 cards, so it is absent, not empty.
+ */
 export function trimContent(content: PdfContent | null | undefined, light = false): PdfContent | null {
   if (!content) return null;
+  if (light) return { nextStep: content.nextStep ?? NO_NEXT_STEP } as PdfContent;
   return {
-    title: light ? '' : content.title ?? '',
-    subtitle: light ? '' : content.subtitle ?? '',
-    audience: light ? '' : content.audience ?? '',
-    promise: light ? '' : content.promise ?? '',
-    introduction: light ? [] : arr(content.introduction).slice(0, 3),
-    chapters: light ? [] : arr(content.chapters).map((ch, i) => trimChapter(ch, i === 0)),
-    bonus: trimChapter(light ? null : content.bonus, false),
-    nextStep: content.nextStep ?? { title: '', text: '', upsellProductId: null },
+    title: content.title ?? '',
+    subtitle: content.subtitle ?? '',
+    audience: content.audience ?? '',
+    promise: content.promise ?? '',
+    introduction: arr(content.introduction).slice(0, 3),
+    chapters: arr(content.chapters).map((ch, i) => trimChapter(ch, i === 0)),
+    bonus: trimChapter(content.bonus, false),
+    nextStep: content.nextStep ?? NO_NEXT_STEP,
     wordCount: content.wordCount ?? 0,
   };
 }
@@ -217,7 +223,7 @@ function withLooks({ designLog, ...p }: Product, keep: number): Product {
 }
 
 /** A stopped guide under light limits: what the catalogue shows of it. Its text and scores weigh more than a live guide's figures. */
-export function stubProduct({ brief: _brief, pagePrint: _pagePrint, visual: _visual, leadMagnet: _magnet, ...p }: Product, looks = LIVE_LIMITS.looks): Product {
+export function stubProduct({ brief: _brief, pagePrint: _pagePrint, visual: _visual, leadMagnet: _magnet, pdfFacts: _facts, bumpProductId: _bump, ...p }: Product, looks = LIVE_LIMITS.looks): Product {
   return withLooks({
     ...p, subtitle: '', audience: '', problem: '', content: null, design: stubDesign(p.design), salesPage: lightPage(p.salesPage), quality: null, salesQuality: null, priceHistory: [],
     files: cardFiles(p), stats: { ...p.stats, reviews: [] },
@@ -226,9 +232,9 @@ export function stubProduct({ brief: _brief, pagePrint: _pagePrint, visual: _vis
 
 /**
  * A guide on sale under light limits: what its card reads. A guide now stays on sale for months, and with 33 of them these fields weighed
- * 140 KB. No panel reads a lead magnet: its 135 bytes a guide pay for the card's look.
+ * 140 KB. No panel reads a lead magnet, the page count of the PDF or the kit of the order bump: their 200 bytes a guide pay for its look.
  */
-function cardProduct({ brief: _brief, pagePrint: _pagePrint, leadMagnet: _magnet, ...p }: Product, looks: number): Product {
+function cardProduct({ brief: _brief, pagePrint: _pagePrint, leadMagnet: _magnet, pdfFacts: _facts, bumpProductId: _bump, ...p }: Product, looks: number): Product {
   return withLooks({
     ...p, salesQuality: null, files: cardFiles(p),
     design: cardDesign(p.design),
@@ -337,6 +343,16 @@ function trimKpis(kpis: DailyKpi[], limits: SnapshotLimits): DailyKpi[] {
   return limits.light ? rows.map(({ channels: _channels, ...k }) => k) : rows;
 }
 
+/**
+ * Light bandits: each arm without its raw sum of rewards, which no panel reads (they print the posterior and the pulls). With the three
+ * look bandits of each niche (D203), these sums weighed 9 KB of a year-old company's GET /api/state.
+ */
+function lightBandits(bandits: CompanyState['bandits'] | undefined): CompanyState['bandits'] {
+  const out: CompanyState['bandits'] = {};
+  for (const [dim, arms] of Object.entries(bandits ?? {})) out[dim] = arr(arms).map(({ reward: _reward, ...a }) => a as BanditArm);
+  return out;
+}
+
 /** D34: the one pillar state a snapshot carries, for the stage and « last seen ». The niches and the whole history stay on the server. */
 function trimGrowth(g: GrowthState, limits: SnapshotLimits): GrowthState {
   return { ...g, niches: {}, weeks: lastN(g.weeks, limits.growthWeeks), decisions: lastN(g.decisions, limits.growthDecisions) };
@@ -363,7 +379,7 @@ export function trimCompany(c: CompanyState, limits: SnapshotLimits = DEFAULT_LI
     research: { trends: arr(research.trends), voc: limits.light ? {} : research.voc ?? {}, competitors: limits.light ? {} : research.competitors ?? {}, shortlist: arr(research.shortlist) },
     lessons: lastN(c.lessons, limits.lessons),
     experiments: experiments.filter((e, i) => i >= expStart || e.status === 'running'),
-    bandits: c.bandits ?? {},
+    bandits: limits.light ? lightBandits(c.bandits) : c.bandits ?? {},
     playbooks: limits.live ? {} : c.playbooks ?? {}, // ui §3.1: the 15 agents' 24 rules, 49 KB a second to one closed panel
     kpis: trimKpis(c.kpis, limits),
     chats,

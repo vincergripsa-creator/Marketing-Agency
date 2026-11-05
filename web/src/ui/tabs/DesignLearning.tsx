@@ -3,8 +3,10 @@
 import type { CompanySnapshot, Experiment, VisualTaste } from '../../../../shared/types';
 import { Bar, cx, Empty } from '../common';
 import { useApp } from '../context';
-import { designBandits, favouriteOf, isPageTest, LOOK_KINDS, LOOK_TITLE, lookLabel, truthOf, type ArmRead, type LookKind, type NicheLooks } from '../design';
-import { fmtDec, fmtInt, fmtPct, plural } from '../format';
+import {
+  designBandits, favouriteOf, fmtLookValue, isPageTest, LOOK_KINDS, LOOK_MEASURE, LOOK_TITLE, lookLabel, truthOf, type ArmRead, type LookKind, type NicheLooks,
+} from '../design';
+import { fmtDec, fmtInt, plural } from '../format';
 import { Icon } from '../icons';
 import { nicheName, type Lookups } from '../labels';
 import { PageTestRow } from '../Looks';
@@ -43,25 +45,28 @@ function truthLine(niche: NicheLooks, taste: VisualTaste): string {
   }).join(' · ');
 }
 
+/** A style's mean blends the clicks of its covers and the sales of its pages: a score. A page's is its conversion (D204). */
 function Dim({ kind, arms, taste }: { kind: LookKind; arms: ArmRead[] | undefined; taste: VisualTaste | undefined }) {
   const fav = favouriteOf(arms);
   const truth = truthOf(taste, kind);
-  const max = Math.max(0.0001, ...(arms ?? []).map((a) => a.cvr));
+  const measure = LOOK_MEASURE[kind];
+  const max = Math.max(0.0001, ...(arms ?? []).map((a) => a.value));
   return (
     <div className="design-dim" data-kind={kind}>
       <div className="design-dim-head">
         {LOOK_TITLE[kind]}
         {fav ? <span className="fav">· favori : {fav.arm.label}{fav.measured ? '' : ' (convention de la recherche, jamais porté)'}</span> : null}
       </div>
+      <div className="design-dim-measure"><strong>{measure.label}</strong> : {measure.note}.</div>
       {arms?.length ? arms.map((a) => {
         const best = fav?.arm.key === a.key;
         const real = truth?.values[a.key];
         return (
           <div key={a.key} className={cx('arm design-arm', best && 'arm-best', truth && 'with-truth')}>
             <span className="arm-label" title={best ? 'Le favori du bandit aujourd’hui' : undefined}>{best ? <Icon name="crown" size={11} /> : null}{a.label}</span>
-            <Bar value={a.cvr / max} color={best ? '#2a78d6' : '#9ec5f4'} height={7} />
-            <span className="arm-val" title="Conversion estimée par le bandit (remboursements déduits)">{fmtPct(a.cvr, 1)}</span>
-            <span className="arm-pulls muted" title="Jours de ventes mesurés">{fmtInt(a.pulls)} j</span>
+            <Bar value={a.value / max} color={best ? '#2a78d6' : '#9ec5f4'} height={7} />
+            <span className="arm-val" title={`${measure.label} par le bandit`}>{fmtLookValue(kind, a.value)}</span>
+            <span className="arm-pulls muted" title={measure.days}>{fmtInt(a.pulls)} j</span>
             {truth ? (
               <span className={cx('arm-truth', truth.best === a.key && 'truth-best')} title="Goût réel du marché pour ce look (mode dieu) : ×1 = neutre">
                 {truth.best === a.key ? <Icon name="eye" size={10} /> : null}×{fmtDec(real ?? 1, 2)}
@@ -81,7 +86,7 @@ export function DesignLearning() {
   if (!rows.length) {
     return (
       <Empty compact icon="palette">
-        Pas encore de données de design. Chaque soir, la rétro note pour chaque guide en vente le style de sa couverture, le gabarit et le visuel de sa page, puis ses visites et ses ventes du jour : les bandits de sa niche apprennent ainsi quels looks vendent.
+        Pas encore de données de design. Chaque soir, la rétro note pour chaque guide en vente le style de sa couverture, le gabarit et le visuel de sa page, puis ses visites et ses ventes du jour, et les clics des pubs TikTok qui montrent sa couverture : les bandits de sa niche apprennent ainsi quels looks vendent.
       </Empty>
     );
   }

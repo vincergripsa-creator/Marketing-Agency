@@ -627,8 +627,7 @@ describe('what the UI may see', () => {
     expect(finished.output).toEqual({ adCap: 12 });
     const p = live.company.products[0]!;
     expect(p.salesPage).toBeNull();
-    expect(p.content!.chapters).toEqual([]);
-    expect(p.content!.nextStep).toEqual(w.company.products[0]!.content!.nextStep);
+    expect(p.content).toEqual({ nextStep: w.company.products[0]!.content!.nextStep }); // the card reads its next step, nothing else of the text
     expect(serializeLiveSnapshot(w, FINANCE).length).toBeLessThan(serializeSnapshot(w, FINANCE).length);
   });
 
@@ -688,7 +687,7 @@ describe('what light views keep (scale §7.1, ui §3.1)', () => {
       expect(card.salesQuality).toBeNull();
       expect(card).not.toHaveProperty('brief');
       expect(card).not.toHaveProperty('pagePrint');
-      expect(card.content!.title).toBe('');
+      expect(card.content).toEqual({ nextStep: p.content!.nextStep }); // nothing else of the text, not even its empty shape
     }
     expect(buildSnapshot(w, FINANCE, false, DEFAULT_LIMITS).company.products[0]).toMatchObject({ design, quality: report, salesQuality: report });
   });

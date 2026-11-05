@@ -115,7 +115,7 @@ export function LearningTab({ onClose }: { onClose(): void }) {
           <Experiments experiments={experiments} />
         </div>
       </div>
-      <SectionTitle right={<span className="muted small">ce que les agents croient des looks : conversion estimée, jours de ventes mesurés</span>}>Design</SectionTitle>
+      <SectionTitle right={<span className="muted small">ce que les agents croient des looks : score des styles, conversion des pages, jours mesurés</span>}>Design</SectionTitle>
       <DesignLearning />
       <GodTruth />
     </Overlay>

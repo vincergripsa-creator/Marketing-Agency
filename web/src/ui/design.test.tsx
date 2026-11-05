@@ -9,7 +9,7 @@ import { mockSnapshot } from '../world/mockSnapshot';
 import { ActivityFeed } from './ActivityFeed';
 import { AppContext, type AppCtx } from './context';
 import {
-  coverPathOf, designBandits, favouriteOf, lookAt, lookLabel, lookOf, LOOK_CVR_SCALE, readableLine, tileLookOf, truthOf, variantOn, versionsOf,
+  coverPathOf, designBandits, favouriteOf, fmtLookValue, lookAt, lookLabel, lookOf, LOOK_CVR_SCALE, LOOK_MEASURE, readableLine, tileLookOf, truthOf, variantOn, versionsOf,
 } from './design';
 import { designLines, FounderDigestBody } from './FounderDigest';
 import { banditArmLabel, banditDimensionLabel, buildLookups, parseRule } from './labels';
@@ -253,16 +253,48 @@ describe('the design of a guide, in its viewer', () => {
 });
 
 describe('Apprentissage: the design bandits', () => {
-  it('niche by niche: each arm in French, its estimated conversion and its days, the favourite crowned', () => {
+  /** The words of each kind's column: its head, its measure, its arms. */
+  const dims = (html: string) => Object.fromEntries(html.split('data-kind="').slice(1).map((part) => [part.slice(0, part.indexOf('"')), text(part)]));
+
+  it('niche by niche: each arm in French, its score or its estimated conversion and its days, the favourite crowned', () => {
     const { s, niche } = designed();
     const html = render(s, <LearningTab onClose={noop} />);
     const section = text(html.slice(html.indexOf('design-niches')));
     expect(section).toContain(s.company.research.trends[0]!.name);
     for (const words of ['Style de couverture', 'Gabarit de page', 'Visuel de page', 'favori : Typo XXL', 'Papier découpé', 'Mur d’avis', 'Le pack', '9 j']) expect(section).toContain(words);
-    expect(section).toContain('2,4 %'); // 6 / 20 × 8 %
+    const { style, template, hero } = dims(html.slice(html.indexOf('design-niches')));
+    expect(style).toContain('30/100'); // 6 / 20, on 100
+    expect(template).toContain('2,0 %'); // 5 / 20 × 8 %
+    expect(hero).toContain('2,0 %'); // 2 / 8 × 8 %
     expect(html).toMatch(/arm design-arm arm-best"><span class="arm-label"[^>]*><svg[^>]*>.*?<\/svg>Typo XXL/);
     expect(text(html)).not.toContain(`cover_style`);
     expect(designBandits(s.company.bandits).map((n) => n.nicheId)).toEqual([niche]);
+  });
+  it('a style\'s mean blends the clicks of its covers and the sales of its pages: a score, labelled so; a page\'s stays a conversion', () => {
+    const { s } = designed();
+    const html = render(s, <LearningTab onClose={noop} />);
+    const { style, template, hero } = dims(html.slice(html.indexOf('design-niches')));
+    expect(style).toContain('Score estimé (clics et ventes) : sur 100, les clics des pubs TikTok qui montrent la couverture (5 % de clics = 100) et les ventes de la page (8 % de conversion = 100), remboursements déduits.');
+    expect(style).not.toContain('Conversion estimée');
+    expect(style).not.toMatch(/\d %(?! de)/); // no arm of a style reads as a rate
+    for (const page of [template, hero]) {
+      expect(page).toContain('Conversion estimée : part des visiteurs de la page qui achètent, remboursements déduits.');
+      expect(page).not.toContain('Score estimé');
+    }
+    expect(html).toContain('title="Score estimé (clics et ventes) par le bandit"');
+    expect(html).toContain('title="Conversion estimée par le bandit"');
+    expect(html).toContain(`title="${LOOK_MEASURE.style.days}"`);
+    expect(text(html)).toContain('score des styles, conversion des pages');
+    expect([fmtLookValue('style', 30.4), fmtLookValue('template', 0.0213), fmtLookValue('hero', 0.02)]).toEqual(['30/100', '2,1 %', '2,0 %']);
+  });
+  it('a niche\'s days of sales are its pages\': a style also counts the days of its covers\' clicks', () => {
+    const { s } = designed();
+    expect(designBandits(s.company.bandits)[0]!.days).toBe(15); // the template's 7 + 8 days of sales
+    const clicks = designBandits({ 'cover_style:a': [arm('pop', 2, 3, 12)], 'page_template:b': [arm('proof', 2, 6, 1)] });
+    expect(clicks.map((n) => [n.nicheId, n.days])).toEqual([['b', 1], ['a', 0]]);
+    const t = text(render({ ...s, company: { ...s.company, experiments: [], bandits: { 'cover_style:a': [arm('pop', 2, 3, 12)] } } }, <LearningTab onClose={noop} />));
+    expect(t).toContain('pas encore de vente mesurée');
+    expect(t).toContain('12 j');
   });
   it('page tests sit under their niche, with their result', () => {
     const { s } = designed({ test: { status: 'concluded', winner: 'inside', endDay: 34 } });
@@ -288,7 +320,8 @@ describe('Apprentissage: the design bandits', () => {
   });
   it('favourite and truth, read as the bandit and the market hold them', () => {
     const arms = designBandits({ 'cover_style:n': [arm('pop', 1, 3, 0), arm('aura', 2, 2, 0)] })[0]!.kinds.style!;
-    expect(arms.map((a) => [a.label, a.cvr])).toEqual([['Aura', 0.5 * LOOK_CVR_SCALE], ['Pop', 0.25 * LOOK_CVR_SCALE]]);
+    expect(arms.map((a) => [a.label, a.value])).toEqual([['Aura', 50], ['Pop', 25]]); // a score on 100
+    expect(designBandits({ 'page_template:n': [arm('proof', 1, 3, 2)] })[0]!.kinds.template!.map((a) => a.value)).toEqual([0.25 * LOOK_CVR_SCALE]);
     expect(favouriteOf(arms)).toMatchObject({ arm: { key: 'aura' }, measured: false });
     expect(truthOf(designed({ taste: true }).s.godMode!.niches[0]!.visualTaste, 'template')?.best).toBe('inside');
     expect(truthOf(undefined, 'style')).toBeNull();

@@ -1,6 +1,7 @@
 // Looks as the founder reads them (design plan D207): French labels from shared/design.ts, never a raw id. Pure, unit-tested.
 import { ART_STYLES, HERO_INFO, PAGE_HEROES, PAGE_TEMPLATES, STYLE_INFO, TEMPLATE_INFO } from '../../../shared/design';
 import type { ArtStyle, BanditArm, DesignLogEntry, Experiment, PageHero, PageTemplate, Product, VisualTaste } from '../../../shared/types';
+import { fmtInt, fmtPct } from './format';
 
 export type LookKind = 'style' | 'template' | 'hero';
 export const LOOK_KINDS: readonly LookKind[] = ['style', 'template', 'hero'];
@@ -16,8 +17,27 @@ export const V1_PAGE = { label: 'Classique', blurb: 'La page d’origine, la mê
 /** No style is the V1 look, which is Bauhaus (D200). */
 export const V1_STYLE_NOTE = 'Ce guide date d’avant le choix des looks : il porte le Bauhaus de la V1.';
 
-/** The retro scores a look's day as the promise bandit: conversion over 8 %, refunds taken off (D204). */
+/** The retro scores a look's day of sales as the promise bandit: conversion over 8 %, refunds taken off (D204). */
 export const LOOK_CVR_SCALE = 0.08;
+/** A style's day of clicks, on the TikTok ads whose frame is its cover, scores as a hook's: CTR over 5 % (retro.ts CTR_REWARD_SCALE). */
+export const LOOK_CTR_SCALE = 0.05;
+
+/** What a look bandit's mean stands for, in the founder's words: a page's is a conversion; a style's blends clicks and sales, a score. */
+export interface LookMeasure { label: string; note: string; days: string }
+const PAGE_MEASURE: LookMeasure = { label: 'Conversion estimée', note: 'part des visiteurs de la page qui achètent, remboursements déduits', days: 'Jours de ventes mesurés' };
+export const LOOK_MEASURE: Record<LookKind, LookMeasure> = {
+  style: {
+    label: 'Score estimé (clics et ventes)',
+    note: `sur 100, les clics des pubs TikTok qui montrent la couverture (${fmtPct(LOOK_CTR_SCALE, 0)} de clics = 100) et les ventes de la page (${fmtPct(LOOK_CVR_SCALE, 0)} de conversion = 100), remboursements déduits`,
+    days: 'Jours mesurés : ventes de la page et pubs TikTok qui montrent la couverture',
+  },
+  template: PAGE_MEASURE,
+  hero: PAGE_MEASURE,
+};
+
+/** An arm's mean in its kind's measure: a style's score on 100, a page's conversion. */
+export const lookValue = (kind: LookKind, mean: number): number => (kind === 'style' ? mean * 100 : mean * LOOK_CVR_SCALE);
+export const fmtLookValue = (kind: LookKind, value: number): string => (kind === 'style' ? `${fmtInt(Math.round(value))}/100` : fmtPct(value, 1));
 
 /** A colour per art direction for its chip: a hint of the look, not one of its inks. */
 export const STYLE_INK: Record<ArtStyle, string> = {
@@ -154,8 +174,9 @@ export function variantOn(e: Pick<Experiment, 'day' | 'variants'>, day: number):
 
 // ───────────────────────────── the bandits ─────────────────────────────
 
-/** An arm as the bandit holds it: its posterior mean, the conversion that mean stands for, and the days of sales behind it. */
-export interface ArmRead { key: string; label: string; mean: number; cvr: number; pulls: number }
+/** An arm as the bandit holds it: its posterior mean, that mean in its kind's measure (`lookValue`), and the days behind it. */
+export interface ArmRead { key: string; label: string; mean: number; value: number; pulls: number }
+/** `days`: the days of sales the page bandits measured, which read sales alone. */
 export interface NicheLooks { nicheId: string; kinds: Partial<Record<LookKind, ArmRead[]>>; days: number }
 
 export const isLookBandit = (key: string): boolean => !!lookKindOfDim(key.split(':')[0] ?? '');
@@ -163,9 +184,11 @@ export const isLookBandit = (key: string): boolean => !!lookKindOfDim(key.split(
 export function armReads(kind: LookKind, arms: readonly BanditArm[]): ArmRead[] {
   return arms.map((a) => {
     const mean = a.alpha + a.beta > 0 ? a.alpha / (a.alpha + a.beta) : 0;
-    return { key: a.key, label: lookLabel(kind, a.key), mean, cvr: mean * LOOK_CVR_SCALE, pulls: a.pulls };
+    return { key: a.key, label: lookLabel(kind, a.key), mean, value: lookValue(kind, mean), pulls: a.pulls };
   }).sort((x, y) => y.mean - x.mean || y.pulls - x.pulls || x.key.localeCompare(y.key));
 }
+
+const pullsOf = (n: NicheLooks): number => LOOK_KINDS.reduce((s, k) => s + (n.kinds[k] ?? []).reduce((t, a) => t + a.pulls, 0), 0);
 
 /** The design bandits of `company.bandits`, by niche, most measured first. */
 export function designBandits(bandits: Record<string, BanditArm[]> | undefined): NicheLooks[] {
@@ -177,9 +200,10 @@ export function designBandits(bandits: Record<string, BanditArm[]> | undefined):
     let n = byNiche.get(nicheId);
     if (!n) byNiche.set(nicheId, n = { nicheId, kinds: {}, days: 0 });
     n.kinds[kind] = armReads(kind, arms);
-    n.days = Math.max(n.days, arms.reduce((s, a) => s + a.pulls, 0));
+    // a style also counts its days of clicks: the days of sales are the page bandits'
+    if (kind !== 'style') n.days = Math.max(n.days, n.kinds[kind]!.reduce((s, a) => s + a.pulls, 0));
   }
-  return [...byNiche.values()].sort((a, b) => b.days - a.days || a.nicheId.localeCompare(b.nicheId));
+  return [...byNiche.values()].sort((a, b) => b.days - a.days || pullsOf(b) - pullsOf(a) || a.nicheId.localeCompare(b.nicheId));
 }
 
 /** The arm the bandit believes in most. One no guide wore yet stands on the research's convention alone: `measured` says which. */
