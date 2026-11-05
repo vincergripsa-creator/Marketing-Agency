@@ -6,7 +6,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createCanvas, loadImage, type Canvas, type Image, type SKRSContext2D } from '@napi-rs/canvas';
-import { field } from '../deliverables/art/field.js';
+import { drawPlate } from '../deliverables/art/styles/index.js';
 import { contrast, ensureContrast, luminance, mix } from '../deliverables/color.js';
 import { normalizeDesign, type Motif } from '../deliverables/design.js';
 import { Scene, toSvg } from '../deliverables/scene.js';
@@ -178,13 +178,13 @@ export function inksOf(design: DesignSpec): Inks {
   };
 }
 
-/** The guide's field of tiles at the size of the frame, its motif filling the foot: the art of its cover, not a copy of its cover. */
+/** The guide's art at the size of the frame, in its style, its motif filling the foot: the art of its cover, not a copy of its cover. */
 async function artPlate(design: DesignSpec, w: number, h: number): Promise<Picture | null> {
   try {
     const u = w / ART_COLS;
     const rows = Math.ceil(h / u);
     const scene = new Scene(w, h);
-    field(scene, { x: 0, y: 0, u, cols: ART_COLS, rows, inks: design.inks!, motif: design.motif, seed: design.artSeed ?? design.seed, hero: { c: ART_COLS - ART_HERO - 1, r: Math.max(0, rows - ART_HERO), s: ART_HERO } });
+    drawPlate(design, scene, { x: 0, y: 0, u, cols: ART_COLS, rows, inks: design.inks!, motif: design.motif, seed: design.artSeed ?? design.seed, hero: { c: ART_COLS - ART_HERO - 1, r: Math.max(0, rows - ART_HERO), s: ART_HERO }, role: 'film' });
     const vector = await loadImage(Buffer.from(toSvg(scene, { precision: 1 })));
     const img = createCanvas(w, h); // once: an SVG image stays vector, and Skia would redraw the whole field on every frame
     img.getContext('2d').drawImage(vector, 0, 0, w, h);

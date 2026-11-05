@@ -1,4 +1,4 @@
-import type { DesignSpec, InkSet } from '../shared.js';
+import { ART_STYLES, type ArtStyle, type DesignSpec, type InkSet } from '../shared.js';
 import { isDark, isHex, safeColor, safePalette, type Palette } from './color.js';
 import { hashString, normalizeKey } from './text.js';
 import { isVoice, voiceFor } from './voices.js';
@@ -153,8 +153,22 @@ function hintedMotif(hint: string): Motif | null {
   return null;
 }
 
-/** Deterministic design system for a product: same inputs → same palette, motif, layout and fonts. */
-export function designFor(input: { nicheName: string; category: string; seed: number; hint?: string; keywords?: string[] }): DesignSpec {
+export const isArtStyle = (v: unknown): v is ArtStyle => typeof v === 'string' && (ART_STYLES as readonly string[]).includes(v);
+
+/** A composition index, or nothing: an index past a style's count wraps round when drawn. */
+const isComposition = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < 64;
+
+/** The look an art director chose (D203), kept only when valid: without it a design is exactly V1's. */
+const lookOf = (style: unknown, composition: unknown): Pick<DesignSpec, 'style' | 'composition'> => ({
+  ...(isArtStyle(style) ? { style } : {}),
+  ...(isComposition(composition) ? { composition } : {}),
+});
+
+/**
+ * Deterministic design system for a product: same inputs → same palette, motif, layout and fonts. `style` and `composition`
+ * are the art director's choice: absent, the result is V1's to the byte.
+ */
+export function designFor(input: { nicheName: string; category: string; seed: number; hint?: string; keywords?: string[]; style?: ArtStyle; composition?: number }): DesignSpec {
   const name = String(input?.nicheName ?? '');
   const category = String(input?.category ?? '');
   const hint = normalizeKey(input?.hint ?? '');
@@ -182,7 +196,7 @@ export function designFor(input: { nicheName: string; category: string; seed: nu
     : elegant ? 'Times-Bold' : 'Helvetica-Bold';
   const bodyFont: DesignSpec['bodyFont'] = family === 'mariage' || /litter|roman|poesie/.test(hint) ? 'Times-Roman' : 'Helvetica';
 
-  return { palette: { ...def.palette }, motif, coverLayout, titleFont, bodyFont, seed, ...(family ? { family } : {}), voice: voiceFor(family, hint), inks: { ...def.inks } };
+  return { palette: { ...def.palette }, motif, coverLayout, titleFont, bodyFont, seed, ...(family ? { family } : {}), voice: voiceFor(family, hint), inks: { ...def.inks }, ...lookOf(input?.style, input?.composition) };
 }
 
 /** Saved inks, as #rrggbb, when all five are colours. */
@@ -210,6 +224,8 @@ export function normalizeDesign(design: Partial<DesignSpec> | null | undefined):
     voice: isVoice(d.voice) ? d.voice : voiceFor(family ?? worn?.family),
     inks: safeInks(d.inks) ?? { ...(worn ?? PALETTES.find((p) => p.family === family) ?? PALETTES[0]).inks },
     ...(Number.isFinite(d.artSeed) ? { artSeed: Number(d.artSeed) } : {}),
+    // an unknown style is dropped, never guessed: the guide then wears Bauhaus, as an old save does
+    ...lookOf(d.style, d.composition),
   };
 }
 
