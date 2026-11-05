@@ -83,18 +83,21 @@ export function conventionOf(kind: LookKind, key: string, shelf: LookShelf): num
 
 /**
  * Where an untried look's day scores, and how many days of evidence that is worth (D203). A look a guide wears scores what its
- * niche converts, 0.18 to 0.24 on the default market: an untried look starts on the running mean of what the bandit itself
- * measured (`mean` before any day), so it never reads better than the looks already worn and the bandit stops fleeing them.
- * The research's conventions lift it a little; `strength` is a few days of evidence.
+ * niche converts, 0.18 to 0.24 on the default market: an untried look starts where the bandit's measured looks stand together
+ * (`mean` before any day), so it never reads better than the looks already worn and the bandit stops fleeing them. The
+ * research's conventions lift it a little; `strength` is a few days of evidence.
  */
 export const LOOK_PRIOR = { mean: 0.2, strength: 4 } as const;
 
-/** What a bandit's measured days scored on average, or the prior's mean before any. */
+/**
+ * The running mean of the bandit's measured looks: their pooled posterior, weighted as the bandit weighs a day, so that an untried
+ * look sits level with a lone measured one. A day's reward alone would not do: the clicks of a cover and a page's sales weigh apart.
+ */
 function measuredMean(arms: readonly BanditArm[]): number {
-  let pulls = 0;
-  let reward = 0;
-  for (const a of arms) { pulls += a.pulls; reward += a.reward; }
-  return pulls > 0 ? reward / pulls : LOOK_PRIOR.mean;
+  let alpha = 0;
+  let total = 0;
+  for (const a of arms) if (a.pulls > 0) { alpha += a.alpha; total += a.alpha + a.beta; }
+  return total > 0 ? alpha / total : LOOK_PRIOR.mean;
 }
 
 /**

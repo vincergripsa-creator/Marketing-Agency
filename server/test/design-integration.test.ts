@@ -102,13 +102,24 @@ describe('the design bandits start where a worn look scores (D203)', () => {
     expect(mean('bauhaus')).toBeCloseTo(LOOK_PRIOR.mean, 3); // nothing measured: a typical worn look
     for (let d = 0; d < 20; d++) rewardArm(w, dim, 'bauhaus', 0.12, 2); // a niche that converts 1 %
     ensureLookArms(w, 'style', 'sommeil-bebe', shelf);
-    expect(mean('typo')).toBeCloseTo(0.12, 3);           // neither convention nor opposite: on the measured mean
-    expect(mean('trait')).toBeCloseTo(0.12 * 1.1, 3);    // a convention of the shelf
-    expect(mean('grille')).toBeCloseTo(0.12 * 0.92, 3);  // its opposite
-    expect(mean('typo')).toBeLessThanOrEqual(mean('bauhaus') + 1e-3); // the measured look is never fled for an untried one
+    const worn = mean('bauhaus');
+    expect(worn).toBeLessThan(0.13);
+    expect(mean('typo')).toBeCloseTo(worn, 3);           // neither convention nor opposite: level with the measured look
+    expect(mean('trait')).toBeCloseTo(worn * 1.1, 3);    // a convention of the shelf
+    expect(mean('grille')).toBeCloseTo(worn * 0.92, 3);  // its opposite
     const typo = w.company.bandits[dim]!.find((a) => a.key === 'typo')!;
     expect(typo.alpha + typo.beta).toBeCloseTo(LOOK_PRIOR.strength, 3);
     expect(LOOK_PRIOR.strength).toBeLessThanOrEqual(5);
+    // days weigh as the bandit weighs them: heavy days of clicks at 0.5 and light days of sales at 0.1 put an untried look level
+    // with the look that holds them, never above it (the mean of the days alone, 0.3, would)
+    const v = createWorld(scenario(), 'test-prior-weights');
+    const vdim = lookDim('style', 'sommeil-bebe');
+    ensureLookArms(v, 'style', 'sommeil-bebe', shelf);
+    for (let d = 0; d < 10; d++) { rewardArm(v, vdim, 'pop', 0.5, 0.5); rewardArm(v, vdim, 'pop', 0.1, 3); }
+    ensureLookArms(v, 'style', 'sommeil-bebe', shelf);
+    const at = (k: string): number => armStats(v, vdim).find((a) => a.key === k)!.mean;
+    expect(at('typo')).toBeCloseTo(at('pop'), 3);
+    expect(at('typo')).toBeLessThan(0.2);
     // once measured, an arm keeps its prior: its own days move it, not the others'
     rewardArm(w, dim, 'typo', 0.5, 1);
     const before = { ...w.company.bandits[dim]!.find((a) => a.key === 'typo')! };
@@ -152,6 +163,9 @@ describe('a cover’s style is rewarded on the clicks of the ads it is the frame
     const hook = w.company.bandits['hook_style:sommeil-bebe']!.find((a) => a.key === 'question')!;
     expect(hook.pulls).toBe(2);
     expect(arms.find((a) => a.key === 'pop')!.pulls).toBe(0);         // a film shows the cover only on its end card
+    // once the day is in, a style nobody wore stands level with the one measured, not where the bandit stood before the day
+    const mean = (k: string): number => armStats(w, lookDim('style', 'sommeil-bebe')).find((a) => a.key === k)!.mean;
+    expect(mean('bauhaus')).toBeCloseTo(mean('aura'), 3);
   });
 
   it('without design learning, no style is rewarded', () => {

@@ -13,7 +13,7 @@ import {
 import { updateExperiments, experimentValueKind } from './experiments.js';
 import { detectLessons, EXPERIMENT_KEY_PREFIX, type HeuristicDraft } from './heuristics.js';
 import { computeDailyKpi, upsertKpi } from './kpi.js';
-import { designLearning, ensureLookArms, LOOK_DIMENSIONS, LOOK_KINDS, lookDim, lookLabel, lookNow, shelfOf, type LookKind } from './looks.js';
+import { designLearning, ensureLookArms, LOOK_DIMENSIONS, LOOK_KINDS, lookDim, lookLabel, lookNow, shelfOf, type LookKind, type LookShelf } from './looks.js';
 import { basenameOf } from './markdown.js';
 import {
   addRule, agentNoteName, agentNotePath, agentsForLesson, directiveSlot, hasMachineRule, lessonLink, lessonTitle, quotedTerms, replaceRuleEverywhere,
@@ -74,6 +74,14 @@ export function applyDailyRewards(world: WorldState, day: number): number {
   const seen = new Map<string, number>();
   for (const r of world.market?.adStats ?? []) if (r.day < day && perCreative.has(r.creativeId) && channelOf(r) === 'tiktok') seen.set(r.creativeId, (seen.get(r.creativeId) ?? 0) + r.impressions);
   let rewards = 0;
+  // the design bandits a day moved: their untried looks follow the day's evidence once it is in, not a day late
+  const looked = new Map<string, () => void>();
+  const rewardLook = (kind: LookKind, nicheId: string, shelf: LookShelf, look: string, reward: number, weight: number): void => {
+    ensureLookArms(world, kind, nicheId, shelf);
+    rewardArm(world, lookDim(kind, nicheId), look, reward, weight);
+    looked.set(lookDim(kind, nicheId), () => ensureLookArms(world, kind, nicheId, shelf));
+    rewards++;
+  };
   for (const [creativeId, { agg, nicheId }] of perCreative) {
     const creative = ix.creatives.get(creativeId);
     if (!creative || !nicheId || agg.impressions < 300) continue;
@@ -89,11 +97,7 @@ export function applyDailyRewards(world: WorldState, day: number): number {
     // most of what a cover's style does is in the clicks of the ads whose frame it is (D201): they reward it as they reward the hook
     const p = designLearning(world) && COVER_FORMATS.includes(creative.format) ? ix.products.get(creative.productId) : undefined;
     const style = p && p.kind !== 'kit' ? lookNow(p, 'style') : undefined;
-    if (p && style) {
-      ensureLookArms(world, 'style', nicheId, shelfOf(world, p, nicheId));
-      rewardArm(world, lookDim('style', nicheId), style, reward, weight);
-      rewards++;
-    }
+    if (p && style) rewardLook('style', nicheId, shelfOf(world, p, nicheId), style, reward, weight);
   }
   const refunds = refundsOnDay(world, ix, day, (o) => onReference(refs, o.productId, o));
   const ordersToday = new Map<string, number>();
@@ -122,10 +126,7 @@ export function applyDailyRewards(world: WorldState, day: number): number {
         const shelf = shelfOf(world, p, p.nicheId);
         for (const kind of LOOK_KINDS) {
           const look = lookNow(p, kind);
-          if (!look) continue;
-          ensureLookArms(world, kind, p.nicheId, shelf);
-          rewardArm(world, lookDim(kind, p.nicheId), look, reward, weight);
-          rewards++;
+          if (look) rewardLook(kind, p.nicheId, shelf, look, reward, weight);
         }
       }
     }
@@ -134,6 +135,7 @@ export function applyDailyRewards(world: WorldState, day: number): number {
       rewards++;
     }
   }
+  for (const settle of looked.values()) settle();
   return rewards;
 }
 
