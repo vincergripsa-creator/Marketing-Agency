@@ -4,6 +4,7 @@ import type { ChronicleEntry, CompanySnapshot, FounderDigest as Digest } from '.
 import { api } from '../api';
 import { Empty, Stat } from './common';
 import { useApp } from './context';
+import { readableLine } from './design';
 import { fmtEur, fmtEurSigned, fmtInt, fmtRoas, plural } from './format';
 import { Icon } from './icons';
 import { STAGE_LABEL } from './StageBadge';
@@ -207,6 +208,12 @@ function productLines(p: Digest['products']): string[] {
   ];
 }
 
+/** The « Design » block (D207): page tests, refreshes, the looks each niche favours. An older server sends none, and none shows. */
+export function designLines(d: Digest): string[] {
+  const lines = (d as Digest & { design?: unknown }).design;
+  return Array.isArray(lines) ? lines.filter((l): l is string => typeof l === 'string' && l.trim() !== '').map(readableLine) : [];
+}
+
 function channelLines(c: Digest['channels']): string[] {
   return [
     ...c.opened.map((n) => `Ouvert : ${n}`),
@@ -239,6 +246,7 @@ export function FounderDigestBody({ data, onEntry, onTasks }: { data: Digest; on
       <Lines title="Incidents" lines={data.incidents} />
       <Lines title="Équipe" lines={[...people.hired.map((n) => `Arrivée : ${n}`), ...people.left.map((n) => `Départ : ${n}`)]} />
       <Lines title="Produits" lines={productLines(data.products)} />
+      <Lines title="Design" lines={designLines(data)} />
       <Lines title="Canaux" lines={channelLines(data.channels)} />
       {data.waiting.length ? (
         <Section title="À décider">

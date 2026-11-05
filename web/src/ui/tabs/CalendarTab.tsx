@@ -4,6 +4,7 @@ import type { DailyKpi, ScenarioConfig } from '../../../../shared/types';
 import { api, type BrainNote } from '../../api';
 import { cx, Empty, Overlay, Pill, SectionTitle } from '../common';
 import { useApp } from '../context';
+import { readableLine } from '../design';
 import { doneTasksByDay } from '../derive';
 import { fmtEur, fmtEurSigned, fmtInt, fmtPct, fmtRoas, pad3 } from '../format';
 import { Icon } from '../icons';
@@ -185,7 +186,7 @@ function DayDetail({ day, today, kpi, doneCount }: { day: number; today: number;
       {noteState === 'missing' ? (
         dayActs.length ? (
           <ul className="day-acts">
-            {dayActs.map((a) => <li key={a.id}><span className="feed-icon"><IconFor kind={a.kind} /></span>{a.text}</li>)}
+            {dayActs.map((a) => <li key={a.id}><span className="feed-icon"><IconFor kind={a.kind} /></span>{readableLine(a.text)}</li>)}
           </ul>
         ) : <Empty compact icon="brain">{demo ? 'Le rapport du jour est écrit dans le cerveau par l’équipe Analyse (serveur requis).' : `Pas de rapport « ${journalPath} » pour ce jour.`}</Empty>
       ) : null}

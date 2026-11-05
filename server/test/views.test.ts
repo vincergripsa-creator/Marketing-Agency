@@ -436,7 +436,10 @@ describe('the detail views', () => {
     expect(stub.stats.sales).toBe(live.stats.sales);
     expect(stub.decision?.reason).toBe('Pas de ventes');
     expect(stub.content).toBeNull();
-    expect(stub.salesPage).toBeNull();
+    // the copy of its page goes, the name of its look stays on the card (D207)
+    const { template, hero } = live.salesPage ?? {};
+    expect(stub.salesPage).toEqual(template || hero ? { ...(template ? { template } : {}), ...(hero ? { hero } : {}) } : null);
+    expect(JSON.stringify(stub.salesPage)).not.toContain('headline');
     expect(stub.visual).toBeUndefined();
   });
 

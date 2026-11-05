@@ -6,12 +6,14 @@ import type { BanditArm, DailyKpi, Experiment, KpiBaseline, Lesson, TrendId } fr
 import { Sparkline, SERIES } from '../charts';
 import { Avatar, Bar, cx, Empty, Overlay, Pill, SectionTitle, Segmented } from '../common';
 import { useApp } from '../context';
+import { isLookBandit, readableLine } from '../design';
 import { fmtDec, fmtEur, fmtInt, fmtPct, fmtRoas, safeDiv } from '../format';
 import { Icon } from '../icons';
 import {
   agentColor, agentName, banditArmLabel, banditDimensionLabel, EXPERIMENT_DIM_LABEL, EXPERIMENT_STATUS, HOOK_LABEL, LESSON_TOPIC_LABEL,
   LESSON_TOPIC_TONE, METRIC_LABEL, nicheName, type Lookups,
 } from '../labels';
+import { DesignLearning } from './DesignLearning';
 
 /** Bandits keyed `<dim>:<nicheId>` that labels.ts does not know: without them a raw id reaches the screen. */
 const NICHE_DIMS: Record<string, string> = { channel: 'Canal', email_angle: 'Angle des e-mails' };
@@ -113,6 +115,8 @@ export function LearningTab({ onClose }: { onClose(): void }) {
           <Experiments experiments={experiments} />
         </div>
       </div>
+      <SectionTitle right={<span className="muted small">ce que les agents croient des looks : conversion estimée, jours de ventes mesurés</span>}>Design</SectionTitle>
+      <DesignLearning />
       <GodTruth />
     </Overlay>
   );
@@ -169,7 +173,8 @@ function Lessons({ lessons }: { lessons: Lesson[] }) {
 
 function Bandits({ bandits }: { bandits: Record<string, BanditArm[]> }) {
   const { lookups } = useApp();
-  const dims = Object.entries(bandits).filter(([, arms]) => Array.isArray(arms) && arms.length > 0)
+  // the looks have their own section, niche by niche, below
+  const dims = Object.entries(bandits).filter(([key, arms]) => Array.isArray(arms) && arms.length > 0 && !isLookBandit(key))
     .sort((a, b) => b[1].reduce((s, x) => s + x.pulls, 0) - a[1].reduce((s, x) => s + x.pulls, 0));
   if (dims.length === 0) return <Empty compact icon="dice">Pas encore de bandit : ils démarrent dès les premières pubs, ventes et réponses support.</Empty>;
   return (
@@ -218,7 +223,7 @@ function Experiments({ experiments }: { experiments: Experiment[] }) {
               <Pill tone={status.tone} title={status.title}>{status.label}</Pill>
               <span className="muted small">{EXPERIMENT_DIM_LABEL[e.dimension] ?? e.dimension} · {perVisitor ? 'Profit par visiteur' : METRIC_LABEL[e.metric] ?? e.metric} · J{e.day}{e.endDay ? ` → J${e.endDay}` : ''} · {agentName(lookups, e.owner)}</span>
             </div>
-            <div className="exp-hyp">{e.hypothesis}</div>
+            <div className="exp-hyp">{readableLine(e.hypothesis)}</div>
             {e.variants.map((v) => {
               const r = e.results?.[v];
               const label = banditArmLabel(lookups, e.dimension === 'sales_hype' ? 'hype' : e.dimension, v);

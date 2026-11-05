@@ -1,24 +1,30 @@
-// Galerie: every deliverable the agency produced, page by page from /api/deliverables. A guide opens in the flip book, an ad in the player.
+// Galerie: every deliverable the agency produced, page by page from /api/deliverables. A guide opens in the flip book, an ad in the player,
+// a cover in the guide's design: every look it wore, version by version (design plan D207). Each tile says its style; a filter keeps one.
 import { useMemo, useRef, useState } from 'react';
+import { ART_STYLES } from '../../../../shared/design';
 import { filmOf } from '../../../../shared/channels';
-import type { CompanySnapshot, Deliverable } from '../../../../shared/types';
+import type { ArtStyle, CompanySnapshot, Deliverable } from '../../../../shared/types';
 import { brainNotePath, fileUrl } from '../../api';
 import { cx, Empty, NEW_TAB, Overlay, Segmented } from '../common';
 import { useApp } from '../context';
+import { lookLabel, STYLE_FILTER, STYLE_INK, tileLookOf, type TileLook } from '../design';
 import { fmtInt } from '../format';
 import { Icon } from '../icons';
-import { agentColor, agentName, DELIVERABLE_ICON, DELIVERABLE_LABEL } from '../labels';
+import { agentColor, agentName, DELIVERABLE_ICON, DELIVERABLE_LABEL, type Lookups } from '../labels';
+import { HeroChip, StyleChip, TemplateChip } from '../Looks';
 import { useDetail } from '../useDetail';
 import { PdfLightbox } from '../viewers/Lightbox';
+import { LooksLightbox } from '../viewers/LooksViewer';
 import { VideoLightbox } from '../viewers/VideoPlayer';
 
 /** `ad_video` is no `Deliverable.kind` (D27): the server merges those tiles from the video manifest. */
 export type TileKind = Deliverable['kind'] | 'ad_video';
-export interface GalleryItem extends Omit<Deliverable, 'kind'> { kind: TileKind; poster?: string | null }
-export interface GalleryPage { items: GalleryItem[]; total: number | null; counts: Partial<Record<TileKind, number>> | null }
+export interface GalleryItem extends Omit<Deliverable, 'kind'> { kind: TileKind; poster?: string | null; look?: TileLook }
+export interface GalleryPage { items: GalleryItem[]; total: number | null; counts: Partial<Record<TileKind, number>> | null; styles?: Partial<Record<ArtStyle, number>> | null }
 
 type Filter = 'all' | TileKind;
-type Viewer = { kind: 'pdf'; url: string; title: string } | { kind: 'video'; creativeId: string; title: string };
+type StyleFilter = 'all' | ArtStyle;
+type Viewer = { kind: 'pdf'; url: string; title: string } | { kind: 'video'; creativeId: string; title: string } | { kind: 'looks'; productId: string };
 
 const IMAGE_KINDS: ReadonlySet<TileKind> = new Set(['cover', 'ad_storyboard']);
 const PAGE = 60;
@@ -28,14 +34,23 @@ const VIDEO_LABEL = 'Vidéo pub';
 
 const labelOf = (k: TileKind) => (k === 'ad_video' ? VIDEO_LABEL : DELIVERABLE_LABEL[k] ?? k);
 const iconOf = (k: TileKind) => (k === 'ad_video' ? 'film' : DELIVERABLE_ICON[k] ?? 'file');
-const pathOf = (kinds: readonly TileKind[], page: number) => `/api/deliverables?page=${page}&kinds=${kinds.join(',')}`;
+/** A style rides in `kinds` as `style:<id>`: the route hands the list on to the gallery as it came. */
+export const galleryPath = (kinds: readonly TileKind[], page: number, style: StyleFilter = 'all') =>
+  `/api/deliverables?page=${page}&kinds=${[...kinds, ...(style === 'all' ? [] : [`${STYLE_FILTER}${style}`])].join(',')}`;
 
 /** One answer of /api/deliverables. Null: not a page, and the tab stays on what the snapshot holds. */
 export function pageOf(data: unknown): GalleryPage | null {
-  if (Array.isArray(data)) return { items: data as GalleryItem[], total: null, counts: null };
-  const o = data as { items?: unknown; total?: unknown; counts?: GalleryPage['counts'] } | null;
+  if (Array.isArray(data)) return { items: data as GalleryItem[], total: null, counts: null, styles: null };
+  const o = data as { items?: unknown; total?: unknown; counts?: GalleryPage['counts']; styles?: GalleryPage['styles'] } | null;
   if (!o || !Array.isArray(o.items)) return null;
-  return { items: o.items as GalleryItem[], total: typeof o.total === 'number' ? o.total : null, counts: o.counts ?? null };
+  return { items: o.items as GalleryItem[], total: typeof o.total === 'number' ? o.total : null, counts: o.counts ?? null, styles: o.styles ?? null };
+}
+
+/** What a tile wore: the server says it; for a server that does not, the snapshot's guide. */
+export function lookOfTile(d: GalleryItem, l: Lookups, s: CompanySnapshot | null): TileLook | undefined {
+  if (d.look) return d.look;
+  const creative = d.creativeId ? s?.company?.creatives?.find((c) => c.id === d.creativeId) : undefined;
+  return tileLookOf(d, l.products.get(d.productId ?? creative?.productId ?? ''), creative?.createdDay);
 }
 
 /** Tiles of the videos the snapshot knows: the same rows the server merges, for a server that cannot page yet. */
@@ -54,15 +69,16 @@ export function videoTiles(s: CompanySnapshot | null): GalleryItem[] {
 }
 
 export function GalleryTab({ onClose }: { onClose(): void }) {
-  const { snapshot, demo } = useApp();
+  const { snapshot, demo, lookups } = useApp();
   const [filter, setFilter] = useState<Filter>('all');
+  const [style, setStyle] = useState<StyleFilter>('all');
   const [limit, setLimit] = useState(PAGE);
   const [older, setOlder] = useState<GalleryItem[][]>([]); // pages 2 and up, the first one follows the day
   const [busy, setBusy] = useState(false);
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const asked = useRef(0);
   const askedKinds = filter === 'all' ? GALLERY_KINDS : [filter];
-  const { data } = useDetail<unknown>(demo ? null : pathOf(askedKinds, 1), snapshot?.day ?? 1);
+  const { data } = useDetail<unknown>(demo ? null : galleryPath(askedKinds, 1, style), snapshot?.day ?? 1);
   const served = pageOf(data);
 
   const local = useMemo(() => [...(snapshot?.company?.deliverables ?? []), ...videoTiles(snapshot)] as GalleryItem[], [snapshot]);
@@ -81,29 +97,42 @@ export function GalleryTab({ onClose }: { onClose(): void }) {
 
   const list = useMemo(() => {
     const wanted = (d: GalleryItem) => filter === 'all' || d.kind === filter;
-    if (!served) return [...local].filter(wanted).sort((a, b) => b.day - a.day || b.id.localeCompare(a.id));
+    if (!served) return [...local].filter((d) => wanted(d) && (style === 'all' || lookOfTile(d, lookups, snapshot)?.style === style)).sort((a, b) => b.day - a.day || b.id.localeCompare(a.id));
     const seen = new Set<string>(); // a new deliverable pushes rows onto the next page: the same row can come twice
-    return [...served.items, ...older.flat()].filter((d) => wanted(d) && !seen.has(d.id) && seen.add(d.id));
-  }, [served, older, local, filter]);
+    return [...served.items, ...older.flat()].filter((d) => wanted(d) && (style === 'all' || d.look?.style === style) && !seen.has(d.id) && seen.add(d.id));
+  }, [served, older, local, filter, style, lookups, snapshot]);
+  // the styles of the kinds asked: the server counts the whole run, the snapshot what it holds
+  const styleCounts = useMemo(() => {
+    if (served?.styles) return served.styles;
+    const counts: Partial<Record<ArtStyle, number>> = {};
+    for (const d of local) {
+      if (filter !== 'all' && d.kind !== filter) continue;
+      const look = lookOfTile(d, lookups, snapshot);
+      if (look) counts[look.style] = (counts[look.style] ?? 0) + 1;
+    }
+    return counts;
+  }, [served, local, filter, lookups, snapshot]);
+  const styles = ART_STYLES.filter((s) => (styleCounts[s] ?? 0) > 0 || s === style);
 
   const shown = served ? list : list.slice(0, limit);
-  const whole = served ? served.total ?? list.length : filter === 'all' ? runTotal : countOf(filter);
+  const whole = served ? served.total ?? list.length : style !== 'all' ? list.length : filter === 'all' ? runTotal : countOf(filter);
   const more = !served ? list.length > limit : served.total !== null ? list.length < served.total : (older.at(-1) ?? served.items).length >= PAGE;
 
-  const pick = (f: Filter) => {
+  const restart = () => {
     asked.current += 1;
-    setFilter(f);
     setLimit(PAGE);
     setOlder([]);
     setBusy(false);
   };
+  const pick = (f: Filter) => { restart(); setFilter(f); };
+  const pickStyle = (s: StyleFilter) => { restart(); setStyle(s); };
   const loadMore = async () => {
     if (!served) { setLimit((l) => l + PAGE); return; }
     const ticket = ++asked.current;
     setBusy(true);
     let page: GalleryPage | null = null;
     try {
-      const res = await fetch(pathOf(askedKinds, older.length + 2));
+      const res = await fetch(galleryPath(askedKinds, older.length + 2, style));
       page = res.ok ? pageOf(await res.json()) : null;
     } catch { /* the button stays: the founder can ask again */ }
     if (ticket !== asked.current) return;
@@ -111,10 +140,12 @@ export function GalleryTab({ onClose }: { onClose(): void }) {
     if (page) setOlder((pages) => [...pages, page.items]);
   };
 
-  // on the server, « Tout » is the gallery's kinds: the notes stay out of it
-  const allCount = !served ? runTotal : filter === 'all' && served.total !== null ? served.total : GALLERY_KINDS.reduce((n, k) => n + countOf(k), 0);
+  // on the server, « Tout » is the gallery's kinds: the notes stay out of it. Like the kinds, it counts every style
+  const allCount = !served ? runTotal : filter === 'all' && style === 'all' && served.total !== null ? served.total : GALLERY_KINDS.reduce((n, k) => n + countOf(k), 0);
   const tail = served ? 'les plus récents d’abord' : 'tous les guides, les pubs les plus récentes';
-  const subtitle = list.length < whole ? `${fmtInt(list.length)} sur ${fmtInt(whole)} livrables réels produits par l’équipe · ${tail}` : `${fmtInt(whole)} livrables réels produits par l’équipe`;
+  const subtitle = style !== 'all'
+    ? `${fmtInt(list.length)}${list.length < whole ? ` sur ${fmtInt(whole)}` : ''} livrables en style « ${lookLabel('style', style)} »`
+    : list.length < whole ? `${fmtInt(list.length)} sur ${fmtInt(whole)} livrables réels produits par l’équipe · ${tail}` : `${fmtInt(whole)} livrables réels produits par l’équipe`;
 
   return (
     <Overlay title="Galerie" subtitle={subtitle} icon="image" onClose={onClose}>
@@ -124,7 +155,18 @@ export function GalleryTab({ onClose }: { onClose(): void }) {
           ...kinds.map((k) => ({ id: k, label: labelOf(k), ...(k === 'ad_video' && !videosKnown ? {} : { count: countOf(k) }) })),
         ]} />
       </div>
-      {shown.length === 0 ? <Empty icon="image">Aucun livrable pour l’instant : les premiers guides, couvertures et pubs apparaîtront ici.</Empty> : (
+      {styles.length ? (
+        <div className="filters-row look-filter">
+          <span className="muted small">Style</span>
+          <Segmented<StyleFilter> size="sm" value={style} onChange={pickStyle} options={[
+            { id: 'all', label: 'Tous' },
+            ...styles.map((s) => ({ id: s, label: <><span className="look-ink" style={{ background: STYLE_INK[s] }} />{lookLabel('style', s)}</>, count: styleCounts[s] ?? 0 })),
+          ]} />
+        </div>
+      ) : null}
+      {shown.length === 0 ? (
+        <Empty icon="image">{style === 'all' ? 'Aucun livrable pour l’instant : les premiers guides, couvertures et pubs apparaîtront ici.' : `Rien ici en style « ${lookLabel('style', style)} » pour l’instant.`}</Empty>
+      ) : (
         <div className="gallery">
           {shown.map((d) => <Tile key={d.id} d={d} onView={setViewer} />)}
         </div>
@@ -132,6 +174,7 @@ export function GalleryTab({ onClose }: { onClose(): void }) {
       {more ? <button type="button" className="btn btn-sm more-btn" disabled={busy} onClick={() => void loadMore()}>{busy ? 'Chargement…' : 'Charger la suite'}</button> : null}
       {viewer?.kind === 'pdf' ? <PdfLightbox url={viewer.url} title={viewer.title} onClose={() => setViewer(null)} /> : null}
       {viewer?.kind === 'video' ? <VideoLightbox creativeId={viewer.creativeId} title={viewer.title} onClose={() => setViewer(null)} /> : null}
+      {viewer?.kind === 'looks' ? <LooksLightbox productId={viewer.productId} onClose={() => setViewer(null)} /> : null}
     </Overlay>
   );
 }
@@ -145,6 +188,8 @@ function Tile({ d, onView }: { d: GalleryItem; onView(v: Viewer): void }) {
   const poster = d.poster ?? (d.creativeId ? snapshot?.videos?.[d.creativeId]?.poster : null);
   // cover for a PDF, poster for a video, else the file itself when it is a picture
   const media = d.kind === 'pdf' ? d.poster ?? product?.files?.cover : d.kind === 'ad_video' ? poster : IMAGE_KINDS.has(d.kind) || /\.(svg|png|jpe?g|webp)$/i.test(d.path) ? d.path : null;
+  const look = lookOfTile(d, lookups, snapshot);
+  const isPage = d.kind === 'sales_page' || d.kind === 'page_preview';
   const body = (
     <>
       <div className={cx('tile-media', `tile-${d.kind}`)}>
@@ -153,6 +198,7 @@ function Tile({ d, onView }: { d: GalleryItem; onView(v: Viewer): void }) {
         )}
         {isVideo && !demo ? <span className="phone-play"><Icon name="play" size={18} /></span> : null}
         <span className="tile-kind">{labelOf(d.kind)}</span>
+        {d.kind === 'cover' && look?.version && look.version > 1 ? <span className="tile-versions">v{look.version}</span> : null}
       </div>
       <div className="tile-body">
         <div className="tile-title">{d.title}</div>
@@ -162,12 +208,20 @@ function Tile({ d, onView }: { d: GalleryItem; onView(v: Viewer): void }) {
           {d.quality !== null && d.quality !== undefined ? <span className="tile-q">{Math.round(d.quality)}/100</span> : null}
         </div>
         {product ? <div className="tile-product small muted">{product.title}</div> : null}
+        {look ? (
+          <div className="tile-looks">
+            <StyleChip style={look.style} />
+            {isPage ? <TemplateChip template={look.template ?? null} /> : null}
+            {isPage && look.hero ? <HeroChip hero={look.hero} /> : null}
+          </div>
+        ) : null}
       </div>
     </>
   );
   if (demo) return <div className="tile is-disabled" title="Fichier indisponible en mode démo">{body}</div>;
   if (d.kind === 'pdf') return <button type="button" className="tile" data-viewer="pdf" onClick={() => onView({ kind: 'pdf', url, title: product?.title ?? d.title })} title="Feuilleter le guide">{body}</button>;
   if (isVideo) return <button type="button" className="tile" data-viewer="video" onClick={() => onView({ kind: 'video', creativeId: d.creativeId!, title: d.title })} title="Lire la vidéo">{body}</button>;
+  if (d.kind === 'cover' && d.productId) return <button type="button" className="tile" data-viewer="looks" onClick={() => onView({ kind: 'looks', productId: d.productId! })} title="Toutes ses couvertures, version par version">{body}</button>;
   const note = brainNotePath(runId, d.path);
   if (note) return <button type="button" className="tile" onClick={() => openBrainNote(note)} title="Ouvrir dans le cerveau">{body}</button>;
   return <a className="tile" href={url} {...NEW_TAB} title={`Ouvrir ${d.path}`}>{body}</a>;

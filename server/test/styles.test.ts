@@ -185,10 +185,13 @@ describe('silhouettes', () => {
 
 describe('the style registry', () => {
   it('knows the eight ids, builds Bauhaus and typo, and draws the others as Bauhaus', () => {
-    expect(BUILT_STYLES).toEqual(['bauhaus', 'typo']);
+    expect(BUILT_STYLES.slice(0, 2)).toEqual(['bauhaus', 'typo']);
+    for (const id of BUILT_STYLES) expect(ART_STYLES).toContain(id);
+    expect(BUILT_STYLES).toEqual(expect.arrayContaining(['grille', 'pop', 'trait', 'collage', 'aura', 'riso']));
     for (const id of ART_STYLES) expect(styleDef(id).compositions.length, id).toBeGreaterThanOrEqual(2);
     expect(isBuilt('typo')).toBe(true);
-    expect(isBuilt('pop')).toBe(false);
+    expect(isBuilt('gothique')).toBe(false);
+    for (const id of UNBUILT) expect(isBuilt(id)).toBe(false);
     expect(styleDef(undefined).id).toBe('bauhaus');
     for (const id of UNBUILT) expect(styleDef(id).id).toBe('bauhaus');
   });
@@ -221,7 +224,7 @@ describe('the style registry', () => {
     expect(compositionOf(chiot({ coverLayout: 'minimal' }))).toBe(1);
     expect(compositionOf(chiot({ coverLayout: 'badge' }))).toBe(0);
     expect(compositionOf(chiot({ coverLayout: 'split', composition: 1 }))).toBe(1);
-    expect(compositionOf(chiot({ style: 'pop', composition: 2 }))).toBe(0);
+    expect(compositionOf(chiot({ style: 'pop', composition: styleDef('pop').compositions.length }))).toBe(0);
     expect(compositionOf(chiot({ style: 'typo', composition: 2 }))).toBe(2);
     expect(compositionOf(chiot({ style: 'typo', composition: -1 }))).toBe(compositionOf(chiot({ style: 'typo' })));
   });

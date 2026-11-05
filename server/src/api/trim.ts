@@ -4,14 +4,15 @@
  */
 import { summarizeLedger } from '../core/index.js';
 import type {
-  AdCreative, AdTotals, AdWeekRow, ArchiveCounters, Campaign, CatalogueTotals, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DailyKpi, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, DesignSpec, FinanceSnapshot,
-  GrowthState, InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, QualityReport, Review, Task, TaskKind, TaskStats, TaskTotals, VisualReport, WorldState,
+  AdCreative, AdTotals, AdWeekRow, ArchiveCounters, Campaign, CatalogueTotals, ChapterContent, CompanySnapshot, CompanyState, CreativeAdTotals, DailyAdStats, DailyKpi, DayTaskCounts, Deliverable, DeptId, DeptTaskCounts, DesignLogEntry, DesignSpec, FinanceSnapshot,
+  GrowthState, InboxMessage, MessageIntent, Mission, PdfContent, Product, PublicInboxMessage, QualityReport, Review, SalesPage, Task, TaskKind, TaskStats, TaskTotals, VisualReport, WorldState,
 } from '../shared.js';
 import { channelOf, kpiBaselineOf } from '../shared.js';
 import { addAdTotals } from '../sim/adTotals.js';
 import { audienceView } from '../sim/audience.js';
 import { lastClosedDay } from '../sim/finance.js';
 import { announcedOutageDays } from '../sim/outage.js';
+import { clip } from '../runtime/util.js';
 import { sceneOf, talentViews } from './views.js';
 
 export interface SnapshotLimits {
@@ -45,13 +46,14 @@ export interface SnapshotLimits {
   growthDecisions: number;
   light: boolean;             // products and ads without what only their files show, daily figures without their channels, no VoC or competitors
   live: boolean;              // live view: finished tasks without their payload, no playbooks
+  looks: number;              // light cards: the newest entries of a guide's design log (D207); GET /api/product holds them all
 }
 
 export const DEFAULT_LIMITS: SnapshotLimits = {
   doneTasks: 200, openTasks: 400, taskLog: 10, deliverables: 250, lessons: 150, chatsPerAgent: 30, missions: 80,
   creatives: 120, campaigns: 400, pnl: 8, experiments: 60, kpis: 400, reviewsPerProduct: 25, inbox: 80, threadPerMessage: 12, adStatsDays: 14,
   commentsPerStat: 6, adComments: Number.POSITIVE_INFINITY, organicPosts: 30, creators: 80, partnerships: 120, events: 40, orders: 100, ledger: 150, activity: 200,
-  stringMax: 400, growthWeeks: 52, growthDecisions: 30, light: false, live: false,
+  stringMax: 400, growthWeeks: 52, growthDecisions: 30, light: false, live: false, looks: Number.POSITIVE_INFINITY,
 };
 
 /** Every « 7 j » of Publicité. The same closed days as Canaux, so one figure reads the same on both tabs. */
@@ -66,6 +68,7 @@ export const TIGHT_LIMITS: SnapshotLimits = {
   creatives: 30, campaigns: 40, pnl: 2, experiments: 25, kpis: 60, reviewsPerProduct: 8, inbox: 30, threadPerMessage: 6, adStatsDays: 5,
   commentsPerStat: 2, adComments: Number.POSITIVE_INFINITY, organicPosts: 20, creators: 40, partnerships: 50, events: 25, orders: 60, ledger: 100, activity: 60,
   stringMax: 160, growthWeeks: 52, growthDecisions: 30, light: true, live: false,
+  looks: 0, // a year-old company: 707 KB with three looks a card, 698 KB without (seed 7, day 360). The stream brings them a second later
 };
 
 /**
@@ -76,11 +79,13 @@ export const LIVE_LIMITS: SnapshotLimits = {
   ...TIGHT_LIMITS, activity: 60, reviewsPerProduct: 5, live: true,
   creatives: 30, campaigns: 20, pnl: 1, doneTasks: 40, deliverables: 60, lessons: 30, inbox: 30, commentsPerStat: 1, adStatsDays: 3, kpis: 60,
   growthWeeks: 12, growthDecisions: 10,
+  looks: 3, // what the cards of Produits print: the last look and its reason, and the two before it
 };
 export const LIVE_TIGHT_LIMITS: SnapshotLimits = {
   ...LIVE_LIMITS, creatives: 15, campaigns: 10, doneTasks: 15, deliverables: 20, lessons: 15, inbox: 15, activity: 40, growthWeeks: 4, growthDecisions: 5,
   adStatsDays: 2, adComments: 14, reviewsPerProduct: 1, threadPerMessage: 3, ledger: 50, orders: 30, creators: 20, missions: 15,
   experiments: 10, organicPosts: 10, events: 15, partnerships: 20, taskLog: 2,
+  looks: 0, // three looks on 50 cards weigh 25 KB: the tightest stream leaves the history to the product view
 };
 
 export const SNAPSHOT_BUDGET_BYTES = 700_000;
@@ -183,21 +188,52 @@ function publicVisual(visual: VisualReport): VisualReport {
 /** The files a card opens. The previews of a guide serve its shop page, and six paths a guide weighed 12 KB of a big stream. */
 const cardFiles = (p: Product): Product['files'] => ({ pdf: p.files?.pdf ?? null, cover: p.files?.cover ?? null, salesPage: p.files?.salesPage ?? null });
 
-/** A stopped guide under light limits: what the catalogue shows of it. Its text and scores weigh more than a live guide's figures. */
-export function stubProduct({ brief: _brief, pagePrint: _pagePrint, visual: _visual, ...p }: Product): Product {
-  return {
-    ...p, subtitle: '', audience: '', problem: '', content: null, design: null, salesPage: null, quality: null, salesQuality: null, priceHistory: [],
-    files: cardFiles(p), stats: { ...p.stats, reviews: [] },
-  };
+/** The reason of a look on a light card: one line. At 12 entries of 300 characters a log weighs 4 KB a guide. */
+export const LIGHT_LOOK_WHY = 100;
+
+/** The palette draws a card's fallback cover, the style names its look (D207): the rest of a design is the files'. */
+function cardDesign(d: DesignSpec | null | undefined): DesignSpec | null {
+  return d ? ({ palette: d.palette, ...(d.style ? { style: d.style } : {}) } as DesignSpec) : null;
 }
 
-/** A guide on sale under light limits: what its card reads. A guide now stays on sale for months, and with 33 of them these fields weighed 140 KB. */
-function cardProduct({ brief: _brief, pagePrint: _pagePrint, ...p }: Product): Product {
-  return {
+/** A stopped guide's card keeps only the name of its look. */
+const stubDesign = (d: DesignSpec | null | undefined): DesignSpec | null => (d?.style ? ({ style: d.style } as DesignSpec) : null);
+
+/** What a light card shows of a page: its template and hero, never its copy. The V1 page has neither, and leaves nothing. */
+function lightPage(sp: SalesPage | null | undefined): SalesPage | null {
+  if (!sp?.template && !sp?.hero) return null;
+  return { ...(sp.template ? { template: sp.template } : {}), ...(sp.hero ? { hero: sp.hero } : {}) } as SalesPage;
+}
+
+/** The newest looks, their reasons cut to a line. None asked, or an old save that never wore a look: no field. */
+function lightLog(log: DesignLogEntry[] | undefined, keep: number): DesignLogEntry[] | undefined {
+  return log?.length && keep > 0 ? lastN(log, keep).map((e) => ({ ...e, why: clip(String(e.why ?? ''), LIGHT_LOOK_WHY) })) : undefined;
+}
+
+/** A light card's looks, the newest `keep`: the field goes when none is kept. */
+function withLooks({ designLog, ...p }: Product, keep: number): Product {
+  const log = lightLog(designLog, keep);
+  return log ? { ...p, designLog: log } : p;
+}
+
+/** A stopped guide under light limits: what the catalogue shows of it. Its text and scores weigh more than a live guide's figures. */
+export function stubProduct({ brief: _brief, pagePrint: _pagePrint, visual: _visual, leadMagnet: _magnet, ...p }: Product, looks = LIVE_LIMITS.looks): Product {
+  return withLooks({
+    ...p, subtitle: '', audience: '', problem: '', content: null, design: stubDesign(p.design), salesPage: lightPage(p.salesPage), quality: null, salesQuality: null, priceHistory: [],
+    files: cardFiles(p), stats: { ...p.stats, reviews: [] },
+  }, looks);
+}
+
+/**
+ * A guide on sale under light limits: what its card reads. A guide now stays on sale for months, and with 33 of them these fields weighed
+ * 140 KB. No panel reads a lead magnet: its 135 bytes a guide pay for the card's look.
+ */
+function cardProduct({ brief: _brief, pagePrint: _pagePrint, leadMagnet: _magnet, ...p }: Product, looks: number): Product {
+  return withLooks({
     ...p, salesQuality: null, files: cardFiles(p),
-    design: p.design && ({ palette: p.design.palette } as DesignSpec),
+    design: cardDesign(p.design),
     quality: p.quality && ({ ...cardScores(p.quality), issues: p.quality.issues, ...(p.quality.blocking ? { blocking: p.quality.blocking } : {}) } as QualityReport),
-  };
+  }, looks);
 }
 
 /** The numbers a card draws (Produits): without them its six bars read 0 beside the overall score. */
@@ -216,13 +252,12 @@ export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS)
     ...kept,
     ...(p.visual ? { visual: publicVisual(p.visual) } : {}),
     content: trimContent(p.content, limits.light),
-    salesPage: limits.light ? null : p.salesPage,
+    salesPage: limits.light ? lightPage(p.salesPage) : p.salesPage,
     stats: { ...stats, reviews: lastN(stats.reviews, limits.reviewsPerProduct).map(publicReview) },
     priceHistory: lastN(p.priceHistory, limits.live ? 14 : 60),
   };
   if (!limits.light) return trimmed;
-  const { designLog: _designLog, ...card } = trimmed; // the history of its looks is the product view's: at 12 entries it would weigh 4 KB a card
-  return p.status === 'paused' || p.status === 'killed' ? stubProduct(card) : cardProduct(card);
+  return p.status === 'paused' || p.status === 'killed' ? stubProduct(trimmed, limits.looks) : cardProduct(trimmed, limits.looks);
 }
 
 /** GET /api/product/:id: the whole guide, which no snapshot carries. What only the company reads stays behind, as in every view. */
@@ -439,7 +474,7 @@ function countsOf(world: WorldState): NonNullable<CompanySnapshot['counts']> {
   };
 }
 
-/** Hidden truth served to god mode only. `intents` covers the messages of the same snapshot. */
+/** Hidden truth served to god mode only. `intents` covers the messages of the same snapshot. The taste for looks (D201) leaves only here. */
 export function godModeOf(world: WorldState, limits: SnapshotLimits = DEFAULT_LIMITS): NonNullable<CompanySnapshot['godMode']> {
   const intents: Record<string, MessageIntent> = {};
   for (const m of keptMessages(world.market?.inbox ?? [], limits)) intents[m.id] = m.intent;
