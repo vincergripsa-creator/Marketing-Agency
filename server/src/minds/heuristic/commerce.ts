@@ -7,8 +7,8 @@ import type { RedTeamFacts, RedTeamVerdict, UpsellContext } from '../../contract
 import { RISK_RULES } from '../lexicon.js';
 import { conflictsWith } from '../playbook.js';
 import { ensurePdf } from '../shapes.js';
-import { bare, bestLabel, cap, clean, fit, fmtEur, lf, lowerFirst, norm, ofAud, plainTitle, q, splitSentences, uniqStrings, type LocalRng } from '../util.js';
-import { buildNicheCtx, FALLBACK } from './niche.js';
+import { bare, bestLabel, cap, clauseLabel, clean, fit, fmtEur, lf, lowerFirst, norm, ofAud, plainTitle, q, qv, splitSentences, uniqStrings, type LocalRng } from '../util.js';
+import { buildNicheCtx, FALLBACK, type NicheCtx } from './niche.js';
 import { inferKind, inline, promiseOutcome } from './studio.js';
 
 export function nicheFromProduct(p: Product | null | undefined, voc?: VoiceOfCustomer | null): NicheBrief {
@@ -153,7 +153,79 @@ export function heuristicSalesPage(
     : `Satisfait ou remboursé pendant 14 jours : si le guide ne vous apporte rien de concret, un simple e-mail à ${brand} suffit, sans justification.`;
   const cta = fit(hype >= 0.7 ? `Oui, je commence le plan — ${fmtEur(price)}` : hype >= 0.35 ? `Je commence ce soir — ${fmtEur(price)}` : `Je télécharge le guide — ${fmtEur(price)}`, 70);
 
-  return { headline: fit(headline, 120), subheadline, painBullets, solution, chapterBlurbs, bonusBlurb, objections, guarantee, cta, hypeLevel: Math.round(hype * 100) / 100 };
+  return {
+    headline: fit(headline, 120), subheadline, painBullets, solution, chapterBlurbs, bonusBlurb, objections, guarantee, cta, hypeLevel: Math.round(hype * 100) / 100,
+    ...templateCopy(c, content, { outcomes, desired, durTxt, nCh, price, noWords, noNumber, noTools }),
+  };
+}
+
+/** A customer phrase short enough for a sentence of ours: the shortest whole one, never a draw. */
+function shortSaid(c: NicheCtx, max: number): string | null {
+  const ok = c.phrases.map((p) => bare(p)).filter((p) => p.length >= 10 && p.length <= max && !/[:;]/.test(p));
+  return ok.sort((a, b) => a.length - b.length || a.localeCompare(b))[0] ?? null;
+}
+
+/** A customer phrase in our sentence: a question keeps its own mark, anything else takes our period. */
+const quoted = (p: string): string => (/\?\s*$/.test(p) ? qv(p) : `${q(p)}.`);
+
+/**
+ * The sections of a templated page (design plan D202): what the reader gets, for whom it is and is not, why we wrote it,
+ * and the guide against doing it otherwise. Written from the same research as the rest of the page, keyed on text, with no
+ * draw: the flaws a weak writer drew above reach these lines too (no customer words, no number, no tools), nothing else.
+ */
+function templateCopy(
+  c: NicheCtx, content: PdfContent,
+  o: { outcomes: string[]; desired: string; durTxt: string; nCh: number; price: number; noWords: boolean; noNumber: boolean; noTools: boolean },
+): Pick<SalesPage, 'benefits' | 'forWho' | 'notFor' | 'story' | 'comparison'> {
+  const chapters = content.chapters ?? [];
+  const steps = chapters.reduce((n, ch) => n + (ch.steps?.length ?? 0), 0);
+  const checklists = chapters.length > 0 && chapters.every((ch) => (ch.checklist?.length ?? 0) > 0);
+  const sheets = [...chapters, content.bonus].filter((ch) => ch?.visual?.type === 'grid').length;
+  const numberless = (s: string): boolean => !o.noNumber || !/\d/.test(s);
+
+  // the outcomes buyers say they want, in their own words, then what the method itself gives
+  const wanted = (o.noWords ? [...FALLBACK.outcomes] : o.outcomes).map((x) => clauseLabel(bare(x), 72, 8) ?? (bare(x).length <= 72 ? bare(x) : null));
+  const said = uniqStrings(wanted.filter((x): x is string => !!x && numberless(x)).map(cap));
+  const method = [
+    o.noTools || o.noNumber ? 'Une étape à la fois, dans le bon ordre' : `Un plan de ${o.durTxt}, une étape à la fois`,
+    !o.noTools && checklists ? 'Une checklist à la fin de chaque chapitre, pour savoir où vous en êtes' : '',
+    !o.noTools && sheets ? `${sheets > 1 ? `${sheets} fiches` : 'Une fiche'} à imprimer et à remplir` : '',
+    chapters.filter((ch) => (ch.example ?? '').length > 40).length >= 2 ? 'Des exemples types, chapitre par chapitre' : '',
+  ];
+  const benefits = uniqStrings([...said.slice(0, 2), ...method]).slice(0, 4);
+
+  const phrase = o.noWords ? null : shortSaid(c, 60);
+  const forWho = uniqStrings([
+    c.pbIsClause ? lf(c.pbClause) : '',
+    phrase ? `vous vous ${/\?\s*$/.test(phrase) ? 'demandez' : 'dites'} : ${qv(phrase)}` : '',
+    `vous voulez ${o.desired}`,
+    `vous préférez une méthode ${c.adj}, une étape à la fois`,
+  ]).slice(0, 4);
+  const notFor = [
+    o.noNumber ? 'vous cherchez un résultat immédiat : la méthode demande de la régularité' : `vous cherchez un résultat du jour au lendemain : la méthode se suit sur ${o.durTxt}`,
+    c.care
+      ? 'vous soupçonnez un problème de santé : parlez-en d’abord à un professionnel, le guide ne le remplace pas'
+      : 'vous attendez un accompagnement individuel : c’est un guide à suivre seul, à votre rythme',
+  ];
+
+  const story = [
+    `Nous avons lu ce qu’écrivent ${c.audArt} : leurs commentaires, leurs avis, leurs questions.`,
+    phrase ? `Une phrase revenait souvent : ${quoted(phrase)}` : '',
+    'Les conseils existaient déjà, mais éparpillés, et rarement dans le bon ordre.',
+    o.noNumber
+      ? 'Nous avons donc écrit le guide que nous aurions voulu leur donner : des chapitres courts, des étapes concrètes et un plan clair.'
+      : `Nous avons donc écrit le guide que nous aurions voulu leur donner : ${o.nCh} chapitres courts, ${steps > 1 ? `${steps} étapes concrètes` : 'des étapes concrètes'} et un plan de ${o.durTxt}.`,
+    'Chaque étape a été relue avant publication.',
+  ].filter(Boolean).join(' ');
+
+  const minutes = !o.noNumber && (content.wordCount ?? 0) > 600 ? Math.max(5, Math.round(content.wordCount / 220 / 5) * 5) : 0;
+  const comparison = [
+    { label: 'Le temps', guide: minutes ? `${minutes} minutes de lecture, puis une étape à la fois` : 'Une lecture courte, puis une étape à la fois', other: 'Des heures à chercher, lire et trier des conseils éparpillés' },
+    { label: 'La méthode', guide: o.noTools || o.noNumber ? 'Les étapes dans l’ordre, du début à la fin' : `Un plan de ${o.durTxt}, dans l’ordre, étape par étape`, other: 'Des astuces isolées, sans ordre ni suivi' },
+    { label: 'Le prix', guide: `${fmtEur(o.price)}, une seule fois, mises à jour comprises`, other: 'Un accompagnement individuel, facturé à la séance' },
+    ...(checklists && !o.noTools ? [{ label: 'Le suivi', guide: 'Une checklist à cocher à la fin de chaque chapitre', other: 'Rien pour savoir si vous avancez' }] : []),
+  ];
+  return { benefits, forWho, notFor, story, comparison };
 }
 
 // ───────────────────────────── Red Team ─────────────────────────────

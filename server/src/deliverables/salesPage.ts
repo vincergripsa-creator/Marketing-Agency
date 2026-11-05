@@ -1,40 +1,26 @@
 /**
  * Self-contained storefront page (pdf §11): the guide's inks and type, its cover as a real book, its real pages as previews,
  * a fake checkout. Nothing leaves the file: the fonts are inlined and no URL is ever fetched.
+ *
+ * This is the V1 page, drawn byte for byte as it always was. A page that names a template (design plan D202) is drawn by
+ * `sales/` instead.
  */
-import type { DesignSpec, PdfContent, Product, Review, SalesPage, VisualSpec } from '../shared.js';
+import type { DesignSpec, Product, Review, SalesPage } from '../shared.js';
 import { ensureContrast, mix, rgba } from './color.js';
 import { COVER_H, COVER_W, splitTitle } from './cover.js';
 import { cssFontStack, normalizeDesign } from './design.js';
-import { diagramFor } from './diagrams.js';
-import { isStdFont, loadVoice, woffOf, type FaceName } from './fonts.js';
+import { loadVoice } from './fonts.js';
 import { kitBoxes, kitSheets } from './kit.js';
 import { guidedActions } from './pages/render.js';
-import { toSvg } from './scene.js';
-import { escapeHtml as esc, formatPrice, frenchNbsp, slugify, truncate, wholeClause } from './text.js';
+import { atPriceOfTheDay, CAPTIONS, CHECKOUT_ALERT, figureSvgFor, fontFace, h, safeSvg, shortTitle } from './sales/common.js';
+import { renderTemplatePage, type SalesPageInput } from './sales/index.js';
+import { escapeHtml as esc, formatPrice, slugify, truncate, wholeClause } from './text.js';
 import type { Voice } from './voices.js';
 
-/** Escaped prose with French no-break spaces ("6 h", "mot :") so lines never break badly. */
-const h = (v: unknown): string => esc(frenchNbsp(String(v ?? '')));
-
-const CHECKOUT_ALERT = 'Boutique virtuelle : paiement simulé — environnement de test Pixel Agency';
+export { figureSvgFor };
 
 const MIN_LEAVES = 4;         // pages in « Feuilletez-le » (pdf §11.1): the cover joins them only to reach this
 const MAX_LEAVES = 6;
-const FIGURE_W = 480;         // a diagram's labels are set for this width: readable at full size, and still on a phone
-const FIGURE_TYPES: VisualSpec['type'][] = ['plan_path', 'cycle', 'steps_diagram']; // the plan proves the most; a `steps_diagram` titled « boucle » is an old save's cycle
-
-/** What a reader gets from each kind of page: a shop window says it in its own words. */
-const CAPTIONS: Record<string, string> = {
-  couverture: 'La couverture',
-  'ouverture-de-chapitre': 'Chaque chapitre annonce ce que vous allez faire',
-  'page-du-guide': 'Une lecture posée, l’essentiel mis en avant',
-  schema: 'Le schéma qui résume ce qu’il faut retenir',
-  'fiche-a-imprimer': 'Les fiches à imprimer et à remplir',
-  'le-contenu-du-kit': 'Tout ce que contient le kit',
-  'le-plan-a-cocher': 'Le plan à cocher, étape par étape',
-  'votre-plan': 'Votre plan, sur une seule page',
-};
 
 /**
  * The stage, in % of its width. A device may overlap the cover by 15 % of its width at most, and on its art only, so the
@@ -45,18 +31,6 @@ export const STAGE = {
   art: { tablet: { left: 58, top: 2, width: 34 }, phone: { left: 70, top: 46, width: 16 } },
   foot: { tablet: { left: 66, top: 4, width: 32 }, phone: { left: 57, top: 70, width: 16 } },
 } as const;
-
-/** Drops anything executable from an SVG string before inlining it in HTML. */
-function safeSvg(svg: string): string {
-  return String(svg ?? '')
-    .replace(/<\?xml[^>]*\?>/gi, '')
-    .replace(/<!DOCTYPE[^>]*>/gi, '')
-    .replace(/<script[\s\S]*?<\/script\s*>/gi, '')
-    .replace(/<foreignObject[\s\S]*?<\/foreignObject\s*>/gi, '')
-    .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-    .replace(/(href\s*=\s*["'])\s*javascript:[^"']*/gi, '$1#')
-    .trim();
-}
 
 function starsHtml(rating: number, size = 18): string {
   const r = Math.max(0, Math.min(5, Number.isFinite(rating) ? rating : 0));
@@ -73,19 +47,6 @@ const ICON = {
 /** A review carries no date: a buyer has no use for the day of a game. */
 function reviewCard(r: Review): string {
   return `<article class="review"><div class="review-head"><div><strong>Acheteur vérifié</strong></div>${starsHtml(r.rating, 15)}</div><p>${h(r.text)}</p></article>`;
-}
-
-const inlined = new Map<FaceName, string>();
-
-/** The committed WOFF as a data URI, never its unpacked form. Read once: a page is rendered again at each price and each review. */
-function fontFace(family: string, face: FaceName): string {
-  if (isStdFont(face)) return ''; // the rescue voice has no file: the fallback stack takes over
-  let data = inlined.get(face);
-  if (!data) {
-    data = woffOf(face).toString('base64');
-    inlined.set(face, data);
-  }
-  return `@font-face{font-family:'${family}';font-weight:100 900;font-display:swap;src:url(data:font/woff;base64,${data}) format('woff')}`;
 }
 
 /** A position on the stage as CSS: the numbers `STAGE` states and a test reads. */
@@ -236,38 +197,6 @@ footer p{margin:4px 0}
 `;
 }
 
-/**
- * The copy is written once and the price moves: what it says of the price follows, in everything but the customers'
- * own words. Only the amount the copy was written at changes (« moins de 10 000 € » stays).
- */
-function atPriceOfTheDay(sp: SalesPage, price: number): SalesPage {
-  const was = sp?.priceWritten;
-  if (!was || was === price) return sp;
-  const amount = Number.isInteger(was) ? `${was}(?:[.,]0+)?` : `${String(was).replace('.', '[.,]')}0*`;
-  const stale = new RegExp(`(?<![\\d.,]|\\d[\\s\\u00a0\\u202f])${amount}[\\s\\u00a0\\u202f]*€`, 'g');
-  const fix = (text: string): string => String(text ?? '').replace(stale, formatPrice(price));
-  return {
-    ...sp, headline: fix(sp.headline), subheadline: fix(sp.subheadline), solution: fix(sp.solution), bonusBlurb: fix(sp.bonusBlurb),
-    guarantee: fix(sp.guarantee), cta: fix(sp.cta),
-    chapterBlurbs: (sp.chapterBlurbs ?? []).map((b) => ({ ...b, blurb: fix(b.blurb) })),
-    objections: (sp.objections ?? []).map((o) => ({ q: fix(o.q), a: fix(o.a) })),
-  };
-}
-
-/** The figure the page shows at full size (pdf §11.1): the plan or the loop of the guide, its labels readable. Null when the guide has neither. */
-export function figureSvgFor(content: PdfContent | null | undefined, design: Partial<DesignSpec> | null | undefined): string | null {
-  const d = normalizeDesign(design);
-  const { voice } = loadVoice(d.voice!);
-  const visuals = (content?.chapters ?? []).flatMap((c) => [c.figure, c.visual]);
-  for (const type of FIGURE_TYPES) {
-    for (const v of visuals) {
-      const drawn = v?.type === type ? diagramFor(v, FIGURE_W, { voice, inks: d.inks! }) : null;
-      if (drawn) return toSvg(drawn.scene, { precision: 1 });
-    }
-  }
-  return null;
-}
-
 interface Leaf { id: string; kind: string; caption: string; box: string; svg: string }
 
 /** The real pages the page shows: the cover is already on stage, it only joins them to reach `MIN_LEAVES`. Each gets an id the devices reuse, so a page travels once. */
@@ -285,22 +214,20 @@ const device = (kind: 'tablet' | 'phone', page: Leaf | undefined): string =>
 
 const figureOf = (k: number, one: string, many: string): string => (k > 0 ? `<li><b>${k}</b>${k > 1 ? many : one}</li>` : '');
 
-const SHORT_TITLE = 40;
-
-/** A title for the buy bar: it stops before a quotation it could not close, and closes one it opens on. */
-function shortTitle(title: string): string {
-  const cut = truncate(title, SHORT_TITLE);
-  const open = cut.lastIndexOf('«');
-  if (open < 0 || cut.includes('»', open)) return cut;
-  return open > 0 ? `${cut.slice(0, open).trimEnd()}…` : `${cut} »`;
-}
-
 interface Inside { title: string; blurb?: string }
 
 const insideList = (rows: readonly Inside[]): string => `<ol class="chapters">${rows.map((c, k) => `<li><span class="num">${String(k + 1).padStart(2, '0')}</span><div><h3>${h(c.title)}</h3>${c.blurb ? `<p>${h(c.blurb)}</p>` : ''}</div></li>`).join('')}</ol>`;
 
-/** Self-contained HTML store page for one product. `figureSvg` left out: the guide's own plan or loop, `null`: none. `offSale`: stopped from outside, the kit of a guide that left the shop. */
-export function renderSalesPageHtml(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string; previews?: { label: string; svg: string }[]; figureSvg?: string | null; offSale?: boolean }): string {
+/**
+ * Self-contained HTML store page for one product. `figureSvg` left out: the guide's own plan or loop, `null`: none. `offSale`: stopped from outside, the kit of a guide that left the shop.
+ * A copy that names a template is drawn by that template (D202); without one, this is the V1 page.
+ */
+export function renderSalesPageHtml(input: SalesPageInput): string {
+  if ((input.salesPage ?? input.product?.salesPage)?.template) return renderTemplatePage(input);
+  return renderV1Page(input);
+}
+
+function renderV1Page(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string; previews?: { label: string; svg: string }[]; figureSvg?: string | null; offSale?: boolean }): string {
   const { product } = input;
   const isKit = product.kind === 'kit';
   const noun = isKit ? 'kit' : 'guide';

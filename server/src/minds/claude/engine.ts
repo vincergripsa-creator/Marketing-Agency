@@ -25,7 +25,7 @@ import {
 } from './normalize.js';
 import { costEur, DEFAULT_MODELS } from './pricing.js';
 import { contentOutline, contentTexts, json, productBrief, systemBlocks, vocBrief } from './prompts.js';
-import { SCHEMAS, type Schema } from './schemas.js';
+import { obj, SCHEMAS, type Schema } from './schemas.js';
 
 interface RequestOpts { timeout?: number; maxRetries?: number }
 
@@ -89,6 +89,45 @@ function guideBrief(niche: NicheBrief, voc: VoiceOfCustomer, upsellOf: UpsellCon
 Ce guide est un guide de suite : il traite un autre sous-problème que le guide précédent, avec un titre, une promesse et des chapitres différents. Sous-problème : ${q(c.problem)}. Objectif : ${q(promiseOutcome(c))}. Ne reprends aucune section du guide précédent : ${json(upsellOf)}.`,
     voc: vocBrief(voc, c.topic?.id ?? null),
   };
+}
+
+const TEXT: Schema = { type: 'string' };
+const TEXTS: Schema = { type: 'array', items: TEXT };
+
+/** The sales page and the sections of its templates (design plan D202): every field required, as the API expects. */
+const SALES_PAGE_SCHEMA: Schema = obj({
+  ...(SCHEMAS.salesPage as { properties: Record<string, Schema> }).properties,
+  benefits: TEXTS, forWho: TEXTS, notFor: TEXTS, story: TEXT,
+  comparison: { type: 'array', items: obj({ label: TEXT, guide: TEXT, other: TEXT }) },
+});
+
+type PageSections = Pick<SalesPage, 'benefits' | 'forWho' | 'notFor' | 'story' | 'comparison'>;
+
+/** Claude's sections of a templated page, each one checked; where one does not hold, the heuristic writer's stands. */
+function pageSections(raw: unknown, fb: SalesPage): PageSections {
+  const o = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+  const texts = (v: unknown, max: number): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').map(clean).filter((x) => x.length > 2 && x.length <= max) : []);
+  const list = (v: unknown, base: string[] | undefined, min: number, keep: number, max: number): string[] | undefined => {
+    const got = texts(v, max);
+    return got.length >= min ? got.slice(0, keep) : base;
+  };
+  const rows = (Array.isArray(o.comparison) ? o.comparison : []).map((r) => {
+    const x = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
+    const s = (k: string): string => (typeof x[k] === 'string' ? clean(x[k] as string) : '');
+    return { label: fit(s('label'), 40), guide: fit(s('guide'), 120), other: fit(s('other'), 120) };
+  }).filter((r) => r.label && r.guide && r.other);
+  const story = typeof o.story === 'string' && clean(o.story).length >= 60 ? fit(clean(o.story), 900) : fb.story;
+  const out: PageSections = {};
+  const benefits = list(o.benefits, fb.benefits, 3, 5, 90);
+  const forWho = list(o.forWho, fb.forWho, 2, 4, 140);
+  const notFor = list(o.notFor, fb.notFor, 1, 3, 160);
+  const comparison = rows.length >= 3 ? rows.slice(0, 4) : fb.comparison;
+  if (benefits) out.benefits = benefits;
+  if (forWho) out.forWho = forWho;
+  if (notFor) out.notFor = notFor;
+  if (story) out.story = story;
+  if (comparison) out.comparison = comparison;
+  return out;
 }
 
 function parseJson(text: string): unknown {
@@ -411,17 +450,23 @@ Avis heuristique (pour référence) : ${json(fb)}`,
   async writeSalesPage(input: { product: Product; content: PdfContent; voc: VoiceOfCustomer; hype: number; upsellOf?: UpsellContext | null }, ctx: MindContext): Promise<SalesPage> {
     const fb = await this.h.writeSalesPage(input, ctx);
     return this.run({
-      method: 'writeSalesPage', ctx, schema: SCHEMAS.salesPage, maxTokens: 6000, effort: 'medium', fallback: fb,
-      normalize: (raw, f) => nSalesPage(raw, f),
-      prompt: `Écris la page de vente du guide pour notre boutique. Niveau de promesse demandé : ${fb.hypeLevel} sur 1 (0 = sobre et factuel, 0,5 = confiant, 1 = très affirmatif avec urgence). La promesse doit rester cohérente avec le contenu réel, sinon remboursements et mauvais avis.
+      method: 'writeSalesPage', ctx, schema: SALES_PAGE_SCHEMA, maxTokens: 7000, effort: 'medium', fallback: fb,
+      normalize: (raw, f) => ({ ...nSalesPage(raw, f), ...pageSections(raw, f) }),
+      prompt: `Écris la page de vente du guide pour notre boutique. Niveau de promesse demandé : ${fb.hypeLevel} sur 1 (0 = sobre et factuel, 0,5 = confiant, 1 = très affirmatif). La promesse doit rester cohérente avec le contenu réel, sinon remboursements et mauvais avis.
 - headline et subheadline avec les mots des clients ;
 - painBullets : 3 à 6 phrases exactes des clients, telles quelles ;
 - solution : le guide comme solution (3-4 phrases) ;
 - chapterBlurbs : un par chapitre (même titre), qui maximise la curiosité sans tout dévoiler ;
 - bonusBlurb : le cadeau inclus ;
 - objections : 3 à 5 questions-réponses tirées des objections de la recherche ;
-- guarantee : honnête (remboursé sous 14 jours) ;
+- guarantee : honnête, c'est une garantie commerciale (remboursé sous 14 jours) ;
 - cta : court, sans le prix (la page l'affiche à jour à côté du bouton) ;
+- benefits : 3 à 5 résultats concrets et courts (70 caractères au plus), avec les mots des clients quand c'est possible ;
+- forWho : 2 à 4 fins de phrase pour « C'est pour vous si… », en minuscule (« vous voulez… ») ;
+- notFor : 1 à 3 fins de phrase honnêtes pour « Ce n'est pas pour vous si… » ;
+- story : pourquoi l'équipe a écrit ce guide, 3 à 5 phrases, à la première personne du pluriel (« nous »), sans biographie ni chiffre inventés ;
+- comparison : 3 ou 4 lignes { label, guide, other } : le guide face à ce que le lecteur ferait autrement (le temps, le prix d'un accompagnement, des conseils gratuits éparpillés), sans chiffre inventé ;
+- jamais de fausse urgence ni de fausse rareté : pas de compte à rebours, pas de « plus que 3 », pas d'offre « limitée » ;
 - aucune promesse d'exemples réels : les exemples du guide sont des exemples types, et la seule preuve sociale est un avis réel d'acheteur.
 Produit : ${json(productBrief(input.product))}
 Contenu du guide : ${json(contentOutline(ensurePdf(input.content ?? input.product?.content)))}
