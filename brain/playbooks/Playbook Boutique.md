@@ -35,4 +35,4 @@ Quand un produit est rentable, Paul conçoit le PDF suivant pour le **même publ
 
 La page de vente affiche toujours le prix et les avis du jour : elle est remise à jour dès qu'ils changent.
 
-Liens : [[Page de vente]] · [[Prix]] · [[Conformité pub TikTok]] · [[Playbook Analyse]]
+Liens : [[Page de vente]] · [[Playbook Page de vente]] · [[Prix]] · [[Conformité pub TikTok]] · [[Conformité vente et pub]] · [[Playbook Analyse]]

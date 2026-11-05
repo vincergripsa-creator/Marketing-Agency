@@ -11,4 +11,4 @@ C'est **la seule chose que l'acheteur voit avant de payer**.
 - S'inspirer des couvertures des meilleures ventes de la niche, sans copier.
 - Le visuel évoque le **résultat désiré** (bébé qui dort paisiblement, lumière chaude du soir…), pas le problème.
 
-Liens : [[Structure d'un PDF qui vend]] · [[Playbook Création]]
+Liens : [[Structure d'un PDF qui vend]] · [[Playbook Création]] · [[Playbook Couverture]]

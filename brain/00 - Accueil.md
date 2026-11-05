@@ -21,12 +21,17 @@ Chaque agent **lit le cerveau avant d'agir** et **l'alimente après chaque actio
 
 ## Politiques (garde-fous)
 - [[Budget et garde-fous]]
-- [[Conformité pub TikTok]]
+- [[Conformité pub TikTok]] · [[Conformité pub par canal]]
+- [[Conformité vente et pub]] — prix barrés, urgence, avis, images : les interdits du droit français
 - [[Support client]]
 - [[Recrutement]]
 
 ## Playbooks des départements
 - [[Playbook Direction]] · [[Playbook Recherche]] · [[Playbook Studio]] · [[Playbook Création]] · [[Playbook Growth]] · [[Playbook Boutique]] · [[Playbook Support]] · [[Playbook Analyse]] · [[Playbook Finance]] · [[Playbook RH]] · [[Playbook Partenariats]] · [[Playbook Vidéo]] · [[Playbook Communauté]]
+
+## Playbooks du design (tirés de la recherche)
+- [[Playbook Couverture]] · [[Playbook Page de vente]] · [[Playbook Visuels et formats pub]] · [[Playbook Tests]]
+- Chaque chiffre y garde son étiquette de preuve : [expérience] test contrôlé · [méta-analyse] synthèse d'études · [observationnel] grande base mesurée, corrélationnelle · [statistique] chiffre public · [enquête] déclaratif · [plateforme] chiffre d'une plateforme sur elle-même · [vendeur] chiffre d'un vendeur d'outil · [estimation] extrapolation d'un tiers · [anecdote] cas unique · [opinion] praticien sans données · [loi], [jurisprudence], [guide officiel] · [calcul], [inférence] déductions de la recherche. Une année signale une donnée d'avant 2024.
 
 ## Mémoire vivante (écrite par les agents)
 - `lecons/` — ce qu'on a appris, avec les chiffres
