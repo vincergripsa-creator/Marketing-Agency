@@ -157,8 +157,8 @@ describe('the frame pipe', () => {
     expect(encodeArgs(null, 'out.mp4', { ffmpeg, w: 8, h: 8 })).not.toContain('-c:a');
   });
 
-  it('a new sound is a new file: the masters of TP -1.5 render again', () => {
-    expect(RENDER_VERSION).toBe(7);
+  it('a new look is a new file: the films with their mentions and the sticker of their style render again', () => {
+    expect(RENDER_VERSION).toBe(8);
   });
 });
 

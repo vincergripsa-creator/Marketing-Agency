@@ -1,10 +1,14 @@
 /** The guide in the light, its price, a pulsing button, the way to the link. No caption: the voice says the same thing and they collided. */
 import { rgba } from '../../deliverables/color.js';
+import { coverScene } from '../../deliverables/cover.js';
+import { coverSticker } from '../../deliverables/storyboard.js';
 import type { DesignSpec } from '../../shared.js';
 import type { SceneApi } from '../compose.js';
 import { FACE } from '../fonts.js';
+import type { RenderSpec } from '../spec.js';
 import { zoneAt } from '../stage.js';
 import { eBack, eOut, priceAt, type TimelineBeat } from '../timeline.js';
+import { framed } from './labels.js';
 
 const BOOK_W = 540;
 const CTA_SIZE = 64;
@@ -27,8 +31,27 @@ export const ctaLabel = (cta: string): string => cta.replace(/\s*\([^)]*\)\s*$/,
 /** « 19 € », « 9,90 € »: as the shop prints it. */
 export const priceLabel = (price: number): string => `${(Number.isInteger(price) ? String(price) : price.toFixed(2).replace('.', ','))} €`;
 
-/** Where a sticker lands on the cover, in shares of it: on its art, never on its title. `minimal` keeps its art low on the right, the others over the title. */
-export const stickerSpot = (design: Pick<DesignSpec, 'coverLayout'>): { u: number; v: number } => (design.coverLayout === 'minimal' ? { u: 0.8, v: 0.84 } : { u: 0.82, v: 0.2 });
+const spots = new WeakMap<object, { u: number; v: number }>();
+
+/**
+ * Where a sticker lands on the cover, in shares of it: the spot the cover's own style reports (D200), on its art and never on
+ * its title, as the storyboard sets it. Drawn once per render; a cover that cannot be laid out keeps the corner its
+ * composition leaves free. The spec holds the title, not the subtitle nor the audience: they only move the small print.
+ */
+export function stickerSpot(spec: Pick<RenderSpec, 'title' | 'brand' | 'design'>): { u: number; v: number } {
+  const known = spots.get(spec);
+  if (known) return known;
+  let spot: { u: number; v: number };
+  try {
+    spot = coverSticker(coverScene({ title: spec.title, subtitle: '', audience: '', design: spec.design, brand: spec.brand }).meta);
+  } catch {
+    spot = FALLBACK_SPOT(spec.design);
+  }
+  spots.set(spec, spot);
+  return spot;
+}
+
+const FALLBACK_SPOT = (design: Pick<DesignSpec, 'coverLayout'>): { u: number; v: number } => (design.coverLayout === 'minimal' ? { u: 0.8, v: 0.84 } : { u: 0.82, v: 0.2 });
 
 function priceSticker(s: SceneApi, price: number, x: number, y: number, age: number, t: number): void {
   const { ctx, C } = s;
@@ -63,7 +86,7 @@ function priceSticker(s: SceneApi, price: number, x: number, y: number, age: num
   ctx.restore();
 }
 
-export function drawEnd(s: SceneApi, b: TimelineBeat, t: number): void {
+function drawEndBeat(s: SceneApi, b: TimelineBeat, t: number): void {
   const { ctx, C, column: box, stage } = s;
   s.background(C.dark, C.dark2, 0.5);
   s.art(b.t0 + t, 0.2);
@@ -82,13 +105,13 @@ export function drawEnd(s: SceneApi, b: TimelineBeat, t: number): void {
   }
   ctx.restore();
 
-  const { price, design, cta } = s.assets.spec;
+  const { price, cta } = s.assets.spec;
   const age = t - priceAt(b.dur);
   const blow = price && age >= 0 ? HIT * (1 - eOut(age / HIT_SEC)) : 0;
   const w = Math.min(BOOK_W, box.h * 0.52) * s.jump;
   s.book(cx, yc + Math.sin(t * 2) * 8, w * (eBack(t / 0.32, 1.4) + blow), -0.03, t);
   if (price && age > 0) {
-    const spot = stickerSpot(design);
+    const spot = stickerSpot(s.assets.spec);
     const y = yc + (spot.v - 0.5) * w * s.assets.cover.h / s.assets.cover.w;
     priceSticker(s, price, Math.min(cx + (spot.u - 0.5) * w, zoneAt(stage, y).x1 - STICKER_R * 0.8), y, age, t);
   }
@@ -132,3 +155,5 @@ export function drawEnd(s: SceneApi, b: TimelineBeat, t: number): void {
   }
   ctx.globalAlpha = 1;
 }
+
+export const drawEnd = framed(drawEndBeat);

@@ -4,12 +4,13 @@ import type { SceneApi } from '../compose.js';
 import { FACE } from '../fonts.js';
 import { eBack, eOut, type TimelineBeat } from '../timeline.js';
 import { stickerSpot } from './end.js';
+import { framed } from './labels.js';
 
 const FAN = [-1, 1, -0.2];
 const BOOK_W = 600;
 const STICKER_K = 0.92;        // tilted, its text keeps inside the zone
 
-export function drawBonus(s: SceneApi, b: TimelineBeat, t: number): void {
+function drawBonusBeat(s: SceneApi, b: TimelineBeat, t: number): void {
   const { ctx, C, column: box } = s;
   s.background(C.primary, C.dark, 0.3);
   s.art(b.t0 + t, 0.2);
@@ -33,7 +34,7 @@ export function drawBonus(s: SceneApi, b: TimelineBeat, t: number): void {
   const grow = eBack((t - at) / 0.22, 3);
   const room = 172 * k * STICKER_K;
   ctx.save();
-  const spot = stickerSpot(s.assets.spec.design);
+  const spot = stickerSpot(s.assets.spec);
   ctx.translate(Math.min(cx + (spot.u - 0.5) * w, box.x + box.w - room), Math.min(s.captionTop - room, Math.max(by + (spot.v - 0.5) * w * s.assets.cover.h / s.assets.cover.w, box.y + room)));
   ctx.rotate(0.16 + Math.sin(t * 3) * 0.02);
   ctx.scale(grow * k * STICKER_K, grow * k * STICKER_K);
@@ -55,3 +56,5 @@ export function drawBonus(s: SceneApi, b: TimelineBeat, t: number): void {
   ctx.textAlign = 'left';
   ctx.restore();
 }
+
+export const drawBonus = framed(drawBonusBeat);

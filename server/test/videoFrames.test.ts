@@ -7,6 +7,7 @@ import PDFDocument from 'pdfkit';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { contrast, mix } from '../src/deliverables/color.js';
 import { normalizeDesign, PALETTES } from '../src/deliverables/design.js';
+import { AD_LABEL, DRAWN_LABEL, VOICE_LABEL } from '../src/deliverables/storyboard.js';
 import type { DesignSpec, VideoBeat, VideoCut, WorldState } from '../src/shared.js';
 import { detectCaps, findFfmpeg } from '../src/video/caps.js';
 import { buildRenderSpec, renderKey, type RenderSpec } from '../src/video/spec.js';
@@ -20,6 +21,10 @@ const hasPdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs').then(() => true
 const compose = hasCanvas ? await import('../src/video/compose.js') : null;
 const hook = hasCanvas ? await import('../src/video/scenes/hook.js') : null;
 const proofScene = hasCanvas ? await import('../src/video/scenes/proof.js') : null;
+
+/** The mentions every beat carries (D208): the row of pills, not the beat's own words. */
+const MENTIONS: ReadonlySet<string> = new Set([AD_LABEL, DRAWN_LABEL, VOICE_LABEL]);
+const own = <T extends { text: string }>(boxes: readonly T[]): T[] => boxes.filter((b) => !MENTIONS.has(b.text));
 
 const DESIGN: DesignSpec = {
   palette: { bg: '#f4efe2', primary: '#2f6b46', secondary: '#a9c8a2', accent: '#e0683a', ink: '#23302a', soft: '#e7ecd9' },
@@ -802,7 +807,7 @@ describe.skipIf(!compose)('the frames', { timeout: 30_000 }, () => {
     const tl = timelineOf(cutOf({}, [{ ...BEATS[1]!, spoken: `${line}, puis la suite.`, screen: line }, BEATS[6]!]));
     const { comp, stage } = await make(tl, { pages: false });
     const boxes = comp.drawFrame(6);
-    expect(boxes.length).toBe(5);
+    expect(own(boxes).length).toBe(5);
     for (const b of boxes) expect(insideSafe(stage, b), b.text).toBe(true);
   });
 
@@ -859,16 +864,16 @@ describe.skipIf(!compose)('the frames', { timeout: 30_000 }, () => {
   it('stands the whole first screen on its first frames: a hook reads with the sound off', async () => {
     const tl = timelineOf(cutOf({}, [{ ...BEATS[1]!, spoken: 'Quatre mots sur un écran, puis la suite.', screen: 'Quatre mots sur un écran' }, BEATS[6]!]));
     const { comp } = await make(tl, { pages: false });
-    expect(comp.drawFrame(6).map((b) => b.text)).toEqual(['QUATRE', 'MOTS', 'SUR', 'UN', 'ÉCRAN']);
+    expect(own(comp.drawFrame(6)).map((b) => b.text)).toEqual(['QUATRE', 'MOTS', 'SUR', 'UN', 'ÉCRAN']);
   });
 
   it('sets its colon inside a line and its question mark, and leaves no mark at the end of a screen', async () => {
     const spokenLine = 'POV : tu veux savoir quoi planter ?';
     const tl = timelineOf(cutOf({}, [{ ...BEATS[1]!, spoken: spokenLine, screen: spokenLine }, BEATS[6]!]));
     const { comp } = await make(tl, { pages: false });
-    expect(comp.drawFrame(6).map((b) => b.text)).toEqual(['POV\u00a0:', 'TU', 'VEUX', 'SAVOIR', 'QUOI', 'PLANTER\u00a0?']);
+    expect(own(comp.drawFrame(6)).map((b) => b.text)).toEqual(['POV\u00a0:', 'TU', 'VEUX', 'SAVOIR', 'QUOI', 'PLANTER\u00a0?']);
     const tail = timelineOf(cutOf({}, [{ ...BEATS[1]!, spoken: 'Tout est dans le plan.', screen: 'Tout est dans le plan.' }, BEATS[6]!]));
-    expect((await make(tail, { pages: false })).comp.drawFrame(6).map((b) => b.text).at(-1)).toBe('PLAN');
+    expect(own((await make(tail, { pages: false })).comp.drawFrame(6)).map((b) => b.text).at(-1)).toBe('PLAN');
   });
 
   it('breaks a word at its hyphen rather than set the whole line small', async () => {
@@ -876,9 +881,27 @@ describe.skipIf(!compose)('the frames', { timeout: 30_000 }, () => {
     const tl = timelineOf(cutOf({ captionWords: 6 }, [{ ...BEATS[1]!, spoken: line, screen: line }, BEATS[6]!]));
     const { comp, stage } = await make(tl, { pages: false, width: 1080 });
     const boxes = comp.drawFrame(12);
-    expect(boxes.map((b) => b.text)).toEqual(['PRESQUE', 'TOUS', 'LES', 'MICRO-', 'ENTREPRENEURS']);
+    expect(own(boxes).map((b) => b.text)).toEqual(['PRESQUE', 'TOUS', 'LES', 'MICRO-', 'ENTREPRENEURS']);
     expect(Math.max(...boxes.map((b) => b.h))).toBeGreaterThan(120);
     for (const b of boxes) expect(insideSafe(stage, b), b.text).toBe(true);
+  });
+
+  it('says what it is on every beat: « Publicité », the drawn narrator, the synthetic voice, inside the zone (D208)', async () => {
+    const narrated: VideoBeat[] = [BEATS[1]!, { ...BEATS[4]!, kind: 'narrator' }, BEATS[6]!];
+    for (const voice of [null, 'Hortense']) {
+      const tl = timelineOf(cutOf({}, narrated));
+      const { comp, stage } = await make(tl, { pages: false, width: 1080, spec: { voice, format: 'ugc_avatar' } });
+      for (const b of tl.beats) {
+        const boxes = comp.drawFrame(frameOf(tl, b.kind, 0.9));
+        const tags = boxes.filter((x) => MENTIONS.has(x.text)).map((x) => x.text);
+        expect(tags, `${b.kind}, voice ${voice}`).toEqual([AD_LABEL, ...(b.kind === 'narrator' ? [DRAWN_LABEL] : []), ...(voice && b.spoken ? [VOICE_LABEL] : [])]);
+        for (const x of boxes) expect(insideSafe(stage, x), `${b.kind}: ${x.text}`).toBe(true);
+        // the row stands above the beat's own words: nothing of the beat starts higher than its pills end
+        const row = Math.max(...boxes.filter((x) => MENTIONS.has(x.text)).map((x) => x.y + x.h));
+        const words = own(boxes).filter((x) => x.w > 0);
+        if (words.length) expect(Math.min(...words.map((x) => x.y)), b.kind).toBeGreaterThan(row - 1);
+      }
+    }
   });
 
   it('leaves no short word alone on a line of the hook', async () => {
@@ -1368,21 +1391,31 @@ describe.skipIf(!compose)('the frames', { timeout: 30_000 }, () => {
     expect(comp.drawFrame(frame(at + 0.4)).map((x) => x.text)).toContain('19 €');
   });
 
-  it('sets a sticker on the cover\'s art, never on its title, on both covers', async () => {
+  it('sets a sticker where the cover\'s own style says, on its art, never on its title, in every style and composition', async () => {
     const { coverScene, COVER_W, COVER_H } = await import('../src/deliverables/cover.js');
     const { stickerSpot } = await import('../src/video/scenes/end.js');
+    const { BUILT_STYLES, styleDef } = await import('../src/deliverables/art/styles/index.js');
     const reach = 160; // the wider sticker, in the cover's own units
-    for (const coverLayout of ['split', 'minimal', 'centered', 'badge'] as const) {
+    const looks = [
+      ...(['split', 'minimal', 'centered', 'badge'] as const).map((coverLayout) => ({ ...DESIGN, coverLayout })),
+      ...BUILT_STYLES.filter((s) => s !== 'bauhaus').flatMap((style) => styleDef(style).compositions.map((_, composition) => ({ ...DESIGN, style, composition }))),
+    ];
+    for (const design of looks) {
       for (const title of ['Bébé se réveille', 'Les plantations ne donnent presque rien sur le balcon : comment s’en sortir en 8 mois']) {
-        const design = { ...DESIGN, coverLayout };
-        const { meta } = coverScene({ title, subtitle: 'Un sous-titre', audience: 'Les parents épuisés', design, brand: 'Pixel Agency' });
-        const spot = stickerSpot(design);
-        const [x, y] = [spot.u * COVER_W, spot.v * COVER_H];
-        for (const line of meta.lines) {
-          const left = line.anchor === 'end' ? line.x - line.width : line.x;
-          const near = x + reach > left && x - reach < left + line.width && y + reach > line.y - line.size && y - reach < line.y + line.size * 0.3;
-          expect(near, `${coverLayout}: ${line.s}`).toBe(false);
-        }
+        const { meta } = coverScene({ title, subtitle: '', audience: '', design, brand: 'Pixel Agency' });
+        const spot = stickerSpot({ title, brand: 'Pixel Agency', design });
+        const bauhaus = !design.style;
+        // Bauhaus keeps the whole sticker off every line; a style that sets small print at the foot keeps it off the title and its deck
+        const nearAny = (p: { u: number; v: number }): string | null => {
+          const [x, y] = [p.u * COVER_W, p.v * COVER_H];
+          const hit = meta.lines.filter((l) => bauhaus || l.size >= 20).find((line) => {
+            const left = line.anchor === 'end' ? line.x - line.width : line.x;
+            return x + reach > left && x - reach < left + line.width && y + reach > line.y - line.size && y - reach < line.y + line.size * 0.3;
+          });
+          return hit?.s ?? null;
+        };
+        expect(nearAny(spot), `${design.style ?? design.coverLayout} ${design.composition ?? ''}`).toBeNull();
+        if (!nearAny(meta.sticker!)) expect(spot).toEqual(meta.sticker); // the cover's own word whenever it keeps off the title
       }
     }
   });
@@ -1413,7 +1446,7 @@ describe.skipIf(!compose)('the frames', { timeout: 30_000 }, () => {
       const px = m.comp.canvas.data();
       let n = 0;
       for (let i = 0; i < px.length; i += 4) if (Math.abs(px[i]! - r) < 20 && Math.abs(px[i + 1]! - g) < 20 && Math.abs(px[i + 2]! - b) < 20) n++;
-      return { n, texts: boxes.map((x) => x.text) };
+      return { n, texts: own(boxes).map((x) => x.text) };
     };
     const without = button(none);
     expect(without.texts).toEqual(['Lien en bio']);
@@ -1467,7 +1500,8 @@ describe.skipIf(!compose)('the frames', { timeout: 30_000 }, () => {
     expect(texts).toContain('— Sophie');
     expect(texts).toContain('méthode,');
     expect(texts).not.toContain('Avis vérifié');
-    expect(texts).not.toMatch(/\b[A-ZÉ]{4,}\b(?<!ACHETEUR)(?<!AVIS)/); // captions are in capitals
+    expect(texts).toContain('AVIS VÉRIFIÉ D’UN ACHETEUR'); // how the shop knows it is a buyer's (D208)
+    expect(texts.replace('AVIS VÉRIFIÉ D’UN ACHETEUR', '')).not.toMatch(/\b[A-ZÉ]{4,}\b/); // captions are in capitals
     const stars = Uint8Array.from(card.comp.canvas.data());
     const anonymous = await make(tl, { pages: false, spec: { reviews: { 3: { quote, rating: null, name: null } } } });
     const unsigned = anonymous.comp.drawFrame(frameOf(tl, 'fact_card', 0.9)).map((b) => b.text).join(' ');
@@ -1536,7 +1570,7 @@ describe.skipIf(!compose)('the frames', { timeout: 30_000 }, () => {
   it('the end card shows no progress bar and no caption, the other beats do', async () => {
     const tl = timelineOf();
     const { comp } = await make(tl);
-    const texts = comp.drawFrame(frameOf(tl, 'end_card', 0.9)).map((b) => b.text);
+    const texts = own(comp.drawFrame(frameOf(tl, 'end_card', 0.9))).map((b) => b.text);
     expect(texts).toEqual(['TÉLÉCHARGE LE GUIDE', 'Lien en bio']);
     const fact = tl.beats.find((b) => b.kind === 'fact_card')!;
     const word = fact.groups[1]![0]!;

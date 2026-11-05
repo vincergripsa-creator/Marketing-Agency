@@ -8,6 +8,7 @@ import type { Inks, SceneApi } from '../compose.js';
 import type { SpokenWord } from '../speech.js';
 import type { Rect } from '../stage.js';
 import { eBack, eOut, leadIn, type TimelineBeat } from '../timeline.js';
+import { framed } from './labels.js';
 
 const MAX_SIZE = 300;
 const MIN_SIZE = 64;
@@ -171,7 +172,7 @@ export function typeOf(group: readonly SpokenWord[]): string[] {
   return clean.map((w, i) => (i === clean.length - 1 ? w.replace(/[\s.,:;…]+$/, '') : w));
 }
 
-export function drawHook(s: SceneApi, b: TimelineBeat, t: number): void {
+function drawHookBeat(s: SceneApi, b: TimelineBeat, t: number): void {
   const { ctx, C, timeline } = s;
   const { plain } = timeline;
   const bookAt = timeline.bookSec;
@@ -240,3 +241,5 @@ export function drawHook(s: SceneApi, b: TimelineBeat, t: number): void {
     s.book(slot.x + slot.w / 2, slot.y + slot.h / 2 + (1 - rise) * slot.h * BOOK_PEEK + Math.sin(t * 2) * 8, slot.w * s.jump, BOOK_TILT, t);
   }
 }
+
+export const drawHook = framed(drawHookBeat);

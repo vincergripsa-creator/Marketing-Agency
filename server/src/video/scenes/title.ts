@@ -6,6 +6,7 @@ import { splitTitle } from '../../deliverables/cover.js';
 import type { SceneApi } from '../compose.js';
 import type { TimelineBeat } from '../timeline.js';
 import { artUnderType, BOOK_TILT } from './hook.js';
+import { framed } from './labels.js';
 
 const MAX_SIZE = 170;
 const MIN_SIZE = 56;
@@ -18,9 +19,9 @@ const BAR_ROOM = 60;           // of the box, under the type
 const BEARING = 10;            // a « J » reaches left of its origin
 
 /** Frame 1 of a plain ad: it is whole from the first frame, a fade would leave it bare. A quick card draws the hook instead, in the compositor. */
-export function drawTitle(s: SceneApi, b: TimelineBeat, t: number): void {
+function drawTitleBeat(s: SceneApi, b: TimelineBeat, t: number): void {
   const { ctx, C, stage } = s;
-  const box = stage.heroBox;
+  const box = s.hero; // under the mentions
   artUnderType(s, b.t0 + t, null);
   const title = splitTitle(s.assets.spec.title).head.toLocaleUpperCase('fr-FR');
   const fit = s.memo(b, () => {
@@ -42,3 +43,5 @@ export function drawTitle(s: SceneApi, b: TimelineBeat, t: number): void {
   const slot = stage.bookSlot;
   s.book(slot.x + slot.w / 2, slot.y + slot.h / 2 + Math.sin(t * 2) * 8, slot.w, BOOK_TILT, t);
 }
+
+export const drawTitle = framed(drawTitleBeat);

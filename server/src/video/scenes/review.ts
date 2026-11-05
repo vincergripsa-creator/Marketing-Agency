@@ -9,7 +9,7 @@ import { FACE } from '../fonts.js';
 import type { ReviewCard } from '../spec.js';
 import { eBack, eOut, type TimelineBeat } from '../timeline.js';
 
-const LABEL = 'AVIS D’ACHETEUR';
+const LABEL = 'AVIS VÉRIFIÉ D’UN ACHETEUR';
 const STARS = 5;
 const STAR_R = 46;
 const STAR_GAP = 18;
