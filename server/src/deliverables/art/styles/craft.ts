@@ -89,6 +89,9 @@ function figureIn(text: string, needsUnit: boolean): Figure | null {
 /** The title's key figure: its first number and the unit it counts, from the head, else from the tail when it counts something. */
 export const keyFigure = (head: string, tail = ''): Figure | null => figureIn(head, false) ?? figureIn(tail, true);
 
+/** The key figure a style may set as art in `face`: none in the standard faces, which have no outlines to give. */
+export const figureFor = (face: FaceName, head: string, tail = ''): Figure | null => (isStdFont(face) ? null : keyFigure(head, tail));
+
 /** The pieces of a poster title that say its first number and its unit, by their place in the title. */
 export function hotWords(words: readonly string[]): Set<number> {
   const first = words.findIndex((w) => /^\P{L}*\d/u.test(w));

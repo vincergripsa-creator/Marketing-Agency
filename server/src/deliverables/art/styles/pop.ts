@@ -13,7 +13,7 @@ import { n, type Scene } from '../../scene.js';
 import { decoRng, hashString } from '../../text.js';
 import { boundsOf, motifShape, ornament, type Box } from '../shapes.js';
 import { bestOn, capHeight, harmony, hueOf, onBauhausScale } from './common.js';
-import { artText, burstPts, cardD, clamp01, curveD, deckIn, dotsD, fitTitle, inkBounds, keyFigure, legible, outlined, polyD, polyStrokeD, pops, setDeck, setTitle, tintFor, titleHeight, type Figure, type Title } from './craft.js';
+import { artText, burstPts, cardD, clamp01, curveD, deckIn, dotsD, figureFor, fitTitle, inkBounds, legible, outlined, polyD, polyStrokeD, pops, setDeck, setTitle, tintFor, titleHeight, type Figure, type Title } from './craft.js';
 import { COVER_H, COVER_W, MARGIN, MEASURE, type ArtStyleDef, type CoverArt, type CoverCall, type CoverKit, type PlateSpec, type TextBlock } from './types.js';
 
 const SHADOW = 9;              // the hard shadow's offset
@@ -169,7 +169,7 @@ function lower(c: CoverKit, call: CoverCall, p: Plan, top: number, on: string): 
   const colW = MEASURE - side - 26;
   const colX = p.left ? COVER_W - MARGIN - colW : MARGIN;
   const audTop = c.audience(FOOT, colW, 3, { x: colX, ink: bestOn(on, [inks.paper, inks.ink]) });
-  const fig = keyFigure(call.head, call.tail);
+  const fig = figureFor(v.display, call.head, call.tail);
   const space = audTop - 18 - top;
   const r = Math.min(88, colW / 2 + 16, space / 2 - 4);
   const twinkleInk = [inks.paper, inks.c, inks.b].find((k) => k !== on && contrast(k, on) >= 1.4) ?? inks.paper;
@@ -271,7 +271,7 @@ function mascot(c: CoverKit, call: CoverCall, p: Plan): CoverArt {
   const cx = COVER_W / 2 + (p.left ? -1 : 1) * Math.max(0, (MEASURE - side) / 2 - 20);
   const cy = zoneTop + (zoneBottom - zoneTop) / 2;
   motifSticker(s, d.motif, motifBox(d.motif, cx - side / 2, cy - side / 2, side), p.fill, ink, p.turn * 0.7, ART * 1.15);
-  const fig = keyFigure(call.head, call.tail);
+  const fig = figureFor(v.display, call.head, call.tail);
   const twinkleInk = [inks.paper, inks.c, inks.b].find((k) => k !== p.ground && contrast(k, p.ground) >= 1.4) ?? inks.paper;
   const far = p.left ? COVER_W - MARGIN - 62 : MARGIN + 62;
   if (fig) {

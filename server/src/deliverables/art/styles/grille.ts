@@ -13,7 +13,7 @@ import { n, type Scene } from '../../scene.js';
 import { decoRng, hashString } from '../../text.js';
 import { boundsOf, drawShape, motifShape, type Box } from '../shapes.js';
 import { bestOn, harmony, hueOf, onBauhausScale } from './common.js';
-import { artText, clamp01, deckIn, fitTitle, inkBounds, keyFigure, legible, pops, setDeck, setTitle, titleHeight, weighted, type Figure, type Title } from './craft.js';
+import { artText, clamp01, deckIn, figureFor, fitTitle, inkBounds, legible, pops, setDeck, setTitle, titleHeight, weighted, type Figure, type Title } from './craft.js';
 import { COVER_H, COVER_W, MARGIN, MEASURE, type ArtStyleDef, type CoverArt, type CoverCall, type CoverKit, type PlateSpec } from './types.js';
 
 const COLS = 6;
@@ -213,7 +213,7 @@ const artFor = (p: Plan, t: Title, ground: string, sticker: { u: number; v: numb
 /** « Chiffre »: paper and hairlines, the key figure huge in the accent on the title's rule, the title under it; the pictogram signs the foot. */
 function numeral(c: CoverKit, call: CoverCall, p: Plan): CoverArt {
   const { s, d, inks } = c;
-  const fig = keyFigure(call.head, call.tail);
+  const fig = figureFor(c.v.labelB, call.head, call.tail);
   const foot = frame(c, p, !!fig);
   const room = foot - 26 - (TOP_RULE + 30);
   const st = fitSetting(c, call, room * 0.54);
@@ -237,7 +237,7 @@ function numeral(c: CoverKit, call: CoverCall, p: Plan): CoverArt {
 /** « Bandeau »: a band of colour across the cover holds the figure and the pictogram over its own grid; the title on paper under it. */
 function band(c: CoverKit, call: CoverCall, p: Plan): CoverArt {
   const { s, d, inks } = c;
-  const fig = keyFigure(call.head, call.tail);
+  const fig = figureFor(c.v.labelB, call.head, call.tail);
   const foot = frame(c, p, false);
   const bandTop = TOP_RULE + 18;
   const lowest = Math.round(Math.min(p.split, 0.62) * COVER_H);
@@ -276,7 +276,7 @@ function band(c: CoverKit, call: CoverCall, p: Plan): CoverArt {
  */
 function tile(c: CoverKit, call: CoverCall, p: Plan): CoverArt {
   const { s, d, inks, v } = c;
-  const fig = keyFigure(call.head, call.tail);
+  const fig = figureFor(c.v.labelB, call.head, call.tail);
   const side = 3 * COL + 2 * GUTTER;
   const x = p.side ? COVER_W - MARGIN - side : MARGIN;
   const colW = COVER_W - MARGIN - colX(3);
