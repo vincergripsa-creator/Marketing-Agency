@@ -5,18 +5,23 @@
  * Then the ContentEngine (Claude mode) may adjust it; the runtime materializes the plan into tasks.
  */
 import type { DayPlanItem, DayPlan } from '../contracts.js';
-import type { Campaign, ChannelId, Lesson, Product, Task, TaskKind, WorldState } from '../shared.js';
+import type { Campaign, ChannelId, Lesson, PageTemplate, Product, Task, TaskKind, WorldState } from '../shared.js';
 import { CHANNELS, channelOf } from '../shared.js';
+import {
+  cvrOf as lookCvr, designLearning, lastRefreshDay, LOOK_EVIDENCE_DAYS, lookEvidence, lookLabel, logLook, looksOn, PAGE_TEST, pageTestsOf, variantOn, type LookRead,
+} from '../learning/looks.js';
 import { adjusted, creditOf, multiChannel, openChannels, planChannels } from './channels.js';
 import type { RuntimeCtx } from './ctx.js';
 import { incident, latestOutput, nameOf, productOf, speak, vocOf } from './ctx.js';
 import { logDecision } from './digest.js';
 import { learning, sim } from './modules.js';
-import { activeCampaigns, campaignMetrics, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, feedbackOf, isProductFeedback, isUpsellProduct, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO, recentReviews, referenceChannel } from './metrics.js';
+import { activeCampaigns, campaignMetrics, claimedMessageIds, committedAdBudget, currentBudget, detectedComplaints, feedbackOf, isProductFeedback, isUpsellProduct, paidConversion, parentOf, priceCeiling, productMetrics, PRICE_EVIDENCE_VIEWS, PRICE_ROLLBACK_RATIO, recentReviews, referenceChannel } from './metrics.js';
 import { reviewBasis } from '../sim/feedback.js';
 import { adsHeldSince, launchHold, productHold } from './holds.js';
 import { officerId, ownersOfAny } from './org/officers.js';
-import { buyersLike, buyersRead, closedNiches, createProductPipeline, createUpsellPipeline, createV2Pipeline, killProduct, openTasksForProduct, paidOn, pauseProduct, resumePipeline, stopAds } from './pipeline.js';
+import {
+  buyersLike, buyersRead, closedNiches, createProductPipeline, createRefreshPipeline, createUpsellPipeline, createV2Pipeline, killProduct, openTasksForProduct, paidOn, pauseProduct, resumePipeline, stopAds,
+} from './pipeline.js';
 import { budgetQueue, buyersUnhappy } from './portfolio.js';
 import { guideGaps } from './redteam.js';
 import { growthOn, policyOf } from './stages.js';
@@ -499,12 +504,96 @@ function lessonOf(ctx: RuntimeCtx, key: string, since: number): Lesson | null {
   return ctx.world.company.lessons.find((l) => l.key === key && lessonDay(l) >= since) ?? null;
 }
 
+// ───────────────────────────── looks (D204) ─────────────────────────────
+
+/**
+ * When a live guide gets a new look: 21 days on sale, 30 days since its last refresh, a style or template converting at least 15 %
+ * under the niche's best on 400 visitors each, and its own last 14 days under its niche's conversion.
+ */
+export const REFRESH = { minAgeDays: 21, gapDays: 30, lag: 1.15, minViews: 400, ownDays: 14 } as const;
+
+/** Work that already changes the guide: a refresh waits for it. */
+const LOOK_BUSY: readonly TaskKind[] = ['write_pdf', 'humanize_pdf', 'fact_check', 'render_pdf', 'design_cover', 'refresh_design', 'write_sales_page', 'publish_product'];
+
+/**
+ * The page tests of the morning. A guide under a test shows the template of the day, and the page follows at the end of the tick.
+ * A finished test leaves its answer on the page the morning after, its winner or else the control, unless the look moved since.
+ */
+export function tendPageTests(ctx: RuntimeCtx): void {
+  const w = ctx.world;
+  for (const p of w.company.products) {
+    if (!p.salesPage?.template || p.status === 'killed') continue;
+    const e = pageTestsOf(w, p.id).at(-1); // the latest test of the guide speaks, an older one was answered or overtaken
+    if (!e) continue;
+    if (e.status === 'running') {
+      const today = variantOn(e, w.day) as PageTemplate | undefined;
+      if (!today || p.salesPage.template === today) continue;
+      p.salesPage.template = today;
+      speak(ctx, 'shop', `test A/B de « ${short(p.title, 40)} » : la page passe en gabarit « ${lookLabel('template', today)} » aujourd’hui (jour ${w.day - e.day + 1} sur ${PAGE_TEST.days} au plus)`, 'thought', { productId: p.id });
+      continue;
+    }
+    const end = e.endDay ?? e.day;
+    const moved = Math.max(0, ...(p.designLog ?? []).map((x) => x.day));
+    const target = (e.winner ?? e.variants[0]) as PageTemplate | undefined;
+    if (w.day <= end || moved > end || !target || p.salesPage.template === target) continue;
+    p.salesPage.template = target;
+    const value = (k: string): string => pct(e.results[k]?.value ?? 0, 2);
+    const other = e.variants.find((v) => v !== target);
+    const result = e.winner
+      ? `le gabarit « ${lookLabel('template', target)} » gagne le test A/B (conversion ${value(target)}${other ? ` contre ${value(other)} pour « ${lookLabel('template', other)} »` : ''})`
+      : `test A/B ${e.status === 'cancelled' ? 'annulé faute de trafic' : 'sans gagnant net'}, la page revient au gabarit « ${lookLabel('template', target)} »`;
+    logLook(p, w.day, result);
+    speak(ctx, 'shop', `« ${short(p.title, 40)} » : ${result}`, 'thought', { productId: p.id });
+  }
+}
+
+/** The best look of a niche, and how far the guide's own one lags behind it, on enough visitors each; null when it does not lag. */
+function lagOf(reads: ReadonlyMap<string, LookRead>, current: string | undefined): { best: string; gap: number; own: LookRead; top: LookRead } | null {
+  const own = current ? reads.get(current) : undefined;
+  if (!own || own.views < REFRESH.minViews) return null;
+  const [best, top] = [...reads].filter(([, r]) => r.views >= REFRESH.minViews).sort((a, b) => lookCvr(b[1]) - lookCvr(a[1]))[0] ?? [];
+  if (!best || !top || best === current || lookCvr(top) < lookCvr(own) * REFRESH.lag) return null;
+  return { best, gap: 1 - lookCvr(own) / lookCvr(top), own, top };
+}
+
+const pooled = (reads: ReadonlyMap<string, LookRead>): LookRead => [...reads.values()].reduce((a, r) => ({ views: a.views + r.views, sales: a.sales + r.sales }), { views: 0, sales: 0 });
+
+/** At most one refresh a day for the whole company (D204): the first guide that meets every condition of REFRESH. */
+export function planDesignRefresh(ctx: RuntimeCtx, items: DayPlanItem[], notes: string[]): void {
+  const w = ctx.world;
+  if (!designLearning(w) || w.company.tasks.some((t) => t.kind === 'refresh_design' && t.dayCreated === w.day)) return;
+  const niches = new Map<string, { style: Map<string, LookRead>; template: Map<string, LookRead> }>();
+  const from = w.day - LOOK_EVIDENCE_DAYS;
+  for (const p of w.company.products) {
+    if (p.status !== 'live' || p.kind === 'kit' || !p.design?.style || !p.salesPage?.template || p.launchedDay === null) continue;
+    if (w.day - p.launchedDay < REFRESH.minAgeDays || w.day - lastRefreshDay(p) < REFRESH.gapDays) continue;
+    if (openTasksForProduct(ctx, p.id).some((t) => LOOK_BUSY.includes(t.kind)) || pageTestsOf(w, p.id).some((e) => e.status === 'running')) continue;
+    let reads = niches.get(p.nicheId);
+    if (!reads) niches.set(p.nicheId, reads = { style: lookEvidence(w, p.nicheId, 'style', from, w.day), template: lookEvidence(w, p.nicheId, 'template', from, w.day) });
+    const style = lagOf(reads.style, p.design.style);
+    const template = lagOf(reads.template, p.salesPage.template);
+    if (!style && !template) continue;
+    const own = paidConversion(w, p.id, Math.max(1, w.day - REFRESH.ownDays + 1));
+    const niche = pooled(reads.style);
+    const ownCvr = own.landingViews > 0 ? own.purchases / own.landingViews : null;
+    if (ownCvr === null || ownCvr >= lookCvr(niche)) continue;
+    const lag = (kind: 'style' | 'template', l: NonNullable<ReturnType<typeof lagOf>>, worn: string): string =>
+      `le ${kind === 'style' ? 'style' : 'gabarit'} « ${lookLabel(kind, worn)} » convertit ${pct(l.gap, 0)} de moins que « ${lookLabel(kind, l.best)} » sur la niche (${l.own.views} et ${l.top.views} visiteurs)`;
+    const behind = [style ? lag('style', style, p.design.style) : '', template ? lag('template', template, p.salesPage.template) : ''].filter(Boolean).join(', et ');
+    const why = `${behind} ; le guide convertit sous sa niche (${pct(ownCvr, 2)} contre ${pct(lookCvr(niche), 2)})`;
+    items.push(planItem('refresh_design', { productId: p.id, pipeline: 'refresh', why, ...(style ? { excludeStyle: true } : {}), ...(template ? { excludeTemplate: true } : {}) }, `Refonte visuelle : ${why}.`, 2, titled('refresh_design', p)));
+    notes.push(`Refonte visuelle de « ${short(p.title, 40)} » : ${behind}.`);
+    return;
+  }
+}
+
 export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   const w = ctx.world;
   const day = w.day;
   const items: DayPlanItem[] = [];
   const notes: string[] = [];
   await ceoDecisions(ctx, notes, items);
+  tendPageTests(ctx);
 
   const budget = currentBudget(w);
   if (budget.outage) notes.push(`Panne de paiement annoncée aujourd'hui : pubs en pause, reprise demain matin.`);
@@ -654,6 +743,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
       items.push(planItem('design_upsell', { productId: pid }, `Produit rentable (ROAS 7 j ${Number.isFinite(m7.roas) ? dec(m7.roas) : '∞'}, ${sold} ventes) : la suite pour le même public.`, 2, titled('design_upsell', p)));
     }
   }
+  planDesignRefresh(ctx, items, notes);
 
   // 4. Media buying.
   const buyWhy = budget.survival ? 'Mode survie : on coupe tout ce qui ne rapporte pas.' : 'Stop-loss, scale progressif et créas fatiguées.';
@@ -790,6 +880,13 @@ export function materialize(ctx: RuntimeCtx, items: DayPlanItem[], opts: Materia
     const priority = opts.priority ?? it.priority;
     const product = productOf(ctx, input.productId);
     const pOpts = { createdBy: opts.createdBy, missionId: opts.missionId, priority };
+    // a refresh is a whole chain, whoever plans it: a new version, its cover, its render, its page, back on sale
+    if (it.kind === 'refresh_design') {
+      if (product?.status === 'live' && looksOn(w) && !openTasksForProduct(ctx, product.id).some((t) => LOOK_BUSY.includes(t.kind))) {
+        created.push(...createRefreshPipeline(ctx, product, str(input.why) ?? it.why, { ...pOpts, excludeStyle: input.excludeStyle === true, excludeTemplate: input.excludeTemplate === true }));
+      }
+      continue;
+    }
     const pipeline = str(input.pipeline);
     if (pipeline && product && product.status !== 'killed') {
       if (pipeline === 'v2' && product.kind !== 'kit') {

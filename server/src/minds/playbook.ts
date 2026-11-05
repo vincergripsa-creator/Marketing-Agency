@@ -2,10 +2,12 @@
  * Machine-readable playbook rules (French sentences in world.company.playbooks[agentId]):
  *   Ne jamais écrire « X » · Privilégier le hook « style » · Privilégier le format « format »
  *   Prix cible « N » · Niveau de promesse max « 0.4 » · Ton support « ton »
+ *   Style de couverture « style » · Gabarit de page « gabarit » · Visuel de page « visuel » (design plan D204, key or label)
  * A directive followed by « sur « Niche » » only applies to that niche (rules written by the retro).
  * Everything else is free text (shown in UI, injected into Claude prompts).
  */
-import type { AdFormat, HookStyle } from '../shared.js';
+import type { AdFormat, ArtStyle, HookStyle, PageHero, PageTemplate } from '../shared.js';
+import { ART_STYLES, HERO_INFO, PAGE_HEROES, PAGE_TEMPLATES, STYLE_INFO, TEMPLATE_INFO } from '../shared.js';
 import { clean, norm } from './util.js';
 
 export const HOOK_STYLES: readonly HookStyle[] = ['question', 'contrarian', 'story', 'stat', 'pov', 'mistake', 'before_after', 'listicle'];
@@ -22,6 +24,10 @@ export interface PlaybookRules {
   targetPrice: number | null;
   maxHype: number | null;
   supportTone: SupportTone | null;
+  /** Looks settled for the subject's niche: the runtime draws them, a writer only needs to know which. */
+  coverStyle: ArtStyle | null;
+  pageTemplate: PageTemplate | null;
+  pageHero: PageHero | null;
   freeText: string[];
 }
 
@@ -38,6 +44,16 @@ const RE_FORMAT = new RegExp(String.raw`privil[ée]gier\s+le\s+format` + QUOTED,
 const RE_PRICE = new RegExp(String.raw`prix\s+cible` + QUOTED, 'iu');
 const RE_HYPE = new RegExp(String.raw`niveau\s+de\s+promesse\s+max` + QUOTED, 'iu');
 const RE_TONE = new RegExp(String.raw`ton\s+support` + QUOTED, 'iu');
+const RE_STYLE = new RegExp(String.raw`style\s+de\s+couverture` + QUOTED, 'iu');
+const RE_TEMPLATE = new RegExp(String.raw`gabarit\s+de\s+page` + QUOTED, 'iu');
+const RE_HERO = new RegExp(String.raw`visuel\s+de\s+page` + QUOTED, 'iu');
+
+/** A look named by its key or its French label (« aura », « Mur d’avis »). */
+function lookOf<K extends string>(value: string, keys: readonly K[], labels: Record<K, { label: string }>): K | null {
+  const plain = (s: string): string => norm(s).replace(/[^a-z0-9]+/g, ' ').trim();
+  const v = plain(value);
+  return keys.find((k) => k === v || plain(labels[k].label) === v) ?? null;
+}
 /** « … sur « Niche » » right after a directive (optionally « (label) » / « à tester ») scopes it to one niche. */
 const RE_SCOPE = /^\s*(?:\([^)]*\)\s*)?(?:à\s+tester\s+)?sur\s*(?:«\s*([^»]+?)\s*»|“\s*([^”]+?)\s*”|"\s*([^"]+?)\s*")/iu;
 
@@ -87,12 +103,18 @@ function scopeAfter(rule: string, m: RegExpExecArray): string | null {
  * For singletons (price, hype, tone) a matching scoped rule beats an unscoped one, then the last rule wins.
  */
 export function parsePlaybook(rules: readonly string[] | null | undefined, subjects: readonly (string | null | undefined)[] = []): PlaybookRules {
-  const out: PlaybookRules = { banned: [], platformBanned: [], preferredHooks: [], preferredFormats: [], targetPrice: null, maxHype: null, supportTone: null, freeText: [] };
+  const out: PlaybookRules = {
+    banned: [], platformBanned: [], preferredHooks: [], preferredFormats: [], targetPrice: null, maxHype: null, supportTone: null,
+    coverStyle: null, pageTemplate: null, pageHero: null, freeText: [],
+  };
   const hooks: Directive<HookStyle>[] = [];
   const formats: Directive<AdFormat>[] = [];
   const prices: Directive<number>[] = [];
   const hypes: Directive<number>[] = [];
   const tones: Directive<SupportTone>[] = [];
+  const styles: Directive<ArtStyle>[] = [];
+  const templates: Directive<PageTemplate>[] = [];
+  const heroes: Directive<PageHero>[] = [];
   for (const raw of rules ?? []) {
     const rule = clean(raw);
     if (!rule) continue;
@@ -133,6 +155,15 @@ export function parsePlaybook(rules: readonly string[] | null | undefined, subje
       if (SUPPORT_TONES.includes(t)) tones.push({ value: t, scope: scopeAfter(rule, tone) });
       machine = true;
     }
+    for (const [rx, list, keys, labels] of [
+      [RE_STYLE, styles, ART_STYLES, STYLE_INFO], [RE_TEMPLATE, templates, PAGE_TEMPLATES, TEMPLATE_INFO], [RE_HERO, heroes, PAGE_HEROES, HERO_INFO],
+    ] as const) {
+      const m = rx.exec(rule);
+      if (!m) continue;
+      const look = lookOf(quoted(m), keys as readonly string[], labels as Record<string, { label: string }>);
+      if (look) (list as Directive<string>[]).push({ value: look, scope: scopeAfter(rule, m) });
+      machine = true;
+    }
     if (!machine) out.freeText.push(rule);
   }
   const applies = <T>(d: Directive<T>) => d.scope === null || scopeMatches(d.scope, subjects);
@@ -147,6 +178,9 @@ export function parsePlaybook(rules: readonly string[] | null | undefined, subje
   out.targetPrice = single(prices);
   out.maxHype = single(hypes);
   out.supportTone = single(tones);
+  out.coverStyle = single(styles);
+  out.pageTemplate = single(templates);
+  out.pageHero = single(heroes);
   return out;
 }
 

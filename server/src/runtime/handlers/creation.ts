@@ -1,11 +1,16 @@
-/** Création: SVG cover and final A4 PDF with visuals (real files on disk). */
-import type { AgentState, DesignEffort, DesignSpec, Product, Task } from '../../shared.js';
+/** Création: SVG cover and final A4 PDF with visuals (real files on disk), the look of a guide and its refresh (design plan D203, D204). */
+import type { AgentState, ArtStyle, DesignEffort, DesignSpec, Product, Task } from '../../shared.js';
+import type { MindContext, Rng } from '../../contracts.js';
+import { hashString, streamRng } from '../../core/index.js';
 import { coverScore } from '../../deliverables/art/evaluate.js';
 import { effortFor } from '../../deliverables/effort.js';
+import { chooseLook, LOOK_ARMS, logLook, lookIn, lookLabel, looksOn, REFRESH_WORD, shelfOf, type LookChoice } from '../../learning/looks.js';
 import type { RuntimeCtx } from '../ctx.js';
-import { absPath, addDeliverable, productBrief, productOf, readRunFile, say, versionDir, vocOf, writeRunFile } from '../ctx.js';
+import { absPath, addDeliverable, nicheName, productBrief, productOf, readRunFile, say, versionDir, vocOf, writeRunFile } from '../ctx.js';
 import { deliverables, learning, sim } from '../modules.js';
-import { effectiveT } from '../talent/craft.js';
+import { directivesOf } from '../playbook.js';
+import { STREAM } from '../streams.js';
+import { craftFor, effectiveT } from '../talent/craft.js';
 import { short, slugify, strArr } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { NO_PRODUCT, requireProduct, reworkNotes, studioMind } from './common.js';
@@ -39,8 +44,82 @@ export function coverSvgFor(ctx: RuntimeCtx, product: Product): string {
 function effortOf(ctx: RuntimeCtx, task: Task, agent: AgentState): DesignEffort | null {
   const w = ctx.world;
   if (w.scenario.visualModel !== 'on') return null;
-  return effortFor(w.scenario.control?.designTalent ?? effectiveT(w, agent, 'design') ?? (agent.level - 1) / (learning.MAX_LEVEL - 1), task.attempts);
+  return effortFor(designTalent(ctx, agent), task.attempts);
 }
+
+function designTalent(ctx: RuntimeCtx, agent: AgentState): number {
+  const w = ctx.world;
+  return w.scenario.control?.designTalent ?? effectiveT(w, agent, 'design') ?? (agent.level - 1) / (learning.MAX_LEVEL - 1);
+}
+
+// ───────────────────────────── looks (D203) ─────────────────────────────
+
+/**
+ * The design stream of one decision. An agent runs one handler a tick, so (day, tick, agent) already is the task, `purpose` names
+ * the draw. Never the company's stream: a control arm without looks keeps every other draw of the default arm.
+ */
+export function designRng(ctx: RuntimeCtx, agentId: string, purpose: string, use = 0): Rng {
+  const w = ctx.world;
+  return streamRng(w.scenario.seed, STREAM.design, w.day, w.tick, hashString(agentId), use, hashString(purpose));
+}
+
+/** Talent reads the design bandits as it reads the hooks (talent §4.8), on the design stream. */
+export function lookSharp(ctx: RuntimeCtx, agent: AgentState, mind: MindContext, purpose: string, kind: Task['kind'] = 'design_cover'): { samples: number; rng: Rng } | undefined {
+  const craft = mind.craft ?? craftFor(ctx.world, agent, kind);
+  return craft ? { samples: craft.sharp, rng: designRng(ctx, agent.id, `sharp:${purpose}`, 2) } : undefined;
+}
+
+/** What a founder's words name in a task: its hint, or the text of their mission. */
+export function founderWords(task: Task): string {
+  return `${str0(task.input.hint)} ${str0(task.input.missionText)}`;
+}
+
+/** Every style draws at least two compositions (D200). The eye looks at as many as the designer's talent allows. */
+export const COVER_COMPOSITIONS = 2;
+
+/** The composition the designer keeps: one at random for a weak eye, else the best of those examined as their own eye reads them. */
+function compositionByEye(ctx: RuntimeCtx, task: Task, agent: AgentState, mind: MindContext, product: Product, style: ArtStyle): number {
+  const rng = designRng(ctx, agent.id, 'composition');
+  const examined = Math.min(COVER_COMPOSITIONS, 1 + Math.floor(designTalent(ctx, agent) * COVER_COMPOSITIONS) + task.attempts);
+  const first = rng.int(0, COVER_COMPOSITIONS - 1);
+  if (examined <= 1) return first;
+  const eye = (mind.craft ?? craftFor(ctx.world, agent, 'design_cover'))?.eye ?? 0;
+  let best = first;
+  let seen = -Infinity;
+  for (let i = 0; i < examined; i++) {
+    const composition = (first + i) % COVER_COMPOSITIONS;
+    const real = coverScore(deliverables.coverAudit({ ...coverInput(ctx, product), design: { ...product.design!, style, composition } }));
+    const perceived = real + rng.normal(0, eye);
+    if (perceived > seen) { seen = perceived; best = composition; }
+  }
+  return best;
+}
+
+interface CoverLook { style: ArtStyle; composition: number; why: string; source: LookChoice['source'] }
+
+/**
+ * The style and composition of a cover (D203), null while looks are off (visual model off, `designV1`). In order: the founder's
+ * hint, a playbook rule for the niche, a Thompson draw on `cover_style:<niche>`, now and then the least-tried style. A rework keeps
+ * its style: the reviewer asked for legibility, not another look. `exclude` is what the evidence says to leave.
+ */
+function coverLook(ctx: RuntimeCtx, task: Task, agent: AgentState, mind: MindContext, product: Product, exclude: readonly string[] = []): CoverLook | null {
+  const w = ctx.world;
+  if (!looksOn(w) || !product.design) return null;
+  const kept = task.attempts > 0 ? str0(task.output?.style) : '';
+  const choice: LookChoice | null = LOOK_ARMS.style.includes(kept)
+    ? { key: kept, source: 'keep', why: 'même style, la reprise ne porte que sur la lisibilité' }
+    : chooseLook(w, {
+      kind: 'style', nicheId: product.nicheId, shelf: shelfOf(w, product, product.nicheId), eligible: LOOK_ARMS.style,
+      founder: lookIn('style', founderWords(task)), rule: directivesOf(w, agent.id, nicheName(ctx, product.nicheId)).coverStyle, exclude,
+      rng: designRng(ctx, agent.id, 'style'), sharp: lookSharp(ctx, agent, mind, 'style'),
+    });
+  if (!choice) return null;
+  const style = choice.key as ArtStyle;
+  return { style, composition: compositionByEye(ctx, task, agent, mind, product, style), why: choice.why, source: choice.source };
+}
+
+/** Under this a refreshed cover is drawn again with more candidates, as the art director's review would send it back (pdf §13). */
+const REFRESH_COVER_MIN = 60;
 
 /** The pages the shop window shows, cut from the render and never mocked (pdf §11.5), next to the guide. */
 export async function writePreviews(ctx: RuntimeCtx, product: Product, previews: { label: string; svg: string }[]): Promise<string[]> {
@@ -72,13 +151,15 @@ export function upsellLink(ctx: RuntimeCtx, product: Product): { title: string; 
 
 export const creationHandlers: HandlerMap = {
   design_cover: {
-    async run(ctx, task, agent) {
+    async run(ctx, task, agent, mind) {
       const product = requireProduct(ctx, task);
       if (!product) return NO_PRODUCT;
       const brief = productBrief(ctx, product);
       const notes = reworkNotes(task);
       const hint = [str0(task.input.hint), task.attempts > 0 ? 'variante plus épurée, titre plus gros' : '', notes[0] ?? ''].filter(Boolean).join(' ; ');
       product.design = deliverables.designFor({ nicheName: brief.name, category: brief.category, keywords: brief.keywords, seed: ctx.rng.int(1, 999_999), ...(hint ? { hint } : {}) });
+      const look = coverLook(ctx, task, agent, mind, product);
+      if (look) Object.assign(product.design, { style: look.style, composition: look.composition });
       const effort = effortOf(ctx, task, agent);
       if (effort) {
         const art = deliverables.pickArt(product.design, effort);
@@ -93,8 +174,50 @@ export const creationHandlers: HandlerMap = {
       const cover = effort ? coverScore(deliverables.coverAudit(coverInput(ctx, product))) : null;
       const designScore = cover ?? (product.content ? scoreContent(ctx, product, product.content).design : null);
       addDeliverable(ctx, { kind: 'cover', title: `Couverture « ${short(product.title, 50)} » (v${product.version})`, productId: product.id, creativeId: null, path: rel, createdBy: agent.id, quality: designScore }, task);
-      say(ctx, agent.id, `${agent.name} : couverture ${product.design.coverLayout}, motif ${product.design.motif}, palette ${product.design.palette.primary}${cover === null ? '' : `, ${Math.round(cover)}/100`}`, 'thought', { productId: product.id });
-      return { summary: `Couverture dessinée (${product.design.coverLayout}, motif ${product.design.motif}).`, output: { path: rel, layout: product.design.coverLayout, motif: product.design.motif, ...(cover === null ? {} : { cover }) } };
+      const drawn = `couverture ${product.design.coverLayout}, motif ${product.design.motif}, palette ${product.design.palette.primary}${cover === null ? '' : `, ${Math.round(cover)}/100`}`;
+      if (look) logLook(product, ctx.world.day, `${lookLabel('style', look.style)} : ${look.why}`);
+      // one line either way: the feed spends ids, and a control arm without looks must keep the same ones
+      say(ctx, agent.id, look ? `${agent.name} choisit le style « ${lookLabel('style', look.style)} » : ${look.why} (${drawn})` : `${agent.name} : ${drawn}`, 'thought', { productId: product.id });
+      return {
+        summary: look ? `Couverture dessinée en style « ${lookLabel('style', look.style)} » (${product.design.coverLayout}, motif ${product.design.motif}).` : `Couverture dessinée (${product.design.coverLayout}, motif ${product.design.motif}).`,
+        output: { path: rel, layout: product.design.coverLayout, motif: product.design.motif, ...(cover === null ? {} : { cover }), ...(look ? { style: look.style, composition: look.composition, styleSource: look.source } : {}) },
+      };
+    },
+  },
+
+  refresh_design: {
+    async run(ctx, task, agent, mind) {
+      const product = requireProduct(ctx, task);
+      if (!product) return NO_PRODUCT;
+      if (!looksOn(ctx.world) || !product.design) return { summary: 'Pas de refonte : ce guide garde le look de la V1.', skipReview: true, output: { skipped: true } };
+      const before = product.design.style ?? 'bauhaus';
+      const look = coverLook(ctx, task, agent, mind, product, task.input.excludeStyle === true ? [before] : []);
+      if (!look) return { summary: 'Pas de refonte : aucun style possible.', skipReview: true, output: { skipped: true } };
+      // same palette, motif and seed: the guide changes its art direction, not its identity
+      product.design = { ...product.design, style: look.style, composition: look.composition };
+      const effort = effortOf(ctx, task, agent);
+      let cover: number | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (effort) {
+          const art = deliverables.pickArt(product.design, attempt ? effortFor(designTalent(ctx, agent), task.attempts + attempt) : effort);
+          product.design.artSeed = art.seed;
+          product.artExplored = art.explored;
+        }
+        cover = effort ? coverScore(deliverables.coverAudit(coverInput(ctx, product))) : null;
+        if (cover === null || cover >= REFRESH_COVER_MIN) break;
+      }
+      const rel = `${versionDir(product)}/cover.svg`;
+      await writeRunFile(ctx, rel, coverSvgFor(ctx, product));
+      product.files.cover = rel;
+      const [now, was] = [lookLabel('style', look.style), lookLabel('style', before)];
+      const change = look.style === before ? `style « ${now} » gardé, nouvelle composition` : `style « ${now} » au lieu de « ${was} »`;
+      logLook(product, ctx.world.day, `${REFRESH_WORD} v${product.version} : ${change} — ${look.why}`, true);
+      addDeliverable(ctx, { kind: 'cover', title: `Couverture « ${short(product.title, 50)} » (v${product.version}, refonte)`, productId: product.id, creativeId: null, path: rel, createdBy: agent.id, quality: cover }, task);
+      say(ctx, agent.id, `${agent.name} refait le look de « ${short(product.title, 50)} » : ${change}, ${look.why}${cover === null ? '' : ` (${Math.round(cover)}/100)`}`, 'thought', { productId: product.id });
+      return {
+        summary: `Refonte visuelle v${product.version} : ${change}.`,
+        output: { path: rel, style: look.style, composition: look.composition, previous: before, styleSource: look.source, ...(cover === null ? {} : { cover }) },
+      };
     },
   },
 

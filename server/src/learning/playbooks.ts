@@ -32,6 +32,9 @@ export const RULE_PATTERNS: readonly RegExp[] = [
   /Prix cible « \d+ »/,
   /Niveau de promesse max « [\d.]+ »/,
   /Ton support « [^»]+ »/,
+  /Style de couverture « [^»]+ »/,
+  /Gabarit de page « [^»]+ »/,
+  /Visuel de page « [^»]+ »/,
 ];
 
 export function hasMachineRule(text: string): boolean {
@@ -127,7 +130,10 @@ const SINGLETON_RX: readonly RegExp[] = [
   /Privilégier le canal\s*«\s*([^»]+?)\s*»/i,
   /Prix cible\s*«\s*([^»]+?)\s*»/i,
   /Niveau de promesse max\s*«\s*([^»]+?)\s*»/i,
-  /Ton support\s*«\s*([^»]+?)\s*»/i,
+  /Style de couverture\s*«\s*([^»]+?)\s*»/i,
+  /Gabarit de page\s*«\s*([^»]+?)\s*»/i,
+  /Visuel de page\s*«\s*([^»]+?)\s*»/i,
+  /Ton support\s*«\s*([^»]+?)\s*»/i, // last: TONE_RX reads it by its place
 ];
 
 const TONE_RX = SINGLETON_RX.length - 1;

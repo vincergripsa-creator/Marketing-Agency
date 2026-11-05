@@ -6,12 +6,13 @@ import { BoundedMemo, clamp, emit, nextId, round2, streamRng } from '../core/ind
 import type { DifficultyProfile, MarketDayResult, Rng } from '../contracts.js';
 import { CHANNELS, CHANNEL_IDS, channelOf } from '../shared.js';
 import type {
-  AdCreative, Broadcast, Campaign, ChannelId, Customer, DailyAdStats, InboxMessage, MessageIntent, NicheTruth, Order, Product, QualityReport, WorldEvent, WorldEventKind, WorldState,
+  AdCreative, AdFormat, Broadcast, Campaign, ChannelId, Customer, DailyAdStats, InboxMessage, MessageIntent, NicheTruth, Order, PageTemplate, Product, QualityReport, WorldEvent, WorldEventKind, WorldState,
 } from '../shared.js';
 import { addAdTotals } from './adTotals.js';
 import { addBuyers, addLeads, deliverEmails, recordEmailSales } from './audience.js';
 import { ADS, CONVERSION, CREATORS, ESCALATION, FEES, INBOX, ORGANIC, REFUNDS, REVIEWS, SCAM, STATS, UPSELL } from './balance.js';
 import { nichePool, poolSaturation } from './capacity.js';
+import { LOOK_MARKET } from './catalog/looks.js';
 import { CHANNEL_STREAM } from './channelBalance.js';
 import {
   accountBanned, accountOf, addImpressions, approvedOn, deliverSearch, deliverySpec, familyPrior, overlapOf, reachOf, rollChannelEvents, runPaidTails, searchCampaigns, updateWarmth,
@@ -25,7 +26,7 @@ import { adComments } from './feedback.js';
 import { SETUP_REF, cashOf, recordLedger } from './finance.js';
 import { GROWTH } from './growth.js';
 import { createMessage, followUpText } from './inbox.js';
-import { difficultyProfile, isScammer } from './market.js';
+import { difficultyProfile, ensureVisualTaste, isScammer } from './market.js';
 import { chargebackOrder, creativeById, nicheOf, orderById, productById, pushEvent, refundOrder, repayableLeft, reviewProduct, type EventRefs } from './ops.js';
 import { genericPhraseHits, guideOverlap, scoreCreative, scorePdf, scoreSalesPage, vocPhraseHits } from './quality.js';
 import { rivalFactor, rollRivals } from './rivals.js';
@@ -277,7 +278,51 @@ function baseCvr(d: Day, p: Product): number {
   const compF = 1 - CONVERSION.competitionWeight * n.competition;
   const hypeF = 1 + CONVERSION.hypeBoost * clamp(p.salesPage?.hypeLevel ?? 0.5, 0, 1);
   const boost = d.boost ? CONVERSION.seasonalBoost : 1;
-  return CONVERSION.base * sqF * priceFactor(p.price, visualWtp(n.wtp, p.visual)) * trustFactor(p, d.storeRating) * specF * demandF * dow * compF * hypeF * boost * visualCvr(p.visual) * rivalFactor(d.world, n.id);
+  return CONVERSION.base * sqF * priceFactor(p.price, visualWtp(n.wtp, p.visual)) * trustFactor(p, d.storeRating) * specF * demandF * dow * compF * hypeF * boost * visualCvr(p.visual) * rivalFactor(d.world, n.id) * lookCvr(d.world, n, p);
+}
+
+// ───────────────────────────── looks (D201) ─────────────────────────────
+
+/** The visual model draws looks, and no control keeps the V1 market. Without it no factor below leaves 1. */
+const looksCount = (w: WorldState): boolean => w.scenario?.visualModel === 'on' && !w.scenario.control?.designV1;
+
+/** Reviews a page can show. */
+const reviewCount = (p: Product): number => Math.max(p.stats.reviews.length, p.stats.ratingCount ?? 0);
+
+/** What a template does on its own, from the research: public, the agents can read it too. */
+export function templateCondition(template: PageTemplate, p: Product): number {
+  const m = LOOK_MARKET;
+  const cheap = p.price <= m.cheapMax;
+  const dear = p.price >= m.dearMin;
+  switch (template) {
+    case 'express': return cheap ? m.priceLift : dear ? m.priceDrop : 1;
+    case 'editorial': return cheap ? m.priceDrop : dear ? m.priceLift : 1;
+    case 'proof': return reviewCount(p) < m.proofMinReviews ? m.proofWithout : 1;
+    case 'inside': return (p.files.previews?.length ?? 0) > 0 ? 1 : m.insideWithout;
+    default: return 1;
+  }
+}
+
+/** Conversion × page[template] × hero[hero] × style^0.35 of the niche's hidden taste, × the template's public conditions. A missing look reads 1. */
+export function lookCvr(w: WorldState, n: NicheTruth, p: Product): number {
+  if (!looksCount(w)) return 1;
+  const taste = n.visualTaste;
+  const { template, hero } = p.salesPage ?? {};
+  const style = p.design?.style;
+  let f = 1;
+  if (template) f *= (taste?.page[template] ?? 1) * templateCondition(template, p);
+  if (hero) f *= taste?.hero[hero] ?? 1;
+  if (style) f *= Math.pow(taste?.style[style] ?? 1, LOOK_MARKET.cvrStyleExp);
+  return f;
+}
+
+/** Click-through × style^0.8 where the frame is the cover, ^0.4 for a film's end card, nothing for a search ad. */
+export function lookCtr(w: WorldState, n: NicheTruth, p: Product, format: AdFormat): number {
+  if (!looksCount(w) || format === 'search_text') return 1;
+  const style = p.design?.style;
+  const v = style ? n.visualTaste?.style[style] : undefined;
+  if (v === undefined) return 1;
+  return Math.pow(v, LOOK_MARKET.coverFormats.includes(format) ? LOOK_MARKET.ctrStyleExp.cover : LOOK_MARKET.ctrStyleExp.film);
 }
 
 // ───────────────────────────── 1. paid ads ─────────────────────────────
@@ -354,7 +399,7 @@ function runAds(d: Day): void {
       const fatigue = 1 / (1 + prior / spec.fatigue);
       const ctrRaw = ADS.baseCtr * Math.pow(Math.max(1, q.overall) / ADS.qualityRef, ADS.qualityExp)
         * Math.pow((n.hookAffinity[c.hookStyle] ?? 1) * spec.formatFit(c), spec.affinityExp) * (0.6 + 0.8 * spec.fit)
-        * spec.ctrScale * spec.ratioFit(c) * spec.learningCtr * fatigue * d.noise(ADS.ctrNoiseSd);
+        * spec.ctrScale * spec.ratioFit(c) * spec.learningCtr * fatigue * d.noise(ADS.ctrNoiseSd) * lookCtr(world, n, p, c.format);
       const ctr = clamp(ctrRaw, ADS.minCtr, ADS.maxCtr);
       const clicks = rng.binomial(impressions, ctr);
       const landingViews = rng.binomial(clicks, spec.landingRate);
@@ -1059,6 +1104,7 @@ export function tickMarket(world: WorldState, rng: Rng): MarketDayResult {
     result.notes.push(`Le marché du jour ${day} est déjà clôturé.`);
     return result;
   }
+  ensureVisualTaste(world); // a run of before the design build joins the new market at its first close (no draw on `rng`)
   const d = new Day(world, rng, difficultyProfile(world.scenario?.difficulty ?? 'normal'));
   d.dayKey = rng.int(0, 0x7fffffff);
   for (const { run, stream } of DAY_PHASES) {

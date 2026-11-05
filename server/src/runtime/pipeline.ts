@@ -149,6 +149,24 @@ export function createV2Pipeline(ctx: RuntimeCtx, product: Product, feedback: st
   return [pdf, human, fact, render, sales, publish];
 }
 
+/**
+ * A new look for a live guide (design plan D204): version++, the same text, a new style and cover, a new render, a new page, back
+ * on sale. The guide stays on sale meanwhile. `excludeStyle` and `excludeTemplate` say which look the evidence found lagging.
+ */
+export function createRefreshPipeline(ctx: RuntimeCtx, product: Product, why: string, opts: PipelineOpts & { excludeStyle?: boolean; excludeTemplate?: boolean }): Task[] {
+  product.version += 1;
+  const v = ` (v${product.version})`;
+  const T = maker(ctx, product, opts);
+  const look = T('refresh_design', [], { why, ...(opts.excludeStyle ? { excludeStyle: true } : {}) }, { title: productTitleFor('refresh_design', product, v) });
+  const render = T('render_pdf', [look], { refresh: true }, { title: productTitleFor('render_pdf', product, v) });
+  const sales = T('write_sales_page', [render], { refresh: true, ...(opts.excludeTemplate ? { excludeTemplate: true } : {}) }, { title: productTitleFor('write_sales_page', product, v) });
+  const publish = T('publish_product', [sales], { republish: true }, { title: `Remettre en ligne${v} — « ${short(product.title, 42)} »` });
+  const art = officerId(ctx.world, 'art');
+  say(ctx, art, `${nameOf(ctx, art)} lance la refonte visuelle de « ${short(product.title, 50)} » (v${product.version}) : ${short(why, 160)}`, 'thought', { productId: product.id });
+  logDecision(ctx.world, { kind: 'rework', who: art, text: `« ${short(product.title, 60)} » change de look (v${product.version})`, why: short(why, 160), productId: product.id });
+  return [look, render, sales, publish];
+}
+
 /** Watchdog: rebuilds the missing stages of a product that is stuck with no open task. */
 export function resumePipeline(ctx: RuntimeCtx, product: Product, opts: PipelineOpts): Task[] {
   if (openTasksForProduct(ctx, product.id).length) return [];

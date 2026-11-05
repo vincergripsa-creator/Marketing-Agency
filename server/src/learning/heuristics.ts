@@ -12,6 +12,7 @@ import {
   type FunnelAgg, type WorldIndex,
 } from './data.js';
 import { experimentNiche, experimentThreshold, experimentValueKind, lowerIsBetter } from './experiments.js';
+import { cvrOf as lookCvr, designLearning, LOOK_EVIDENCE_DAYS, LOOK_KINDS, LOOK_NOUN, LOOK_RULE, lookEvidence, lookLabel, restOf, zOf } from './looks.js';
 import { quotedTerms } from './playbooks.js';
 import {
   DIMENSION_LABELS, FORMAT_LABELS, HOOK_LABELS, TASK_LABELS, fmtEur, fmtNum, fmtPct, fmtRatio, fold, plural, round,
@@ -487,6 +488,46 @@ function salesPageConversion(inp: RetroInput): HeuristicDraft[] {
       links: ['Page de vente', ...productLink(inp, p)],
       tags: ['page-de-vente', 'conversion'],
     }));
+  }
+  return out;
+}
+
+// ───────────────────────────── Looks ─────────────────────────────
+
+/** A look a niche's own traffic clearly prefers (D204): enough visitors on it and on the others pooled, a lead the noise would not give. */
+export const LOOK_LESSON = { minViews: 400, minRest: 400, minSales: 10, lift: 0.15, z: 1.96 } as const;
+
+function looks(inp: RetroInput): HeuristicDraft[] {
+  const { world, day } = inp;
+  if (!designLearning(world)) return [];
+  const from = Math.max(1, day - LOOK_EVIDENCE_DAYS + 1);
+  const niches = unique((world.company.products ?? []).filter((p) => p.status === 'live' && p.kind !== 'kit' && p.design?.style).map((p) => p.nicheId));
+  const out: HeuristicDraft[] = [];
+  for (const nicheId of niches) {
+    const name = nicheName(world, nicheId);
+    for (const kind of LOOK_KINDS) {
+      const reads = lookEvidence(world, nicheId, kind, from, day);
+      const ranked = [...reads].sort((a, b) => lookCvr(b[1]) - lookCvr(a[1]) || b[1].views - a[1].views);
+      const best = ranked.find(([, r]) => r.views >= LOOK_LESSON.minViews);
+      if (!best) continue;
+      const [key, own] = best;
+      const rest = restOf(reads, key);
+      if (rest.views < LOOK_LESSON.minRest || own.sales < LOOK_LESSON.minSales || lookCvr(rest) <= 0) continue;
+      const lift = lookCvr(own) / lookCvr(rest) - 1;
+      if (lift < LOOK_LESSON.lift || zOf(own, rest) < LOOK_LESSON.z) continue;
+      const label = lookLabel(kind, key);
+      out.push(draft({
+        key: `look-${kind}-${slugify(nicheId, 40)}`,
+        topic: 'product',
+        title: `${LOOK_RULE[kind]} « ${label} » sur ${name}`,
+        insight: `${LOOK_RULE[kind]} « ${label} » sur « ${name} » : ${fmtPct(lift, 0)} de conversion en plus que les autres ${LOOK_NOUN[kind]}s sur ${fmtNum(own.views)} visiteurs.`,
+        evidence: `${ranked.map(([k, r]) => `« ${lookLabel(kind, k)} » : conversion ${fmtPct(lookCvr(r), 2)} sur ${fmtNum(r.views)} visites (${plural(r.sales, 'vente', 'ventes')})`).join(' · ')} — ${windowLabel(world, from, day)}.`,
+        confidence: sampleConfidence(Math.min(own.views, rest.views), 1500, lift / 0.3),
+        links: ['Page de vente', ...nicheLink(inp, nicheId)],
+        tags: ['design', kind],
+        extraDepts: ['boutique'],
+      }));
+    }
   }
   return out;
 }
@@ -992,12 +1033,14 @@ function experiments(inp: RetroInput): HeuristicDraft[] {
   const out: HeuristicDraft[] = [];
   for (const e of inp.concluded) {
     if (!e.winner || e.dimension === 'agent_duel') continue; // a duel is not a lesson about the market
+    if (e.dimension === 'page_template' && !designLearning(inp.world)) continue;
     const w = e.winner;
     const others = Object.entries(e.results).filter(([k, r]) => k !== w && r.n > 0);
     others.sort((a, b) => (lowerIsBetter(e) ? b[1].value - a[1].value : a[1].value - b[1].value));
     const loser = others[0];
     const wv = fmtExpValue(e, e.results[w]?.value ?? 0);
-    const vs = loser ? ` contre ${fmtExpValue(e, loser[1].value)} pour « ${loser[0]} »` : '';
+    const armName = (k: string): string => (e.dimension === 'page_template' ? lookLabel('template', k) : k);
+    const vs = loser ? ` contre ${fmtExpValue(e, loser[1].value)} pour « ${armName(loser[0])} »` : '';
     // a niche-scoped experiment says so (and gets its own lesson per niche)
     const nicheId = experimentNiche(inp.world, e);
     const on = nicheId ? ` sur « ${nicheName(inp.world, nicheId)} »` : '';
@@ -1008,6 +1051,7 @@ function experiments(inp: RetroInput): HeuristicDraft[] {
       case 'price': insight = `Prix cible « ${Math.round(Number(w)) || w} »${on} : il gagne l'expérience de prix (${wv}${vs}).`; break;
       case 'sales_hype': insight = `Niveau de promesse max « ${w} »${on} : meilleur compromis conversion / remboursements (${wv}${vs}).`; break;
       case 'support_tone': insight = `Ton support « ${w} » : il gagne l'expérience (${wv}${vs}).`; break;
+      case 'page_template': insight = `${LOOK_RULE.template} « ${lookLabel('template', w)} »${on} : il gagne le test A/B de la page (conversion ${wv}${vs}).`; break;
       default: insight = `Miser sur la niche « ${nicheName(inp.world, w)} » : elle gagne l'expérience (${wv}${vs}).`;
     }
     const minN = Math.min(...Object.values(e.results).map((r) => r.n));
@@ -1018,9 +1062,9 @@ function experiments(inp: RetroInput): HeuristicDraft[] {
       insight,
       evidence: `Expérience ${e.id} (« ${shorten(e.hypothesis, 90)} », jours ${e.day} à ${e.endDay ?? inp.day}) : ${Object.entries(e.results).map(([k, r]) => `« ${k} » ${fmtExpValue(e, r.value)} (n = ${fmtNum(r.n)})`).join(' · ')}.`,
       confidence: 0.4 + 0.5 * clamp(safeDiv(Number.isFinite(minN) ? minN : 0, experimentThreshold(e))),
-      links: e.dimension === 'price' ? ['Prix'] : e.dimension === 'support_tone' ? ['Support client'] : e.dimension === 'sales_hype' ? ['Page de vente'] : e.dimension === 'niche' ? ['Règle du un'] : ["Canaux d'acquisition"],
+      links: e.dimension === 'price' ? ['Prix'] : e.dimension === 'support_tone' ? ['Support client'] : e.dimension === 'sales_hype' || e.dimension === 'page_template' ? ['Page de vente'] : e.dimension === 'niche' ? ['Règle du un'] : ["Canaux d'acquisition"],
       tags: ['experience', e.dimension],
-      extraDepts: e.dimension === 'sales_hype' ? ['boutique', 'analyse'] : ['analyse'],
+      extraDepts: e.dimension === 'sales_hype' || e.dimension === 'page_template' ? ['boutique', 'analyse'] : ['analyse'],
     }));
   }
   return out;
@@ -1031,7 +1075,7 @@ export function detectLessons(inp: RetroInput): HeuristicDraft[] {
   const detectors = [
     rejections, channelRejections, adAccount, finance, hypeAndQuality, support, creators, experiments, channelLessons,
     (i: RetroInput) => compareCreatives(i, 'hookStyle'), (i: RetroInput) => compareCreatives(i, 'format'),
-    prices, niches, fatigue, lowCtr, salesPageConversion, organic, processIssues,
+    prices, niches, fatigue, lowCtr, salesPageConversion, organic, processIssues, looks,
   ];
   const out: HeuristicDraft[] = [];
   const seen = new Set<string>();

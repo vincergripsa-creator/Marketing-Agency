@@ -25,7 +25,7 @@ export const ROLES: Record<RoleId, RoleDef> = {
   ghostwriter: role('Plume', 'studio', 'sonnet', ['write_pdf'], ['write_titles'], 6),
   humanizer: role('Éditrice-humanisatrice', 'studio', 'sonnet', ['humanize_pdf'], ['write_pdf'], 3),
   fact_checker: role('Fact-checker', 'studio', 'sonnet', ['fact_check'], ['humanize_pdf'], 3),
-  art_director: role('Directrice artistique', 'creation', 'sonnet', ['design_cover', 'render_pdf'], [], 1, { lead: true }),
+  art_director: role('Directrice artistique', 'creation', 'sonnet', ['design_cover', 'render_pdf', 'refresh_design'], [], 1, { lead: true }),
   cover_designer: role('Designer de couvertures', 'creation', 'haiku', ['design_cover'], [], 3),
   layout_designer: role('Maquettiste', 'creation', 'sonnet', ['render_pdf'], ['design_cover'], 3),
   video_editor: role('Monteuse vidéo', 'video', 'sonnet', ['produce_ad'], ['adapt_creative'], 6),
@@ -102,7 +102,7 @@ export const OFFICES: Record<Office, { roles: readonly RoleId[]; kind: TaskKind 
 
 /** Which office reads a kind's work. Adapted creatives and Search ads go through the same review as a produced ad (channels §7.5). */
 export const REVIEW_OFFICE: Partial<Record<TaskKind, Office>> = {
-  write_pdf: 'fact_checker', render_pdf: 'fact_checker', fact_check: 'editor', design_cover: 'art',
+  write_pdf: 'fact_checker', render_pdf: 'fact_checker', fact_check: 'editor', design_cover: 'art', refresh_design: 'art',
   red_team: 'ceo', produce_ad: 'growth', adapt_creative: 'growth', write_search_ads: 'growth',
   write_sales_page: 'shop', publish_product: 'ceo', weekly_pnl: 'cfo',
 };
@@ -227,7 +227,7 @@ const SEEDS: AgentSeed[] = [
     persona: "Zoé pense en palettes et en miniatures : une couverture doit se lire sur un écran de téléphone en une demi-seconde. Elle défend l'air et la simplicité.",
     skills: ['Direction artistique', 'Identité visuelle', 'Typographie', 'Revue design', 'Infographie'],
     tools: [...BRAIN, 'design.cover', 'pdf.render', 'team.delegate', 'team.review'],
-    taskKinds: ['design_cover', 'render_pdf'],
+    taskKinds: ['design_cover', 'render_pdf', 'refresh_design'],
     look: { skin: '#f1c7a0', hair: '#e85d75', hairStyle: 3, accessory: 'none' },
   },
   {

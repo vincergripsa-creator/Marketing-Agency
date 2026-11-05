@@ -1,6 +1,8 @@
-/** Boutique: sales page (hype bandit capped by playbook), price (start low, bandit, target), publish, upsell. */
-import type { Product } from '../../shared.js';
+/** Boutique: sales page (hype bandit capped by playbook, template and hero: design plan D203), price (start low, bandit, target), publish, upsell. */
+import type { AgentState, PageHero, PageTemplate, Product, Task } from '../../shared.js';
+import type { MindContext } from '../../contracts.js';
 import { nextId } from '../../core/index.js';
+import { chooseLook, eligibleLooks, logLook, lookIn, lookLabel, looksOn, runningPageTest, shelfOf, variantOn, type LookChoice } from '../../learning/looks.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { addDeliverable, incident, latestOutput, nicheName, productOf, readRunFile, runFileExists, say, speak, versionDir, vocOf, writeRunFile } from '../ctx.js';
 import { deliverables, learning, sim } from '../modules.js';
@@ -15,7 +17,7 @@ import { linkUpsell, nicheCollision, pickUpsellSubject, upsellContextOf } from '
 import { endLine, eur, median, numOf, round2, short, str } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { NO_PRODUCT, requireProduct, studioMind } from './common.js';
-import { coverSvgFor, ensureCoverFile, ensureDesign } from './creation.js';
+import { coverSvgFor, designRng, ensureCoverFile, ensureDesign, founderWords, lookSharp } from './creation.js';
 import { reworkCraft } from './growth.js';
 
 const HYPES = HYPE_ARMS.map(Number).sort((a, b) => a - b);
@@ -47,10 +49,45 @@ function offSale(ctx: RuntimeCtx, product: Product): boolean {
   return stopped(product) || (!!guide && stopped(guide));
 }
 
-/** What the page prints of the live shop: when this changes, the file on disk is out of date. A stopped guide loses its buttons this way, and its kit with it. */
+/**
+ * What the page prints of the live shop: when this changes, the file on disk is out of date. A stopped guide loses its buttons this way,
+ * and its kit with it. Its look too: a page test switches the template by day, a refresh the cover (D204). A V1 page has no look.
+ */
 function pagePrintOf(ctx: RuntimeCtx, product: Product): string {
   const { reviews, rating } = product.stats;
-  return [product.price, reviews.length, rating, reviews[reviews.length - 1]?.id ?? '', ...(offSale(ctx, product) ? ['hors vente'] : [])].join('|');
+  const look = [product.design?.style, product.salesPage?.template, product.salesPage?.hero];
+  return [product.price, reviews.length, rating, reviews[reviews.length - 1]?.id ?? '', ...(offSale(ctx, product) ? ['hors vente'] : []), ...(look.some(Boolean) ? [`look:${look.map((x) => x ?? '').join('/')}`] : [])].join('|');
+}
+
+interface PageLook { template: PageTemplate; hero: PageHero; why: string }
+
+/**
+ * The template and hero of a page (D203), null while looks are off. A rework, or a new draft of the same version's page, keeps the look
+ * it had while its needs hold: only the copy changes. A running page test sets the template of the day. Otherwise each is chosen like a
+ * cover's style, among the looks whose needs hold today; a refresh leaves the template the evidence found lagging.
+ */
+function pageLook(ctx: RuntimeCtx, task: Task, agent: AgentState, mind: MindContext, product: Product): PageLook | null {
+  const w = ctx.world;
+  if (!looksOn(w)) return null;
+  const sp = product.salesPage;
+  const templates = eligibleLooks(product, 'template');
+  const heroes = eligibleLooks(product, 'hero');
+  const sameVersion = !!sp && product.files.salesPage === `${versionDir(product)}/sales-page.html`;
+  const keep = (task.attempts > 0 || (sameVersion && task.input.refresh !== true)) && !!sp?.template && !!sp.hero && templates.includes(sp.template) && heroes.includes(sp.hero);
+  if (keep) return { template: sp!.template!, hero: sp!.hero!, why: 'même look, seule la copie change' };
+  const test = runningPageTest(w, product.id);
+  const shelf = shelfOf(w, product, product.nicheId);
+  const rules = directivesOf(w, agent.id, nicheName(ctx, product.nicheId));
+  const words = founderWords(task);
+  const ask = (kind: 'template' | 'hero', eligible: string[], rule: string | null, testKey: string | null, exclude: string[]): LookChoice | null => chooseLook(w, {
+    kind, nicheId: product.nicheId, shelf, eligible, founder: lookIn(kind, words), rule, test: testKey, exclude,
+    rng: designRng(ctx, agent.id, kind), sharp: lookSharp(ctx, agent, mind, kind, 'write_sales_page'),
+  });
+  const template = ask('template', templates, rules.pageTemplate, test ? variantOn(test, w.day) ?? null : null, task.input.excludeTemplate === true && sp?.template ? [sp.template] : []);
+  const hero = ask('hero', heroes, rules.pageHero, null, []);
+  if (!template || !hero) return null;
+  const why = template.why === hero.why ? template.why : `${template.why} ; visuel : ${hero.why}`;
+  return { template: template.key as PageTemplate, hero: hero.key as PageHero, why };
 }
 
 /** The real pages `render_pdf` left next to the guide, named after their kind. An old save has none: its page skips the section. */
@@ -96,11 +133,14 @@ export const boutiqueHandlers: HandlerMap = {
       if (!content) return { fail: 'Impossible d’écrire la page : le guide n’existe pas encore.', summary: 'Pas de contenu.' };
       const voc = vocOf(ctx, product.nicheId);
       const cap = directivesOf(ctx.world, agent.id, nicheName(ctx, product.nicheId)).maxHype;
+      const look = pageLook(ctx, task, agent, mind, product);
       let hype: number;
       let source: string;
       const previous = product.salesPage?.hypeLevel;
       if (task.attempts > 0 && typeof previous === 'number') {
         hype = stepArm(HYPES, previous, -1); source = 'reprise : promesse plus sobre';
+      } else if (task.input.refresh === true && typeof previous === 'number') {
+        hype = previous; source = 'refonte visuelle : même promesse';
       } else if (typeof numOf(task.input.hypeDelta) === 'number' && typeof previous === 'number') {
         hype = stepArm(HYPES, previous, Math.round(numOf(task.input.hypeDelta)!)); source = `v${product.version} : promesse revue à la baisse`;
       } else {
@@ -119,6 +159,7 @@ export const boutiqueHandlers: HandlerMap = {
         (d) => sim.scoreSalesPage({ ...d, hypeLevel: hype }, product, voc).overall);
       sp.hypeLevel = hype;
       sp.priceWritten = product.price;
+      if (look) Object.assign(sp, { template: look.template, hero: look.hero });
       product.salesPage = sp;
       let sq = sim.scoreSalesPage(sp, product, voc);
       // A rewrite that reads worse than the page it replaces does not go online.
@@ -127,8 +168,17 @@ export const boutiqueHandlers: HandlerMap = {
       const rel = `${versionDir(product)}/sales-page.html`;
       await renderSalesPage(ctx, product, rel, await ensureCoverFile(ctx, product));
       addDeliverable(ctx, { kind: 'sales_page', title: `Page de vente « ${short(product.title, 50)} » (v${product.version})`, productId: product.id, creativeId: null, path: rel, createdBy: agent.id, quality: sq.overall }, task);
-      say(ctx, agent.id, `${agent.name} : accroche « ${short(product.salesPage.headline, 70)} » — promesse ${product.salesPage.hypeLevel} (${source})`, 'thought', { productId: product.id });
-      return { summary: `Page de vente écrite (promesse ${hype}, qualité ${sq.overall}/100).`, output: { path: rel, hype, hypeSource: source, score: sq.overall } };
+      const { template, hero } = product.salesPage;
+      if (look) logLook(product, ctx.world.day, `${lookLabel('template', template ?? look.template)} et ${lookLabel('hero', hero ?? look.hero)} : ${look.why}`);
+      const copy = `accroche « ${short(product.salesPage.headline, 70)} » — promesse ${product.salesPage.hypeLevel} (${source})`;
+      // one line either way: the feed spends ids, and a control arm without looks must keep the same ones
+      say(ctx, agent.id, look && template && hero
+        ? `${agent.name} choisit le gabarit « ${lookLabel('template', template)} » et le visuel « ${lookLabel('hero', hero)} » : ${look.why} ; ${copy}`
+        : `${agent.name} : ${copy}`, 'thought', { productId: product.id });
+      return {
+        summary: `Page de vente écrite (promesse ${hype}${template ? `, gabarit « ${lookLabel('template', template)} »` : ''}, qualité ${sq.overall}/100).`,
+        output: { path: rel, hype, hypeSource: source, score: sq.overall, ...(template ? { template } : {}), ...(hero ? { hero } : {}) },
+      };
     },
   },
 

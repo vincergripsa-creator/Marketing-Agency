@@ -1,8 +1,12 @@
 /** Initial market state: seeded niche truth, creators (some scammers), empty books. */
-import { clamp, round2 } from '../core/index.js';
+import { clamp, hashString, round2, streamRng } from '../core/index.js';
 import type { DifficultyProfile, Rng } from '../contracts.js';
-import type { AdFormat, CreatorProfile, Difficulty, HookStyle, MarketState, NicheTruth, ScenarioConfig, WorldState } from '../shared.js';
+import { designFor } from '../deliverables/design.js';
+import { STREAM } from '../runtime/streams.js';
+import { ART_STYLES, PAGE_HEROES, PAGE_TEMPLATES } from '../shared.js';
+import type { AdFormat, CreatorProfile, Difficulty, HookStyle, MarketState, NicheTruth, ScenarioConfig, VisualTaste, WorldState } from '../shared.js';
 import { CREATORS, DIFFICULTY, NICHE_VARIATION } from './balance.js';
+import { heroConvention, styleConvention, TASTE, templateConvention } from './catalog/looks.js';
 import { ensureChannelMarket } from './channels.js';
 import { FEMALE_NAMES, FIRST_NAMES, MALE_NAMES } from './customers.js';
 import { NICHE_CATALOG, cloneNiche } from './niches.js';
@@ -37,6 +41,74 @@ export function varyNiche(n: NicheTruth, rng: Rng): NicheTruth {
   n.seasonality = n.seasonality.map((s) => round2(s * (1 + uniform(rng, -0.03, 0.03))));
   for (const c of n.competitors) c.reviews = Math.max(1, Math.round(c.reviews * vary(rng)));
   return n;
+}
+
+// ───────────────────────────── Taste for looks (D201) ─────────────────────────────
+
+const UNIT = 10_000;
+
+/**
+ * The values scaled so their mean is exactly 1 inside [min, max]: a bisection on the scale of the clamped values, then
+ * 4 decimals whose sum is n, the last units going to arms that still have room. An agency that picks at random sells
+ * as much as one that ignores looks.
+ */
+export function meanOne(values: readonly number[], min: number, max: number): number[] {
+  const n = values.length;
+  const at = (s: number): number[] => values.map((v) => clamp(v * s, min, max));
+  const mean = (s: number): number => at(s).reduce((a, b) => a + b, 0) / n;
+  let lo = min / Math.max(...values);
+  let hi = max / Math.min(...values);
+  for (let i = 0; i < 200; i++) {
+    const mid = (lo + hi) / 2;
+    if (mean(mid) < 1) lo = mid; else hi = mid;
+  }
+  const units = at((lo + hi) / 2).map((v) => Math.round(v * UNIT));
+  const [floor, ceil] = [Math.round(min * UNIT), Math.round(max * UNIT)];
+  let gap = n * UNIT - units.reduce((a, b) => a + b, 0);
+  // each unit of rounding goes to an arm inside its range, the one with the most room: a clamped arm stays on its bound
+  while (gap !== 0) {
+    const up = gap > 0;
+    const rank = (i: number): number => {
+      const room = up ? ceil - units[i]! : units[i]! - floor;
+      return room <= 0 ? -1 : room + (units[i]! > floor && units[i]! < ceil ? 2 * UNIT : 0);
+    };
+    let best = -1;
+    for (let i = 0; i < n; i++) if (rank(i) >= 0 && (best < 0 || rank(i) > rank(best))) best = i;
+    if (best < 0) break;
+    units[best]! += up ? 1 : -1;
+    gap += up ? -1 : 1;
+  }
+  return units.map((u) => u / UNIT);
+}
+
+/** Conventions + the run's draw: a lognormal on each arm and one surprise, then exactly mean 1 inside the record's range. */
+function tasteRecord<K extends string>(arms: readonly K[], shift: (k: K) => number, range: { min: number; max: number }, rng: Rng): Record<K, number> {
+  const raw = arms.map((k) => (1 + shift(k)) * Math.exp(rng.normal(0, TASTE.sigma)));
+  raw[rng.int(0, arms.length - 1)]! += TASTE.surprise;
+  const values = meanOne(raw, range.min, range.max);
+  return Object.fromEntries(arms.map((k, i) => [k, values[i]!])) as Record<K, number>;
+}
+
+/**
+ * The hidden taste of one niche, from the seed and the niche alone (STREAM.visualTaste): a world with the visual model on
+ * and one with it off share every other byte, and a save of before the design build gets the same taste a new run would.
+ * The family is the one `deliverables/design.ts` reads from the category and the keywords, the archetype the catalogue's.
+ */
+export function visualTasteOf(n: NicheTruth, seed: number): VisualTaste {
+  const rng = streamRng(seed, STREAM.visualTaste, hashString(n.id));
+  const family = designFor({ nicheName: n.name, category: n.category, keywords: n.keywords, seed: 0 }).family ?? null;
+  const archetype = n.voc?.knowledge?.archetype ?? null;
+  return {
+    style: tasteRecord(ART_STYLES, (s) => styleConvention(s, family), TASTE.style, rng),
+    page: tasteRecord(PAGE_TEMPLATES, (t) => templateConvention(t, archetype), TASTE.page, rng),
+    hero: tasteRecord(PAGE_HEROES, (h) => heroConvention(h, family), TASTE.hero, rng),
+  };
+}
+
+/** Fills the taste of every niche that has none, once, under the visual model. Safe on a reload: a save keeps its taste. */
+export function ensureVisualTaste(world: Pick<WorldState, 'market' | 'scenario'>): void {
+  if (world.scenario?.visualModel !== 'on') return;
+  for (const n of world.market?.niches ?? []) n.visualTaste ??= visualTasteOf(n, world.scenario.seed);
 }
 
 // ───────────────────────────── Creators ─────────────────────────────
@@ -191,5 +263,6 @@ export function createMarketState(scenario: ScenarioConfig, rng: Rng): MarketSta
     creativeImpressions: {},
   };
   ensureChannelMarket({ market, scenario }); // draws on the seed, never on `rng`
+  ensureVisualTaste({ market, scenario }); // the same: STREAM.visualTaste only
   return market;
 }

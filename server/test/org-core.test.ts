@@ -116,7 +116,7 @@ describe('the founding team (org test 4)', () => {
     expect(w.company.org!.stats.lastResortHats).toBe(0);
   });
 
-  it('gives every kind of the 47 an owner, a hat being a kind on top of the role', () => {
+  it('gives every kind of the 48 an owner, a hat being a kind on top of the role', () => {
     const w = leanWorld();
     for (const k of ALL_KINDS) expect(w.company.agents.some((a) => a.taskKinds.includes(k)), k).toBe(true);
     for (const a of w.company.agents) expect(a.taskKinds, a.id).toEqual([...ROLES[a.roleId].core, ...ROLES[a.roleId].assist, ...a.hatKinds]);
