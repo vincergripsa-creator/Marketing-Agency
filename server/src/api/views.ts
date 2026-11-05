@@ -18,9 +18,9 @@ import { TALENT } from '../runtime/talent/constants.js';
 import { primaryOf, SKILLS } from '../runtime/talent/skills.js';
 import { dec, round2, short, sum } from '../runtime/util.js';
 import type {
-  AdCreative, AgentId, AgentState, Alumnus, AlumnusView, BoardRow, ChannelChip, ChannelDayKpi, ChannelId, ChannelRow, ChannelsDetail, ChannelState, ChronicleEntry, ChronicleKind,
-  CreativeVideo, DailyAdStats, DailyKpi, Deliverable, Duel, DuelChip, DuelSide, DuelView, FounderDigest, HeadRow, HiringReqView, LeagueDetail, LeagueEntry, LeagueRow,
-  OrgDept, OrgDetail, PersonChip, Position, PodiumView, SceneView, SeasonReport, SeasonRow, Skill, SkillRating, StageView, TalentTruthView, WorldState,
+  AdCreative, AgentId, AgentState, Alumnus, AlumnusView, ArtStyle, BoardRow, ChannelChip, ChannelDayKpi, ChannelId, ChannelRow, ChannelsDetail, ChannelState, ChronicleEntry, ChronicleKind,
+  CreativeVideo, DailyAdStats, DailyKpi, Deliverable, DesignLogEntry, Duel, DuelChip, DuelSide, DuelView, FounderDigest, HeadRow, HiringReqView, LeagueDetail, LeagueEntry, LeagueRow,
+  OrgDept, OrgDetail, PageHero, PageTemplate, PersonChip, Position, PodiumView, Product, SceneView, SeasonReport, SeasonRow, Skill, SkillRating, StageView, TalentTruthView, WorldState,
 } from '../shared.js';
 import { CHANNEL_IDS, CHANNELS, channelOf, filmOf } from '../shared.js';
 import { cardOf, chronicleOf, duelWinner, peopleIndex, type PeopleIndex } from './chronicle.js';
@@ -550,9 +550,59 @@ export function digestPeopleOf(world: WorldState, fromDay: number, toDay: number
 
 // ───────────────────────────── the gallery ─────────────────────────────
 
+/** What a tile wore (D207): its guide's style, and for a page its template and hero. No template: the V1 page. */
+export interface TileLook { style: ArtStyle; template?: PageTemplate; hero?: PageHero; version?: number }
+
 /** A tile of the gallery. `ad_video` never is a `Deliverable` (D27): its tiles come from the manifest, through the session. */
-export type DeliverableTile = Omit<Deliverable, 'kind'> & { kind: Deliverable['kind'] | 'ad_video'; poster?: string | null };
-export interface DeliverablePage { items: DeliverableTile[]; page: number; pages: number; pageSize: number; total: number; counts: Partial<Record<DeliverableTile['kind'], number>> } // counts: each kind on the whole run, whatever `kinds` asked
+export type DeliverableTile = Omit<Deliverable, 'kind'> & { kind: Deliverable['kind'] | 'ad_video'; poster?: string | null; look?: TileLook };
+export interface DeliverablePage {
+  items: DeliverableTile[]; page: number; pages: number; pageSize: number; total: number;
+  counts: Partial<Record<DeliverableTile['kind'], number>>; // each kind on the whole run, whatever `kinds` asked
+  styles: Partial<Record<ArtStyle, number>>;                // each style among the kinds asked, whatever style was asked
+}
+
+/** Tiles that wear their guide's look: the guide, its cover, its page and its ads. Notes and reports wear none. */
+const LOOK_TILES: ReadonlySet<DeliverableTile['kind']> = new Set(['pdf', 'cover', 'sales_page', 'page_preview', 'ad_storyboard', 'ad_preview', 'ad_video']);
+const PAGE_TILES: ReadonlySet<DeliverableTile['kind']> = new Set(['sales_page', 'page_preview']);
+const AD_TILES: ReadonlySet<DeliverableTile['kind']> = new Set(['ad_storyboard', 'ad_preview', 'ad_video']);
+/** The route hands `kinds` on as it came: the style the founder filters on rides in it as `style:<id>`. */
+export const STYLE_FILTER = 'style:';
+
+/** « files/prd_1/v3/cover.svg », else « Couverture « … » (v3) ». */
+function versionIn(...texts: (string | null | undefined)[]): number | null {
+  for (const t of texts) {
+    const m = /\/v(\d+)\//.exec(t ?? '') ?? /\(v(\d+)\b/.exec(t ?? '');
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
+/**
+ * The look a guide wore at a version, or on a day: the last log entry up to it. What the guide wears today wins for its current
+ * version (a page test switches the page every day). A guide without a log is older than looks: Bauhaus and the V1 page (D200, D202).
+ */
+export function lookAt(p: Product, at: { version: number } | { day: number }, page = false): TileLook {
+  const log = p.designLog ?? [];
+  const fits = 'version' in at ? (e: DesignLogEntry) => e.version <= at.version : (e: DesignLogEntry) => e.day <= at.day;
+  const now = 'version' in at ? at.version >= p.version : !log.some((e) => e.day > at.day);
+  const worn = log.findLast(fits);
+  const paged = log.findLast((e) => fits(e) && !!(e.template || e.hero));
+  const style = (now ? p.design?.style : undefined) ?? worn?.style ?? 'bauhaus';
+  const template = page ? (now ? p.salesPage?.template : undefined) ?? paged?.template : undefined;
+  const hero = page ? (now ? p.salesPage?.hero : undefined) ?? paged?.hero : undefined;
+  const version = 'version' in at ? at.version : worn?.version;
+  return { style, ...(template ? { template } : {}), ...(hero ? { hero } : {}), ...(version ? { version } : {}) };
+}
+
+function tileLook(t: DeliverableTile, products: ReadonlyMap<string, Product>, creatives: ReadonlyMap<string, AdCreative>): TileLook | undefined {
+  if (!LOOK_TILES.has(t.kind)) return undefined;
+  const creative = t.creativeId ? creatives.get(t.creativeId) : undefined;
+  const p = products.get(t.productId ?? creative?.productId ?? '');
+  if (!p) return undefined;
+  if (AD_TILES.has(t.kind)) return lookAt(p, { day: creative?.createdDay ?? t.day });
+  const version = versionIn(t.path, t.title);
+  return lookAt(p, version === null ? { day: t.day } : { version }, PAGE_TILES.has(t.kind));
+}
 
 /** An evicted video keeps its poster, and its tile: the player asks for a new render. */
 function videoTile(id: string, v: CreativeVideo, creative: AdCreative | undefined): DeliverableTile[] {
@@ -564,19 +614,39 @@ function videoTile(id: string, v: CreativeVideo, creative: AdCreative | undefine
   }];
 }
 
-/** The whole run, newest first: `archived` is what compaction took out of the world. Pages start at 1. */
+/**
+ * The whole run, newest first: `archived` is what compaction took out of the world. Pages start at 1. Each tile says what it
+ * wore, and `style:<id>` among the kinds keeps the tiles of that style (D207). The guide of an older version shows that
+ * version's cover: every render writes its own (`ensureCoverFile`), so a guide's change of look reads in the gallery.
+ */
 export function deliverablesPage(world: WorldState, query: { page?: number; kinds?: readonly string[] }, videos: Readonly<Record<string, CreativeVideo>> = {}, archived: readonly Deliverable[] = []): DeliverablePage {
   const creatives = new Map((world.company.creatives ?? []).map((c) => [c.id, c]));
-  const covers = new Map((world.company.products ?? []).map((p) => [p.id, p.files?.cover ?? null]));
+  const products = new Map((world.company.products ?? []).map((p) => [p.id, p]));
   const held = new Set((world.company.deliverables ?? []).map((d) => d.id));
-  const works: DeliverableTile[] = [...archived.filter((d) => !held.has(d.id)), ...(world.company.deliverables ?? [])].map((d) => (d.kind === 'pdf' && d.productId ? { ...d, poster: covers.get(d.productId) ?? null } : d));
+  const all = [...archived.filter((d) => !held.has(d.id)), ...(world.company.deliverables ?? [])];
+  const drawn = new Map(all.filter((d) => d.kind === 'cover' && d.productId).map((d) => [`${d.productId}|${versionIn(d.path, d.title)}`, d.path]));
+  const posterOf = (d: Deliverable): string | null => {
+    const p = products.get(d.productId ?? '');
+    const today = p?.files?.cover ?? null;
+    const v = versionIn(d.path);
+    if (!p || v === null || v >= p.version) return today;
+    return drawn.get(`${p.id}|${v}`) ?? today?.replace(/\/v\d+\//, `/v${v}/`) ?? null;
+  };
+  const works: DeliverableTile[] = all.map((d) => (d.kind === 'pdf' && d.productId ? { ...d, poster: posterOf(d) } : d));
   const films = new Set<string>(); // two ads with the same spec are one film: it shows once
-  const tiles = [...works, ...Object.entries(videos).flatMap(([id, v]) => videoTile(id, v, creatives.get(id)).filter((t) => !films.has(filmOf(t.path)) && films.add(filmOf(t.path))))];
+  const tiles = [...works, ...Object.entries(videos).flatMap(([id, v]) => videoTile(id, v, creatives.get(id)).filter((t) => !films.has(filmOf(t.path)) && films.add(filmOf(t.path))))]
+    .map((t) => { const look = tileLook(t, products, creatives); return look ? { ...t, look } : t; });
   const counts: DeliverablePage['counts'] = {};
   for (const { kind } of tiles) counts[kind] = (counts[kind] ?? 0) + 1;
-  const wanted = query.kinds?.length ? new Set<string>(query.kinds) : null;
-  const shown = tiles.map((tile, i) => ({ tile, i })).filter(({ tile }) => !wanted || wanted.has(tile.kind)).sort((a, b) => b.tile.day - a.tile.day || b.i - a.i).map(({ tile }) => tile);
+  const asked = query.kinds ?? [];
+  const kinds = asked.filter((k) => !k.startsWith(STYLE_FILTER));
+  const wanted = kinds.length ? new Set<string>(kinds) : null;
+  const looks = new Set(asked.filter((k) => k.startsWith(STYLE_FILTER)).map((k) => k.slice(STYLE_FILTER.length)));
+  const ofKind = tiles.map((tile, i) => ({ tile, i })).filter(({ tile }) => !wanted || wanted.has(tile.kind));
+  const styles: DeliverablePage['styles'] = {};
+  for (const { tile } of ofKind) if (tile.look) styles[tile.look.style] = (styles[tile.look.style] ?? 0) + 1;
+  const shown = ofKind.filter(({ tile }) => !looks.size || (!!tile.look && looks.has(tile.look.style))).sort((a, b) => b.tile.day - a.tile.day || b.i - a.i).map(({ tile }) => tile);
   const pages = Math.max(1, Math.ceil(shown.length / GALLERY_PAGE));
   const page = Math.min(pages, Math.max(1, query.page ?? 1));
-  return { items: shown.slice((page - 1) * GALLERY_PAGE, page * GALLERY_PAGE), page, pages, pageSize: GALLERY_PAGE, total: shown.length, counts };
+  return { items: shown.slice((page - 1) * GALLERY_PAGE, page * GALLERY_PAGE), page, pages, pageSize: GALLERY_PAGE, total: shown.length, counts, styles };
 }

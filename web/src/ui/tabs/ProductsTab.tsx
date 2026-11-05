@@ -1,14 +1,24 @@
-// Products: the PDF guides — cover, pipeline, quality, sales, reviews, files.
+// Products: the PDF guides — cover, look, pipeline, quality, sales, reviews, files. The look opens the guide's design (D207).
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { Product } from '../../../../shared/types';
+import type { Experiment, Product } from '../../../../shared/types';
 import { fileUrl } from '../../api';
 import { cx, Empty, FileLink, Overlay, Pill, QualityBars, qualityColor, SectionTitle, Segmented, Stat } from '../common';
 import { useApp } from '../context';
+import { isRefresh, lookLabel, lookOf, pageTestsOf, readableLine, variantOn } from '../design';
 import { nextStepTitle } from '../derive';
 import { fmtEur, fmtInt, fmtPct, safeDiv, stars, sum } from '../format';
 import { Icon } from '../icons';
 import { nicheName, PIPELINE, PRODUCT_STATUS_LABEL, PRODUCT_STATUS_TONE } from '../labels';
+import { LookChips } from '../Looks';
 import { PdfLightbox } from '../viewers/Lightbox';
+import { LooksLightbox, type LooksTab } from '../viewers/LooksViewer';
+
+/** « Test de page : Express ↔ Éditoriale », the template shown today first. */
+export function pageTestPill(e: Experiment, day: number): string {
+  const today = variantOn(e, day);
+  const other = e.variants.find((v) => v !== today);
+  return `Test de page : ${lookLabel('template', today)} ↔ ${lookLabel('template', other)}`;
+}
 
 type Filter = 'all' | 'live' | 'prod' | 'stopped';
 
@@ -109,9 +119,14 @@ function Cover({ p }: { p: Product }) {
 }
 
 function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) {
-  const { lookups, runId, demo } = useApp();
+  const { lookups, runId, demo, snapshot } = useApp();
   const [showIssues, setShowIssues] = useState(false);
   const [flipping, setFlipping] = useState(false);
+  const [design, setDesign] = useState<LooksTab | null>(null);
+  const look = lookOf(p);
+  const day = snapshot?.day ?? 1;
+  const test = pageTestsOf(snapshot?.company?.experiments, p.id).find((e) => e.status === 'running');
+  const lastLook = p.designLog?.at(-1);
   const st = p.stats ?? { views: 0, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, rating: 0, reviews: [], upsellSales: 0 };
   const upsellId = p.upsellProductId ?? p.content?.nextStep?.upsellProductId ?? null;
   const upsell = upsellId && upsellId !== p.id ? lookups.products.get(upsellId) : undefined;
@@ -137,6 +152,14 @@ function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) 
         </div>
         <h3 className="product-title">{p.title}</h3>
         {p.subtitle ? <div className="product-sub">{p.subtitle}</div> : null}
+        {look.style || look.page ? (
+          <div className="product-look">
+            <LookChips look={look} />
+            {test ? <Pill tone="blue" icon="layers" title="Les deux pages alternent chaque jour : la conversion de chacune dira laquelle garder">{pageTestPill(test, day)}</Pill> : null}
+            {lastLook && isRefresh(lastLook) && day - lastLook.day <= 14 ? <Pill tone="violet" icon="refresh" title={readableLine(lastLook.why)}>Refonte J{lastLook.day}</Pill> : null}
+          </div>
+        ) : null}
+        {lastLook ? <div className="product-look-why small" title={readableLine(lastLook.why)}><strong>Look v{lastLook.version}, J{lastLook.day} :</strong> {readableLine(lastLook.why)}</div> : null}
         <div className="product-meta small">
           <span><Icon name="users" size={11} /> {p.audience || '—'}</span>
           {p.problem ? <span><Icon name="target" size={11} /> {p.problem}</span> : null}
@@ -205,6 +228,8 @@ function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) 
           {p.files?.pdf && !demo ? <button type="button" className="btn btn-sm btn-ghost" data-viewer="pdf" onClick={() => setFlipping(true)} title="Feuilleter le guide"><Icon name="layers" size={13} />Feuilleter</button> : null}
           <FileLink runId={runId} path={p.files?.pdf} demo={demo} icon="file">Ouvrir le PDF</FileLink>
           <FileLink runId={runId} path={p.files?.salesPage} demo={demo} icon="store">Page de vente</FileLink>
+          {p.files?.salesPage && !demo ? <button type="button" className="btn btn-sm btn-ghost" data-viewer="page" onClick={() => setDesign('page')} title="La page de vente ici même, en taille téléphone ou ordinateur"><Icon name="phone" size={13} />Aperçu</button> : null}
+          {look.style && !demo ? <button type="button" className="btn btn-sm btn-ghost" data-viewer="looks" onClick={() => setDesign('looks')} title="Ses looks, version par version, et pourquoi l’agence les a choisis"><Icon name="palette" size={13} />Design</button> : null}
           {!p.files?.pdf && !p.files?.salesPage && !stopped ? <span className="muted small">Fichiers en cours de fabrication…</span> : null}
         </div>
         {upsell || nextTitle ? (
@@ -217,6 +242,7 @@ function ProductCard({ p, focused = false }: { p: Product; focused?: boolean }) 
         ) : null}
       </div>
       {flipping && p.files?.pdf ? <PdfLightbox url={fileUrl(runId, p.files.pdf)} title={p.title} onClose={() => setFlipping(false)} /> : null}
+      {design ? <LooksLightbox productId={p.id} initial={design} onClose={() => setDesign(null)} /> : null}
     </article>
   );
 }
