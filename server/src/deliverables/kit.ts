@@ -379,7 +379,7 @@ export function kitOffer(kit: Pick<Product, 'content'>, parent: Pick<Product, 't
     chapterBlurbs: planParts(content, kitSheets(content)).filter(({ kicker }) => kicker !== 'Bonus').map(({ ch }) => ({ title: S(ch.title), blurb: firstBox(ch) })),
     bonusBlurb: `Avec le bonus du guide : ${S(content.bonus?.title).replace(/^bonus\s*:\s*/i, '').replace(/[\s.!?…]+$/, '')}.`,
     objections: [{ q: 'Faut-il avoir le guide ?', a: 'Oui : le guide explique, le kit se remplit. Il vous est proposé à la commande du guide.' }],
-    guarantee: 'Satisfait ou remboursé pendant 14 jours, sans justification.', cta: 'Ajouter le kit à ma commande', hypeLevel: 0.2,
+    guarantee: 'Remboursé sous 14 jours, même après le téléchargement, sans justification.', cta: 'Ajouter le kit à ma commande', hypeLevel: 0.2,
   };
 }
 

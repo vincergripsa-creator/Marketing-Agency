@@ -255,7 +255,8 @@ describe('contrast (E7): every text reads at 4.5:1 at least', () => {
 });
 
 describe('the V1 page is untouched', () => {
-  // the bytes of the V1 page, taken at 17a0c3c before package P touched anything
+  // the bytes of the V1 page, taken at 17a0c3c before package P touched anything, then once more for the law's words of D208 alone:
+  // the guarantee says it is commercial and only where the copy states one, the reviews say how they are verified
   const SVG = (label: string, w = 595, h = 842): string => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><path aria-label="${label}" d="M0 0h${w}v${h}h-${w}Z" fill="#f4ecdf"/><path d="M40 60h300v24h-300Z" fill="#27357a"/></svg>`;
   const V1_PREVIEWS = ['Couverture', 'Page du guide', 'Ouverture de chapitre', 'Fiche à imprimer', 'Schéma', 'Votre plan'].map((label) => ({ label, svg: SVG(label) }));
   const KIT_PREVIEWS = ['Couverture', 'Le contenu du kit', 'Fiche à imprimer', 'Le plan à cocher'].map((label) => ({ label, svg: SVG(label) }));
@@ -268,17 +269,17 @@ describe('the V1 page is untouched', () => {
   } as unknown as DesignSpec;
   const base = { product: { ...demoProduct, content: demoContent, design: DESIGN }, salesPage: demoSalesPage, coverSvg: V1_COVER, design: DESIGN, brand: 'Pixel Agency' };
   const CASES: Record<string, [Parameters<typeof renderSalesPageHtml>[0], string]> = {
-    guide: [{ ...base, previews: V1_PREVIEWS, figureSvg: FIGURE }, '9679eb048d9120a3e428258d9fe81caa3afe25a7'],
-    minimal: [{ ...base, design: { ...DESIGN, coverLayout: 'minimal' }, previews: V1_PREVIEWS, figureSvg: FIGURE }, 'ae46a814a48c797cf0dc702a0a09fff89de884ee'],
-    alone: [{ ...base, figureSvg: null }, 'a0f2bf9a429950accc8e21bcccd37750b04816ba'],
-    kit: [{ ...base, product: { ...base.product, kind: 'kit' }, previews: KIT_PREVIEWS, figureSvg: null }, '0fcc289d15cde056d4c64bf815f85c1f43283635'],
-    offSale: [{ ...base, previews: V1_PREVIEWS, figureSvg: FIGURE, offSale: true }, 'd5f876da4daa0c014a7351fdc55f5293f8a24eee'],
-    killed: [{ ...base, product: { ...base.product, status: 'killed' }, previews: V1_PREVIEWS, figureSvg: null }, 'b9ec43df1474571d5387cf23aea8c860390de2a8'],
-    repriced: [{ ...base, product: { ...base.product, price: 24 }, salesPage: { ...demoSalesPage, cta: 'Je commence ce soir — 19 €', priceWritten: 19, solution: `${demoSalesPage.solution} Pour 19 € seulement.` }, previews: V1_PREVIEWS, figureSvg: FIGURE }, 'dee187e5094790bdec01ef25583d4063b79f046c'],
-    noReviews: [{ ...base, product: { ...base.product, stats: { ...demoProduct.stats, rating: 0, reviews: [] } }, previews: V1_PREVIEWS.slice(0, 3), figureSvg: null }, '17e28018c29e17348dcf11517a027b877919ab66'],
+    guide: [{ ...base, previews: V1_PREVIEWS, figureSvg: FIGURE }, 'f99c46a778a9cb3201209ce77cb4cd68e946b87a'],
+    minimal: [{ ...base, design: { ...DESIGN, coverLayout: 'minimal' }, previews: V1_PREVIEWS, figureSvg: FIGURE }, '7dc11ffe03ebbf90cf3fb57b82bd73d16764356d'],
+    alone: [{ ...base, figureSvg: null }, 'bc78627e94f6939c779a578936cbde049f7e315b'],
+    kit: [{ ...base, product: { ...base.product, kind: 'kit' }, previews: KIT_PREVIEWS, figureSvg: null }, '08ff485de60b8da2ff7792d907659c9ec624073c'],
+    offSale: [{ ...base, previews: V1_PREVIEWS, figureSvg: FIGURE, offSale: true }, '16986bdb2f8796d2ebede059fe8349b9d062b30a'],
+    killed: [{ ...base, product: { ...base.product, status: 'killed' }, previews: V1_PREVIEWS, figureSvg: null }, '6f45c97612cbbc28fa03622404231976c658f1aa'],
+    repriced: [{ ...base, product: { ...base.product, price: 24 }, salesPage: { ...demoSalesPage, cta: 'Je commence ce soir — 19 €', priceWritten: 19, solution: `${demoSalesPage.solution} Pour 19 € seulement.` }, previews: V1_PREVIEWS, figureSvg: FIGURE }, 'ff2b8e643630eedcda0d46064374443a078522e5'],
+    noReviews: [{ ...base, product: { ...base.product, stats: { ...demoProduct.stats, rating: 0, reviews: [] } }, previews: V1_PREVIEWS.slice(0, 3), figureSvg: null }, '65da548ecba55a1ef97794875503a00c222f5eec'],
   };
 
-  it('without a template, byte for byte as at 17a0c3c', () => {
+  it('without a template, byte for byte as at 17a0c3c but for the law’s words', () => {
     for (const [name, [input, sha1]] of Object.entries(CASES)) expect(createHash('sha1').update(renderSalesPageHtml(input)).digest('hex'), name).toBe(sha1);
   });
 

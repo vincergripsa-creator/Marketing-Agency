@@ -59,12 +59,14 @@ export function heroConvention(hero: PageHero, family: string | null | undefined
   return row === 'all' || (isFamily(family) && row.includes(family)) ? TASTE.hero.convention : 0;
 }
 
+/** The ad formats whose frame is the cover itself, a fact of the ad anyone can see. Films show it on their end card; a search ad shows none. */
+export const COVER_FORMATS: readonly AdFormat[] = ['static_image', 'carousel', 'text_slideshow'];
+
 /** What a look does to the market (D201). Taste: conversion × page × hero × style^cvr, clicks × style^ctr where the cover shows. */
 export const LOOK_MARKET = {
   cvrStyleExp: 0.35,
   ctrStyleExp: { cover: 0.8, film: 0.4 },
-  /** The formats whose frame is the cover itself. Films show it on their end card; a search ad shows none. */
-  coverFormats: ['static_image', 'carousel', 'text_slideshow'] as readonly AdFormat[],
+  coverFormats: COVER_FORMATS,
   /** Public conditions from the research: short pages sell cheap guides, long reads dear ones, proof needs proof, `inside` real pages. */
   cheapMax: 14, dearMin: 29, priceLift: 1.06, priceDrop: 0.94,
   proofMinReviews: 5, proofWithout: 0.82,

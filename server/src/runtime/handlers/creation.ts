@@ -3,6 +3,7 @@ import type { AgentState, ArtStyle, DesignEffort, DesignSpec, Product, Task } fr
 import type { MindContext, Rng } from '../../contracts.js';
 import { hashString, streamRng } from '../../core/index.js';
 import { coverScore } from '../../deliverables/art/evaluate.js';
+import { compositionOf, styleDef } from '../../deliverables/art/styles/index.js';
 import { effortFor } from '../../deliverables/effort.js';
 import { chooseLook, LOOK_ARMS, logLook, lookIn, lookLabel, looksOn, REFRESH_WORD, shelfOf, type LookChoice } from '../../learning/looks.js';
 import type { RuntimeCtx } from '../ctx.js';
@@ -10,7 +11,7 @@ import { absPath, addDeliverable, nicheName, productBrief, productOf, readRunFil
 import { deliverables, learning, sim } from '../modules.js';
 import { directivesOf } from '../playbook.js';
 import { STREAM } from '../streams.js';
-import { craftFor, effectiveT } from '../talent/craft.js';
+import { effectiveT } from '../talent/craft.js';
 import { short, slugify, strArr } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { NO_PRODUCT, requireProduct, reworkNotes, studioMind } from './common.js';
@@ -63,10 +64,9 @@ export function designRng(ctx: RuntimeCtx, agentId: string, purpose: string, use
   return streamRng(w.scenario.seed, STREAM.design, w.day, w.tick, hashString(agentId), use, hashString(purpose));
 }
 
-/** Talent reads the design bandits as it reads the hooks (talent §4.8), on the design stream. */
-export function lookSharp(ctx: RuntimeCtx, agent: AgentState, mind: MindContext, purpose: string, kind: Task['kind'] = 'design_cover'): { samples: number; rng: Rng } | undefined {
-  const craft = mind.craft ?? craftFor(ctx.world, agent, kind);
-  return craft ? { samples: craft.sharp, rng: designRng(ctx, agent.id, `sharp:${purpose}`, 2) } : undefined;
+/** Talent reads the design bandits as it reads the hooks (talent §4.8), on the design stream: the craft of the task's own skill. */
+export function lookSharp(ctx: RuntimeCtx, agent: AgentState, mind: MindContext, purpose: string): { samples: number; rng: Rng } | undefined {
+  return mind.craft ? { samples: mind.craft.sharp, rng: designRng(ctx, agent.id, `sharp:${purpose}`, 2) } : undefined;
 }
 
 /** What a founder's words name in a task: its hint, or the text of their mission. */
@@ -74,25 +74,14 @@ export function founderWords(task: Task): string {
   return `${str0(task.input.hint)} ${str0(task.input.missionText)}`;
 }
 
-/** Every style draws at least two compositions (D200). The eye looks at as many as the designer's talent allows. */
-export const COVER_COMPOSITIONS = 2;
-
-/** The composition the designer keeps: one at random for a weak eye, else the best of those examined as their own eye reads them. */
-function compositionByEye(ctx: RuntimeCtx, task: Task, agent: AgentState, mind: MindContext, product: Product, style: ArtStyle): number {
-  const rng = designRng(ctx, agent.id, 'composition');
-  const examined = Math.min(COVER_COMPOSITIONS, 1 + Math.floor(designTalent(ctx, agent) * COVER_COMPOSITIONS) + task.attempts);
-  const first = rng.int(0, COVER_COMPOSITIONS - 1);
-  if (examined <= 1) return first;
-  const eye = (mind.craft ?? craftFor(ctx.world, agent, 'design_cover'))?.eye ?? 0;
-  let best = first;
-  let seen = -Infinity;
-  for (let i = 0; i < examined; i++) {
-    const composition = (first + i) % COVER_COMPOSITIONS;
-    const real = coverScore(deliverables.coverAudit({ ...coverInput(ctx, product), design: { ...product.design!, style, composition } }));
-    const perceived = real + rng.normal(0, eye);
-    if (perceived > seen) { seen = perceived; best = composition; }
-  }
-  return best;
+/**
+ * The composition the designer keeps (D203): the foundation's own choice among the style's real compositions (`pickComposition`),
+ * as many examined as their eye allows, judged on the real cover. `avoid` is the one a refresh that keeps its style leaves.
+ */
+function compositionFor(ctx: RuntimeCtx, task: Task, agent: AgentState, product: Product, style: ArtStyle, avoid?: number): number {
+  const { composition: _worn, ...design } = product.design!; // another style's index means nothing to this one
+  const input = { ...coverInput(ctx, product), design: { ...design, style } };
+  return deliverables.pickComposition(input, effortFor(designTalent(ctx, agent), task.attempts), avoid === undefined ? {} : { avoid }).composition;
 }
 
 interface CoverLook { style: ArtStyle; composition: number; why: string; source: LookChoice['source'] }
@@ -100,9 +89,10 @@ interface CoverLook { style: ArtStyle; composition: number; why: string; source:
 /**
  * The style and composition of a cover (D203), null while looks are off (visual model off, `designV1`). In order: the founder's
  * hint, a playbook rule for the niche, a Thompson draw on `cover_style:<niche>`, now and then the least-tried style. A rework keeps
- * its style: the reviewer asked for legibility, not another look. `exclude` is what the evidence says to leave.
+ * its style: the reviewer asked for legibility, not another look. `exclude` is what the evidence says to leave, `worn` the look a
+ * refresh replaces: kept, its style gets another of its compositions.
  */
-function coverLook(ctx: RuntimeCtx, task: Task, agent: AgentState, mind: MindContext, product: Product, exclude: readonly string[] = []): CoverLook | null {
+function coverLook(ctx: RuntimeCtx, task: Task, agent: AgentState, mind: MindContext, product: Product, exclude: readonly string[] = [], worn?: { style: ArtStyle; composition: number }): CoverLook | null {
   const w = ctx.world;
   if (!looksOn(w) || !product.design) return null;
   const kept = task.attempts > 0 ? str0(task.output?.style) : '';
@@ -115,7 +105,7 @@ function coverLook(ctx: RuntimeCtx, task: Task, agent: AgentState, mind: MindCon
     });
   if (!choice) return null;
   const style = choice.key as ArtStyle;
-  return { style, composition: compositionByEye(ctx, task, agent, mind, product, style), why: choice.why, source: choice.source };
+  return { style, composition: compositionFor(ctx, task, agent, product, style, worn?.style === style ? worn.composition : undefined), why: choice.why, source: choice.source };
 }
 
 /** Under this a refreshed cover is drawn again with more candidates, as the art director's review would send it back (pdf §13). */
@@ -191,7 +181,8 @@ export const creationHandlers: HandlerMap = {
       if (!product) return NO_PRODUCT;
       if (!looksOn(ctx.world) || !product.design) return { summary: 'Pas de refonte : ce guide garde le look de la V1.', skipReview: true, output: { skipped: true } };
       const before = product.design.style ?? 'bauhaus';
-      const look = coverLook(ctx, task, agent, mind, product, task.input.excludeStyle === true ? [before] : []);
+      const worn = { style: before, composition: compositionOf(product.design, styleDef(before)) };
+      const look = coverLook(ctx, task, agent, mind, product, task.input.excludeStyle === true ? [before] : [], worn);
       if (!look) return { summary: 'Pas de refonte : aucun style possible.', skipReview: true, output: { skipped: true } };
       // same palette, motif and seed: the guide changes its art direction, not its identity
       product.design = { ...product.design, style: look.style, composition: look.composition };
@@ -210,7 +201,8 @@ export const creationHandlers: HandlerMap = {
       await writeRunFile(ctx, rel, coverSvgFor(ctx, product));
       product.files.cover = rel;
       const [now, was] = [lookLabel('style', look.style), lookLabel('style', before)];
-      const change = look.style === before ? `style « ${now} » gardé, nouvelle composition` : `style « ${now} » au lieu de « ${was} »`;
+      const drawn = styleDef(look.style).compositions[look.composition]?.label;
+      const change = look.style === before ? `style « ${now} » gardé, nouvelle composition${drawn ? ` « ${drawn} »` : ''}` : `style « ${now} » au lieu de « ${was} »`;
       logLook(product, ctx.world.day, `${REFRESH_WORD} v${product.version} : ${change} — ${look.why}`, true);
       addDeliverable(ctx, { kind: 'cover', title: `Couverture « ${short(product.title, 50)} » (v${product.version}, refonte)`, productId: product.id, creativeId: null, path: rel, createdBy: agent.id, quality: cover }, task);
       say(ctx, agent.id, `${agent.name} refait le look de « ${short(product.title, 50)} » : ${change}, ${look.why}${cover === null ? '' : ` (${Math.round(cover)}/100)`}`, 'thought', { productId: product.id });

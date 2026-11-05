@@ -12,7 +12,7 @@ export const KIND_SKILL: Partial<Record<TaskKind, Skill>> = {
   write_titles: 'longform', write_outline: 'longform', write_pdf: 'longform',
   humanize_pdf: 'polish',
   write_sales_page: 'page',
-  design_cover: 'design', render_pdf: 'design',
+  design_cover: 'design', render_pdf: 'design', refresh_design: 'design',
   launch_campaign: 'buying', optimize_ads: 'buying',
   scan_trends: 'research', pick_opportunity: 'research',
   reply_inbox: 'support', handle_refund: 'support',

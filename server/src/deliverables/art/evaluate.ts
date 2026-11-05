@@ -47,16 +47,21 @@ export function pickArt(design: DesignSpec, effort: DesignEffort): { seed: numbe
 
 /**
  * The composition this designer keeps for a cover (D203), judged on the real cover with its title: the style's default
- * first, then as many others as the eye has room for, misread as `pickArt` misreads art. A full eye sees them all.
+ * first, then as many others as the eye has room for, misread as `pickArt` misreads art. A full eye sees them all. `avoid`
+ * leaves one out while the style has another: a refresh that keeps its style still draws a new cover.
  */
-export function pickComposition(input: CoverInput, effort: DesignEffort): { composition: number; score: number; explored: number } {
+export function pickComposition(input: CoverInput, effort: DesignEffort, o: { avoid?: number } = {}): { composition: number; score: number; explored: number } {
   const d = normalizeDesign(input.design);
   const style = styleOf(d);
   const count = style.compositions.length;
-  const first = compositionOf(d, style);
-  const order = [first, ...Array.from({ length: count }, (_, k) => k).filter((k) => k !== first).sort((a, b) => hashString(`${d.seed}|composition|${a}`) - hashString(`${d.seed}|composition|${b}`))];
+  const avoid = count > 1 && typeof o.avoid === 'number' && Number.isInteger(o.avoid) && o.avoid >= 0 ? o.avoid % count : -1;
+  const pool = Array.from({ length: count }, (_, k) => k).filter((k) => k !== avoid);
+  const own = compositionOf(d, style);
+  const rank = (k: number): number => hashString(`${d.seed}|composition|${k}`);
+  const first = pool.includes(own) ? own : [...pool].sort((a, b) => rank(a) - rank(b))[0]!;
+  const order = [first, ...pool.filter((k) => k !== first).sort((a, b) => rank(a) - rank(b))];
   const eye = clamp01((effort.taste - 0.4) / 0.6);
-  const explored = Math.max(1, Math.min(count, 1 + Math.round((count - 1) * eye)));
+  const explored = Math.max(1, Math.min(pool.length, 1 + Math.round((pool.length - 1) * eye)));
   let best = { composition: first, score: 0, seen: -Infinity };
   for (const composition of order.slice(0, explored)) {
     const score = coverScore(coverAudit({ ...input, design: { ...input.design, composition } }));

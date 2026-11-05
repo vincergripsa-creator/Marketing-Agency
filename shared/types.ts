@@ -1315,6 +1315,7 @@ export interface FounderDigest {
   incidents: string[];         // outages, skipped ticks, crash recoveries, machine off
   waiting: string[];           // what needs the founder, approval tasks first
   next: string[];              // this week's allocation and open bets
+  design?: string[];           // French: the page tests of the window, the guides that changed their look, the looks each niche favours (D207)
 }
 export interface StagePolicy {
   maxMains: number;

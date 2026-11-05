@@ -6,6 +6,7 @@
 import type { Rng } from '../contracts.js';
 import type { ArtStyle, BanditArm, DesignLogEntry, Experiment, GuideArchetype, PageHero, PageTemplate, Product, WorldState } from '../shared.js';
 import { ART_STYLES, HERO_INFO, HERO_NEEDS, PAGE_HEROES, PAGE_TEMPLATES, STYLE_INFO, TEMPLATE_INFO, TEMPLATE_NEEDS } from '../shared.js';
+import { clamp } from '../core/index.js';
 import { heroConvention, styleConvention, templateConvention } from '../sim/catalog/looks.js';
 import { armStats, chooseArm } from './bandits.js';
 import { adRows, nicheName, onReference, referenceChannels } from './data.js';
@@ -81,19 +82,38 @@ export function conventionOf(kind: LookKind, key: string, shelf: LookShelf): num
 }
 
 /**
- * Where a look's day scores before any sale, and how many days of evidence the research is worth: a fresh agency starts from
- * conventions. The mean is a typical page of the research, 2.5 % of paid visitors buying and 5 % of sales refunded: 0.025 / 0.08 × 0.8.
+ * Where an untried look's day scores, and how many days of evidence that is worth (D203). A look a guide wears scores what its
+ * niche converts, 0.18 to 0.24 on the default market: an untried look starts where the bandit's measured looks stand together
+ * (`mean` before any day), so it never reads better than the looks already worn and the bandit stops fleeing them. The
+ * research's conventions lift it a little; `strength` is a few days of evidence.
  */
-export const LOOK_PRIOR = { mean: 0.25, strength: 6 } as const;
+export const LOOK_PRIOR = { mean: 0.2, strength: 4 } as const;
 
-/** The arms of a niche's design bandit, each created once from the research priors as pseudo-counts (D203). */
+/**
+ * The running mean of the bandit's measured looks: their pooled posterior, weighted as the bandit weighs a day, so that an untried
+ * look sits level with a lone measured one. A day's reward alone would not do: the clicks of a cover and a page's sales weigh apart.
+ */
+function measuredMean(arms: readonly BanditArm[]): number {
+  let alpha = 0;
+  let total = 0;
+  for (const a of arms) if (a.pulls > 0) { alpha += a.alpha; total += a.alpha + a.beta; }
+  return total > 0 ? alpha / total : LOOK_PRIOR.mean;
+}
+
+/**
+ * The arms of a niche's design bandit (D203). An arm never measured sits on the bandit's running mean, lifted by the research
+ * conventions of the shelf, with the weight of a few days: it moves with the bandit until its first day, then keeps that prior.
+ */
 export function ensureLookArms(world: WorldState, kind: LookKind, nicheId: string, shelf: LookShelf): BanditArm[] {
   const all = (world.company.bandits ??= {});
   const arms = (all[lookDim(kind, nicheId)] ??= []);
-  for (const key of LOOK_ARMS[kind]) {
-    if (arms.some((a) => a.key === key)) continue;
-    const mean = LOOK_PRIOR.mean * (1 + conventionOf(kind, key, shelf));
-    arms.push({ key, alpha: round(LOOK_PRIOR.strength * mean, 4), beta: round(LOOK_PRIOR.strength * (1 - mean), 4), pulls: 0, reward: 0 });
+  for (const key of LOOK_ARMS[kind]) if (!arms.some((a) => a.key === key)) arms.push({ key, alpha: 0, beta: 0, pulls: 0, reward: 0 });
+  const centre = measuredMean(arms);
+  for (const a of arms) {
+    if (a.pulls > 0) continue;
+    const mean = clamp(centre * (1 + conventionOf(kind, a.key, shelf)), 0.01, 0.99);
+    a.alpha = round(LOOK_PRIOR.strength * mean, 4);
+    a.beta = round(LOOK_PRIOR.strength * (1 - mean), 4);
   }
   return arms;
 }

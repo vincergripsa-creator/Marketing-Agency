@@ -2,6 +2,7 @@
 import type { AgentState, PageHero, PageTemplate, Product, Task } from '../../shared.js';
 import type { MindContext } from '../../contracts.js';
 import { nextId } from '../../core/index.js';
+import { priceDropPrint } from '../../deliverables/sales/index.js';
 import { chooseLook, eligibleLooks, logLook, lookIn, lookLabel, looksOn, runningPageTest, shelfOf, variantOn, type LookChoice } from '../../learning/looks.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { addDeliverable, incident, latestOutput, nicheName, productOf, readRunFile, runFileExists, say, speak, versionDir, vocOf, writeRunFile } from '../ctx.js';
@@ -49,14 +50,22 @@ function offSale(ctx: RuntimeCtx, product: Product): boolean {
   return stopped(product) || (!!guide && stopped(guide));
 }
 
+/** The kit the checkout really offers beside a guide, drawn by the `bundle` hero: a kit not on sale is never shown. */
+function kitOf(ctx: RuntimeCtx, product: Product): Product | undefined {
+  const kit = product.kind === 'kit' ? undefined : productOf(ctx, product.bumpProductId);
+  return kit?.status === 'live' && kit.design ? kit : undefined;
+}
+
 /**
  * What the page prints of the live shop: when this changes, the file on disk is out of date. A stopped guide loses its buttons this way,
- * and its kit with it. Its look too: a page test switches the template by day, a refresh the cover (D204). A V1 page has no look.
+ * and its kit with it. Its look too: a page test switches the template by day, a refresh the cover (D204). A V1 page has no look, and
+ * prints neither a reduction nor a kit: a templated one shows a reduction for 30 days (D208) and the kit the checkout offers.
  */
 function pagePrintOf(ctx: RuntimeCtx, product: Product): string {
   const { reviews, rating } = product.stats;
   const look = [product.design?.style, product.salesPage?.template, product.salesPage?.hero];
-  return [product.price, reviews.length, rating, reviews[reviews.length - 1]?.id ?? '', ...(offSale(ctx, product) ? ['hors vente'] : []), ...(look.some(Boolean) ? [`look:${look.map((x) => x ?? '').join('/')}`] : [])].join('|');
+  const shop = product.salesPage?.template ? [`baisse:${priceDropPrint(product.priceHistory, product.price, ctx.world.day)}`, `kit:${kitOf(ctx, product)?.id ?? ''}`] : [];
+  return [product.price, reviews.length, rating, reviews[reviews.length - 1]?.id ?? '', ...(offSale(ctx, product) ? ['hors vente'] : []), ...(look.some(Boolean) ? [`look:${look.map((x) => x ?? '').join('/')}`] : []), ...shop].join('|');
 }
 
 interface PageLook { template: PageTemplate; hero: PageHero; why: string }
@@ -81,7 +90,7 @@ function pageLook(ctx: RuntimeCtx, task: Task, agent: AgentState, mind: MindCont
   const words = founderWords(task);
   const ask = (kind: 'template' | 'hero', eligible: string[], rule: string | null, testKey: string | null, exclude: string[]): LookChoice | null => chooseLook(w, {
     kind, nicheId: product.nicheId, shelf, eligible, founder: lookIn(kind, words), rule, test: testKey, exclude,
-    rng: designRng(ctx, agent.id, kind), sharp: lookSharp(ctx, agent, mind, kind, 'write_sales_page'),
+    rng: designRng(ctx, agent.id, kind), sharp: lookSharp(ctx, agent, mind, kind),
   });
   const template = ask('template', templates, rules.pageTemplate, test ? variantOn(test, w.day) ?? null : null, task.input.excludeTemplate === true && sp?.template ? [sp.template] : []);
   const hero = ask('hero', heroes, rules.pageHero, null, []);
@@ -101,7 +110,11 @@ async function previewsOf(ctx: RuntimeCtx, product: Product): Promise<{ label: s
 }
 
 async function renderSalesPage(ctx: RuntimeCtx, product: Product, rel: string, coverSvg: string): Promise<void> {
-  const html = deliverables.renderSalesPageHtml({ product, salesPage: product.salesPage!, coverSvg, design: ensureDesign(ctx, product), brand: ctx.world.company.name, previews: await previewsOf(ctx, product), offSale: offSale(ctx, product) });
+  const kit = kitOf(ctx, product);
+  const html = deliverables.renderSalesPageHtml({
+    product, salesPage: product.salesPage!, coverSvg, design: ensureDesign(ctx, product), brand: ctx.world.company.name, previews: await previewsOf(ctx, product), offSale: offSale(ctx, product),
+    kit: kit ? { title: kit.title, coverSvg: coverSvgFor(ctx, kit) } : null, day: ctx.world.day,
+  });
   await writeRunFile(ctx, rel, html);
   product.files.salesPage = rel;
   product.pagePrint = pagePrintOf(ctx, product);

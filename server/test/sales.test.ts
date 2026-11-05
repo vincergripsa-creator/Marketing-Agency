@@ -1,5 +1,5 @@
 /** The sales page (pdf §11): nothing leaves the file, the pages it shows are the guide's, the figures it prints are counted. */
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -11,6 +11,8 @@ import { setFontDir } from '../src/deliverables/fonts.js';
 import { renderCoverSvg, renderSalesPageHtml } from '../src/deliverables/index.js';
 import { layoutPdf } from '../src/deliverables/pdf.js';
 import { figureSvgFor, STAGE } from '../src/deliverables/salesPage.js';
+import { safeSvg } from '../src/deliverables/sales/common.js';
+import { buildModel } from '../src/deliverables/sales/model.js';
 import { toSvg } from '../src/deliverables/scene.js';
 import { VOICES } from '../src/deliverables/voices.js';
 import { createBrainVault } from '../src/learning/index.js';
@@ -84,7 +86,8 @@ const shop = (over: Partial<Parameters<typeof renderSalesPageHtml>[0]> = {}, pro
   renderSalesPageHtml({ product: { ...demoProduct, content: demoContent, ...product }, salesPage: demoSalesPage, coverSvg: cover, design, brand: 'Pixel Agency', ...over });
 
 beforeAll(async () => {
-  world = createWorld(defaultScenario({ seed: 7, mindMode: 'heuristic', maxComputeEur: 0, horizonDays: 90 }), 'test-sales');
+  // the V1 page (D202): the shop of this file writes copy that names no template; the templates have salesTemplates.test.ts
+  world = createWorld(defaultScenario({ seed: 7, mindMode: 'heuristic', maxComputeEur: 0, horizonDays: 90, control: { designV1: true } }), 'test-sales');
   root = mkdtempSync(join(tmpdir(), 'pixel-sales-'));
   const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
   const brain = createBrainVault(paths);
@@ -513,5 +516,125 @@ describe('no double period anywhere', () => {
     };
     expect(await noteOf(`Je tue « ${p.title} » en l’état : Marché trop bon marché pour « ${p.title} » : les clients citent 9 €.`)).not.toMatch(/[.…] ?»?\.$/);
     expect(await noteOf('Je tue ce guide en l’état.')).toBe('Verdict « tuer » validé : Je tue ce guide en l’état.');
+  });
+});
+
+// ───────────────────────────── the templated page of the pipeline ─────────────────────────────
+
+/** A drawing as a templated page inlines it once, as a symbol: the inside of its <svg>, its title and description left out. */
+const innerOf = (svg: string): string => /^<svg\b[^>]*>([\s\S]*)<\/svg>$/.exec(safeSvg(svg))![1]!.replace(/<title>[\s\S]*?<\/title>/i, '').replace(/<desc>[\s\S]*?<\/desc>/i, '');
+const symbolsIn = (html: string, prefix: string): Map<string, string> =>
+  new Map([...html.matchAll(new RegExp(`<symbol id="(${prefix}[\\w-]*)" viewBox="[^"]*">([\\s\\S]*?)</symbol>`, 'g'))].map((m) => [m[1]!, m[2]!]));
+
+/** The company of today: looks on, so every page the shop writes names a template (D202). The V1 page's checks, on the new path. */
+describe('the page the pipeline writes with a template (D202)', () => {
+  let lw: WorldState;
+  let lctx: RuntimeCtx;
+  let lp: Product;
+  async function lrun(product: Product, kind: Task['kind']): Promise<Task> {
+    const agent = lw.company.agents.find((a) => a.taskKinds.includes(kind))!;
+    const mind: MindContext = { agent, playbook: [], brainNotes: [], lessons: [], day: lw.day, brand: 'Pixel' };
+    const task = createTask(lw, { kind, assignee: agent.id, input: { productId: product.id } });
+    const out = await HANDLERS[kind]!.run(lctx, task, agent, mind);
+    expect(out.fail, kind).toBeUndefined();
+    task.output = out.output ?? null;
+    task.status = 'done';
+    return task;
+  }
+  const ladd = (id: string): Product => {
+    const product: Product = {
+      ...demoProduct, id, nicheId: NICHE, title: 'Le chiot fait ses besoins partout', price: 19, status: 'live', version: 1, content: null, design: null, salesPage: null,
+      files: { pdf: null, cover: null, salesPage: null }, quality: null, salesQuality: null, upsellProductId: null, createdDay: 2, launchedDay: 3,
+      stats: { views: 0, sales: 0, revenue: 0, refunds: 0, refundAmount: 0, rating: 0, reviews: [], upsellSales: 0 }, priceHistory: [],
+    };
+    lw.company.products.push(product);
+    return product;
+  };
+  async function lonSale(product: Product): Promise<void> {
+    for (const kind of ['write_titles', 'write_outline', 'write_pdf', 'design_cover', 'render_pdf', 'write_sales_page'] as const) await lrun(product, kind);
+  }
+  const lhtml = (p: Product): string => read(p.files.salesPage!);
+
+  beforeAll(async () => {
+    lw = createWorld(defaultScenario({ seed: 7, mindMode: 'heuristic', maxComputeEur: 0, horizonDays: 90 }), 'test-sales-looks');
+    const paths: RunPaths = { root, brain: join(root, 'brain-looks'), files: join(root, 'files') };
+    const brain = createBrainVault(paths);
+    await brain.init();
+    const company = new Company(lw, { paths, engine: createContentEngine({ mode: 'heuristic', maxComputeEur: 0, seed: 7 }), brain });
+    lctx = (company as unknown as { ctx: RuntimeCtx }).ctx;
+    lw.company.research.voc[NICHE] = lctx.tools.minePains(NICHE, 'deep');
+    lp = ladd('prd_tpl');
+    await lonSale(lp);
+  }, 60_000);
+
+  it('names its template and hero, wears the guide’s style, and fetches nothing', () => {
+    const { template, hero } = lp.salesPage!;
+    expect(template).toBeDefined();
+    expect(hero).toBeDefined();
+    const html = lhtml(lp);
+    expect(html).toContain(`<body class="t-${template} s-${lp.design!.style} h-${hero}">`);
+    expect(html).toContain(BANNER);
+    const urls = noFonts(html).replaceAll('xmlns="http://www.w3.org/2000/svg"', '').match(/(?:https?:)?\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)+/gi) ?? [];
+    expect(urls).toEqual([]);
+    expect(html).not.toMatch(/<(?:link|img|iframe|object|embed|video|audio)\b|@import|\ssrc\s*=/i);
+  });
+
+  it('its faces are the committed WOFF files themselves, each once', () => {
+    const html = lhtml(lp);
+    const inline = [...html.matchAll(/url\(data:font\/woff;base64,([A-Za-z0-9+/=]+)\)/g)].map((m) => m[1]!);
+    expect(html.match(/@font-face/g)).toHaveLength(inline.length);
+    expect(inline.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(inline).size).toBe(inline.length);
+    const committed = new Set(readdirSync(join('assets', 'fonts')).filter((f) => f.endsWith('.woff')).map((f) => readFileSync(join('assets', 'fonts', f)).toString('base64')));
+    for (const face of inline) expect(committed.has(face)).toBe(true);
+  });
+
+  it('render_pdf’s real pages reach it untouched, each inlined once and shown by reference', () => {
+    const written = lp.files.previews!.map(read);
+    expect(written.length).toBeGreaterThanOrEqual(3);
+    const html = lhtml(lp);
+    const pages = symbolsIn(html, 'pg-');
+    expect(pages.size).toBeGreaterThanOrEqual(3);
+    expect(pages.size).toBeLessThanOrEqual(6);
+    expect(html.match(/<symbol id="pg-/g)).toHaveLength(pages.size);
+    const drawn = new Set(written.map(innerOf));
+    for (const inner of pages.values()) expect(drawn.has(inner)).toBe(true);
+    for (const [, id] of html.matchAll(/<use href="#(pg-[\w-]*)"/g)) expect(pages.has(id!)).toBe(true);
+    expect(leavesIn(html)).toEqual([]); // no page inlined whole, as the V1 page does: each travels once, as a symbol
+  });
+
+  it('the cover reaches it untouched', () => {
+    const file = read(lp.files.cover!);
+    expect(file.startsWith('<svg')).toBe(true);
+    expect(symbolsIn(lhtml(lp), 'cover-art').get('cover-art')).toBe(innerOf(file));
+    expect(renderCoverSvg({ title: lp.title, subtitle: lp.content!.subtitle, audience: lp.audience, design: lp.design!, brand: lw.company.name })).toBe(file);
+  });
+
+  it('the figures it prints are the guide’s and its render’s, the actions being the number the PDF prints', () => {
+    const c = lp.content!;
+    const promise = plain(pdfPagesText(join(root, ...lp.files.pdf!.split('/')))[1]!);
+    const actions = Number(/(\d+) actions guidées/.exec(promise)![1]);
+    const model = buildModel({ product: lp, salesPage: lp.salesPage!, coverSvg: read(lp.files.cover!), design: lp.design!, brand: lw.company.name });
+    expect(model.template).toBe(lp.salesPage!.template);
+    expect(model.facts).toMatchObject({ chapters: c.chapters.length, actions, sheets: lp.pdfFacts!.sheets, pages: lp.pdfFacts!.pages });
+    expect(lp.pdfFacts!.sheets).toBeGreaterThan(0);
+  });
+
+  it('the guide rendered again: the page shows the new render at the end of the tick, and keeps its look', async () => {
+    const p = ladd('prd_tpl_again');
+    await lonSale(p);
+    const look = [p.design!.style, p.salesPage!.template, p.salesPage!.hero];
+    const stamp = p.pagePrint;
+    const before = [...symbolsIn(lhtml(p), 'pg-').values()];
+    expect(stamp).toBeDefined();
+    p.content!.chapters[0]!.title = 'Un chapitre tout neuf';
+    await lrun(p, 'render_pdf');
+    expect(p.pagePrint).toBeUndefined();
+    await syncSalesPages(lctx);
+    expect(p.pagePrint).toBe(stamp);
+    const after = [...symbolsIn(lhtml(p), 'pg-').values()];
+    expect(after).not.toEqual(before);
+    expect(after.join('')).toContain('tout neuf');
+    expect([p.design!.style, p.salesPage!.template, p.salesPage!.hero]).toEqual(look);
   });
 });
