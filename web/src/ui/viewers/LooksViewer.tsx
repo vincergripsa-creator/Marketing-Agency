@@ -1,5 +1,5 @@
 // A guide's design, in one layer (design plan D207): what it wears today, every look it wore version by version with the agent's
-// reason, its page tests, and its sales page at phone and desktop size. The whole log comes from GET /api/product, the stream keeps 3.
+// reason, its page tests, and its sales page at phone and desktop size. The whole log comes from GET /api/product, the stream keeps the last.
 import { useState } from 'react';
 import type { DesignLogEntry, Experiment, Product } from '../../../../shared/types';
 import { fileUrl } from '../../api';
