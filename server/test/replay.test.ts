@@ -124,15 +124,17 @@ describe('A5: a reload is an uninterrupted run', () => {
     expect(firstGap(straight.dump, reloaded.dump)).toBeNull();
   }, LONG_TIMEOUT);
 
-  // A failed plan goes to the challenge at a close: D56 at the earliest (D79) and on seed 12, D70 on other seeds, so the run holds both.
+  // A failed plan goes to the challenge at a close: D56 at the earliest (D79), D70 on other seeds, so the run holds both. Since the
+  // integration of the design build seeds 1 to 16 hold this road 11 times, 4 of them with the firing on D57 (1, 4, 10, 11), the others
+  // on D71, the run's last day (12 among them): seed 1 keeps two weeks in hand. A change that moves the market may move the seed.
   it('league: through a hire, a firing, a compaction and 3 channels', async () => {
     const ticks = 71 * TICKS_A_DAY;
-    const straight = await play(12, ticks, 0, { ...FULL, talent: 'league' }, true);
+    const straight = await play(1, ticks, 0, { ...FULL, talent: 'league' }, true);
     expectFullCompany(straight.world, 'league');
     const fired = straight.world.company.org!.alumni.filter((a) => a.kind === 'fired');
     expect(fired.length).toBeGreaterThan(0);
     expect(fired[0]!.replacedBy).not.toBeNull();
-    const reloaded = await play(12, ticks, 7, { ...FULL, talent: 'league' }, true);
+    const reloaded = await play(1, ticks, 7, { ...FULL, talent: 'league' }, true);
     expect(reloaded.reloads).toBe(Math.floor(ticks / 7));
     expect(firstGap(straight.dump, reloaded.dump)).toBeNull();
   }, LONG_TIMEOUT);

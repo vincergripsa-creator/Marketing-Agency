@@ -84,7 +84,8 @@ const shop = (over: Partial<Parameters<typeof renderSalesPageHtml>[0]> = {}, pro
   renderSalesPageHtml({ product: { ...demoProduct, content: demoContent, ...product }, salesPage: demoSalesPage, coverSvg: cover, design, brand: 'Pixel Agency', ...over });
 
 beforeAll(async () => {
-  world = createWorld(defaultScenario({ seed: 7, mindMode: 'heuristic', maxComputeEur: 0, horizonDays: 90 }), 'test-sales');
+  // the V1 page (D202): the shop of this file writes copy that names no template; the templates have salesTemplates.test.ts
+  world = createWorld(defaultScenario({ seed: 7, mindMode: 'heuristic', maxComputeEur: 0, horizonDays: 90, control: { designV1: true } }), 'test-sales');
   root = mkdtempSync(join(tmpdir(), 'pixel-sales-'));
   const paths: RunPaths = { root, brain: join(root, 'brain'), files: join(root, 'files') };
   const brain = createBrainVault(paths);

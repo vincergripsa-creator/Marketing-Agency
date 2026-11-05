@@ -2,8 +2,8 @@
  * Self-contained storefront page (pdf §11): the guide's inks and type, its cover as a real book, its real pages as previews,
  * a fake checkout. Nothing leaves the file: the fonts are inlined and no URL is ever fetched.
  *
- * This is the V1 page, drawn byte for byte as it always was. A page that names a template (design plan D202) is drawn by
- * `sales/` instead.
+ * This is the V1 page, drawn as it always was but for the law's words (design plan D208): its guarantee says it is commercial,
+ * its reviews say how they are verified. A page that names a template (design plan D202) is drawn by `sales/` instead.
  */
 import type { DesignSpec, Product, Review, SalesPage } from '../shared.js';
 import { ensureContrast, mix, rgba } from './color.js';
@@ -14,6 +14,7 @@ import { kitBoxes, kitSheets } from './kit.js';
 import { guidedActions } from './pages/render.js';
 import { atPriceOfTheDay, CAPTIONS, CHECKOUT_ALERT, figureSvgFor, fontFace, h, safeSvg, shortTitle } from './sales/common.js';
 import { renderTemplatePage, type SalesPageInput } from './sales/index.js';
+import { GUARANTEE_TITLE, REVIEWS_VERIFIED } from './sales/law.js';
 import { escapeHtml as esc, formatPrice, slugify, truncate, wholeClause } from './text.js';
 import type { Voice } from './voices.js';
 
@@ -156,6 +157,7 @@ section{padding:68px 0;scroll-margin-top:60px}
 .review-head div{flex:1}
 .review p{margin:0}
 .no-review{color:var(--muted)}
+.verified{margin:-10px 0 18px;max-width:680px;font:400 14px/1.45 var(--label);color:var(--muted)}
 /* faq */
 .faq details{border-top:1px solid var(--line)}.faq details:last-child{border-bottom:1px solid var(--line)}
 .faq summary{cursor:pointer;list-style:none;padding:16px 36px 16px 0;font:700 16px/1.35 var(--label);position:relative}
@@ -318,7 +320,7 @@ function renderV1Page(input: { product: Product; salesPage: SalesPage; coverSvg:
       ${ratingLine}
       ${strip ? `<ul class="strip">${strip}</ul>` : ''}
       ${onSale ? `<button type="button" class="buy cta" data-buy>${ctaHtml}</button>
-      <p class="note">Téléchargement immédiat · Paiement unique · Satisfait ou remboursé</p>` : `<p class="gone">Ce ${noun} n’est plus en vente.</p>`}
+      <p class="note">Téléchargement immédiat · Paiement unique${sp?.guarantee ? ` · ${GUARANTEE_TITLE}` : ''}</p>` : `<p class="gone">Ce ${noun} n’est plus en vente.</p>`}
     </div>
     <div class="stage${d.coverLayout === 'minimal' ? ' foot' : ''}${tablet ? '' : ' alone'}">
       <div class="book"><div class="front">${cover}</div><div class="edge"></div></div>
@@ -374,7 +376,7 @@ ${reviews.length || onSale ? `<section class="reviews" id="avis">
     <span class="kicker">Avis des ${isKit ? 'acheteurs' : 'lecteurs'}</span>
     <h2>${reviews.length ? `Ce qu’en disent les ${isKit ? 'acheteurs' : 'lecteurs'}` : 'Les premiers avis arrivent'}</h2>
     ${reviews.length
-      ? `<div class="rating-big"><strong>${h(avg.toFixed(1).replace('.', ','))}</strong>${starsHtml(avg, 22)}<span>${h(reviewTotal)} avis vérifiés</span></div><div class="review-grid">${reviews.slice(0, 6).map(reviewCard).join('')}</div>`
+      ? `<div class="rating-big"><strong>${h(avg.toFixed(1).replace('.', ','))}</strong>${starsHtml(avg, 22)}<span>${h(reviewTotal)} avis vérifiés</span></div><p class="verified">${h(REVIEWS_VERIFIED)}</p><div class="review-grid">${reviews.slice(0, 6).map(reviewCard).join('')}</div>`
       : `<p class="no-review">Ce ${noun} vient de sortir : aucun avis pour l’instant. Nous n’affichons jamais de faux témoignages.</p>`}
   </div>
 </section>` : ''}
@@ -387,7 +389,7 @@ ${faq.length ? `<section class="faq" id="faq">
 </section>` : ''}
 ${sp?.guarantee && onSale ? `<section class="guarantee">
   <div class="wrap narrow">
-    <div class="guarantee-card"><span class="shield">${ICON.shield}</span><div><h2>Notre garantie</h2><p>${h(sp.guarantee)}</p></div></div>
+    <div class="guarantee-card"><span class="shield">${ICON.shield}</span><div><h2>Notre garantie commerciale</h2><p>${h(sp.guarantee)}</p></div></div>
   </div>
 </section>` : ''}
 ${onSale ? `<section class="final">

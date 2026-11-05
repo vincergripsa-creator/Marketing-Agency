@@ -3,6 +3,7 @@ import type { BrainNote, BrainVault, ContentEngine, LessonDraft, MindContext } f
 import type { AgentState, ChannelId, DailyKpi, Experiment, Lesson, WorldEvent, WorldState } from '../shared.js';
 import { CHANNELS, channelOf } from '../shared.js';
 import { clamp, emit, nextId, quietDay, unsaid } from '../core/index.js';
+import { COVER_FORMATS } from '../sim/catalog/looks.js';
 import { isAnnouncedOutage } from '../sim/outage.js';
 import { armStats, HYPE_ARMS, nearestArm, PRICE_ARMS, rewardArm } from './bandits.js';
 import {
@@ -45,7 +46,8 @@ export const WORN_CREATIVE_WEIGHT = 0.25;
  * same evening, or a retro replayed after loading a save, never double-counts the rewards.
  * An announced outage day rewards nothing: adRows leaves it out, it says nothing about a hook, a price or a niche.
  * Hook and format read TikTok's rows, price and promise their product's reference channel (channels §5.3). The channel
- * bandit's own reward needs the reconciled credit: the channels pillar pays it.
+ * bandit's own reward needs the reconciled credit: the channels pillar pays it. A look reads conversion like the promise; a
+ * cover's style also reads the clicks of the TikTok ads it is the frame of, as the hook does.
  */
 export function applyDailyRewards(world: WorldState, day: number): number {
   const last = Number(world.company.lastRetroDay);
@@ -84,6 +86,14 @@ export function applyDailyRewards(world: WorldState, day: number): number {
     rewardArm(world, `hook_style:${nicheId}`, creative.hookStyle, reward, weight);
     rewardArm(world, `ad_format:${nicheId}`, creative.format, reward, weight);
     rewards += 2;
+    // most of what a cover's style does is in the clicks of the ads whose frame it is (D201): they reward it as they reward the hook
+    const p = designLearning(world) && COVER_FORMATS.includes(creative.format) ? ix.products.get(creative.productId) : undefined;
+    const style = p && p.kind !== 'kit' ? lookNow(p, 'style') : undefined;
+    if (p && style) {
+      ensureLookArms(world, 'style', nicheId, shelfOf(world, p, nicheId));
+      rewardArm(world, lookDim('style', nicheId), style, reward, weight);
+      rewards++;
+    }
   }
   const refunds = refundsOnDay(world, ix, day, (o) => onReference(refs, o.productId, o));
   const ordersToday = new Map<string, number>();

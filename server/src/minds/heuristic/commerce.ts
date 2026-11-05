@@ -148,9 +148,10 @@ export function heuristicSalesPage(
   // P4: an answer that fits any objection stands in for the real one
   [stockFirst, stockSecond].forEach((stock, i) => { if (stock && objections[i]) objections[i]!.a = genericAnswer(answers, usedAnswers); });
 
+  // the shop's own commercial guarantee, never the legal withdrawal right presented as a gift (L121-4 10°): it holds after the download
   const guarantee = hype >= 0.7 && canRisk('garanti')
     ? `Résultats garantis ou remboursé : si vous ne voyez aucun changement en ${durTxt}, on vous rembourse.`
-    : `Satisfait ou remboursé pendant 14 jours : si le guide ne vous apporte rien de concret, un simple e-mail à ${brand} suffit, sans justification.`;
+    : `Remboursé sous 14 jours, même après le téléchargement : si le guide ne vous apporte rien de concret, un simple e-mail à ${brand} suffit, sans justification.`;
   const cta = fit(hype >= 0.7 ? `Oui, je commence le plan — ${fmtEur(price)}` : hype >= 0.35 ? `Je commence ce soir — ${fmtEur(price)}` : `Je télécharge le guide — ${fmtEur(price)}`, 70);
 
   return {

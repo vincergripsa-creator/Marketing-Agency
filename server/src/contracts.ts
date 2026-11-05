@@ -19,7 +19,7 @@ import type {
   MessageIntent, NicheBrief, PdfContent, Product, QualityReport, ReplyOutcome, SalesPage, ScenarioConfig,
   SupportReplyInput, TrendSignal, VoiceOfCustomer, WorldState, Activity, DailyKpi, Experiment, Task, TaskKind, AgentId,
   ModelTier, MindMode, NicheTruth, Order,
-  AdRatio, AudienceView, Broadcast, ChannelId, DesignEffort, EmailSequence, EmailStep, Skill, VideoCut, VisualReport,
+  AdRatio, AudienceView, Broadcast, ChannelId, DesignEffort, EmailSequence, EmailStep, Skill, VideoCut, VisualReport, ArtStyle,
 } from './shared.js';
 
 export type { CampaignInputShape };
@@ -177,16 +177,22 @@ export interface CoverAudit { art: number; thumbPx: number; lineBalance: number;
 
 // deliverables/index.ts must export:
 export interface DeliverablesModule {
-  designFor(input: { nicheName: string; category: string; seed: number; hint?: string; keywords?: string[] }): DesignSpec;
+  /** `style` and `composition`: the art director's look (D203), kept only when valid; absent, the design is V1's to the byte. */
+  designFor(input: { nicheName: string; category: string; seed: number; hint?: string; keywords?: string[]; style?: ArtStyle; composition?: number }): DesignSpec;
   renderCoverSvg(input: { title: string; subtitle: string; audience: string; design: DesignSpec; brand: string }): string; // 600x848 viewBox (A4 ratio)
   /** Writes a real A4 PDF: cover (vector art), contents, intro, chapters with numbered step boxes,
    *  example callouts, checklists, VisualSpec infographics, bonus, "La suite est ici" CTA page, page numbers. */
   renderPdf(input: { product: Product; content: PdfContent; design: DesignSpec; brand: string; outFile: string; upsell?: { title: string; url: string } | null; effort?: DesignEffort }): Promise<{ pages: number; bytes: number; audit: PdfAudit; previews: { label: string; svg: string }[] }>;
-  /** Self-contained HTML storefront page (inline CSS, inline cover SVG, fake checkout button). */
-  renderSalesPageHtml(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string; previews?: { label: string; svg: string }[]; figureSvg?: string | null; offSale?: boolean }): string;
+  /**
+   * Self-contained HTML storefront page (inline CSS, inline cover SVG, fake checkout button). `kit`: the kit the checkout offers,
+   * drawn beside the guide by the `bundle` hero; `day`: today, so a price reduction stops being announced after 30 days (D208).
+   */
+  renderSalesPageHtml(input: { product: Product; salesPage: SalesPage; coverSvg: string; design: DesignSpec; brand: string; previews?: { label: string; svg: string }[]; figureSvg?: string | null; offSale?: boolean; kit?: { title: string; coverSvg: string } | null; day?: number }): string;
   /** 9:16 storyboard frames (SVG strings, 360x640 viewBox) + a self-contained HTML "TikTok" preview that plays the scenes. */
   renderAdStoryboard(input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string }): { frames: string[]; previewHtml: string };
   pickArt(design: DesignSpec, effort: DesignEffort): { seed: number; score: number; explored: number };
+  /** The composition a designer keeps among the style's own (D203), on the real cover; `avoid` leaves one out while the style has another. */
+  pickComposition(input: { title: string; subtitle: string; audience: string; design: DesignSpec; brand: string }, effort: DesignEffort, o?: { avoid?: number }): { composition: number; score: number; explored: number };
   coverAudit(input: { title: string; subtitle: string; audience: string; design: DesignSpec; brand: string }): CoverAudit;
   visualReport(pdf: PdfAudit, cover: CoverAudit, effort: DesignEffort, explored: number): VisualReport;
   /** 3 to 5 pages, the same type and art. */

@@ -27,6 +27,7 @@ const COMPANY = `## L'entreprise
 - Les personnages d'exemple sont fictifs : ils sont toujours annoncés « Exemple type », et aucun résultat chiffré n'est présenté comme vécu par un vrai client.
 - Pas de promesse garantie (« garanti », « 100 % », « à coup sûr », « en 3 jours seulement »), pas d'allégation santé (« guérir », « soigner »), pas d'argent facile, pas de fausse urgence.
 - Chaque plateforme a ses règles (note « Conformité pub par canal ») : ni corps ni détresse de la personne sur Facebook & Instagram, pas de perte de poids sur Pinterest, ni marque tierce, ni superlatif, ni point d'exclamation dans une annonce Google. Un compte n'encaisse que ses propres avertissements.
+- Le droit français de la vente (note « Conformité vente et pub ») : un prix barré seulement s'il est le plus bas des 30 jours précédents ; la garantie de remboursement est une garantie commerciale, jamais le droit de rétractation présenté comme un cadeau ; ni fausse urgence ni fausse rareté ; des avis vérifiés, qui disent comment, jamais inventés ; « Images virtuelles » sur tout visage fait par IA.
 - Remboursement accordé sans discuter sous 14 jours si la demande est de bonne foi. Ne jamais payer ni cliquer sur un lien suspect : les arnaques sont bloquées.
 - Honnêteté : si une information manque, le dire plutôt que l'inventer.
 

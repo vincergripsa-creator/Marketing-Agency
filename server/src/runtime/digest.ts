@@ -326,7 +326,7 @@ function nextOf(w: WorldState): string[] {
 
 /**
  * The « Design » block of the founder (design plan D207): the page tests of the window and what they found, the refreshes, and the
- * looks each niche favours. FounderDigest has no field for it yet: the weekly note prints it, the api may read it here.
+ * looks each niche favours. The digest carries it as `design`, the weekly note prints it.
  */
 export function designOf(w: WorldState, from: number, to: number): string[] {
   const lines: string[] = [];
@@ -392,12 +392,13 @@ export function buildDigest(w: WorldState, fromDay: number, toDay: number, sessi
     incidents: incidentsOf(w, from, to, logged, session),
     waiting: waitingOf(w),
     next: nextOf(w),
+    design: designOf(w, from, to),
   };
 }
 
 // ───────────────────────────── the weekly note ─────────────────────────────
 
-function noteBody(title: string, week: WeekRollup, d: FounderDigest, design: readonly string[] = []): string {
+function noteBody(title: string, week: WeekRollup, d: FounderDigest): string {
   const section = (name: string, lines: readonly string[]): string[] => (lines.length ? [`## ${name}`, ...lines.map((s) => `- ${s}`), ''] : []);
   const { products: p, people, money: m } = d;
   return [
@@ -412,7 +413,7 @@ function noteBody(title: string, week: WeekRollup, d: FounderDigest, design: rea
       ...(p.best ? [`Meilleur : ${p.best.title}, ${eur(p.best.profit)}`] : []), ...(p.worst ? [`Pire : ${p.worst.title}, ${eur(p.worst.profit)}`] : []),
     ]),
     ...section('Équipe', [...people.hired.map((s) => `Arrivée : ${s}`), ...people.left.map((s) => `Départ : ${s}`)]),
-    ...section('Design', design),
+    ...section('Design', d.design ?? []),
     ...section('À décider', d.waiting),
     ...section('La suite', d.next),
     'Liens : [[Croissance]] · [[Playbook Finance]] · [[Budget et garde-fous]]',
@@ -424,5 +425,5 @@ export async function weeklyNote(ctx: RuntimeCtx, week: WeekRollup): Promise<voi
   const w = ctx.world;
   if (!growthOn(w)) return;
   const title = `Semaine ${week.week}, jours ${week.fromDay} à ${week.toDay}`;
-  await writeNote(ctx, officerId(w, 'cfo'), { path: `journal/semaine-${pad3(week.week)}.md`, title, tags: ['journal', 'semaine'], body: noteBody(title, week, buildDigest(w, week.fromDay, week.toDay), designOf(w, week.fromDay, week.toDay)) });
+  await writeNote(ctx, officerId(w, 'cfo'), { path: `journal/semaine-${pad3(week.week)}.md`, title, tags: ['journal', 'semaine'], body: noteBody(title, week, buildDigest(w, week.fromDay, week.toDay)) });
 }
