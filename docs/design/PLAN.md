@@ -17,7 +17,7 @@ In their words (2026-11-05): the visuals are « très simples et toujours les m�
 
 ## 2. What the research says
 
-The full report is `reports/Guides PDF visuels qui vendent.md`, its notes in `research_notes/Guides PDF visuels qui vendent/`. What shapes the decisions below:
+The full report is `docs/research/Guides PDF visuels qui vendent.md`, its notes in `docs/research/notes/`. What shapes the decisions below:
 
 - Measured data specific to low-ticket PDFs is scarce. Concept-level changes (cover typography, the first image, the page template, the ad hook) move results far more than cosmetic tweaks; most tests do not win, a confirmed win is usually +5 to +15 %, whole-template tests are where large lifts live.
 - Typography-led covers that read at thumbnail size won the best measured cover test; trends for 2025-2026 are human and imperfect (collage, texture, oversized type, editorial and zine layouts) beside a minimalist counter-trend. Genre conventions per niche are practitioner knowledge, not measured.
