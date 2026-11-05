@@ -276,4 +276,7 @@ export const DIMENSION_LABELS: Record<string, string> = {
   sales_hype: 'Niveau de promesse',
   support_tone: 'Ton du support',
   niche: 'Niche',
+  cover_style: 'Style de couverture',
+  page_template: 'Gabarit de page',
+  page_hero: 'Visuel de page',
 };

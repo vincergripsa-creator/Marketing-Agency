@@ -86,8 +86,8 @@ describe('role catalog', () => {
     expect(ROLE_IDS.filter((r) => ROLES[r].lead).sort()).toEqual([...founderRoles(), 'support_lead', 'partnerships_lead'].sort());
   });
 
-  it('keeps every kind in a home: each of the 47 has a role, and video and crm have kinds of their own (D5)', () => {
-    expect(ALL_KINDS).toHaveLength(47);
+  it('keeps every kind in a home: each of the 48 has a role, and video and crm have kinds of their own (D5)', () => {
+    expect(ALL_KINDS).toHaveLength(48);
     for (const k of ALL_KINDS) expect(ROLE_IDS.some((r) => kindsOf(r).includes(k)), k).toBe(true);
     expect(ROLE_IDS.filter((r) => ROLES[r].dept === 'video').flatMap((r) => ROLES[r].core)).toContain('adapt_creative');
     expect(ROLE_IDS.filter((r) => ROLES[r].dept === 'crm').flatMap((r) => ROLES[r].core)).toEqual(expect.arrayContaining(['post_organic', 'send_broadcast']));
@@ -104,7 +104,7 @@ describe('hats', () => {
     }
   });
 
-  it('leaves the founders wearing 24 of the 47 kinds (D2)', () => {
+  it('leaves the founders wearing 24 of the 48 kinds (D2)', () => {
     expect(hats()).toHaveLength(24);
     expect(hats().sort()).toEqual([
       'adapt_creative', 'daily_report', 'design_bump', 'design_upsell', 'fact_check', 'find_creators', 'follow_missions', 'handle_refund',

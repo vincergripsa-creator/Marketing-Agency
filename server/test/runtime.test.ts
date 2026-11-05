@@ -22,7 +22,7 @@ const ALL_KINDS = Object.keys(KIND_META) as TaskKind[];
 /** The legacy team and its 11 departments: video and crm stay closed on it. catalog.test.ts reads the 13 of the catalog. */
 const AGENTS = buildTeam(LEGACY_ORG);
 const DEPARTMENTS = CATALOG_DEPARTMENTS.filter((d) => AGENTS.some((a) => a.dept === d.id));
-/** Kinds of V1 with no owner in the legacy team, which never reconciles. org-core.test.ts covers the 47 on the lean team. */
+/** Kinds of V1 with no owner in the legacy team, which never reconciles. org-core.test.ts covers the 48 on the lean team. */
 const V1_KINDS: TaskKind[] = [
   'headcount_review', 'recruit', 'league_review', 'open_channel', 'adapt_creative', 'write_search_ads', 'reconcile_channels', 'allocate_channels',
   'write_lead_magnet', 'write_email_sequence', 'send_broadcast', 'design_bump', 'portfolio_review',
@@ -59,9 +59,9 @@ describe('roster', () => {
     for (const kind of LEGACY_KINDS) expect(AGENTS.some((a) => a.taskKinds.includes(kind)), kind).toBe(true);
   });
 
-  it('counts 47 kinds, and missions still route on the 30 they always did (D57)', () => {
-    expect(ALL_KINDS).toHaveLength(47);
-    expect(LEGACY_KINDS).toHaveLength(34);
+  it('counts 48 kinds, and missions route on the 30 they always did plus the refresh of a look (D57, design D204)', () => {
+    expect(ALL_KINDS).toHaveLength(48);
+    expect(LEGACY_KINDS).toHaveLength(35);
     expect(PLAN_KINDS).toEqual(LEGACY_KINDS.filter((k) => !['plan_day', 'budget_review', 'retro', 'performance_review'].includes(k)));
   });
 

@@ -12,6 +12,7 @@ import {
 import { updateExperiments, experimentValueKind } from './experiments.js';
 import { detectLessons, EXPERIMENT_KEY_PREFIX, type HeuristicDraft } from './heuristics.js';
 import { computeDailyKpi, upsertKpi } from './kpi.js';
+import { designLearning, ensureLookArms, LOOK_DIMENSIONS, LOOK_KINDS, lookDim, lookLabel, lookNow, shelfOf, type LookKind } from './looks.js';
 import { basenameOf } from './markdown.js';
 import {
   addRule, agentNoteName, agentNotePath, agentsForLesson, directiveSlot, hasMachineRule, lessonLink, lessonTitle, quotedTerms, replaceRuleEverywhere,
@@ -98,12 +99,24 @@ export function applyDailyRewards(world: WorldState, day: number): number {
         rewardArm(world, `price:${p.nicheId}`, priceArm, clamp((agg.revenue - ref.amount) / agg.landingViews / 1.5), weight);
         rewards++;
       }
+      const sales = Math.max(agg.purchases, ordersToday.get(productId) ?? 0);
+      const refundRate = safeDiv(ref.count, Math.max(1, sales));
+      const reward = clamp(cvrOf(agg) / 0.08) * (1 - Math.min(1, refundRate * 4));
       const hypeArm = p.salesPage ? nearestArm(p.salesPage.hypeLevel, HYPE_ARMS) : null;
       if (hypeArm) {
-        const sales = Math.max(agg.purchases, ordersToday.get(productId) ?? 0);
-        const refundRate = safeDiv(ref.count, Math.max(1, sales));
-        rewardArm(world, 'hype', hypeArm, clamp(cvrOf(agg) / 0.08) * (1 - Math.min(1, refundRate * 4)), weight);
+        rewardArm(world, 'hype', hypeArm, reward, weight);
         rewards++;
+      }
+      // the look this guide wore today, judged like its promise (D204): a day of landing views and sales, refunds out
+      if (designLearning(world) && p.nicheId && p.kind !== 'kit') {
+        const shelf = shelfOf(world, p, p.nicheId);
+        for (const kind of LOOK_KINDS) {
+          const look = lookNow(p, kind);
+          if (!look) continue;
+          ensureLookArms(world, kind, p.nicheId, shelf);
+          rewardArm(world, lookDim(kind, p.nicheId), look, reward, weight);
+          rewards++;
+        }
       }
     }
     if (all.spend >= 3 && p.nicheId) {
@@ -304,11 +317,14 @@ function dimensionLabel(world: WorldState, dim: string): string {
   return nicheId ? `${label} · ${nicheName(world, nicheId)}` : label;
 }
 
+const LOOK_OF_DIMENSION = new Map(LOOK_KINDS.map((k) => [LOOK_DIMENSIONS[k], k] as const));
+
 function armLabel(world: WorldState, dim: string, key: string): string {
   if (dim === 'niche') return nicheName(world, key);
   if (dim.startsWith('price')) return `${key} €`;
   if (dim.startsWith('channel')) return CHANNELS[key as ChannelId]?.label ?? key;
-  return key;
+  const look: LookKind | undefined = LOOK_OF_DIMENSION.get(dim.split(':')[0]!);
+  return look ? lookLabel(look, key) : key;
 }
 
 function kpiTable(k: DailyKpi): string {

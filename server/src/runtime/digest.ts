@@ -7,6 +7,8 @@ import type { SessionRecord } from '../api/persist.js';
 import { isHold, nextId, summarizeLedger } from '../core/index.js';
 import { CHANNELS, channelOf } from '../shared.js';
 import { listSize } from '../sim/audience.js';
+import { nicheName as nicheNameOf } from '../learning/data.js';
+import { favouriteLooks, isRefreshEntry, LOOK_KINDS, LOOK_NOUN, lookLabel } from '../learning/looks.js';
 import type { DecisionRecord, FounderDigest, LedgerEntry, Order, ProductPnl, RoleId, Task, WeekRollup, WorldEvent, WorldState } from '../shared.js';
 import { channelPnls, productPnls } from './accounting.js';
 import { STOP_LOSS_ROAS, versionSince } from './acquisition.js';
@@ -18,7 +20,7 @@ import { closedWindow, isUpsellProduct } from './metrics.js';
 import { ROLES } from './org/catalog.js';
 import { officerId } from './org/officers.js';
 import { growthOn, STAGE_LABELS, STAGES } from './stages.js';
-import { clip, dec, eur, idNum, pad3, round2, short, sum, uniq } from './util.js';
+import { clip, dec, eur, idNum, pad3, pct, round2, short, sum, uniq } from './util.js';
 
 const MAX_DECISIONS = 500;
 const TOP_DECISIONS = 12;
@@ -320,6 +322,33 @@ function nextOf(w: WorldState): string[] {
   ].slice(0, MAX_LINES);
 }
 
+// ───────────────────────────── design ─────────────────────────────
+
+/**
+ * The « Design » block of the founder (design plan D207): the page tests of the window and what they found, the refreshes, and the
+ * looks each niche favours. FounderDigest has no field for it yet: the weekly note prints it, the api may read it here.
+ */
+export function designOf(w: WorldState, from: number, to: number): string[] {
+  const lines: string[] = [];
+  const title = (id: string | null | undefined): string => short(w.company.products.find((p) => p.id === id)?.title ?? 'un guide', 50);
+  for (const e of w.company.experiments.filter((x) => x.dimension === 'page_template' && x.day <= to && (x.endDay ?? w.day) >= from)) {
+    const [a, b] = e.variants.map((v) => lookLabel('template', v));
+    const read = (v: string): string => `${pct(e.results[v]?.value ?? 0, 2)} sur ${e.results[v]?.n ?? 0} visites`;
+    if (e.status === 'running') lines.push(`Test de page en cours sur « ${title(e.productId)} » : « ${b} » contre « ${a} » depuis le jour ${e.day}`);
+    else if (e.winner) lines.push(`Test de page sur « ${title(e.productId)} » : « ${lookLabel('template', e.winner)} » gagne (${e.variants.map((v) => `« ${lookLabel('template', v)} » ${read(v)}`).join(', ')})`);
+    else lines.push(`Test de page sur « ${title(e.productId)} » ${e.status === 'cancelled' ? 'annulé faute de trafic' : 'sans gagnant net'} : « ${a} » reste`);
+  }
+  for (const p of w.company.products) {
+    for (const entry of p.designLog ?? []) if (entry.day >= from && entry.day <= to && isRefreshEntry(entry)) lines.push(`« ${short(p.title, 50)} » change de look : ${clip(entry.why, MAX_WHY)}`);
+  }
+  for (const nicheId of uniq(w.company.products.filter((p) => p.status === 'live' && p.design?.style).map((p) => p.nicheId))) {
+    const fav = favouriteLooks(w, nicheId);
+    const parts = LOOK_KINDS.flatMap((k) => (fav[k] ? [`${LOOK_NOUN[k]} « ${lookLabel(k, fav[k]!)} »`] : []));
+    if (parts.length) lines.push(`Préférés sur « ${short(nicheNameOf(w, nicheId), 50)} » : ${parts.join(', ')}`);
+  }
+  return lines.slice(0, MAX_LINES);
+}
+
 function headlineOf(days: number, m: FounderDigest['money']): string {
   const result = m.profit < 0 ? `Perte de ${eur(-m.profit)}` : m.profit > 0 ? `Profit de ${eur(m.profit)}` : 'Ni profit ni perte';
   const versus = m.previousProfit === null ? '' : `, contre ${eur(m.previousProfit)} la période d'avant`;
@@ -368,7 +397,7 @@ export function buildDigest(w: WorldState, fromDay: number, toDay: number, sessi
 
 // ───────────────────────────── the weekly note ─────────────────────────────
 
-function noteBody(title: string, week: WeekRollup, d: FounderDigest): string {
+function noteBody(title: string, week: WeekRollup, d: FounderDigest, design: readonly string[] = []): string {
   const section = (name: string, lines: readonly string[]): string[] => (lines.length ? [`## ${name}`, ...lines.map((s) => `- ${s}`), ''] : []);
   const { products: p, people, money: m } = d;
   return [
@@ -383,6 +412,7 @@ function noteBody(title: string, week: WeekRollup, d: FounderDigest): string {
       ...(p.best ? [`Meilleur : ${p.best.title}, ${eur(p.best.profit)}`] : []), ...(p.worst ? [`Pire : ${p.worst.title}, ${eur(p.worst.profit)}`] : []),
     ]),
     ...section('Équipe', [...people.hired.map((s) => `Arrivée : ${s}`), ...people.left.map((s) => `Départ : ${s}`)]),
+    ...section('Design', design),
     ...section('À décider', d.waiting),
     ...section('La suite', d.next),
     'Liens : [[Croissance]] · [[Playbook Finance]] · [[Budget et garde-fous]]',
@@ -394,5 +424,5 @@ export async function weeklyNote(ctx: RuntimeCtx, week: WeekRollup): Promise<voi
   const w = ctx.world;
   if (!growthOn(w)) return;
   const title = `Semaine ${week.week}, jours ${week.fromDay} à ${week.toDay}`;
-  await writeNote(ctx, officerId(w, 'cfo'), { path: `journal/semaine-${pad3(week.week)}.md`, title, tags: ['journal', 'semaine'], body: noteBody(title, week, buildDigest(w, week.fromDay, week.toDay)) });
+  await writeNote(ctx, officerId(w, 'cfo'), { path: `journal/semaine-${pad3(week.week)}.md`, title, tags: ['journal', 'semaine'], body: noteBody(title, week, buildDigest(w, week.fromDay, week.toDay), designOf(w, week.fromDay, week.toDay)) });
 }

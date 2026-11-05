@@ -2,8 +2,9 @@
  * Playbooks = learned French rules per agent (max 12). A few machine-readable patterns are honoured
  * by the runtime (and by the content engine): see SHARED CONVENTIONS.
  */
-import type { AdFormat, AgentId, ChannelId, HookStyle, WorldState } from '../shared.js';
+import type { AdFormat, AgentId, ArtStyle, ChannelId, HookStyle, PageHero, PageTemplate, WorldState } from '../shared.js';
 import { CHANNEL_IDS } from '../shared.js';
+import { lookKey } from '../learning/looks.js';
 import { includesCI } from './util.js';
 
 export const MAX_PLAYBOOK_RULES = 12;
@@ -24,6 +25,10 @@ export interface PlaybookDirectives {
   targetPrice: number | null;
   maxHype: number | null;
   tone: string | null;
+  /** Looks a measured lesson settled for the niche (D204): the founder's hint alone beats them. */
+  coverStyle: ArtStyle | null;
+  pageTemplate: PageTemplate | null;
+  pageHero: PageHero | null;
 }
 
 const RX = {
@@ -34,11 +39,14 @@ const RX = {
   price: /Prix cible\s*«\s*([^»]+?)\s*»/i,
   hype: /Niveau de promesse max\s*«\s*([^»]+?)\s*»/i,
   tone: /Ton support\s*«\s*([^»]+?)\s*»/i,
+  style: /Style de couverture\s*«\s*([^»]+?)\s*»/i,
+  template: /Gabarit de page\s*«\s*([^»]+?)\s*»/i,
+  hero: /Visuel de page\s*«\s*([^»]+?)\s*»/i,
 };
 
 const PLATFORM_RULE = /^\s*Sur\s+[^«»,]+,\s*ne jamais écrire/i;
 
-const SINGLETONS = [RX.hook, RX.format, RX.channel, RX.price, RX.hype, RX.tone];
+const SINGLETONS = [RX.hook, RX.format, RX.channel, RX.price, RX.hype, RX.tone, RX.style, RX.template, RX.hero];
 
 function parseNumber(s: string): number | null {
   const m = /-?\d+(?:[.,]\d+)?/.exec(s);
@@ -60,7 +68,7 @@ function scopeOf(rule: string, m: RegExpExecArray): string | null {
  * With `niche`, rules scoped to another niche (« … sur « Autre niche » ») are ignored; banned words stay global.
  */
 export function parsePlaybook(rules: readonly string[], niche?: string): PlaybookDirectives {
-  const d: PlaybookDirectives = { banned: [], platformBanned: [], hook: null, format: null, channel: null, targetPrice: null, maxHype: null, tone: null };
+  const d: PlaybookDirectives = { banned: [], platformBanned: [], hook: null, format: null, channel: null, targetPrice: null, maxHype: null, tone: null, coverStyle: null, pageTemplate: null, pageHero: null };
   const inScope = (rule: string, m: RegExpExecArray): boolean => {
     const scope = scopeOf(rule, m);
     if (!scope || !niche) return true;
@@ -80,6 +88,12 @@ export function parsePlaybook(rules: readonly string[], niche?: string): Playboo
     if (m) { const n = parseNumber(m[1]!); if (n !== null && n > 0) d.targetPrice = n; continue; }
     m = RX.hype.exec(rule);
     if (m) { const n = parseNumber(m[1]!); if (n !== null) d.maxHype = Math.min(1, Math.max(0, n)); continue; }
+    m = RX.style.exec(rule);
+    if (m) { d.coverStyle = (lookKey('style', m[1]) as ArtStyle | null) ?? d.coverStyle; continue; }
+    m = RX.template.exec(rule);
+    if (m) { d.pageTemplate = (lookKey('template', m[1]) as PageTemplate | null) ?? d.pageTemplate; continue; }
+    m = RX.hero.exec(rule);
+    if (m) { d.pageHero = (lookKey('hero', m[1]) as PageHero | null) ?? d.pageHero; continue; }
     m = RX.tone.exec(rule);
     if (m) d.tone = m[1]!.trim();
   }

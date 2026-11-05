@@ -201,8 +201,9 @@ describe('a full run is a TikTok run until a buyer is asked for', () => {
       return asked(full.world) ? ticks : 0;
     };
     // The first request moves with the guides, and a seed that asks on D5 compares little: the first of these to ask past D10 ends it.
+    // The looks of the design build moved the roads: seed 27 asks on D17.
     let longest = 0;
-    for (const seed of [7, 4, 12, 1]) {
+    for (const seed of [27, 7, 4, 12, 1]) {
       longest = await stretch(seed);
       if (longest > 12 * 10) break;
     }

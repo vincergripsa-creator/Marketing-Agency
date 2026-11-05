@@ -221,7 +221,8 @@ export function trimProduct(p: Product, limits: SnapshotLimits = DEFAULT_LIMITS)
     priceHistory: lastN(p.priceHistory, limits.live ? 14 : 60),
   };
   if (!limits.light) return trimmed;
-  return p.status === 'paused' || p.status === 'killed' ? stubProduct(trimmed) : cardProduct(trimmed);
+  const { designLog: _designLog, ...card } = trimmed; // the history of its looks is the product view's: at 12 entries it would weigh 4 KB a card
+  return p.status === 'paused' || p.status === 'killed' ? stubProduct(card) : cardProduct(card);
 }
 
 /** GET /api/product/:id: the whole guide, which no snapshot carries. What only the company reads stays behind, as in every view. */
@@ -447,6 +448,7 @@ export function godModeOf(world: WorldState, limits: SnapshotLimits = DEFAULT_LI
     niches: arr(world.market?.niches).map((n) => ({
       id: n.id, name: n.name, demand: n.demand, wtp: n.wtp, competition: n.competition,
       tiktokAffinity: n.tiktokAffinity, hookAffinity: n.hookAffinity, ...(n.channels ? { channels: n.channels } : {}),
+      ...(n.visualTaste ? { visualTaste: n.visualTaste } : {}),
     })),
     intents,
   };

@@ -1,9 +1,11 @@
 /** Analyse, Finance, RH and Direction rituals: daily report, A/B experiments, CFO budget and its split between channels, the books, retro, HR review, follow-up, portfolio. */
 import { CHANNELS, CHANNEL_IDS, channelOf } from '../../shared.js';
-import type { DailyKpi, Experiment, Product } from '../../shared.js';
+import type { DailyKpi, Experiment, Product, Task } from '../../shared.js';
+import { designLearning, lookLabel, PAGE_TEST, pageChallenger, shelfOf } from '../../learning/looks.js';
 import { allocateChannels } from '../allocator.js';
 import type { RuntimeCtx } from '../ctx.js';
-import { addDeliverable, incident, nameOf, say, writeNote } from '../ctx.js';
+import { addDeliverable, incident, nameOf, nicheName, say, writeNote } from '../ctx.js';
+import { directivesOf } from '../playbook.js';
 import { logDecision } from '../digest.js';
 import { learning, sim } from '../modules.js';
 import { reconcileDay, recordPnl, weeklyPnl } from '../accounting.js';
@@ -36,12 +38,17 @@ const DRIFT_WINDOW_DAYS = 7;
 /** A test cancelled for lack of traffic may run again after this many days. */
 const CANCELLED_RETRY_DAYS = 7;
 
+/** A page test read on one guide stays the answer for this long: the market moves, and its next guide may wear another look. */
+const PAGE_RETEST_DAYS = 45;
+
 /** Is the answer of a finished test still good? Only a new version of the guide or a strong drift reopens it. */
 function stillSettled(ctx: RuntimeCtx, e: Experiment, product: Product | undefined): boolean {
   const w = ctx.world;
   const end = e.endDay ?? e.day;
   if (e.status === 'cancelled') return w.day - end < CANCELLED_RETRY_DAYS;
   if (product && versionSince(w, product) > end) return false;
+  // its days alternate: a re-reading of the last week would split one look in two
+  if (e.dimension === 'page_template') return w.day - end < PAGE_RETEST_DAYS;
   const ranked = Object.entries(e.results).sort((a, b) => b[1].value - a[1].value);
   const best = e.winner ?? ranked[0]?.[0];
   const concluded = best ? e.results[best] : undefined;
@@ -55,6 +62,27 @@ function alreadyAnswered(ctx: RuntimeCtx, dimension: Experiment['dimension'], va
   const key = [...variants].sort().join('|');
   const last = ctx.world.company.experiments.filter((e) => e.dimension === dimension && [...e.variants].sort().join('|') === key && (e.nicheId ?? null) === nicheId).at(-1);
   return !!last && (last.status === 'running' || stillSettled(ctx, last, product));
+}
+
+/** Work that rewrites a guide or its page: a page test waits for it, or it would measure a moving page. */
+const PAGE_BUSY: readonly Task['kind'][] = ['write_pdf', 'humanize_pdf', 'render_pdf', 'write_sales_page', 'refresh_design', 'publish_product'];
+
+/**
+ * A page test worth opening on a guide (D204): design learning on, paid visitors every day, a challenger whose needs hold, nothing
+ * rewriting the page meanwhile, and no rule that already settled the niche's template. The control is the template it wears.
+ */
+function pageTestCandidate(ctx: RuntimeCtx, p: Product, name: string): Pick<Experiment, 'hypothesis' | 'dimension' | 'variants' | 'metric'> | null {
+  const w = ctx.world;
+  const current = p.salesPage?.template;
+  if (!designLearning(w) || !current || p.kind === 'kit' || running(ctx, 'page_template')) return null;
+  if (paidConversion(w, p.id, Math.max(1, w.day - 6)).landingViews < PAGE_TEST.dailyViews * 7) return null;
+  if (w.company.tasks.some((t) => isOpen(t) && t.input.productId === p.id && PAGE_BUSY.includes(t.kind))) return null;
+  if (directivesOf(w, officerId(w, 'shop'), nicheName(ctx, p.nicheId)).pageTemplate) return null;
+  const challenger = pageChallenger(w, p, shelfOf(w, p, p.nicheId));
+  if (!challenger) return null;
+  const variants = [current, challenger];
+  if (alreadyAnswered(ctx, 'page_template', variants, p.nicheId, p)) return null;
+  return { hypothesis: `Sur « ${name} », le gabarit ${lookLabel('template', challenger)} convertit mieux que ${lookLabel('template', current)}`, dimension: 'page_template', variants, metric: 'cvr' };
 }
 
 /** Which experiment is worth starting now (one variable at a time, enough arms in play, never a settled question). */
@@ -97,6 +125,8 @@ export function experimentCandidate(ctx: RuntimeCtx): Omit<Experiment, 'id' | 's
         return { ...scope, hypothesis: `« ${name} » rapporte plus par visiteur à ${other} € qu'à ${cur} €`, dimension: 'price', variants: [cur, other], metric: 'roas' };
       }
     }
+    const page = pageTestCandidate(ctx, p, name);
+    if (page) return { ...scope, ...page };
   }
   if (!running(ctx, 'support_tone')) {
     const arms = learning.armStats(ctx.world, 'support_tone').filter((a) => a.pulls > 0);

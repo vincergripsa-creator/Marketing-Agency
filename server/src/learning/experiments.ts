@@ -4,9 +4,15 @@ import { channelOf } from '../shared.js';
 import { emit, nextId } from '../core/index.js';
 import { nearestArm } from './bandits.js';
 import { addRow, adRows, emptyAgg, indexWorld, onReference, priceOnDay, productOfRow, referenceChannels, type FunnelAgg } from './data.js';
+import { PAGE_TEST, pageTestWinner, variantOn } from './looks.js';
 import { fold, round, safeDiv, unique } from './text.js';
 
 export const EXPERIMENT_MAX_DAYS = 7;
+
+/** A page test alternates by day and reads sales, not clicks: it runs two weeks (D204). */
+export function experimentDays(e: Pick<Experiment, 'dimension'>): number {
+  return e.dimension === 'page_template' ? PAGE_TEST.days : EXPERIMENT_MAX_DAYS;
+}
 /** A variant still without a single observation this many days after the start: the test measures nothing, it stops. */
 export const EXPERIMENT_NO_DATA_DAYS = 2;
 
@@ -26,6 +32,7 @@ export function experimentThreshold(e: Pick<Experiment, 'dimension' | 'metric'>)
   if (e.metric === 'ctr') return 3000;                                          // impressions
   if (e.metric === 'refund_rate') return 30;                                    // orders
   if (e.dimension === 'price') return 120;                                     // landing views (a price needs sales, not clicks)
+  if (e.dimension === 'page_template') return PAGE_TEST.views;                 // landing views: a page is read on sales
   return 60;                                                                    // landing views
 }
 
@@ -42,7 +49,7 @@ export function experimentValueKind(e: Pick<Experiment, 'dimension' | 'metric'>)
 }
 
 /** Dimensions measured on a product's market data (and therefore scoped to its niche). */
-const NICHE_SCOPED: ReadonlySet<Experiment['dimension']> = new Set(['hook_style', 'ad_format', 'price', 'sales_hype', 'agent_duel']);
+const NICHE_SCOPED: ReadonlySet<Experiment['dimension']> = new Set(['hook_style', 'ad_format', 'price', 'sales_hype', 'agent_duel', 'page_template']);
 
 /**
  * Niche an experiment is about. An explicit `nicheId` (even null = global) wins; otherwise it is inferred
@@ -139,7 +146,7 @@ export function replyRecords(world: WorldState, fromDay: number, toDay: number):
  * channel, or a shift in the mix would pass for its effect; anything else on TikTok's, where CTR levels can be compared.
  */
 function experimentBasis(world: WorldState, e: Pick<Experiment, 'dimension'>): (productId: string | undefined, x: { channel?: ChannelId }) => boolean {
-  if (e.dimension !== 'price' && e.dimension !== 'sales_hype') return (_, x) => channelOf(x) === 'tiktok';
+  if (e.dimension !== 'price' && e.dimension !== 'sales_hype' && e.dimension !== 'page_template') return (_, x) => channelOf(x) === 'tiktok';
   const refs = referenceChannels(world, world.day);
   return (productId, x) => onReference(refs, productId ?? '', x);
 }
@@ -170,7 +177,9 @@ export function computeExperimentResults(world: WorldState, e: Experiment): Reco
     const product = productOfRow(ix, r);
     if (!inScope(product) || !onBasis(product?.id, r)) continue;
     let key: string | null = null;
-    if (e.dimension === 'hook_style') key = ix.creatives.get(r.creativeId)?.hookStyle ?? null;
+    // a page test reads its one guide, each day of the test under the template it showed that day
+    if (e.dimension === 'page_template') key = product?.id === e.productId && r.day <= (e.endDay ?? world.day) ? variantOn(e, r.day) ?? null : null;
+    else if (e.dimension === 'hook_style') key = ix.creatives.get(r.creativeId)?.hookStyle ?? null;
     else if (e.dimension === 'ad_format') key = ix.creatives.get(r.creativeId)?.format ?? null;
     else if (e.dimension === 'price') key = product ? nearestArm(priceOnDay(product, r.day), e.variants) : null;
     else if (e.dimension === 'sales_hype') key = product?.salesPage ? nearestArm(product.salesPage.hypeLevel, e.variants) : null;
@@ -224,6 +233,7 @@ export const PRICE_TEST_MIN_SALES = 8;
 export const PRICE_TEST_MIN_LIFT = 1.1;
 
 export function pickWinner(e: Pick<Experiment, 'dimension' | 'metric' | 'variants' | 'results'>): string | null {
+  if (e.dimension === 'page_template') return pageTestWinner(e.results);
   const threshold = experimentThreshold(e);
   const candidates = Object.entries(e.results).filter(([, r]) => r.n >= Math.max(1, threshold * 0.25));
   if (candidates.length === 0 || (candidates.length < 2 && e.variants.length > 1)) return null;
@@ -245,7 +255,7 @@ export function updateExperiments(world: WorldState): Experiment[] {
     e.results = computeExperimentResults(world, e);
     const threshold = experimentThreshold(e);
     const enough = e.variants.length > 0 && e.variants.every((v) => (e.results[v]?.n ?? 0) >= threshold);
-    const expired = world.day - e.day >= EXPERIMENT_MAX_DAYS;
+    const expired = world.day - e.day >= experimentDays(e);
     if (!enough && world.day - e.day >= EXPERIMENT_NO_DATA_DAYS && e.variants.some((v) => (e.results[v]?.n ?? 0) === 0)) {
       e.status = 'cancelled';
       e.endDay = world.day;
