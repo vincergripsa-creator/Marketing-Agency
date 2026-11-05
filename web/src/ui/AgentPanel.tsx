@@ -4,6 +4,7 @@ import type { Activity, AgentState, AlumnusView, ChatMessage, DeptId, HeadRow, L
 import { api } from '../api';
 import { Avatar, Bar, ChiefBadge, cx, DeliverableLink, Empty, Pill, SectionTitle, Segmented } from './common';
 import { useApp } from './context';
+import { readableLine } from './design';
 import { fmtClock, fmtEur, fmtInt, fmtPct, plural, safeDiv } from './format';
 import { Icon } from './icons';
 import {
@@ -223,7 +224,7 @@ function ChatTab({ agent }: { agent: AgentState }) {
             <div className="work-head">{prenom.toUpperCase()} {agent.status === 'working' || agent.status === 'thinking' || agent.status === 'reviewing' ? 'TRAVAILLE…' : '· ACTIVITÉ RÉCENTE'}</div>
             {currentTask ? <div className="work-task"><Icon name="play" size={11} /> {currentTask.title}</div> : null}
             <div className="work-lines">
-              {recent.slice(-4).map((a) => <div key={a.id} className="work-line">{a.text}</div>)}
+              {recent.slice(-4).map((a) => <div key={a.id} className="work-line">{readableLine(a.text)}</div>)}
             </div>
             <div className="tool-chips">
               {chips.map((c, i) => <span key={`${c}-${i}`} className="tool-chip">{c}</span>)}
@@ -399,7 +400,7 @@ function TaskLine({ task }: { task: Task }) {
 
 // ───────────────────────────── Playbook ─────────────────────────────
 
-const RULE_TONE: Record<RuleKind, Tone> = { banned: 'red', hook: 'pink', format: 'violet', price: 'amber', hype: 'orange', tone: 'cyan', free: 'neutral' };
+const RULE_TONE: Record<RuleKind, Tone> = { banned: 'red', hook: 'pink', format: 'violet', price: 'amber', hype: 'orange', tone: 'cyan', style: 'violet', template: 'blue', hero: 'green', free: 'neutral' };
 
 function PlaybookTab({ agent, rules }: { agent: AgentState; rules: string[] }) {
   const { snapshot, openBrainNote } = useApp();

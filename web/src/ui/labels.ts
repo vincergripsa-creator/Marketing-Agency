@@ -4,6 +4,7 @@ import type {
   Difficulty, DuelView, Experiment, HiringReqView, HookStyle, InboxMessage, LedgerType, Lesson, MessageIntent, ModelTier,
   PersonChip, ProbationPlan, ProductStatus, RoleId, Skill, Task, TaskKind, TaskStatus, ToolName, WorldEvent,
 } from '../../../shared/types';
+import { LOOK_DIM, LOOK_KINDS, LOOK_TITLE, lookKindOfDim, lookLabel } from './design';
 import type { IconName } from './icons';
 
 export type TabId =
@@ -281,7 +282,7 @@ export const EVENT_TONE: Record<WorldEvent['severity'], Tone> = { info: 'blue', 
 
 export const EXPERIMENT_DIM_LABEL: Record<string, string> = {
   hook_style: 'Style de hook', ad_format: 'Format pub', price: 'Prix', sales_hype: 'Niveau de promesse',
-  support_tone: 'Ton du support', niche: 'Niche',
+  support_tone: 'Ton du support', niche: 'Niche', page_template: 'Gabarit de page', agent_duel: 'Duel',
 };
 export const METRIC_LABEL: Record<string, string> = {
   ctr: 'CTR', cvr: 'Conversion', roas: 'ROAS', refund_rate: 'Taux de remboursement', resolution: 'Résolution',
@@ -422,14 +423,18 @@ export function banditDimensionLabel(l: Lookups, key: string): string {
   const [dim, niche] = key.split(':');
   const base: Record<string, string> = {
     hook_style: 'Style de hook', ad_format: 'Format pub', price: 'Prix', hype: 'Niveau de promesse (page de vente)',
-    support_tone: 'Ton du support', niche: 'Choix de niche',
+    support_tone: 'Ton du support', niche: 'Choix de niche', ...LOOK_TITLE_BY_DIM,
   };
   const label = base[dim ?? ''] ?? dim ?? key;
   return niche ? `${label} · ${nicheName(l, niche)}` : label;
 }
 
+const LOOK_TITLE_BY_DIM: Record<string, string> = Object.fromEntries(LOOK_KINDS.map((k) => [LOOK_DIM[k], LOOK_TITLE[k]]));
+
 export function banditArmLabel(l: Lookups, dimKey: string, arm: string): string {
   const dim = dimKey.split(':')[0];
+  const look = lookKindOfDim(dim ?? '');
+  if (look) return lookLabel(look, arm);
   if (dim === 'hook_style') return HOOK_LABEL[arm as HookStyle] ?? arm;
   if (dim === 'ad_format') return FORMAT_LABEL[arm as AdFormat] ?? arm;
   if (dim === 'price') return `${arm} €`;
@@ -443,7 +448,7 @@ export function banditArmLabel(l: Lookups, dimKey: string, arm: string): string 
 
 // ───────────────────────────── Playbook rule patterns ─────────────────────────────
 
-export type RuleKind = 'banned' | 'hook' | 'format' | 'price' | 'hype' | 'tone' | 'free';
+export type RuleKind = 'banned' | 'hook' | 'format' | 'price' | 'hype' | 'tone' | 'style' | 'template' | 'hero' | 'free';
 
 export interface ParsedRule { kind: RuleKind; label: string; value: string | null; text: string }
 
@@ -454,6 +459,10 @@ const RULE_PATTERNS: { kind: RuleKind; label: string; re: RegExp }[] = [
   { kind: 'price', label: 'Prix cible', re: /Prix cible\s*«\s*([^»]+?)\s*»/i },
   { kind: 'hype', label: 'Promesse max', re: /Niveau de promesse max\s*«\s*([^»]+?)\s*»/i },
   { kind: 'tone', label: 'Ton support', re: /Ton support\s*«\s*([^»]+?)\s*»/i },
+  // design plan D204: the key or the label of a look
+  { kind: 'style', label: 'Style de couverture', re: /Style de couverture\s*«\s*([^»]+?)\s*»/i },
+  { kind: 'template', label: 'Gabarit de page', re: /Gabarit de page\s*«\s*([^»]+?)\s*»/i },
+  { kind: 'hero', label: 'Visuel de page', re: /Visuel de page\s*«\s*([^»]+?)\s*»/i },
 ];
 
 export function parseRule(text: string): ParsedRule {
@@ -465,6 +474,7 @@ export function parseRule(text: string): ParsedRule {
       if (value && p.kind === 'format') value = FORMAT_LABEL[value as AdFormat] ?? value;
       if (value && p.kind === 'price') value = `${value} €`;
       if (value && p.kind === 'hype') value = `${Math.round(Number(value.replace(',', '.')) * 100) || value} %`;
+      if (value && (p.kind === 'style' || p.kind === 'template' || p.kind === 'hero')) value = lookLabel(p.kind, value);
       return { kind: p.kind, label: p.label, value, text };
     }
   }

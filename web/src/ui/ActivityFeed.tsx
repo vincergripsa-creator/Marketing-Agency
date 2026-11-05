@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import type { Activity, ActivityKind, ChronicleEntry } from '../../../shared/types';
 import { cx, Dot, Segmented } from './common';
 import { useApp } from './context';
+import { readableLine } from './design';
 import { activityProductId } from './derive';
 import { Icon } from './icons';
 import { ACTIVITY_META, agentColor, agentName, firstName, type Lookups } from './labels';
@@ -54,7 +55,7 @@ export function ActivityFeed() {
       <button type="button" className="feed-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span className="live-dot" />
         <strong>Journal</strong>
-        <span className="muted small feed-last">{!open && last ? last.text : `${activity.length} événements`}</span>
+        <span className="muted small feed-last">{!open && last ? readableLine(last.text) : `${activity.length} événements`}</span>
         <Icon name={open ? 'chevronDown' : 'chevronUp'} size={14} />
       </button>
       {open ? (
@@ -91,7 +92,7 @@ export function ActivityFeed() {
                           {a.toAgentId ? <> <Icon name="arrowRight" size={10} /> {firstName(agentName(lookups, a.toAgentId))}</> : null}
                         </span>
                       ) : null}
-                      <span className="feed-msg">{a.text}</span>
+                      <span className="feed-msg">{readableLine(a.text)}</span>
                       {product ? <span className="feed-product"><Icon name="package" size={10} /> Voir le produit</span> : null}
                     </span>
                     <span className="feed-time">J{a.day}·{a.tick}</span>
