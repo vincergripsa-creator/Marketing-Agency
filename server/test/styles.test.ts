@@ -187,6 +187,7 @@ describe('the style registry', () => {
   it('knows the eight ids, builds Bauhaus and typo, and draws the others as Bauhaus', () => {
     expect(BUILT_STYLES.slice(0, 2)).toEqual(['bauhaus', 'typo']);
     for (const id of BUILT_STYLES) expect(ART_STYLES).toContain(id);
+    expect(BUILT_STYLES).toEqual(expect.arrayContaining(['grille', 'pop', 'trait', 'collage', 'aura', 'riso']));
     for (const id of ART_STYLES) expect(styleDef(id).compositions.length, id).toBeGreaterThanOrEqual(2);
     expect(isBuilt('typo')).toBe(true);
     expect(isBuilt('gothique')).toBe(false);

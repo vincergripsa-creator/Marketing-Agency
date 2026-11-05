@@ -13,7 +13,9 @@ import { grille } from './grille.js';
 import { pop } from './pop.js';
 import { trait } from './trait.js';
 
-// styles B: collage, aura, riso
+import { aura } from './aura.js';
+import { collage } from './collage.js';
+import { riso } from './riso.js';
 
 const BUILT: Partial<Record<ArtStyle, ArtStyleDef>> = {
   bauhaus,
@@ -21,6 +23,9 @@ const BUILT: Partial<Record<ArtStyle, ArtStyleDef>> = {
   grille,
   pop,
   trait,
+  collage,
+  aura,
+  riso,
 };
 
 /** The styles that draw their own art, Bauhaus first. */
