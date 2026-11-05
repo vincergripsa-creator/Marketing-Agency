@@ -13,6 +13,7 @@ import { ctaLabel } from './end.js';
 import { chipLabel, QUOTE_LABEL } from './fact.js';
 import { accentWord, ORPHAN } from './hook.js';
 import { drawReview, leadOf } from './review.js';
+import { framed } from './labels.js';
 
 const REVEAL_PER_SEC = 6;      // a silent film: `max(1.8, words / 2.6 + 0.5)` gives a slide its time to be read, the words must not spend it arriving
 const FADE_SEC = 0.08;
@@ -159,7 +160,7 @@ function drawStatic(s: SceneApi, b: TimelineBeat, t: number): void {
   ctx.textAlign = 'left';
 }
 
-export function drawSlide(s: SceneApi, b: TimelineBeat, t: number): void {
+function drawSlideBeat(s: SceneApi, b: TimelineBeat, t: number): void {
   const { spec } = s.assets;
   if (spec.format === 'static_image') { drawStatic(s, b, t); return; }
   const { ctx, column: box } = s;
@@ -213,3 +214,5 @@ export async function renderCards(comp: Compositor, dir: string): Promise<CardFi
   }
   return cards;
 }
+
+export const drawSlide = framed(drawSlideBeat);

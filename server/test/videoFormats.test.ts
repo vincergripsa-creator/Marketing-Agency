@@ -10,8 +10,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { createRng } from '../src/core/index.js';
 import { contrast } from '../src/deliverables/color.js';
 import { normalizeDesign, PALETTES } from '../src/deliverables/design.js';
-import { renderAdCut, renderAdStoryboard } from '../src/deliverables/storyboard.js';
-import { textWidth } from '../src/deliverables/text.js';
+import { AD_LABEL, adTextBoxes, DRAWN_LABEL, insideZones, renderAdCut, renderAdStoryboard, VOICE_LABEL } from '../src/deliverables/storyboard.js';
 import { planCut } from '../src/deliverables/videoCut.js';
 import { SAFE_ZONES } from '../src/shared.js';
 import type { AdCreative, AdFormat, AdScene, BeatKind, DesignSpec, PdfContent, Product, VideoCut, VideoTempo, VoiceOfCustomer, WorldState } from '../src/shared.js';
@@ -28,6 +27,10 @@ const narrator = hasCanvas ? await import('../src/video/scenes/narrator.js') : n
 const slide = hasCanvas ? await import('../src/video/scenes/slide.js') : null;
 const worker = hasCanvas ? await import('../src/video/worker.js') : null;
 const ffmpeg = findFfmpeg() ?? '';
+
+/** The mentions every beat and frame carries (D208), apart from the words of the beat. */
+const MENTIONS: ReadonlySet<string> = new Set([AD_LABEL, DRAWN_LABEL, VOICE_LABEL]);
+const own = <T extends { text: string }>(boxes: readonly T[]): T[] => boxes.filter((b) => !MENTIONS.has(b.text));
 
 const DESIGN: DesignSpec = {
   palette: { bg: '#f4efe2', primary: '#2f6b46', secondary: '#a9c8a2', accent: '#e0683a', ink: '#23302a', soft: '#e7ecd9' },
@@ -81,21 +84,8 @@ function board(creative: AdCreative, ratio: VideoRatio): string[] {
   return renderAdCut({ creative, product: PRODUCT, design: DESIGN, brand: 'Pixel Agency', ratio }).frames;
 }
 
-const UNESCAPE: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'", '&#39;': "'" };
-
-/** Every text of a frame as a box, with the same width estimate the layout uses. The cover nested in a pin is a picture. */
-function svgBoxes(svg: string): (Rect & { text: string })[] {
-  const own = svg.replace(/<svg x=.*?<\/svg>/s, '');
-  return [...own.matchAll(/<text\b([^>]*)>([^<]*)<\/text>/g)].map((m) => {
-    const attr = (name: string): string | undefined => new RegExp(`\\b${name}="([^"]*)"`).exec(m[1]!)?.[1];
-    const text = m[2]!.replace(/&[#\w]+;/g, (e) => UNESCAPE[e] ?? e);
-    const size = Number(attr('font-size'));
-    const w = textWidth(text, 'Helvetica-Bold', size) * 1.06;
-    const anchor = attr('text-anchor');
-    const x = Number(attr('x')) - (anchor === 'middle' ? w / 2 : anchor === 'end' ? w : 0);
-    return { text, x, y: Number(attr('y')) - size * 0.8, w, h: size };
-  });
-}
+/** Every word a frame prints, from the `aria-label` of its glyph groups: the cover and the pages hold their own. */
+const said = (svg: string): string => [...svg.matchAll(/aria-label="([^"]*)"/g)].map((m) => m[1]!.replace(/&[#\w]+;/g, (e) => ({ '&amp;': '&', '&quot;': '"', '&#39;': "'" })[e] ?? e).replace(/[  ]/g, ' ')).join(' ');
 
 function pngSize(file: string): { w: number; h: number } {
   const b = readFileSync(file);
@@ -103,7 +93,7 @@ function pngSize(file: string): { w: number; h: number } {
 }
 
 describe('renderAdCut: plain SVG, every machine', () => {
-  const FRAMES: [VideoRatio, number, number][] = [['4:5', 432, 540], ['1:1', 540, 540], ['2:3', 400, 600]];
+  const FRAMES: [VideoRatio, number, number][] = [['4:5', 432, 540], ['1:1', 540, 540], ['2:3', 1000, 1500]];
 
   it.each(FRAMES)('%s is one frame per scene, at the size the channels asked', (ratio, w, h) => {
     for (const format of ['faceless_voiceover', 'text_slideshow', 'ugc_avatar', 'carousel'] as const) {
@@ -115,40 +105,44 @@ describe('renderAdCut: plain SVG, every machine', () => {
 
   it('re-lays the scene out, it does not crop the master: every text reads at its place on every ratio', () => {
     const long = SCENES.map((s, i) => (i === 2 ? { ...s, onScreenText: LONG_TEXT } : s));
-    for (const [ratio] of FRAMES) {
-      const { w, h, insets } = { '4:5': SAFE_ZONES.meta_feed, '1:1': SAFE_ZONES.square, '2:3': SAFE_ZONES.pinterest }[ratio as '4:5' | '1:1' | '2:3'];
-      const frame = FRAMES.find(([r]) => r === ratio)!;
-      const k = frame[1] / w;
+    for (const [ratio] of [...FRAMES, ['9:16'] as [VideoRatio]]) {
+      const { w, h, insets } = { '4:5': SAFE_ZONES.meta_feed, '1:1': SAFE_ZONES.square, '2:3': SAFE_ZONES.pinterest, '9:16': SAFE_ZONES.tiktok }[ratio as '4:5' | '1:1' | '2:3' | '9:16'];
       for (const format of ['faceless_voiceover', 'text_slideshow', 'ugc_avatar', 'carousel'] as const) {
-        for (const svg of board(creativeOf(format, { scenes: long }), ratio)) {
-          const boxes = svgBoxes(svg);
+        const { frame, frames } = adTextBoxes({ creative: creativeOf(format, { scenes: long }), product: PRODUCT, design: DESIGN, brand: 'Pixel Agency', ratio });
+        const k = frame.w / w;
+        for (const boxes of frames) {
           expect(boxes.length).toBeGreaterThan(0);
           for (const b of boxes) {
+            expect(insideZones(frame, b), `${ratio} ${format}: ${b.text}`).toBe(true);
+            // and inside the platform's own insets, read from the shared table
             expect(b.x, `${ratio} ${format}: ${b.text}`).toBeGreaterThanOrEqual(insets.left * k - 0.5);
             expect(b.x + b.w, `${ratio} ${format}: ${b.text}`).toBeLessThanOrEqual((w - insets.right) * k + 0.5);
             expect(b.y, `${ratio} ${format}: ${b.text}`).toBeGreaterThanOrEqual(insets.top * k - 0.5);
             expect(b.y + b.h, `${ratio} ${format}: ${b.text}`).toBeLessThanOrEqual((h - insets.bottom) * k + 0.5);
           }
         }
+        expect(Math.round(frame.h / k)).toBe(h);
       }
     }
   });
 
   it('shows the scene’s own words, and the button on the last frame only', () => {
     const frames = board(creativeOf('faceless_voiceover'), '4:5');
-    expect(frames[0]).toContain('5 erreurs sur un balcon');
-    expect(frames.at(-1)).toContain('Télécharge le guide');
-    expect(frames.at(-1)).not.toContain('(lien en bio)');
-    expect(frames[1]).not.toContain('Télécharge le guide');
+    expect(said(frames[0]!)).toContain('5 erreurs sur un balcon');
+    expect(said(frames.at(-1)!)).toContain('Télécharge le guide');
+    expect(said(frames.at(-1)!)).not.toContain('(lien en bio)');
+    expect(said(frames[1]!)).not.toContain('Télécharge le guide');
   });
 
-  it('carries nothing of TikTok to a feed: no rail, no fake counters, no « Sponsorisé »', () => {
-    const master = renderAdStoryboard({ creative: creativeOf('ugc_avatar'), product: PRODUCT, design: DESIGN, brand: 'Pixel Agency' }).frames.join('');
-    expect(master).toContain('son original');
-    for (const svg of board(creativeOf('ugc_avatar'), '4:5')) {
+  it('carries nothing of TikTok to a feed, and says « Publicité » on every frame, the master’s too', () => {
+    const master = renderAdStoryboard({ creative: creativeOf('ugc_avatar'), product: PRODUCT, design: DESIGN, brand: 'Pixel Agency' });
+    expect(master.previewHtml).toContain('Sponsorisé'); // the platform's word lives in its own layer, the preview's
+    for (const svg of [...master.frames, ...board(creativeOf('ugc_avatar'), '4:5')]) {
       expect(svg).not.toContain('son original');
       expect(svg).not.toContain('Sponsorisé');
       expect(svg).not.toContain('#fe2c55');
+      expect(said(svg)).toContain('Publicité');
+      expect(said(svg)).toContain('Personnage illustré');
     }
   });
 
@@ -157,25 +151,25 @@ describe('renderAdCut: plain SVG, every machine', () => {
     for (const [ratio] of FRAMES) {
       const [frame, ...rest] = board(pin, ratio);
       expect(rest).toEqual([]);
-      expect(frame).toContain('viewBox="0 0 600 848"');
-      expect(frame).toContain('Le balcon en 8 étapes'); // the cover's title
-      expect(svgBoxes(frame!).map((b) => b.text).join(' ')).toMatch(/5 erreurs.*balcon.*Télécharge le guide/);
+      expect(frame).toContain('url(#bkclip)'); // the printed guide
+      expect(said(frame!)).toMatch(/Le balcon en 8/); // the cover's own title
+      expect(said(frame!)).toMatch(/5 erreurs.*balcon/);
+      expect(said(frame!)).toContain('Télécharge le guide');
     }
   });
 
   it('shows the buyer\'s words where the voice reads a review, never a « 5/5 » label', () => {
     const scenes = SCENES.map((s, i) => (i === 3 ? { ...s, onScreenText: 'Avis vérifié : 5/5', voiceover: 'Un acheteur a écrit sur le guide : « enfin clair ».' } : s));
     const frames = [...board(creativeOf('faceless_voiceover', { scenes }), '4:5'), ...renderAdStoryboard({ creative: creativeOf('faceless_voiceover', { scenes }), product: PRODUCT, design: DESIGN, brand: 'Pixel Agency' }).frames];
-    expect(frames.filter((f) => f.includes('enfin clair'))).toHaveLength(2);
-    expect(frames.some((f) => f.includes('5/5') && f.includes('<text') && />[^<]*5\/5[^<]*<\/text>/.test(f))).toBe(false);
+    expect(frames.filter((f) => said(f).includes('enfin clair'))).toHaveLength(2);
+    expect(frames.some((f) => said(f).includes('5/5'))).toBe(false);
   });
 
   it('a last card says where to go, not to swipe', () => {
     const svg = board(creativeOf('carousel', { cta: 'Swipe jusqu’au bout et télécharge le guide (lien en bio)' }), '1:1').at(-1)!;
-    expect(svg).toContain('>Télécharge le guide<');
+    expect(svg).toContain('aria-label="Télécharge le guide"');
     expect(svg).not.toContain('Swipe');
   });
-
   it('an ad with no media has no frames, and no scene gives no frame', () => {
     expect(board(creativeOf('search_text', { scenes: [] }), '4:5')).toEqual([]);
     expect(board(creativeOf('search_text'), '4:5')).toEqual([]);
@@ -298,15 +292,15 @@ describe.skipIf(!compose)('drawn on a canvas', { timeout: 60_000 }, () => {
     return { spec, timeline, stage, assets, comp: compose!.createCompositor(timeline, stage, assets) };
   }
 
-  /** Text of a frame, in reading order. */
-  const texts = (boxes: readonly { text: string }[]): string => boxes.map((b) => b.text).join(' ');
+  /** Text of a frame, in reading order: the beat's own, the mentions row left out (it is tested on its own). */
+  const texts = (boxes: readonly { text: string }[]): string => own(boxes).map((b) => b.text).join(' ');
 
   describe('slides', () => {
     it('words come up fast, the first one on the cut, and the frame ends with the whole text', async () => {
       const { timeline, comp } = await stageUp(planned('text_slideshow', { scenes: SCENES.map((s) => ({ ...s, onScreenText: LONG_TEXT })) }), '9:16', { width: 540 });
       const b = timeline.beats[1]!;
       const at = (sec: number) => Math.round((b.t0 + sec) * timeline.fps);
-      const seen = (sec: number) => comp.drawFrame(at(sec)).filter((x) => x.text !== 'ÉTAPE 1').length;
+      const seen = (sec: number) => own(comp.drawFrame(at(sec))).filter((x) => x.text !== 'ÉTAPE 1').length;
       expect(seen(0)).toBe(1);
       expect(seen(0.4)).toBeLessThanOrEqual(3);
       expect(seen(3)).toBeGreaterThan(12);
@@ -465,7 +459,7 @@ describe.skipIf(!compose)('drawn on a canvas', { timeout: 60_000 }, () => {
         expect(boxes.length, screen).toBeGreaterThan(0);
       }
       const { comp } = await stageUp(planned('text_slideshow', { scenes: SCENES.map((s, i) => (i === 0 ? { ...s, onScreenText: 'Tout est dans le plan.' } : s)) }), '9:16', { width: 540 });
-      expect(comp.drawFrame(1).map((b) => b.text).join(' ')).toBe('TOUT EST DANS LE PLAN');
+      expect(texts(comp.drawFrame(1))).toBe('TOUT EST DANS LE PLAN');
     });
 
     it('leaves no short word alone on a line of a slide', async () => {

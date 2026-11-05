@@ -6,6 +6,7 @@ import { mix, rgba } from '../../deliverables/color.js';
 import type { SceneApi } from '../compose.js';
 import { FACE } from '../fonts.js';
 import { eBack, eOut, type TimelineBeat } from '../timeline.js';
+import { framed } from './labels.js';
 
 const LABEL = 'LU DANS LES COMMENTAIRES';
 const TYPING_SEC = 0.55;
@@ -64,7 +65,7 @@ function bubblePhrase(s: SceneApi, l: Layout, x: number, y: number, t: number): 
   ctx.globalAlpha = 1;
 }
 
-export function drawPain(s: SceneApi, b: TimelineBeat, t: number): void {
+function drawPainBeat(s: SceneApi, b: TimelineBeat, t: number): void {
   const { ctx, C, column: box } = s;
   s.background(C.light, mix(C.light, C.secondary, 0.7), 0.2);
   s.art(b.t0 + t, 0.12);
@@ -141,3 +142,5 @@ export function drawPain(s: SceneApi, b: TimelineBeat, t: number): void {
     ctx.restore();
   }
 }
+
+export const drawPain = framed(drawPainBeat);

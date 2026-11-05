@@ -7,7 +7,8 @@ import { saidSpan } from '../../deliverables/videoCut.js';
 import type { Proof, SceneApi } from '../compose.js';
 import type { Rect } from '../stage.js';
 import { clamp01, eBack, eIO, type TimelineBeat } from '../timeline.js';
-import { chipLabel, drawFact } from './fact.js';
+import { chipLabel, drawFactBeat } from './fact.js';
+import { framed } from './labels.js';
 
 const TIGHT = 3.6;             // px a point on the frame: 10 pt prints at 36 px, a phone's reading size
 const TIGHT_STEP = [1, 1, 0.9];    // the jumps of the shots: shot 0 is the page, the later ones never lose the line
@@ -121,9 +122,9 @@ function drawMarker(s: SceneApi, proof: Proof, x: number, y: number, k: number, 
   ctx.restore();
 }
 
-export function drawProof(s: SceneApi, b: TimelineBeat, t: number): void {
+function drawProofBeat(s: SceneApi, b: TimelineBeat, t: number): void {
   const proof = s.assets.proofs.get(b.index);
-  if (!proof) { drawFact(s, b, t); return; }
+  if (!proof) { drawFactBeat(s, b, t); return; }
   const { ctx, C, stage, column: box, timeline } = s;
   const { w: W, h: H } = stage;
   const { plain } = timeline;
@@ -155,10 +156,11 @@ export function drawProof(s: SceneApi, b: TimelineBeat, t: number): void {
   const focusY = (aim.y - a.h / 2) * k;
   const top = stage.zones[0]!.y0;
   const safe = stage.zones.at(-1)!.y1 - top;
+  const stripH = STRIP_H + Math.max(0, box.y - top); // the mentions lie on the paper too
   // The line rests high in the safe band, unless that would leave bare paper under it: then it comes down, the page's ink with it.
   const inkEnd = (proof.inkEnd - a.h / 2) * k;
   const lowest = top + safe * (stage.band === null ? FOCUS_OPEN : FOCUS_LOW);
-  const head = proof.headTop === null ? 0 : top + STRIP_H + (aim.y - proof.headTop) * k; // whole under the strip, never sliced by it
+  const head = proof.headTop === null ? 0 : top + stripH + (aim.y - proof.headTop) * k; // whole under the strip, never sliced by it
   const rest = Math.min(lowest, Math.max(top + safe * FOCUS_Y, (stage.band ?? H * INK_REACH) - inkEnd + focusY, head));
   const reach = Math.max(0, (a.w * k - W) / 2); // the sides of the page stay out of the frame
   const x = Math.max(W / 2 - reach, Math.min(W / 2 + reach, W / 2 - focusX * close));
@@ -173,7 +175,7 @@ export function drawProof(s: SceneApi, b: TimelineBeat, t: number): void {
 
   // The paper stops where it stops on every beat: the art takes the foot, the head stays clear for the bar and the chips.
   s.band(b.t0 + t);
-  const stripEnd = top + STRIP_H;
+  const stripEnd = top + stripH;
   const strip = ctx.createLinearGradient(0, stripEnd - STRIP_FADE, 0, stripEnd);
   strip.addColorStop(0, proof.paper); strip.addColorStop(1, proof.paper.replace('rgb(', 'rgba(').replace(')', ',0)'));
   ctx.fillStyle = strip;
@@ -181,3 +183,5 @@ export function drawProof(s: SceneApi, b: TimelineBeat, t: number): void {
   const first = s.chip(chipLabel(b), box.x, box.y + 56, t);
   s.chip(`PAGE ${proof.page}`, box.x + first + CHIP_GAP, box.y + 48, t - CHIP_AT, C.dark, PAGE_CHIP);
 }
+
+export const drawProof = framed(drawProofBeat);

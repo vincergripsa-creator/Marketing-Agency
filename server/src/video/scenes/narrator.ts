@@ -11,6 +11,7 @@ import { FACE } from '../fonts.js';
 import type { SpokenWord } from '../speech.js';
 import type { Rect } from '../stage.js';
 import { eIO, eOut, type TimelineBeat } from '../timeline.js';
+import { framed } from './labels.js';
 
 const BLINK_EVERY = 3.1;
 const BLINK_SEC = 0.12;
@@ -156,7 +157,7 @@ function figure(s: SceneApi, cx: number, cy: number, size: number, at: number, o
   ctx.restore();
 }
 
-export function drawNarrator(s: SceneApi, b: TimelineBeat, t: number): void {
+function drawNarratorBeat(s: SceneApi, b: TimelineBeat, t: number): void {
   const { ctx, C } = s;
   s.background(C.light, mix(C.light, C.secondary, 0.8), 0.2);
   s.art(b.t0 + t, 0.1);
@@ -201,3 +202,5 @@ export function drawNarrator(s: SceneApi, b: TimelineBeat, t: number): void {
   if (proof) drawInset(s, proof, card, b, t);
   ctx.restore();
 }
+
+export const drawNarrator = framed(drawNarratorBeat);

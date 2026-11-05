@@ -221,40 +221,45 @@ export function heuristicHooks(
   });
 }
 
+/**
+ * What each scene shows, as the storyboard draws it (`deliverables/storyboard.ts`, design plan D206): the guide's own art,
+ * its real cover from the first frame, its real pages where a scene points at them. Read by the scorer (10 characters at
+ * least) and shown to the founder; the on-screen texts are written below, never here.
+ */
 const VISUALS: Record<AdFormat, string[]> = {
   faceless_voiceover: [
-    'Fond sombre animé, l’accroche claque mot par mot au centre',
-    'Plaque claire, les mots des clients en bulles de commentaires',
-    'Vraie page du guide, zoom sur la ligne surlignée au marqueur',
-    'Vraie page du guide, deuxième repère surligné au marqueur',
-    'Pages du guide en éventail derrière le livre, sticker du bonus',
-    'Couverture du guide en plein écran, flèche vers la bio',
+    'L’art du guide en fond, l’accroche en sous-titres blancs, la couverture dessous',
+    'Le papier du guide, la phrase des clients dans une bulle',
+    'Vraie page du guide en gros plan, l’étape surlignée au marqueur',
+    'Carte d’avis d’un acheteur vérifié, ou repère du guide sur une carte',
+    'Vraies pages du guide en éventail derrière le livre, sticker « bonus offert »',
+    'La couverture du guide en grand, son prix du jour, le bouton vers le lien',
   ],
   text_slideshow: [
-    'Fond uni à la couleur de la marque, texte noir très gros',
-    'Slide 2 : la phrase client entre guillemets, fond clair',
-    'Slide 3 : étape 1 en grand, numéro en couleur',
-    'Slide 4 : repère ou avis d’acheteur, une seule ligne',
-    'Slide 5 : aperçu du bonus offert',
-    'Slide finale : couverture du guide + « lien en bio »',
+    'Slide 1 : l’accroche en très grand sur la couleur du guide, sa couverture dessous',
+    'Slide 2 : la phrase des clients en grande citation',
+    'Slide 3 : le numéro de l’étape en très grand, sa vraie page surlignée',
+    'Slide 4 : l’avis d’un acheteur ou un repère, en une phrase',
+    'Slide 5 : le bonus offert, une vraie page du guide en aperçu',
+    'Slide finale : la couverture du guide, son prix du jour et le bouton',
   ],
   ugc_avatar: [
-    'Narrateur illustré en carte, regard direct, accroche à côté de lui',
-    'Narrateur illustré qui soupire, sous-titres dynamiques',
-    'Narrateur illustré, une vraie page du guide en incrustation',
-    'Vraie page du guide, zoom sur la ligne surlignée au marqueur',
-    'Pages du guide en éventail derrière le livre, sticker du bonus',
-    'Couverture du guide, le narrateur pointe : « lien en bio »',
+    'Narrateur illustré qui montre le guide à côté de son visage, l’accroche au-dessus',
+    'Narrateur illustré qui soupire, la phrase des clients au-dessus',
+    'Narrateur illustré en incrustation devant une vraie page surlignée',
+    'Narrateur illustré qui parle, l’avis ou le repère en sous-titres',
+    'Narrateur illustré qui montre le guide, sticker « bonus offert »',
+    'Narrateur illustré qui montre le guide et son prix, le bouton vers le lien',
   ],
   carousel: [
-    'Carte 1 : accroche en gros sur fond clair',
-    'Carte 2 : la phrase qu’on lit partout, en citation',
-    'Carte 3 : étape 1 illustrée par une icône',
-    'Carte 4 : repère ou avis d’acheteur en deux lignes',
-    'Carte 5 : le bonus offert',
-    'Carte finale : couverture du guide + appel à l’action',
+    'Carte 1 : l’accroche en très grand, la couverture du guide dessous',
+    'Carte 2 : la phrase qu’on lit partout, en grande citation',
+    'Carte 3 : le numéro de l’étape en très grand, sa vraie page surlignée',
+    'Carte 4 : l’avis d’un acheteur ou un repère, en une phrase',
+    'Carte 5 : le bonus offert, une vraie page du guide en aperçu',
+    'Carte finale : la couverture du guide, son prix du jour et le bouton',
   ],
-  static_image: ['Image unique : accroche en gros, couverture du guide, appel à l’action'],
+  static_image: ['Image unique : l’accroche, la couverture du guide et le bouton, dans le look que l’accroche appelle'],
   search_text: [], // text only, no scene
 };
 

@@ -9,6 +9,7 @@ import type { SceneApi } from '../compose.js';
 import { FACE } from '../fonts.js';
 import { eOut, type TimelineBeat } from '../timeline.js';
 import { drawReview } from './review.js';
+import { framed } from './labels.js';
 
 const MAX_SIZE = 116;
 const MIN_SIZE = 40;
@@ -34,7 +35,7 @@ export function plateText(screen: string, spoken: string): string {
   return fact.charAt(0).toLocaleUpperCase('fr-FR') + fact.slice(1);
 }
 
-export function drawFact(s: SceneApi, b: TimelineBeat, t: number): void {
+export function drawFactBeat(s: SceneApi, b: TimelineBeat, t: number): void {
   const { ctx, C, column: box } = s;
   const review = s.assets.spec.reviews?.[b.scene];
   if (review) { drawReview(s, b, t, review); return; }
@@ -72,3 +73,5 @@ export function drawFact(s: SceneApi, b: TimelineBeat, t: number): void {
     s.chip(chipLabel(b), box.x, box.y + 56, t);
   }
 }
+
+export const drawFact = framed(drawFactBeat);
