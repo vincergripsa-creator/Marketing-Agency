@@ -15,7 +15,7 @@ import { taskChannel } from '../tasks.js';
 import { upsellContextOf } from '../upsell.js';
 import { dec, eur, round2, short, str, uniq } from '../util.js';
 import type { HandlerMap } from './common.js';
-import { mindWith, NO_PRODUCT, requireProduct, reworkNotes } from './common.js';
+import { frameFile, mindWith, NO_PRODUCT, requireProduct, reworkNotes } from './common.js';
 import { ensureDesign } from './creation.js';
 import { reworkCraft } from './growth.js';
 import { COMPLIANCE_WORDS } from './phrases.js';
@@ -142,10 +142,10 @@ export const channelHandlers: HandlerMap = {
       }
       const creative = ownCreative(ctx, task) ?? newCreative(ctx, agent.id, ch, { productId: product.id, ...script });
       Object.assign(creative, script, { ratio, masterId: master.id, createdBy: agent.id });
-      const board = deliverables.renderAdCut({ creative, product, design: ensureDesign(ctx, product), brand: w.company.name, ratio });
+      const board = deliverables.renderAdFiles({ creative, product, design: ensureDesign(ctx, product), brand: w.company.name, ratio }, frameFile(0));
       const frames: string[] = [];
       for (let i = 0; i < board.frames.length; i++) {
-        const rel = `files/${product.id}/ads/${creative.id}/frame-${i + 1}.svg`;
+        const rel = `files/${product.id}/ads/${creative.id}/${frameFile(i)}`;
         await writeRunFile(ctx, rel, board.frames[i]!);
         frames.push(rel);
       }

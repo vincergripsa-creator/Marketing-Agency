@@ -8,7 +8,7 @@ import { coverScene } from '../src/deliverables/cover.js';
 import { demoContent, demoProduct, demoSalesPage } from '../src/deliverables/fixture.js';
 import { normalizeDesign } from '../src/deliverables/design.js';
 import { setFontDir } from '../src/deliverables/fonts.js';
-import { renderCoverSvg, renderSalesPageHtml } from '../src/deliverables/index.js';
+import { compactPaths, renderCoverSvg, renderSalesPageHtml } from '../src/deliverables/index.js';
 import { layoutPdf } from '../src/deliverables/pdf.js';
 import { figureSvgFor, STAGE } from '../src/deliverables/salesPage.js';
 import { safeSvg } from '../src/deliverables/sales/common.js';
@@ -409,7 +409,7 @@ describe('the page follows the guide', () => {
     expect(file.startsWith('<svg')).toBe(true);
     expect(htmlOf(page)).toContain(`<div class="front">${file}</div>`);
     expect(existsSync(join(root, ...page.files.cover!.split('/')))).toBe(true);
-    expect(renderCoverSvg({ title: page.title, subtitle: page.content!.subtitle, audience: page.audience, design: page.design!, brand: world.company.name })).toBe(file);
+    expect(compactPaths(renderCoverSvg({ title: page.title, subtitle: page.content!.subtitle, audience: page.audience, design: page.design!, brand: world.company.name }))).toBe(file); // the drawing, its path data written shorter
   });
 });
 
@@ -607,7 +607,7 @@ describe('the page the pipeline writes with a template (D202)', () => {
     const file = read(lp.files.cover!);
     expect(file.startsWith('<svg')).toBe(true);
     expect(symbolsIn(lhtml(lp), 'cover-art').get('cover-art')).toBe(innerOf(file));
-    expect(renderCoverSvg({ title: lp.title, subtitle: lp.content!.subtitle, audience: lp.audience, design: lp.design!, brand: lw.company.name })).toBe(file);
+    expect(compactPaths(renderCoverSvg({ title: lp.title, subtitle: lp.content!.subtitle, audience: lp.audience, design: lp.design!, brand: lw.company.name }))).toBe(file);
   });
 
   it('the figures it prints are the guide’s and its render’s, the actions being the number the PDF prints', () => {

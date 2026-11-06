@@ -201,6 +201,13 @@ export interface DeliverablesModule {
   renderKit(input: { product: Product; content: PdfContent; design: DesignSpec; brand: string; outFile: string }): Promise<{ pages: number; bytes: number; previews: { label: string; svg: string }[] }>;
   /** Still frames for a non-9:16 cut: 432×540, 540×540, 400×600. No canvas, no ffmpeg: works on every machine. */
   renderAdCut(input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string; ratio: Exclude<AdRatio, 'text'> }): { frames: string[] };
+  /**
+   * The same frames as files of a run, the first one written as `sheet`: it holds them all, each drawn once, the others and the
+   * preview (none for a cut) show theirs through its views. Frame 1 alone still shows as an image.
+   */
+  renderAdFiles(input: { creative: AdCreative; product: Product; design: DesignSpec; brand: string; ratio?: Exclude<AdRatio, 'text'> }, sheet: string): { frames: string[]; previewHtml: string | null };
+  /** An SVG or HTML text with the data of its paths written shorter, every point where it was: what a file of the run holds. */
+  compactPaths(text: string): string;
 }
 
 // ───────────────────────────── minds/ (ContentEngine) ─────────────────────────────

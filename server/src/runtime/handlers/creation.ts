@@ -16,7 +16,7 @@ import { short, slugify, strArr } from '../util.js';
 import type { HandlerMap } from './common.js';
 import { NO_PRODUCT, requireProduct, reworkNotes, studioMind } from './common.js';
 import { scoreContent } from './studio.js';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 export function ensureDesign(ctx: RuntimeCtx, product: Product, hint?: string): DesignSpec {
@@ -111,14 +111,18 @@ function coverLook(ctx: RuntimeCtx, task: Task, agent: AgentState, mind: MindCon
 /** Under this a refreshed cover is drawn again with more candidates, as the art director's review would send it back (pdf §13). */
 const REFRESH_COVER_MIN = 60;
 
-/** The pages the shop window shows, cut from the render and never mocked (pdf §11.5), next to the guide. */
+/**
+ * The pages the shop window shows, cut from the render and never mocked (pdf §11.5), next to the guide. The ones they replace
+ * go: a page reads only the guide's current ones, and the page of an older version holds its own inlined.
+ */
 export async function writePreviews(ctx: RuntimeCtx, product: Product, previews: { label: string; svg: string }[]): Promise<string[]> {
   const paths: string[] = [];
   for (const [i, preview] of previews.entries()) {
     const rel = `${versionDir(product)}/previews/${String(i + 1).padStart(2, '0')}-${slugify(preview.label)}.svg`;
-    await writeRunFile(ctx, rel, preview.svg);
+    await writeRunFile(ctx, rel, deliverables.compactPaths(preview.svg));
     paths.push(rel);
   }
+  for (const rel of product.files.previews ?? []) if (!paths.includes(rel)) await rm(absPath(ctx, rel), { force: true });
   return paths;
 }
 
@@ -126,7 +130,8 @@ export async function writePreviews(ctx: RuntimeCtx, product: Product, previews:
 export async function ensureCoverFile(ctx: RuntimeCtx, product: Product): Promise<string> {
   const rel = `${versionDir(product)}/cover.svg`;
   const svg = coverSvgFor(ctx, product);
-  if (product.files.cover !== rel || (await readRunFile(ctx, rel)) !== svg) await writeRunFile(ctx, rel, svg);
+  const file = deliverables.compactPaths(svg);
+  if (product.files.cover !== rel || (await readRunFile(ctx, rel)) !== file) await writeRunFile(ctx, rel, file);
   product.files.cover = rel;
   return svg;
 }
@@ -158,7 +163,7 @@ export const creationHandlers: HandlerMap = {
       }
       const svg = coverSvgFor(ctx, product);
       const rel = `${versionDir(product)}/cover.svg`;
-      await writeRunFile(ctx, rel, svg);
+      await writeRunFile(ctx, rel, deliverables.compactPaths(svg));
       product.files.cover = rel;
       if (product.status === 'writing' || product.status === 'research') product.status = 'design';
       const cover = effort ? coverScore(deliverables.coverAudit(coverInput(ctx, product))) : null;
@@ -198,7 +203,7 @@ export const creationHandlers: HandlerMap = {
         if (cover === null || cover >= REFRESH_COVER_MIN) break;
       }
       const rel = `${versionDir(product)}/cover.svg`;
-      await writeRunFile(ctx, rel, coverSvgFor(ctx, product));
+      await writeRunFile(ctx, rel, deliverables.compactPaths(coverSvgFor(ctx, product)));
       product.files.cover = rel;
       const [now, was] = [lookLabel('style', look.style), lookLabel('style', before)];
       const drawn = styleDef(look.style).compositions[look.composition]?.label;

@@ -109,11 +109,12 @@ async function previewsOf(ctx: RuntimeCtx, product: Product): Promise<{ label: s
   return out;
 }
 
+/** The covers a page holds, as their files hold them: its real pages come so from theirs, and a page is written again at every price and review. */
 async function renderSalesPage(ctx: RuntimeCtx, product: Product, rel: string, coverSvg: string): Promise<void> {
   const kit = kitOf(ctx, product);
   const html = deliverables.renderSalesPageHtml({
-    product, salesPage: product.salesPage!, coverSvg, design: ensureDesign(ctx, product), brand: ctx.world.company.name, previews: await previewsOf(ctx, product), offSale: offSale(ctx, product),
-    kit: kit ? { title: kit.title, coverSvg: coverSvgFor(ctx, kit) } : null, day: ctx.world.day,
+    product, salesPage: product.salesPage!, coverSvg: deliverables.compactPaths(coverSvg), design: ensureDesign(ctx, product), brand: ctx.world.company.name, previews: await previewsOf(ctx, product), offSale: offSale(ctx, product),
+    kit: kit ? { title: kit.title, coverSvg: deliverables.compactPaths(coverSvgFor(ctx, kit)) } : null, day: ctx.world.day,
   });
   await writeRunFile(ctx, rel, html);
   product.files.salesPage = rel;
