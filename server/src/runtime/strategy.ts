@@ -27,7 +27,7 @@ import { guideGaps } from './redteam.js';
 import { growthOn, policyOf } from './stages.js';
 import { createTask, isOpen, KIND_META, logTask, openTasks, PLAN_KINDS, PRODUCT_KINDS, taskChannel } from './tasks.js';
 import { openMessages, urgency } from './handlers/support.js';
-import { experimentCandidate } from './handlers/ops.js';
+import { experimentCandidate, pageExperimentCandidate } from './handlers/ops.js';
 import {
   ACQUISITION_KINDS, acquisitionCandidates, adBanActive, bestCandidate, channelPaused, companyPaidBlock, daysWithoutAds, harvesting, isReworking, launchableCreatives,
   lessonDay, LOSS_WINDOW_DAYS, MAX_IDLE_DAYS, MIN_CAMPAIGN_BUDGET, openTest, productHealth, productPaidBlock, promotionBlock, recentLoss, recentProfits, refundsWorthRework, SURVIVAL_ROAS, SURVIVAL_SAMPLE,
@@ -779,7 +779,7 @@ export async function buildHeuristicPlan(ctx: RuntimeCtx): Promise<DayPlan> {
   if (day >= 2) items.push(planItem('reconcile_ledger', { day: day - 1 }, 'Chaque ligne de la veille doit coller aux ventes, à TikTok et aux remboursements.', 2, `Rapprocher le grand livre du jour ${day - 1}`));
   if (day >= 8 && (day - 1) % 7 === 0) items.push(planItem('weekly_pnl', {}, 'Savoir ce que chaque produit rapporte vraiment, frais et remboursements compris.', 2, `P&L de la semaine ${Math.ceil((day - 1) / 7)} par produit`));
   if (day >= 2) items.push(planItem('follow_missions', {}, 'Rien ne doit dormir : les missions du fondateur avancent, les tâches bloquées repartent.', 2));
-  if (day >= 3 && !open('run_experiment') && (experimentCandidate(ctx) || w.company.experiments.some((e) => e.status === 'running'))) {
+  if (day >= 3 && !open('run_experiment') && (experimentCandidate(ctx) || pageExperimentCandidate(ctx) || w.company.experiments.some((e) => e.status === 'running'))) {
     items.push(planItem('run_experiment', {}, 'Transformer les intuitions en tests A/B mesurés.', 3));
   }
 
