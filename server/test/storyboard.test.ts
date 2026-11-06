@@ -6,8 +6,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { coverScene } from '../src/deliverables/cover.js';
 import { designFor } from '../src/deliverables/design.js';
+import { compactPaths } from '../src/deliverables/pathData.js';
 import {
-  AD_LABEL, adTextBoxes, coverSticker, cutFrame, DRAWN_LABEL, insideZones, keyWords, masterFrame, quotableReview, renderAdCut, renderAdStoryboard,
+  AD_LABEL, adTextBoxes, coverSticker, cutFrame, DRAWN_LABEL, insideZones, keyWords, masterFrame, quotableReview, renderAdCut, renderAdFiles, renderAdStoryboard,
   staticLookOf, VOICE_LABEL, type AdFrame,
 } from '../src/deliverables/storyboard.js';
 import type { AdCreative, AdFormat, AdScene, ArtStyle, ChapterContent, HookStyle, PdfContent, Product, Review } from '../src/shared.js';
@@ -317,6 +318,102 @@ describe('the phone preview', () => {
   it('names the look of a single image', () => {
     const { previewHtml } = renderAdStoryboard(input(pinOf('story', 'On a lu vos commentaires sur le chiot')));
     expect(previewHtml).toContain('look « Carte d’avis »');
+  });
+});
+
+/** What lies between two marks of a text, the second one excluded. */
+const between = (s: string, from: string, to: string): string => {
+  const at = s.indexOf(from);
+  return at < 0 ? '' : s.slice(at + from.length, s.indexOf(to, at + from.length));
+};
+
+/** Frame `k` (from 1) of a sheet as its own file draws it: its group, the pieces it shares put back, and its box's bar. */
+function fromSheet(sheet: string, k: number): string {
+  const defs = between(sheet, '<defs>', '</defs><view');
+  const pieces = new Map<string, string>();
+  for (let j = 0; defs.includes(`<g id="ar${j}">`); j++) pieces.set(`ar${j}`, between(defs, `<g id="ar${j}">`, defs.includes(`<g id="ar${j + 1}">`) ? `<g id="ar${j + 1}">` : '<g id="sc1">').replace(/<\/g>$/, ''));
+  const next = defs.includes(`<g id="sc${k + 1}">`) ? `<g id="sc${k + 1}">` : '\u0000';
+  const body = (next === '\u0000' ? defs.slice(defs.indexOf(`<g id="sc${k}">`) + `<g id="sc${k}">`.length) : between(defs, `<g id="sc${k}">`, next)).replace(/<\/g>$/, '');
+  const bar = between(sheet, `<use href="#sc${k}"/>`, '</svg>');
+  return body.replace(/<use href="#(ar\d+)"\/>/g, (_, id: string) => pieces.get(id)!) + bar;
+}
+
+/** The body of a frame's own file, path data compacted as the sheet's is. */
+const bodyOf = (frame: string): string => {
+  const c = compactPaths(frame);
+  return c.slice(c.indexOf('</defs>') + '</defs>'.length, -'</svg>'.length);
+};
+
+/** The name a frame's own file gives itself, as written. */
+const nameOf = (frame: string): string => /aria-label="([^"]*)"/.exec(frame)![1]!;
+
+/** Every letter a drawing uses is defined in `defs` as in the frame's own file. */
+function lettersHeld(drawing: string, frame: string, sheet: string): void {
+  for (const [, id] of drawing.matchAll(/<use href="#(g[0-9a-z]+_[0-9a-z]+)"/g)) {
+    const def = new RegExp(`<path id="${id}" d="[^"]*"/>`);
+    expect(sheet.match(def)?.[0], id).toBe(compactPaths(frame).match(def)?.[0]);
+  }
+}
+
+describe('the files of an ad', () => {
+  it('keeps every frame once in the first file, its letters and its cover once; the others and the preview show it through its views', () => {
+    for (const style of STYLES) {
+      for (const format of FORMATS) {
+        const inp = input(creativeOf(format), style);
+        const board = renderAdStoryboard(inp);
+        const files = renderAdFiles(inp, 'frame-1.svg');
+        expect(files.frames, `${style} ${format}`).toHaveLength(board.frames.length);
+        const sheet = files.frames[0]!;
+        // shown alone, as the gallery shows it: the first frame, nothing loaded from outside
+        expect(sheet).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 360 640" width="360" height="640" overflow="hidden" role="img"/);
+        expect(sheet).not.toMatch(/<image\b|href="(?!#)/);
+        expect(labels(sheet)[0]).toBe(labels(board.frames[0]!)[0]);
+        board.frames.forEach((frame, i) => {
+          const drawn = fromSheet(sheet, i + 1);
+          expect(drawn, `${style} ${format} frame ${i + 1}`).toBe(bodyOf(frame));
+          lettersHeld(drawn, frame, sheet);
+          expect(sheet).toContain(`<view id="v${i + 1}" viewBox="${i * 360} 0 360 640"/>`);
+        });
+        files.frames.slice(1).forEach((f, i) => {
+          expect(f).toContain(`<image href="frame-1.svg#v${i + 2}" width="360" height="640"/>`);
+          expect(labels(f)[0]).toBe(labels(board.frames[i + 1]!)[0]);
+        });
+        // the preview plays the bare frames, the bar of the scenes is its own
+        const bare = format !== 'carousel';
+        expect(files.previewHtml).not.toContain('<svg xmlns');
+        expect(files.previewHtml).toBe(board.previewHtml.replace(/(<div class="frame[^"]*" data-k="(\d+)" style="[^"]*">)<svg[\s\S]*?<\/svg>(<\/div>)/g,
+          (_, open: string, k: string, close: string) => `${open}<img src="frame-1.svg#${bare ? 'p' : 'v'}${Number(k) + 1}" alt="${nameOf(board.frames[Number(k)]!)}">${close}`));
+        if (bare) board.frames.forEach((_, i) => expect(sheet).toContain(`<view id="p${i + 1}" viewBox="${i * 360} 640 360 640"/>`));
+        // a cover drawn in several frames is kept once
+        const covers = (sheet.match(/<g clip-path="url\(#bkclip\)">/g) ?? []).length;
+        expect(sheet.match(/<g clip-path="url\(#bkclip\)"><use href="#ar\d+"\/>/g)?.length ?? 0, `${style} ${format}`).toBe(covers > 1 ? covers : 0);
+        const before = board.frames.reduce((n, f) => n + f.length, 0) + board.previewHtml.length;
+        const after = files.frames.reduce((n, f) => n + f.length, 0) + files.previewHtml!.length;
+        expect(after, `${style} ${format}`).toBeLessThan(before * 0.5);
+      }
+    }
+  });
+
+  it('a cut: the same frames in one file and its views, no preview; one image stands alone', () => {
+    for (const format of [...FORMATS, 'static_image'] as AdFormat[]) {
+      const creative = format === 'static_image' ? pinOf('listicle', '3 étapes pour un chiot propre') : creativeOf(format);
+      for (const ratio of ['4:5', '2:3'] as const) {
+        const cut = renderAdCut({ ...input(creative), ratio });
+        const files = renderAdFiles({ ...input(creative), ratio }, 'frame-1.svg');
+        expect(files.previewHtml).toBeNull();
+        expect(files.frames).toHaveLength(cut.frames.length);
+        if (cut.frames.length === 1) { expect(files.frames[0]).toBe(compactPaths(cut.frames[0]!)); continue; }
+        cut.frames.forEach((frame, i) => expect(fromSheet(files.frames[0]!, i + 1), `${format} ${ratio} ${i + 1}`).toBe(bodyOf(frame)));
+      }
+    }
+    expect(renderAdFiles({ ...input(creativeOf('carousel', { format: 'search_text' })), ratio: '4:5' }, 'frame-1.svg')).toEqual({ frames: [], previewHtml: null });
+  });
+
+  it('a single image of the master is one file, and its preview shows that file', () => {
+    const files = renderAdFiles(input(pinOf('question')), 'frame-1.svg');
+    expect(files.frames).toHaveLength(1);
+    expect(files.frames[0]).toBe(compactPaths(renderAdStoryboard(input(pinOf('question'))).frames[0]!));
+    expect(files.previewHtml).toContain('<img src="frame-1.svg" alt="Scène 1 : ');
   });
 });
 

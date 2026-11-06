@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { Product, Task } from '../src/shared.js';
 import type { BrainVault, ContentEngine, MindContext, RunPaths } from '../src/contracts.js';
 import { norm, upsellTopics, nextStepFor } from '../src/minds/index.js';
+import { compactPaths } from '../src/deliverables/pathData.js';
 import { finalWording } from '../src/deliverables/pdf.js';
 import { LEGACY } from './legacy.js';
 
@@ -305,7 +306,7 @@ describe('an internal note stays internal, the cover follows the product (D3)', 
       const second = await ensureCoverFile(e.ctx, p);
       expect(second).toContain('<title>Le titre retenu pour la vente</title>');
       expect(second).toContain('Le sous-titre écrit avec le guide');
-      expect(readFileSync(join(e.root, ...p.files.cover!.split('/')), 'utf8')).toBe(second);
+      expect(readFileSync(join(e.root, ...p.files.cover!.split('/')), 'utf8')).toBe(compactPaths(second)); // the drawing, its path data written shorter
     } finally { clean(e); }
   });
 });

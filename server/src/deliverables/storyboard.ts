@@ -14,6 +14,7 @@ import { COVER_H, COVER_W, coverScene, type CoverMeta } from './cover.js';
 import { normalizeDesign } from './design.js';
 import { advance, faceOf, fitDisplay, isStdFont, loadVoice, sanitizeFor, wrapFace, type FaceName } from './fonts.js';
 import type { PagePlan } from './layout/paginate.js';
+import { compactPaths } from './pathData.js';
 import { layoutPdf } from './pdf.js';
 import { circleD, Scene, toSvg, type Op } from './scene.js';
 import { escapeHtml as h, escapeXml as x, hashString, slugify, stripEmoji } from './text.js';
@@ -378,6 +379,11 @@ class Glyphs {
   svg(): string {
     return [...this.defs.values()].join('');
   }
+
+  /** The letters drawn so far, by id: a file that holds several frames defines each once. */
+  get drawn(): ReadonlyMap<string, string> {
+    return this.defs;
+  }
 }
 
 /** A drawing ready to place: its shapes already SVG, its lines waiting for the frame's glyph sheet. */
@@ -447,7 +453,7 @@ function bookSvg(L: Layers, k: Kit, cx: number, cy: number, w: number, rot = 0, 
   const edge = mix(k.inks.paper, '#000000', 0.18);
   const body = shadowOf(c.w, c.h, 14, 16, 26, o.shadow ?? 0.3)
     + `<rect x="9" y="7" width="${c.w}" height="${c.h}" rx="10" fill="${edge}"/><rect x="5" y="3.5" width="${c.w}" height="${c.h}" rx="10" fill="#fbf8f2"/>`
-    + `<g clip-path="url(#bkclip)">${emit(c.art, L.G)}<rect width="34" height="${c.h}" fill="url(#bkspine)"/><rect width="${c.w}" height="${c.h}" fill="url(#bkgloss)"/></g>`;
+    + `<g clip-path="url(#bkclip)">${L.share(emit(c.art, L.G))}<rect width="34" height="${c.h}" fill="url(#bkspine)"/><rect width="${c.w}" height="${c.h}" fill="url(#bkgloss)"/></g>`;
   return placed(body, c.w, c.h, cx - w / 2, cy - (c.h * s) / 2, s, rot);
 }
 
@@ -460,15 +466,18 @@ const BOOK_DEFS = '<clipPath id="bkclip"><rect width="600" height="848" rx="10"/
 function sheetSvg(L: Layers, page: Prepared, pw: number, ph: number, cx: number, cy: number, w: number, rot = 0, shadow = 0.22): string {
   const s = w / pw;
   const id = `pg${(hashString(`${pw}x${ph}`) % 1e6).toString(36)}`;
-  const body = shadowOf(pw, ph, 6, 8, 14, shadow) + `<clipPath id="${id}"><rect width="${r2(pw)}" height="${r2(ph)}" rx="4"/></clipPath><rect width="${r2(pw)}" height="${r2(ph)}" rx="4" fill="#ffffff"/><g clip-path="url(#${id})">${emit(page, L.G)}</g>`;
+  const body = shadowOf(pw, ph, 6, 8, 14, shadow) + `<clipPath id="${id}"><rect width="${r2(pw)}" height="${r2(ph)}" rx="4"/></clipPath><rect width="${r2(pw)}" height="${r2(ph)}" rx="4" fill="#ffffff"/><g clip-path="url(#${id})">${L.share(emit(page, L.G))}</g>`;
   return placed(body, pw, ph, cx - w / 2, cy - (ph * s) / 2, s, rot);
 }
 
 /** Layers in order: SVG strings as they are, scenes of shapes and lines through the frame's glyph sheet. */
 class Layers {
   private parts: (string | Scene)[] = [];
+  /** The cover and the pages as drawn here: another frame of the ad may draw them the same, and one file keeps them once. */
+  readonly art = new Set<string>();
   constructor(readonly f: AdFrame, readonly G: Glyphs = new Glyphs(), readonly ledger: TextBox[] | null = null) {}
   svg(s: string): void { if (s) this.parts.push(s); }
+  share(s: string): string { if (s) this.art.add(s); return s; }
   /** The scene to draw shapes and text into, above everything so far. */
   get s(): Scene {
     const last = this.parts[this.parts.length - 1];
@@ -1425,15 +1434,27 @@ function deckMarks(L: Layers, k: Kit, i: number, count: number, ground: string):
 
 // ───────────────────────────── one frame ─────────────────────────────
 
-function svgOf(f: AdFrame, scene: AdScene | undefined, i: number, desc: string, L: Layers): string {
+/** A frame as drawn, before it is written: alone in its own file, or beside the other frames of its ad in one (`sheetOf`). */
+interface Drawn { f: AdFrame; label: string; title: string; desc: string; body: string; L: Layers }
+
+function drawnOf(f: AdFrame, scene: AdScene | undefined, i: number, desc: string, L: Layers): Drawn {
   // the frame is named after what it shows: the buyer's words where the voice reads them, the channel's own way to the link
   const said = forChannel(screenOf(scene), f.channel) || `Scène ${i + 1}`;
-  const body = L.body();
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${f.w} ${f.h}" width="${f.w}" height="${f.h}" role="img" aria-label="${x(`Scène ${i + 1} : ${said}`)}">`
-    + `<title>${x(said)}</title><desc>${x(desc)}</desc><defs>${BOOK_DEFS}${L.G.svg()}</defs>${body}</svg>`;
+  return { f, label: x(`Scène ${i + 1} : ${said}`), title: x(said), desc: x(desc), body: L.body(), L };
 }
 
+const svgOf = (d: Drawn): string => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${d.f.w} ${d.f.h}" width="${d.f.w}" height="${d.f.h}" role="img" aria-label="${d.label}">`
+  + `<title>${d.title}</title><desc>${d.desc}</desc><defs>${BOOK_DEFS}${d.L.G.svg()}</defs>${d.body}</svg>`;
+
+/** The bar of the ad's scenes rides on the 9:16 frames, a carousel's dots stand for it. */
+const barred = (k: Kit, f: AdFrame): boolean => k.creative.format !== 'carousel' && f.ratio === '9:16';
+
 function frameOf(k: Kit, f: AdFrame, i: number, o: FrameOpts): string {
+  const svg = svgOf(drawFrame(k, f, i, o));
+  return o.progress && barred(k, f) ? withProgress(svg, f, i, k.scenes.length) : svg;
+}
+
+function drawFrame(k: Kit, f: AdFrame, i: number, o: FrameOpts): Drawn {
   const L = new Layers(f, undefined, o.ledger ?? null);
   const count = k.scenes.length;
   const role = roleOf(k.scenes[i]!, i, count);
@@ -1453,16 +1474,17 @@ function frameOf(k: Kit, f: AdFrame, i: number, o: FrameOpts): string {
               : reviewQuote(k.scenes[i]?.voiceover ?? '') ? reviewFrame(L, k, i, clean(reviewQuote(k.scenes[i]!.voiceover)!))
                 : (k.creative.cut?.beats?.some((b) => b.scene === i && b.proof) ? pageFrame(L, k, i) : null) ?? factFrame(L, k, i);
   }
-  const svg = svgOf(f, k.scenes[i], i, desc, L);
-  return o.progress && format !== 'carousel' && f.ratio === '9:16' ? withProgress(svg, f, i, count) : svg;
+  return drawnOf(f, k.scenes[i], i, desc, L);
 }
 
 /** The bar of the ad's scenes over a finished frame: the last layer, nothing of it to shape. */
-function withProgress(svg: string, f: AdFrame, i: number, count: number): string {
+function barOf(f: AdFrame, i: number, count: number): string {
   const L = new Layers(f);
   progress(L, i, count, true);
-  return svg.replace(/<\/svg>$/, `${L.body()}</svg>`);
+  return L.body();
 }
+
+const withProgress = (svg: string, f: AdFrame, i: number, count: number): string => svg.replace(/<\/svg>$/, `${barOf(f, i, count)}</svg>`);
 
 // ───────────────────────────── a single image ─────────────────────────────
 
@@ -1501,13 +1523,15 @@ function ratingLine(p: Product): { rating: number; text: string } | null {
   return n > 0 && r > 0 ? { rating: r, text: `${rating1(r)}/5 · ${plural(n, 'avis vérifié', 'avis vérifiés')}` } : null;
 }
 
-function staticFrame(k: Kit, f: AdFrame, ledger: TextBox[] | null = null): string {
+function drawStatic(k: Kit, f: AdFrame, ledger: TextBox[] | null = null): Drawn {
   const L = new Layers(f, undefined, ledger);
   const look = staticLookOf(k.creative, k.product, !!k.guide?.pages.length);
   const hook = clean(k.scenes[0]?.onScreenText) || clean(k.creative.hook);
   const desc = look === 'text' ? staticText(L, k, hook) : look === 'review' ? staticReview(L, k, hook) : look === 'inside' ? staticInside(L, k, hook) : staticOffer(L, k, hook);
-  return svgOf(f, k.scenes[0], 0, `${STATIC_LOOK_LABEL[look]} : ${desc}`, L);
+  return drawnOf(f, k.scenes[0], 0, `${STATIC_LOOK_LABEL[look]} : ${desc}`, L);
 }
+
+const staticFrame = (k: Kit, f: AdFrame, ledger: TextBox[] | null = null): string => svgOf(drawStatic(k, f, ledger));
 
 /** The foot every image shares: the button, and on a pin the facts of the file. */
 function staticFoot(L: Layers, k: Kit, bottom: number): number {
@@ -1756,8 +1780,8 @@ html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-u
 .nav .plus{width:40px;height:26px;border-radius:8px;background:linear-gradient(90deg,#25f4ee 0 18%,#fff 18% 82%,#fe2c55 82%);color:#111;display:grid;place-items:center;font-size:20px;font-weight:800;opacity:1;margin-top:-2px}
 .frame{position:absolute;inset:0;opacity:0;transition:opacity .35s ease}
 .frame.on{opacity:1}
-.frame svg{width:100%;height:100%;display:block}
-.frame.on svg{animation:push var(--d,3s) linear both}
+.frame svg,.frame img{width:100%;height:100%;display:block}
+.frame.on svg,.frame.on img{animation:push var(--d,3s) linear both}
 @keyframes push{from{transform:scale(1)}to{transform:scale(1.045)}}
 .ui{position:absolute;inset:0;pointer-events:none;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.45);z-index:5}
 .tabs{position:absolute;top:7.5%;left:0;right:0;display:flex;justify-content:center;gap:16px;font-weight:700;font-size:13px}
@@ -1812,7 +1836,7 @@ ol.scenes .dur{font-size:11.5px;font-weight:800;color:var(--muted)}
 .note{font-size:12.5px;color:var(--muted)}
 label.toggle{display:inline-flex;gap:8px;align-items:center;font-size:13px;color:var(--muted);cursor:pointer}
 @media (max-width:520px){.wrap{padding:0 0 40px;gap:18px}.phone{width:100vw;max-width:none;aspect-ratio:9/16;height:auto;border-radius:0;padding:0;box-shadow:none}.screen{border-radius:0}.island,.nav{display:none}.tabs{top:3.5%}.panel{padding:0 16px}}
-@media (prefers-reduced-motion:reduce){.frame{transition:none}.frame.on svg,.disc{animation:none}}
+@media (prefers-reduced-motion:reduce){.frame{transition:none}.frame.on svg,.frame.on img,.disc{animation:none}}
 </style>
 </head>
 <body>
@@ -1898,7 +1922,7 @@ label.toggle{display:inline-flex;gap:8px;align-items:center;font-size:13px;color
     for (var i = 0; i < frames.length; i++) {
       var on = i === k;
       frames[i].classList.toggle('on', on);
-      if (on) { var svg = frames[i].querySelector('svg'); if (svg) { svg.style.animation = 'none'; void svg.getBoundingClientRect(); svg.style.animation = ''; } }
+      if (on) { var svg = frames[i].querySelector('svg,img'); if (svg) { svg.style.animation = 'none'; void svg.getBoundingClientRect(); svg.style.animation = ''; } }
     }
     for (var j = 0; j < items.length; j++) items[j].classList.toggle('on', j === k);
   }
@@ -1936,6 +1960,47 @@ label.toggle{display:inline-flex;gap:8px;align-items:center;font-size:13px;color
 </body>
 </html>
 `;
+}
+
+// ───────────────────────────── the files of an ad ─────────────────────────────
+
+/** A cover or a page drawn in more than one frame is kept once in the sheet, from this size on. */
+const SHARED_FROM = 200;
+
+/**
+ * Every frame of an ad in one SVG: their letters defined once, a cover or a page drawn in several frames kept once, each frame
+ * in its own box side by side under its view `v<n>`, and when the frames carry the bar of the scenes, their bare copies under
+ * it in the views `p<n>`. A box clips what its frame draws past its edges, as the frame's own file does. No view named, it
+ * shows the first frame as that file would: the gallery and the ads tab show it as an image, where nothing outside may load.
+ */
+function sheetOf(drawn: readonly Drawn[], bars: readonly string[] | null): string {
+  const { w, h } = drawn[0]!.f;
+  const glyphs = new Map<string, string>();
+  for (const d of drawn) for (const [id, def] of d.L.G.drawn) if (def) glyphs.set(id, def);
+  const art = new Set(drawn.flatMap((d) => [...d.L.art]));
+  const times = (a: string): number => drawn.reduce((n, d) => n + d.body.split(a).length - 1, 0);
+  // the longest first: a piece that holds another is kept whole
+  const shared = [...art].filter((a) => a.length >= SHARED_FROM && times(a) > 1).sort((a, b) => b.length - a.length || (a < b ? -1 : 1));
+  const bodies = drawn.map((d) => shared.reduce((body, a, j) => body.split(a).join(`<use href="#ar${j}"/>`), d.body));
+  const box = (i: number, y: number, inner: string): string => `<svg x="${i * w}" y="${y}" width="${w}" height="${h}" overflow="hidden">${inner}</svg>`;
+  const views = drawn.map((_, i) => `<view id="v${i + 1}" viewBox="${i * w} 0 ${w} ${h}"/>${bars ? `<view id="p${i + 1}" viewBox="${i * w} ${h} ${w} ${h}"/>` : ''}`).join('');
+  const shown = drawn.map((_, i) => box(i, 0, `<use href="#sc${i + 1}"/>${bars?.[i] ?? ''}`)).join('');
+  const bare = bars ? drawn.map((_, i) => box(i, h, `<use href="#sc${i + 1}"/>`)).join('') : '';
+  const first = drawn[0]!;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" overflow="hidden" role="img" aria-label="${first.label}">`
+    + `<title>${first.title}</title><desc>${first.desc}</desc><defs>${BOOK_DEFS}${[...glyphs.values()].join('')}`
+    + `${shared.map((a, j) => `<g id="ar${j}">${a}</g>`).join('')}${bodies.map((b, i) => `<g id="sc${i + 1}">${b}</g>`).join('')}</defs>`
+    + `${views}${shown}${bare}</svg>`;
+}
+
+/** A frame past the first: its own name and words, its drawing the sheet's view of it. */
+const viewFile = (d: Drawn, n: number, sheet: string): string => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${d.f.w} ${d.f.h}" width="${d.f.w}" height="${d.f.h}" role="img" aria-label="${d.label}">`
+  + `<title>${d.title}</title><desc>${d.desc}</desc><image href="${x(sheet)}#v${n}" width="${d.f.w}" height="${d.f.h}"/></svg>`;
+
+/** The files of the frames, in order: one frame stands alone (one scene has no bar), several share the first file (`sheetOf`). */
+function framesFiles(drawn: readonly Drawn[], bars: readonly string[] | null, sheet: string): string[] {
+  if (drawn.length < 2) return drawn.map((d) => compactPaths(svgOf(d)));
+  return [compactPaths(sheetOf(drawn, bars)), ...drawn.slice(1).map((d, i) => viewFile(d, i + 2, sheet))];
 }
 
 // ───────────────────────────── the API ─────────────────────────────
@@ -1984,4 +2049,24 @@ export function renderAdCut(input: RenderInput & { ratio: Ratio }): { frames: st
   const f = cutFrame(input.ratio);
   if (input.creative?.format === 'static_image') return { frames: k.scenes.length ? [staticFrame(k, f)] : [] };
   return { frames: k.scenes.map((_, i) => frameOf(k, f, i, { progress: false })) };
+}
+
+/**
+ * What a run folder keeps of an ad: the frames of `renderAdStoryboard`, or of `renderAdCut` when a ratio is named, the same
+ * drawings, written once. `sheet` is the name of the first frame's file: it holds every frame (`sheetOf`), each other file
+ * shows its own through a view of it, and the master's preview plays them as images of it. A cover, a page or a letter is
+ * stored once per ad, not once per frame and once more in the preview. A cut has no preview.
+ */
+export function renderAdFiles(input: RenderInput & { ratio?: Ratio }, sheet: string): { frames: string[]; previewHtml: string | null } {
+  if (input.ratio && input.creative?.format === 'search_text') return { frames: [], previewHtml: null };
+  const k = kitOf(input);
+  const f = cutFrame(input.ratio ?? '9:16');
+  const single = k.creative?.format === 'static_image';
+  const drawn = single ? (k.scenes.length ? [drawStatic(k, f)] : []) : k.scenes.map((_, i) => drawFrame(k, f, i, { progress: false }));
+  const bars = !single && barred(k, f) ? drawn.map((_, i) => barOf(f, i, drawn.length)) : [];
+  const barsOn = bars.some(Boolean) ? bars : null;
+  const frames = framesFiles(drawn, barsOn, sheet);
+  if (input.ratio) return { frames, previewHtml: null };
+  const src = (i: number): string => (drawn.length < 2 ? sheet : `${sheet}#${barsOn ? 'p' : 'v'}${i + 1}`);
+  return { frames, previewHtml: previewHtml(k, drawn.map((d, i) => `<img src="${x(src(i))}" alt="${d.label}">`)) };
 }

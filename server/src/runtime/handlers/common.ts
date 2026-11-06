@@ -73,3 +73,6 @@ export function genericPhrases(): readonly string[] {
 }
 
 export const NO_PRODUCT: HandlerOutcome = { summary: 'Produit introuvable ou arrêté : rien à faire.', skipReview: true, output: { skipped: true } };
+
+/** The file of an ad's frame `i` (from 0). The first one holds every frame of the ad: the others and the preview name it. */
+export const frameFile = (i: number): string => `frame-${i + 1}.svg`;

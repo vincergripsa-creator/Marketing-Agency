@@ -27,7 +27,7 @@ import { createTask, isOpen, openTasks, taskChannel } from '../tasks.js';
 import { upsellContextOf } from '../upsell.js';
 import { clamp, clip, dec, eur, idNum, keywords, numOf, pct, round2, short, str, sum, uniq } from '../util.js';
 import type { HandlerMap, HandlerOutcome } from './common.js';
-import { NO_PRODUCT, requireProduct, reworkNotes, mindWith } from './common.js';
+import { frameFile, NO_PRODUCT, requireProduct, reworkNotes, mindWith } from './common.js';
 import { COMPLIANCE_WORDS, FORMAT_LABELS, HOOK_LABELS } from './phrases.js';
 import { ensureDesign } from './creation.js';
 
@@ -399,15 +399,15 @@ export const growthHandlers: HandlerMap = {
       Object.assign(creative, { ...draft, review: { status: 'pending', reason: null, day: null }, createdBy: agent.id });
       if (!existing) ctx.world.company.creatives.push(creative);
       const design = ensureDesign(ctx, product);
-      const board = deliverables.renderAdStoryboard({ creative, product, design, brand: ctx.world.company.name });
+      const board = deliverables.renderAdFiles({ creative, product, design, brand: ctx.world.company.name }, frameFile(0));
       const dir = `files/${product.id}/ads/${creative.id}`;
       const frames: string[] = [];
       for (let i = 0; i < board.frames.length; i++) {
-        const rel = `${dir}/frame-${i + 1}.svg`;
+        const rel = `${dir}/${frameFile(i)}`;
         await writeRunFile(ctx, rel, board.frames[i]!);
         frames.push(rel);
       }
-      await writeRunFile(ctx, `${dir}/preview.html`, board.previewHtml);
+      await writeRunFile(ctx, `${dir}/preview.html`, board.previewHtml!);
       creative.files = { storyboard: frames, preview: `${dir}/preview.html` };
       creative.quality = sim.scoreCreative(creative, product, voc);
       const label = `${HOOK_LABELS[creative.hookStyle] ?? creative.hookStyle}, ${FORMAT_LABELS[creative.format] ?? creative.format}`;
