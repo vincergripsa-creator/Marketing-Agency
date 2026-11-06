@@ -20,10 +20,12 @@ import { createContentEngine } from '../src/minds/index.js';
 import type { RuntimeCtx } from '../src/runtime/ctx.js';
 import { designOf } from '../src/runtime/digest.js';
 import { Company, createWorld, defaultScenario } from '../src/runtime/index.js';
+import { HANDLERS } from '../src/runtime/handlers/index.js';
 import { officerId } from '../src/runtime/org/officers.js';
 import { parsePlaybook } from '../src/runtime/playbook.js';
 import { materialize, planDesignRefresh, REFRESH } from '../src/runtime/strategy.js';
 import { STREAM } from '../src/runtime/streams.js';
+import { createTask } from '../src/runtime/tasks.js';
 import { LOOK_MARKET, styleConvention, TASTE } from '../src/sim/catalog/looks.js';
 import { ensureVisualTaste, meanOne } from '../src/sim/market.js';
 import { lookCtr, lookCvr } from '../src/sim/tick.js';
@@ -418,6 +420,70 @@ describe('a page test (D204)', () => {
     const reloaded = await play(7);
     expect(reloaded.during).toBeGreaterThan(10);
     expect(reloaded.dump === straight.dump).toBe(true);
+  }, LONG);
+});
+
+describe('a page test has a slot of its own, and never shares its guide with a price test (D215)', () => {
+  /**
+   * Two live guides on paid traffic, on two niches. 80 visitors a day are enough for a page test, 40 only for a price test; a
+   * price test needs 10 sales too. Nobody buys this week: a price test goes one tier down.
+   */
+  async function bench(sales: { a: number; b: number }, daily = { a: 80, b: 80 }) {
+    const l = await lab({ seed: 5 });
+    const w = l.world;
+    w.day = 20;
+    const a = guide('prd_901', { title: 'Le sommeil de bébé en quatorze nuits', stats: { ...guide('x').stats, sales: sales.a } });
+    const b = guide('prd_902', { nicheId: 'proprete-chiot', title: 'Un chiot propre en deux semaines', stats: { ...guide('x').stats, sales: sales.b } });
+    for (const [p, views] of [[a, daily.a], [b, daily.b]] as const) {
+      w.company.products.push(p);
+      w.company.campaigns.push({ id: `cmp_${p.id}`, productId: p.id, name: p.title, creativeIds: [], dailyBudget: 20, status: 'active', targeting: { interests: [], ageMin: 25, ageMax: 45 }, startDay: 10, createdBy: 'adam' });
+      for (let day = 13; day <= 19; day++) w.market.adStats.push(row(day, p.id, views, 0));
+    }
+    const agent = w.company.agents.find((x) => x.taskKinds.includes('run_experiment'))!;
+    /** One round of `run_experiment`: what it opened, as [dimension, guide]. */
+    const round = async (): Promise<[string, string | null | undefined][]> => {
+      const before = new Set(w.company.experiments.map((e) => e.id));
+      const task = createTask(w, { kind: 'run_experiment', assignee: agent.id, input: {} });
+      await HANDLERS.run_experiment!.run(l.ctx, task, agent, { agent, playbook: [], brainNotes: [], lessons: [], day: w.day, brand: 'Pixel' });
+      return w.company.experiments.filter((e) => !before.has(e.id)).map((e) => [e.dimension, e.productId]);
+    };
+    const running = (over: Partial<Experiment>): Experiment => startExperiment(w, {
+      day: w.day - 1, owner: officerId(w, 'analyst'), hypothesis: 'h', dimension: 'hook_style', variants: ['question', 'pov'], metric: 'ctr', nicheId: 'japon-petit-budget', productId: null, ...over,
+    });
+    const pageTest = (p: Product): Experiment => running({ dimension: 'page_template', variants: ['express', 'creator'], metric: 'cvr', nicheId: p.nicheId, productId: p.id });
+    const priceTest = (p: Product): Experiment => running({ dimension: 'price', variants: ['19', '14'], metric: 'roas', nicheId: p.nicheId, productId: p.id, hypothesis: `« ${p.title} » rapporte plus par visiteur à 14 € qu'à 19 €` });
+    return { w, a, b, round, running, pageTest, priceTest };
+  }
+
+  it('opens while the two shared slots are full, and never keeps a price test out of them', async () => {
+    const full = await bench({ a: 0, b: 0 });
+    full.running({});
+    full.running({ dimension: 'support_tone', variants: ['chaleureux', 'concis'], metric: 'resolution', nicheId: null });
+    expect(await full.round()).toEqual([['page_template', full.a.id]]);
+    // the first guide is due a price test, the second a page test: one round opens both, the page test never first and alone
+    const both = await bench({ a: 12, b: 0 }, { a: 40, b: 80 });
+    expect(await both.round()).toEqual([['price', both.a.id], ['page_template', both.b.id]]);
+    // a page test and one shared test running: the second shared slot is still free for a price test
+    const half = await bench({ a: 0, b: 12 });
+    half.running({});
+    half.pageTest(half.a);
+    expect(await half.round()).toEqual([['price', half.b.id]]);
+  }, LONG);
+
+  it('a price test keeps the page test off its guide, and a page test the price test off its own', async () => {
+    const priced = await bench({ a: 12, b: 0 });
+    priced.priceTest(priced.a);
+    expect(await priced.round()).toEqual([['page_template', priced.b.id]]);
+    const alone = await bench({ a: 12, b: 0 });
+    alone.b.status = 'paused';
+    alone.priceTest(alone.a);
+    expect(await alone.round()).toEqual([]);
+    const paged = await bench({ a: 12, b: 0 });
+    const e = paged.pageTest(paged.a);
+    expect(await paged.round()).toEqual([]); // the guide that has sold enough is under a page test, the other has not sold enough
+    e.status = 'concluded';
+    e.endDay = paged.w.day;
+    expect((await paged.round())[0]).toEqual(['price', paged.a.id]); // the price test only waited for the page test
   }, LONG);
 });
 

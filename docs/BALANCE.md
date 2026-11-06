@@ -615,7 +615,7 @@ Ce qui reste vrai sur `fff9634`, lu dans le code ou à l'écran. Un nombre sans 
 
 ## 8. Chantier design
 
-Le chantier design (`docs/design/PLAN.md`, D200 à D209) donne aux agents huit styles de couverture, six gabarits de page et cinq visuels, un goût caché du marché pour ces looks, neutre en moyenne (D201), des bandits, des tests A/B de page et des refontes (D203, D204). Deux témoins existent : `control.designV1`, les looks de la V1 sur un marché qui ne les lit pas, et `control.noDesignLearning`, les looks tirés au hasard sans test, leçon, règle ni refonte (D205). Tout ce qui suit est lu sur `8355c93`, cerveau heuristique, 500 € de départ. Le goût caché n'est lu que par les scripts de mesure, jamais par un agent.
+Le chantier design (`docs/design/PLAN.md`, D200 à D209) donne aux agents huit styles de couverture, six gabarits de page et cinq visuels, un goût caché du marché pour ces looks, neutre en moyenne (D201), des bandits, des tests A/B de page et des refontes (D203, D204). Deux témoins existent : `control.designV1`, les looks de la V1 sur un marché qui ne les lit pas, et `control.noDesignLearning`, les looks tirés au hasard sans test, leçon, règle ni refonte (D205). Tout ce qui suit est lu sur `8355c93`, sauf le §8.4 (après les corrections D211), cerveau heuristique, 500 € de départ. Le goût caché n'est lu que par les scripts de mesure, jamais par un agent.
 
 ### 8.1 La lecture de contrôle qui inquiétait, et ce qu'elle était
 
@@ -712,40 +712,40 @@ Une seule lecture, par la règle du §6 du plan, écrite avant tout résultat : 
 | `noDesignLearning` moins `designV1` | +77 € (19) | +657 € (21) | +2 006 € (19) | +4 020 € (19) | +3 819 € (17) | +2 543 € (16) |
 | Défaut moins `designV1` | -10 € (14) | +588 € (19) | +2 722 € (18) | +8 621 € (20) | +8 469 € (21) | +10 379 € (23) |
 
-Profit cumulé graine par graine, avec la colonne de l'essai borné du §8.3 (le défaut avec ses deux changements) :
+Profit cumulé graine par graine, avec les colonnes de l'essai borné du §8.3 (le défaut avec ses deux changements) et du défaut après les corrections D211 du §8.4 (les témoins y sont les mêmes) :
 
-| Graine | Défaut J60 | Témoin J60 | `designV1` J60 | Défaut J180 | Témoin J180 | `designV1` J180 | Essai J60 | Essai J180 |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 7 664 € | 9 180 € | 5 464 € | 28 294 € | 30 645 € | 12 686 € | 7 445 € | 29 691 € |
-| 2 | 1 761 € | 4 691 € | 4 625 € | 25 224 € | 31 245 € | 22 303 € | 2 282 € | 27 580 € |
-| 3 | 2 131 € | 9 068 € | 1 € | 47 849 € | 63 589 € | 22 256 € | 2 131 € | 56 737 € |
-| 4 | 7 064 € | 5 938 € | 4 060 € | 35 832 € | 17 370 € | 20 753 € | 7 119 € | 34 702 € |
-| 5 | -359 € | -356 € | -360 € | 3 093 € | 13 581 € | 3 377 € | -359 € | 2 104 € |
-| 6 | 5 692 € | 6 209 € | 4 792 € | 30 779 € | 23 819 € | 25 641 € | 5 447 € | 35 834 € |
-| 7 | 9 230 € | 6 867 € | 5 814 € | 56 043 € | 37 122 € | 46 300 € | 10 317 € | 48 465 € |
-| 8 | 2 803 € | 3 727 € | 3 584 € | 32 682 € | 30 343 € | 21 665 € | 2 709 € | 26 016 € |
-| 9 | -302 € | -315 € | 1 884 € | 6 683 € | 655 € | 12 451 € | -302 € | 14 840 € |
-| 10 | 3 328 € | -130 € | 457 € | 58 518 € | 25 883 € | 29 917 € | 2 859 € | 63 793 € |
-| 11 | 4 048 € | 605 € | 3 224 € | 54 301 € | 22 328 € | 49 585 € | 5 195 € | 44 884 € |
-| 12 | 6 655 € | 12 069 € | 9 490 € | 33 844 € | 30 856 € | 29 240 € | 8 919 € | 54 478 € |
-| 13 | 8 606 € | -353 € | -170 € | 29 976 € | 10 187 € | 21 507 € | 4 979 € | 24 620 € |
-| 14 | -247 € | 132 € | 3 € | 50 723 € | 41 756 € | 36 316 € | -247 € | 53 938 € |
-| 15 | 5 402 € | 4 087 € | 1 989 € | 28 519 € | 18 637 € | 9 312 € | 7 608 € | 30 553 € |
-| 16 | 7 819 € | 15 113 € | 8 905 € | 69 629 € | 54 088 € | 47 134 € | 6 638 € | 53 849 € |
-| 17 | 1 158 € | 4 992 € | 5 224 € | 26 037 € | 32 616 € | 52 640 € | 2 185 € | 30 612 € |
-| 18 | 1 114 € | 1 861 € | 952 € | 23 962 € | 37 964 € | 45 345 € | 4 412 € | 50 679 € |
-| 19 | 3 865 € | -203 € | 1 043 € | 28 220 € | 20 463 € | 28 655 € | 6 171 € | 32 087 € |
-| 20 | 1 564 € | 5 586 € | -348 € | 45 953 € | 39 604 € | -279 € | 4 784 € | 57 426 € |
-| 21 | 5 755 € | 8 714 € | 2 034 € | 46 816 € | 47 279 € | 8 678 € | 7 954 € | 39 257 € |
-| 22 | 10 007 € | 3 238 € | 8 392 € | 55 701 € | 23 814 € | 35 552 € | 10 007 € | 55 299 € |
-| 23 | 3 517 € | 4 414 € | 483 € | 51 820 € | 33 939 € | 20 415 € | 4 487 € | 50 649 € |
-| 24 | -8 € | 5 934 € | 5 771 € | 33 138 € | 49 038 € | 50 763 € | -8 € | 34 941 € |
-| 25 | 5 390 € | 9 380 € | 7 044 € | 102 063 € | 58 443 € | 54 973 € | 6 148 € | 84 414 € |
-| 26 | 271 € | 1 869 € | 5 020 € | 30 850 € | 14 483 € | 30 781 € | 271 € | 29 269 € |
-| 27 | -164 € | -234 € | -196 € | 33 330 € | 27 988 € | 29 823 € | -164 € | 29 772 € |
-| 28 | -307 € | 4 241 € | 3 835 € | 5 639 € | 24 682 € | 18 556 € | 95 € | 40 163 € |
-| 29 | -16 € | 9 621 € | -370 € | 27 520 € | 43 595 € | 2 199 € | 2 888 € | 37 155 € |
-| 30 | 2 121 € | 4 433 € | 181 € | 43 816 € | 43 210 € | 24 089 € | 2 121 € | 48 081 € |
+| Graine | Défaut J60 | Témoin J60 | `designV1` J60 | Défaut J180 | Témoin J180 | `designV1` J180 | Essai J60 | Essai J180 | Après J60 | Après J180 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 7 664 € | 9 180 € | 5 464 € | 28 294 € | 30 645 € | 12 686 € | 7 445 € | 29 691 € | 8 659 € | 32 876 € |
+| 2 | 1 761 € | 4 691 € | 4 625 € | 25 224 € | 31 245 € | 22 303 € | 2 282 € | 27 580 € | 2 505 € | 25 630 € |
+| 3 | 2 131 € | 9 068 € | 1 € | 47 849 € | 63 589 € | 22 256 € | 2 131 € | 56 737 € | 1 484 € | 36 841 € |
+| 4 | 7 064 € | 5 938 € | 4 060 € | 35 832 € | 17 370 € | 20 753 € | 7 119 € | 34 702 € | 9 084 € | 41 986 € |
+| 5 | -359 € | -356 € | -360 € | 3 093 € | 13 581 € | 3 377 € | -359 € | 2 104 € | -359 € | 6 063 € |
+| 6 | 5 692 € | 6 209 € | 4 792 € | 30 779 € | 23 819 € | 25 641 € | 5 447 € | 35 834 € | 6 425 € | 27 357 € |
+| 7 | 9 230 € | 6 867 € | 5 814 € | 56 043 € | 37 122 € | 46 300 € | 10 317 € | 48 465 € | 10 056 € | 59 127 € |
+| 8 | 2 803 € | 3 727 € | 3 584 € | 32 682 € | 30 343 € | 21 665 € | 2 709 € | 26 016 € | 2 748 € | 25 689 € |
+| 9 | -302 € | -315 € | 1 884 € | 6 683 € | 655 € | 12 451 € | -302 € | 14 840 € | -302 € | 9 868 € |
+| 10 | 3 328 € | -130 € | 457 € | 58 518 € | 25 883 € | 29 917 € | 2 859 € | 63 793 € | 2 184 € | 39 844 € |
+| 11 | 4 048 € | 605 € | 3 224 € | 54 301 € | 22 328 € | 49 585 € | 5 195 € | 44 884 € | 5 562 € | 68 462 € |
+| 12 | 6 655 € | 12 069 € | 9 490 € | 33 844 € | 30 856 € | 29 240 € | 8 919 € | 54 478 € | 15 206 € | 42 889 € |
+| 13 | 8 606 € | -353 € | -170 € | 29 976 € | 10 187 € | 21 507 € | 4 979 € | 24 620 € | 5 176 € | 46 107 € |
+| 14 | -247 € | 132 € | 3 € | 50 723 € | 41 756 € | 36 316 € | -247 € | 53 938 € | -247 € | 53 310 € |
+| 15 | 5 402 € | 4 087 € | 1 989 € | 28 519 € | 18 637 € | 9 312 € | 7 608 € | 30 553 € | 5 996 € | 45 547 € |
+| 16 | 7 819 € | 15 113 € | 8 905 € | 69 629 € | 54 088 € | 47 134 € | 6 638 € | 53 849 € | 10 117 € | 57 229 € |
+| 17 | 1 158 € | 4 992 € | 5 224 € | 26 037 € | 32 616 € | 52 640 € | 2 185 € | 30 612 € | 2 001 € | 29 724 € |
+| 18 | 1 114 € | 1 861 € | 952 € | 23 962 € | 37 964 € | 45 345 € | 4 412 € | 50 679 € | 3 679 € | 46 881 € |
+| 19 | 3 865 € | -203 € | 1 043 € | 28 220 € | 20 463 € | 28 655 € | 6 171 € | 32 087 € | 2 969 € | 11 773 € |
+| 20 | 1 564 € | 5 586 € | -348 € | 45 953 € | 39 604 € | -279 € | 4 784 € | 57 426 € | 2 953 € | 68 257 € |
+| 21 | 5 755 € | 8 714 € | 2 034 € | 46 816 € | 47 279 € | 8 678 € | 7 954 € | 39 257 € | 7 958 € | 44 962 € |
+| 22 | 10 007 € | 3 238 € | 8 392 € | 55 701 € | 23 814 € | 35 552 € | 10 007 € | 55 299 € | 11 884 € | 55 844 € |
+| 23 | 3 517 € | 4 414 € | 483 € | 51 820 € | 33 939 € | 20 415 € | 4 487 € | 50 649 € | 4 473 € | 57 258 € |
+| 24 | -8 € | 5 934 € | 5 771 € | 33 138 € | 49 038 € | 50 763 € | -8 € | 34 941 € | -8 € | 30 377 € |
+| 25 | 5 390 € | 9 380 € | 7 044 € | 102 063 € | 58 443 € | 54 973 € | 6 148 € | 84 414 € | 7 086 € | 65 791 € |
+| 26 | 271 € | 1 869 € | 5 020 € | 30 850 € | 14 483 € | 30 781 € | 271 € | 29 269 € | 271 € | 24 744 € |
+| 27 | -164 € | -234 € | -196 € | 33 330 € | 27 988 € | 29 823 € | -164 € | 29 772 € | -164 € | 34 120 € |
+| 28 | -307 € | 4 241 € | 3 835 € | 5 639 € | 24 682 € | 18 556 € | 95 € | 40 163 € | 95 € | 37 597 € |
+| 29 | -16 € | 9 621 € | -370 € | 27 520 € | 43 595 € | 2 199 € | 2 888 € | 37 155 € | 2 377 € | 34 397 € |
+| 30 | 2 121 € | 4 433 € | 181 € | 43 816 € | 43 210 € | 24 089 € | 2 121 € | 48 081 € | 2 166 € | 47 473 € |
 
 | Looks des guides en ligne, lus contre le goût caché | J60 | J120 | J180 |
 |---|---|---|---|
@@ -786,4 +786,76 @@ Profit cumulé graine par graine, avec la colonne de l'essai borné du §8.3 (le
 
 - **L'essai rapporte, et il échoue quand même**, sur trois conditions : la part sur le meilleur style ne monte pas (17,0 → 16,9 %), celle sur le meilleur gabarit non plus (22,9 → 22,9 %, 74 sur 323 puis 164 sur 716), et K2 dépasse sa borne haute à J60, 4 449 € pour 4 000 € au plus. La règle ne lit pas l'argent seul : **il n'est pas adopté**, le code garde le chemin d'apprentissage de `8355c93`.
 - **Ce qu'il change, en clair** : les looks valent plus dès J60 (style 1,022, gabarit 1,011, contre 1,022 et 0,999 sans l'essai) et le restent (1,019 et 1,015 à J180, contre 1,013 et 1,007), le profit médian monte de 33 234 à 38 206 € à J180 et de 3 065 à 4 449 € à J60. Les conventions placent mieux les premiers guides de chaque niche, mais l'essai n'apprend pas ensuite à placer mieux les suivants : ses parts restent plates. C'est la condition « en hausse » qui échoue, pas le niveau, et K2 qui lit une entreprise trop à l'aise à J60.
-- **Ce qui reste ouvert** : le défaut 1 du §8.1 (les conventions de gabarit n'atteignent pas les agents) reste dans le code, avec les défauts 2 et 3 ; l'essai montre ce que le premier coûte, et D212 ferme tout deuxième essai.
+- **Ce qui reste ouvert** : le défaut 1 du §8.1 (les conventions de gabarit n'atteignent pas les agents) reste dans le code, avec les défauts 2 et 3 ; l'essai montre ce que le premier coûte, et D212 ferme tout deuxième essai. Les trois ont été corrigés depuis, à la demande du fondateur : §8.4.
+
+### 8.4 Après les corrections D211
+
+**Ce qui change dans le code** (D215). Les trois défauts du §8.1 sont corrigés, et chaque correction a un test qui échoue sans elle :
+
+1. **Les conventions de gabarit atteignent les agents.** L'étagère lit l'archétype du plan du guide : celui que nomme la recherche, sinon celui que l'éditeur donne à la niche, sinon celui des mots-clés de sa fiche, c'est-à-dire celui dans lequel le rédacteur écrit le guide. Jamais la vérité du marché. Sur les 16 niches, c'est l'archétype autour duquel le goût caché a été tiré, et les gabarits de sa convention partent avec 12 % d'avance dans l'a priori du bandit.
+2. **Un test de page a sa propre place.** Les deux places de `run_experiment` gardent les hooks, les formats, les prix et le ton ; une même ronde peut ouvrir un test dans ces places et un test de page à côté, le test de page en dernier.
+3. **Un test de page et un test de prix ne partagent plus un guide.** Aucun test de page ne s'ouvre sur un guide dont le prix est en test, aucun test de prix sur un guide en test de page.
+
+**La règle, écrite et enregistrée dans le dépôt avant tout run** (D215). Les trois corrections restent quoi que dise la lecture. Une seule lecture, les mêmes runs que la lecture formelle du §8.2 : `normal`, graines 1 à 30, 182 jours, 500 €, sans fin, défaut contre `noDesignLearning` et contre `designV1` ; `facile` et `cauchemar`, graines 1 à 30, 60 jours, défaut seul, pour K1 à K6. Lignes notées : E9 argent ; part du meilleur gabarit du défaut en hausse de J60 à J180, et au-dessus de celle du témoin à J180 ; part du meilleur style du défaut à J180 au moins celle du témoin ; E8 ; K1 à K6 à J60 et faillites à J180. Une part se lit comme au §8.2 (guides en ligne sur le meilleur look de leur niche, toutes graines ensemble). Pas de réglage, pas de deuxième essai. Lu sur `28671d9` (`d99230b` et les trois corrections), 150 runs, aucun en erreur.
+
+**Les témoins ne lisent pas les corrections** : les 60 runs `noDesignLearning` et `designV1` refaits sur l'arbre corrigé sont identiques, ligne du jour par ligne du jour, à ceux de la lecture formelle. E8 se relit donc à l'identique.
+
+| Ligne | Demandé | Lecture formelle (`8355c93`, §8.2) | Après les corrections | Passe |
+|---|---|---|---|---|
+| E9, argent | défaut moins `noDesignLearning`, gain apparié médian à J180 au-dessus de 0, positif sur au moins 19 sur 30 | +6 189 €, 20/30 | +8 132 € (Q1 -2 891, Q3 22 005 €), 21/30 | oui |
+| Meilleur gabarit, en hausse | part du défaut en hausse de J60 à J180 | 17,9 % (56 sur 312) → 20,1 % (142 sur 706) | 23,8 % (78 sur 328) → 22,6 % (165 sur 731), en hausse sur 16 graines sur 30 | **NON** |
+| Meilleur gabarit, contre le témoin | part du défaut à J180 au-dessus de celle du témoin | 20,1 % contre 19,6 % (139 sur 710) | 22,6 % contre 19,6 % | oui |
+| Meilleur style, contre le témoin | part du défaut à J180 au moins celle du témoin | 16,3 % (115 sur 706) contre 13,2 % (94 sur 710) | 15,2 % (111 sur 731) contre 13,2 % | oui |
+| E8, J60 | `noDesignLearning` moins `designV1`, au plus 1 176 € | +657 €, positif 21/30 | +657 €, positif 21/30 (mêmes runs) | oui |
+| E8, J180 | au plus 6 341 € | +2 543 €, positif 16/30 | +2 543 €, positif 16/30 (mêmes runs) | oui |
+| E10, K1 | `normal` : objectif à J60, 15 à 27 sur 30 | 22/30 | 23/30 | oui |
+| E10, K2 | `normal` : médiane à J60, 1 000 à 4 000 € | 3 065 € | 2 961 € | oui |
+| E10, K3 | `normal` : au plus 2 faillites à J60 et à J180 | 0 et 0 | 0 et 0 | oui |
+| E10, K4 | `facile` : objectif au moins 24 sur 30, aucune faillite | 29/30, 0 | 29/30, 0 | oui |
+| E10, K5 | `cauchemar` : au plus 8 faillites, trésorerie médiane au moins 250 € | 0, 801 € | 0, 1 109 € | oui |
+| E10, K6 | violations, écarts au grand livre, NaN | 0, 0, 0 sur 90 runs | 0, 0, 0 sur 90 runs | oui |
+| E10, faillites | à J180, défaut au plus `designV1` + 1 | 0 contre 0 | 0 contre 0 | oui |
+
+**Une ligne échoue** : la part du meilleur gabarit ne monte pas de J60 à J180, elle passe de 23,8 à 22,6 %. Toutes les autres passent. Lue avec cette même règle, la lecture formelle passait toutes ses lignes : c'est la hausse qui manque, pas le niveau.
+
+**Les mêmes runs, en clair.**
+
+| Profit cumulé, médiane (Q1 / Q3) | J60 | J120 | J180 |
+|---|---:|---:|---:|
+| Défaut, lecture formelle | 3 065 € (271 / 5 755 €) | 19 158 € (13 946 / 27 259 €) | 33 234 € (28 220 / 50 723 €) |
+| Défaut, après les corrections | 2 961 € (1 484 / 7 086 €) | 21 778 € (14 420 / 33 355 €) | 40 915 € (29 724 / 53 310 €) |
+| `noDesignLearning` (inchangé) | 4 423 € (605 / 6 867 €) | 20 853 € (13 758 / 27 158 €) | 30 750 € (22 328 / 41 756 €) |
+| `designV1` (inchangé) | 2 629 € (181 / 5 224 €) | 13 906 € (7 282 / 23 925 €) | 24 865 € (18 556 / 36 316 €) |
+
+| Écart apparié médian (positif sur 30) | J30 | J60 | J90 | J120 | J150 | J180 |
+|---|---:|---:|---:|---:|---:|---:|
+| Défaut moins `noDesignLearning`, lecture formelle | -93 € (9) | -910 € (10) | -710 € (12) | -649 € (14) | +2 196 € (17) | +6 189 € (20) |
+| Défaut moins `noDesignLearning`, après | -72 € (12) | -191 € (14) | +68 € (15) | +1 953 € (17) | +2 536 € (21) | +8 132 € (21) |
+| Défaut moins `designV1`, lecture formelle | -10 € (14) | +588 € (19) | +2 722 € (18) | +8 621 € (20) | +8 469 € (21) | +10 379 € (23) |
+| Défaut moins `designV1`, après | +51 € (16) | +1 826 € (22) | +4 466 € (20) | +9 479 € (21) | +9 853 € (24) | +13 238 € (25) |
+| Défaut après moins défaut avant | — | +738 € (19) | — | +1 707 € (19) | — | +3 027 € (20) |
+
+| Looks des guides en ligne, lus contre le goût caché | J60 | J120 | J180 |
+|---|---|---|---|
+| Défaut, lecture formelle | meilleur style 20 %, meilleur gabarit 18 % ; goût moyen 1,022 et 0,999 | 17 %, 19 % ; 1,016 et 1,007 | 16 %, 20 % ; 1,013 et 1,007 |
+| Défaut, après les corrections | 17 %, 24 % ; 1,020 et 1,013 | 16 %, 25 % ; 1,020 et 1,019 | 15 %, 23 % ; 1,016 et 1,015 |
+| `noDesignLearning` | 12 %, 21 % ; 0,995 et 1,005 | 13 %, 19 % ; 1,002 et 1,004 | 13 %, 20 % ; 1,003 et 1,003 |
+
+| Tests A/B | Défaut, lecture formelle | Défaut, après | `noDesignLearning` |
+|---|---:|---:|---:|
+| Graines 1 à 10, ouverts jusqu'à J120 : tests de prix | 54 | 81 | 86 |
+| … tests de format | 113 | 164 | 158 |
+| … tests de page | 47 | 65 | 0 |
+| … tests de page sur un guide dont le prix est en test | 14 (27 jours, 13 tests de prix) | 0 | — |
+| Graines 1 à 30, 182 jours : tests de prix (gagnés) | — | 460 (244) | 464 (223) |
+| … tests de page (gagnés, annulés) | — | 371 (59, 42) | 0 |
+| … jours-run avec un test de page en cours | — | 3 636 sur 5 460 | 0 |
+
+La colonne « lecture formelle » des tests vient des bras de démontage du §8.1 (graines 1 à 10, 120 jours) : le témoin y comptait déjà 86 tests de prix et 158 tests de format, les mêmes qu'ici.
+
+- **Les gabarits partent mieux, puis ne progressent plus.** Dès J60, 23,8 % des guides portent le meilleur gabarit de leur niche, contre 17,9 % avant et 21,5 % au hasard, et leur goût moyen passe de 0,999 à 1,013. Ensuite la part monte à 24,7 % à J120 puis redescend à 22,6 % à J180, toujours au-dessus du hasard (19,6 %). L'essai borné du §8.3, qui portait déjà la correction 1, lisait la même chose : 22,9 → 22,9 %. Les conventions placent bien les premiers guides ; rien, ensuite, n'apprend à placer mieux les suivants.
+- **Les tests de prix reviennent.** Sur les graines 1 à 10, ils passent de 54 à 81 pour 86 au témoin, les tests de format de 113 à 164, et plus aucun test de page ne partage son guide avec un test de prix. Les tests de page, qui ont leur place, sont plus nombreux (65 contre 47) et tournent deux jours sur trois ; 59 des 371 nomment un gagnant.
+- **L'argent suit.** Le défaut finit à 40 915 € de médiane à J180, contre 33 234 € avant les corrections (+3 027 € apparié, 20 graines sur 30). Il passe devant le témoin dès J90 et finit à +8 132 € (21 sur 30) ; à J60 il est encore derrière, de 191 € au lieu de 910 €. K2 reste dans sa borne (2 961 €), là où l'essai borné la dépassait.
+- **Le style ne bouge pas.** 16,8 % des guides sur le meilleur style à J60, 15,2 % à J180 : au-dessus du hasard (13,2 %), en baisse comme avant (19,6 → 16,3 %). Le §6 du plan demandait les deux parts en hausse ; ni avant ni après les corrections elles ne montent.
+
+**Verdict : une ligne sur treize échoue, la hausse de la part du meilleur gabarit (23,8 → 22,6 %).** Par la règle de D215, les trois corrections restent, sans réglage ni deuxième essai.

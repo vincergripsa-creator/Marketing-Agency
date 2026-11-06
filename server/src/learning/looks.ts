@@ -7,6 +7,7 @@ import type { Rng } from '../contracts.js';
 import type { ArtStyle, BanditArm, DesignLogEntry, Experiment, GuideArchetype, PageHero, PageTemplate, Product, WorldState } from '../shared.js';
 import { ART_STYLES, HERO_INFO, HERO_NEEDS, PAGE_HEROES, PAGE_TEMPLATES, STYLE_INFO, TEMPLATE_INFO, TEMPLATE_NEEDS } from '../shared.js';
 import { clamp } from '../core/index.js';
+import { archetypeOf } from '../minds/heuristic/profiles.js';
 import { heroConvention, styleConvention, templateConvention } from '../sim/catalog/looks.js';
 import { armStats, chooseArm } from './bandits.js';
 import { adRows, nicheName, onReference, referenceChannels } from './data.js';
@@ -66,12 +67,19 @@ export function designLearning(w: Pick<WorldState, 'scenario'>): boolean {
 
 // ───────────────────────────── the research priors ─────────────────────────────
 
-/** What the agents know of a shelf: the family the guide's palette says, the archetype the company's research names. */
+/** What the agents know of a shelf: the family the guide's palette says, the kind of guide the niche's guides are written as. */
 export interface LookShelf { family: string | null; archetype: GuideArchetype | null }
 
+/**
+ * The archetype is the guide's own plan (D215): the one the research names, else the editor's for the niche, else the brief's
+ * keywords, as the writer decides it (`archetypeOf`). Public data only, never the market's truth: the research tool hands no
+ * archetype over, so the template conventions of the plan's §5 reach the agents through their own plan.
+ */
 export function shelfOf(world: WorldState, p: Pick<Product, 'design'> | undefined, nicheId: string): LookShelf {
   const family = p?.design?.family ?? world.company.products.find((x) => x.nicheId === nicheId && x.design?.family)?.design?.family ?? null;
-  return { family, archetype: world.company.research?.voc?.[nicheId]?.knowledge?.archetype ?? null };
+  const research = world.company.research;
+  const trend = research?.trends?.find((t) => t.nicheId === nicheId);
+  return { family, archetype: archetypeOf({ nicheId, name: trend?.name, category: trend?.category }, research?.voc?.[nicheId]) };
 }
 
 /** + for a convention of the shelf, − for its opposite, from the table the market's taste was drawn around (§5). */

@@ -1,5 +1,6 @@
 /**
- * The integration of the design build: the design bandits' prior sits on what a worn look really scores, a cover's style also
+ * The integration of the design build: the design bandits' prior sits on what a worn look really scores, the template conventions
+ * reach it through the guide's own plan, a cover's style also
  * learns from the clicks of the ads it is the frame of, covers use their style's own compositions, a templated page shows the
  * kit and follows the 30-day rule, `refresh_design` reads and trains `design`, the founder's digest carries the « Design » block,
  * every Claude call reads the law of selling, and the V1 copy says what the law asks.
@@ -19,7 +20,7 @@ import { kitOffer } from '../src/deliverables/kit.js';
 import { REVIEWS_VERIFIED } from '../src/deliverables/sales/law.js';
 import { armStats, rewardArm } from '../src/learning/bandits.js';
 import { createBrainVault } from '../src/learning/index.js';
-import { ensureLookArms, LOOK_PRIOR, lookDim } from '../src/learning/looks.js';
+import { ensureLookArms, LOOK_PRIOR, lookDim, shelfOf } from '../src/learning/looks.js';
 import { applyDailyRewards } from '../src/learning/retro.js';
 import { systemBlocks } from '../src/minds/claude/prompts.js';
 import { heuristicSalesPage } from '../src/minds/heuristic/commerce.js';
@@ -33,6 +34,7 @@ import { Company, createWorld, defaultScenario } from '../src/runtime/index.js';
 import { deliverables } from '../src/runtime/modules.js';
 import { createTask } from '../src/runtime/tasks.js';
 import { craftFor, KIND_SKILL, seedTruth } from '../src/runtime/talent/index.js';
+import { TASTE } from '../src/sim/catalog/looks.js';
 import { findPageClaims } from '../src/sim/compliance.js';
 
 const roots: string[] = [];
@@ -127,6 +129,23 @@ describe('the design bandits start where a worn look scores (D203)', () => {
     ensureLookArms(w, 'style', 'sommeil-bebe', shelf);
     expect(w.company.bandits[dim]!.find((a) => a.key === 'typo')).toEqual(before);
   });
+
+  it('the template conventions reach the shelf through the guide’s own plan, never through the market’s truth (D215)', async () => {
+    const s = await shop();
+    expect(s.world.company.research.voc[NICHE]!.knowledge.archetype).toBeUndefined(); // the research tool names no archetype
+    // the editor plans each niche of the catalogue in the archetype its research material describes, the one the taste was drawn around
+    for (const n of s.world.market.niches) expect(shelfOf(s.world, undefined, n.id).archetype, n.id).toBe(n.voc.knowledge.archetype);
+    const shelf = shelfOf(s.world, undefined, NICHE);
+    expect(shelf.archetype).toBe('habitude');
+    s.world.market.niches.find((n) => n.id === NICHE)!.voc.knowledge.archetype = 'paliers';
+    expect(shelfOf(s.world, undefined, NICHE)).toEqual(shelf); // the truth moved, the agents' plan did not
+    const dim = lookDim('template', NICHE);
+    ensureLookArms(s.world, 'template', NICHE, shelf);
+    const mean = (k: string): number => armStats(s.world, dim).find((a) => a.key === k)!.mean;
+    expect(mean('creator')).toBeCloseTo(LOOK_PRIOR.mean * (1 + TASTE.page.convention), 3); // habitude: creator and inside
+    expect(mean('inside')).toBeCloseTo(LOOK_PRIOR.mean * (1 + TASTE.page.convention), 3);
+    expect(mean('express')).toBeCloseTo(LOOK_PRIOR.mean, 3);
+  }, LONG);
 });
 
 // ───────────────────────────── 3. a style learns from the clicks too ─────────────────────────────

@@ -1,7 +1,7 @@
 /** Analyse, Finance, RH and Direction rituals: daily report, A/B experiments, CFO budget and its split between channels, the books, retro, HR review, follow-up, portfolio. */
 import { CHANNELS, CHANNEL_IDS, channelOf } from '../../shared.js';
 import type { DailyKpi, Experiment, Product, Task } from '../../shared.js';
-import { designLearning, lookLabel, PAGE_TEST, pageChallenger, shelfOf } from '../../learning/looks.js';
+import { designLearning, lookLabel, PAGE_TEST, pageChallenger, runningPageTest, shelfOf } from '../../learning/looks.js';
 import { allocateChannels } from '../allocator.js';
 import type { RuntimeCtx } from '../ctx.js';
 import { addDeliverable, incident, nameOf, nicheName, say, writeNote } from '../ctx.js';
@@ -24,6 +24,17 @@ import { HOOK_LABELS, FORMAT_LABELS } from './phrases.js';
 function running(ctx: RuntimeCtx, dimension: Experiment['dimension']): Experiment | undefined {
   return ctx.world.company.experiments.find((e) => e.status === 'running' && e.dimension === dimension);
 }
+
+/** Tests of hooks, formats, prices and tone share two slots. A page test has a slot of its own and never takes one of theirs (D215). */
+export const EXPERIMENT_SLOTS = 2;
+const slotted = (e: Experiment): boolean => e.status === 'running' && e.dimension !== 'page_template';
+
+/** The running price test that alternates this guide's price: strategy alternates the guide its hypothesis names. */
+function priceTestOn(ctx: RuntimeCtx, p: Product): Experiment | undefined {
+  return ctx.world.company.experiments.find((e) => e.status === 'running' && e.dimension === 'price' && (e.productId === p.id || (!!p.title && e.hypothesis.includes(p.title.slice(0, 30)))));
+}
+
+const testName = (p: Product): string => (p.title.length > 50 ? `${p.title.slice(0, 49)}…` : p.title);
 
 /** A price test needs this many sales of the product first; a product is re-tested at most every PRICE_RETEST_DAYS days. */
 export const PRICE_TEST_MIN_SALES = 10;
@@ -69,12 +80,13 @@ const PAGE_BUSY: readonly Task['kind'][] = ['write_pdf', 'humanize_pdf', 'render
 
 /**
  * A page test worth opening on a guide (D204): design learning on, paid visitors every day, a challenger whose needs hold, nothing
- * rewriting the page meanwhile, and no rule that already settled the niche's template. The control is the template it wears.
+ * rewriting the page meanwhile, and no rule that already settled the niche's template. The control is the template it wears. Never on
+ * a guide whose price is under test: both alternate by day, and each would read the other's days (D215).
  */
 function pageTestCandidate(ctx: RuntimeCtx, p: Product, name: string): Pick<Experiment, 'hypothesis' | 'dimension' | 'variants' | 'metric'> | null {
   const w = ctx.world;
   const current = p.salesPage?.template;
-  if (!designLearning(w) || !current || p.kind === 'kit' || running(ctx, 'page_template')) return null;
+  if (!designLearning(w) || !current || p.kind === 'kit' || running(ctx, 'page_template') || priceTestOn(ctx, p)) return null;
   if (paidConversion(w, p.id, Math.max(1, w.day - 6)).landingViews < PAGE_TEST.dailyViews * 7) return null;
   if (w.company.tasks.some((t) => isOpen(t) && t.input.productId === p.id && PAGE_BUSY.includes(t.kind))) return null;
   if (directivesOf(w, officerId(w, 'shop'), nicheName(ctx, p.nicheId)).pageTemplate) return null;
@@ -85,11 +97,16 @@ function pageTestCandidate(ctx: RuntimeCtx, p: Product, name: string): Pick<Expe
   return { hypothesis: `Sur « ${name} », le gabarit ${lookLabel('template', challenger)} convertit mieux que ${lookLabel('template', current)}`, dimension: 'page_template', variants, metric: 'cvr' };
 }
 
-/** Which experiment is worth starting now (one variable at a time, enough arms in play, never a settled question). */
-export function experimentCandidate(ctx: RuntimeCtx): Omit<Experiment, 'id' | 'status' | 'results' | 'winner' | 'endDay' | 'owner' | 'day'> | null {
+type Candidate = Omit<Experiment, 'id' | 'status' | 'results' | 'winner' | 'endDay' | 'owner' | 'day'>;
+
+/**
+ * Which experiment of the two shared slots is worth starting now (one variable at a time, enough arms in play, never a settled
+ * question). Page tests are not among them: they have their own slot (`pageExperimentCandidate`, D215).
+ */
+export function experimentCandidate(ctx: RuntimeCtx): Candidate | null {
   const live = ctx.world.company.products.filter((p) => p.status === 'live');
   for (const p of live) {
-    const name = p.title.length > 50 ? `${p.title.slice(0, 49)}…` : p.title;
+    const name = testName(p);
     const scope = { nicheId: p.nicheId, productId: p.id };
     // Ads, formats and prices are measured on paid traffic: without a campaign, nothing would be learned.
     const paid = activeCampaigns(ctx.world, p.id);
@@ -111,7 +128,8 @@ export function experimentCandidate(ctx: RuntimeCtx): Omit<Experiment, 'id' | 's
       }
     }
     const lastPriceTest = Math.max(0, ...ctx.world.company.experiments.filter((e) => e.dimension === 'price' && e.hypothesis.includes(name)).map((e) => e.endDay ?? ctx.world.day));
-    if (!running(ctx, 'price') && p.stats.sales >= PRICE_TEST_MIN_SALES && (lastPriceTest === 0 || ctx.world.day - lastPriceTest >= PRICE_RETEST_DAYS)) {
+    // a page test alternates this guide's template by day: a price alternating beside it would read the template's days (D215)
+    if (!running(ctx, 'price') && !runningPageTest(ctx.world, p.id) && p.stats.sales >= PRICE_TEST_MIN_SALES && (lastPriceTest === 0 || ctx.world.day - lastPriceTest >= PRICE_RETEST_DAYS)) {
       const cur = PRICE_ARMS.find((a) => Number(a) >= p.price) ?? PRICE_ARMS[PRICE_ARMS.length - 1]!;
       const i = PRICE_ARMS.indexOf(cur);
       // Direction from what buyers do: a paid conversion below PRICE_TEST_LOW_CVR says "too expensive" → test one
@@ -125,8 +143,6 @@ export function experimentCandidate(ctx: RuntimeCtx): Omit<Experiment, 'id' | 's
         return { ...scope, hypothesis: `« ${name} » rapporte plus par visiteur à ${other} € qu'à ${cur} €`, dimension: 'price', variants: [cur, other], metric: 'roas' };
       }
     }
-    const page = pageTestCandidate(ctx, p, name);
-    if (page) return { ...scope, ...page };
   }
   if (!running(ctx, 'support_tone')) {
     const arms = learning.armStats(ctx.world, 'support_tone').filter((a) => a.pulls > 0);
@@ -134,6 +150,17 @@ export function experimentCandidate(ctx: RuntimeCtx): Omit<Experiment, 'id' | 's
     if (arms.length >= 2 && arms.reduce((s, a) => s + a.pulls, 0) >= 6 && !alreadyAnswered(ctx, 'support_tone', v, null)) {
       return { nicheId: null, hypothesis: `Un ton ${v[0]} résout mieux les tickets qu'un ton ${v[1]}`, dimension: 'support_tone', variants: v, metric: 'resolution' };
     }
+  }
+  return null;
+}
+
+/** The page test worth opening now, in its own slot (D215): one at a time, on a live guide with paid traffic whose price is not under test. */
+export function pageExperimentCandidate(ctx: RuntimeCtx): Candidate | null {
+  if (!designLearning(ctx.world) || running(ctx, 'page_template')) return null;
+  for (const p of ctx.world.company.products) {
+    if (p.status !== 'live' || !activeCampaigns(ctx.world, p.id).length) continue;
+    const page = pageTestCandidate(ctx, p, testName(p));
+    if (page) return { nicheId: p.nicheId, productId: p.id, ...page };
   }
   return null;
 }
@@ -227,16 +254,21 @@ export const opsHandlers: HandlerMap = {
         const res = Object.entries(e.results).map(([k, r]) => `${k} n=${r.n}`).join(', ');
         lines.push(`En cours : « ${e.hypothesis} » (${res || 'pas encore de données'})`);
       }
-      const cand = ctx.world.company.experiments.filter((e) => e.status === 'running').length < 2 ? experimentCandidate(ctx) : null;
-      let started: Experiment | null = null;
-      if (cand) {
-        started = learning.startExperiment(ctx.world, { ...cand, day: ctx.world.day, owner: agent.id });
-        const ordered = orderVariantCreatives(ctx, started);
-        say(ctx, agent.id, `${agent.name} lance un test A/B : « ${started.hypothesis} »${ordered ? ` (${ordered} créa(s) à produire pour les variantes sans pub)` : ''}`, 'thought');
-        lines.push(`Nouvelle expérience : ${started.hypothesis}`);
-      }
+      const started: Experiment[] = [];
+      const start = (cand: Candidate): void => {
+        const e = learning.startExperiment(ctx.world, { ...cand, day: ctx.world.day, owner: agent.id });
+        const ordered = orderVariantCreatives(ctx, e);
+        say(ctx, agent.id, `${agent.name} lance un test A/B : « ${e.hypothesis} »${ordered ? ` (${ordered} créa(s) à produire pour les variantes sans pub)` : ''}`, 'thought');
+        lines.push(`Nouvelle expérience : ${e.hypothesis}`);
+        started.push(e);
+      };
+      const cand = ctx.world.company.experiments.filter(slotted).length < EXPERIMENT_SLOTS ? experimentCandidate(ctx) : null;
+      if (cand) start(cand);
+      // the page test's own slot, after the shared ones: it never takes the guide a price test has just opened on (D215)
+      const page = pageExperimentCandidate(ctx);
+      if (page) start(page);
       if (!lines.length) return { summary: 'Pas encore assez de données pour un test A/B propre.', skipReview: true, output: { started: null } };
-      return { summary: lines.join(' · '), output: { started: started?.id ?? null, running: ctx.world.company.experiments.filter((e) => e.status === 'running').length } };
+      return { summary: lines.join(' · '), output: { started: started[0]?.id ?? null, ...(started.length > 1 ? { alsoStarted: started.slice(1).map((e) => e.id) } : {}), running: ctx.world.company.experiments.filter((e) => e.status === 'running').length } };
     },
   },
 
